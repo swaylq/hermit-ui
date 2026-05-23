@@ -45,8 +45,8 @@
 - [x] **add `evolution/` to template** — done; `evolution/README.md` explains lessons/skills/reflections; empty skeleton in place.
 - [x] **rewrite `template/CLAUDE.md`** — done; new bootstrap order: IDENTITY → USER → AGENTS → TOOLS → `evolution/lessons.md`. No SOUL, no MEMORY.
 - [x] **scaffold test agent `agents/alpha`** — done; template copied + placeholders substituted (sway / Alpha / test assistant); 0 `{{`-style placeholders remain.
-- [ ] **rewrite `apps/cli/bin/create-hermit-agent.js`** — drop Telegram bot token prompts, drop plugin install, drop chat_id collection. Keep: agent name, persona, working dir, optional brave-search key. Add: dashboard URL prompt + initial machine-key fetch from the dashboard.
-- [ ] **rewrite `apps/cli/package.json` description + remove --host codex path** — the Telegram-flavored Codex variant goes away.
+- [x] **rewrite `apps/cli/bin/create-hermit-agent.js`** — fresh 330-line implementation (was 1680 lines, stashed as `create-hermit-agent.legacy.js`). Drops Telegram bot validation / plugin install / chat_id / clone-of doppel / --host codex / state-dir .env writing. Keeps: agent name, persona, user name, dashboard URL prompt, optional brave-key, pre-ack of Claude first-run dialogs, npm install. Smoke test: `node bin/create-hermit-agent.js beta -y --persona "smoke test" --user sway --dashboard-url http://127.0.0.1:4101` → scaffolds clean `agents/beta/` with 0 unsubstituted placeholders + valid settings.local.json scoped to beta's path. The `--dashboard-url` argument + `HERMIT_DASHBOARD_URL` env in settings replace `--user-id` / `--bot-token` as the network identity, deferring machine-key fetch to M6 (the CLI doesn't talk to the dashboard yet).
+- [ ] **rewrite `apps/cli/package.json` description + remove --host codex path** — description still mentions Telegram, template-codex/ still exists. Quick follow-up.
 
 ### M3 — Tmux chat driver
 

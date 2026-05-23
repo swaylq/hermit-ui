@@ -1,0 +1,54 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "MultiEdit",
+      "NotebookEdit",
+      "NotebookRead",
+      "Read",
+      "Task",
+      "TodoWrite",
+      "WebFetch",
+      "WebSearch",
+      "Write",
+      "Write(/Users/mac/claudeclaw/asst/hermit-ui/agents/beta/**)",
+      "Write(/Users/mac/claudeclaw/asst/hermit-ui/agents/beta/.claude/**)",
+      "Edit(/Users/mac/claudeclaw/asst/hermit-ui/agents/beta/**)",
+      "Edit(/Users/mac/claudeclaw/asst/hermit-ui/agents/beta/.claude/**)",
+      "Read(/Users/mac/claudeclaw/asst/hermit-ui/agents/beta/**)",
+      "Read(/Users/mac/claudeclaw/asst/hermit-ui/agents/beta/.claude/**)",
+      "mcp__playwright",
+      "mcp__playwright-browser",
+      "mcp__plugin_telegram_telegram__reply",
+      "mcp__plugin_telegram_telegram__react",
+      "mcp__plugin_telegram_telegram__edit_message",
+      "mcp__plugin_telegram_telegram__download_attachment"
+    ]
+  },
+  "mcpServers": {
+    "playwright-browser": {
+      "command": "/Users/mac/claudeclaw/asst/hermit-ui/agents/beta/scripts/playwright-mcp-launcher.sh",
+      "args": []
+    }
+  },
+  "enabledPlugins": {
+    "telegram@claude-plugins-official": true
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/mac/claudeclaw/asst/hermit-ui/agents/beta/.claude/hooks/tg-reply-check.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
