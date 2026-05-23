@@ -1,0 +1,9 @@
+{
+  "name": "hermit-agent-{{AGENT_NAME}}",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A hermit agent spawned by create-hermit-agent. See ../hermit-agent for the template source.",
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}

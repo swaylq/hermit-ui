@@ -1,0 +1,21 @@
+{
+  "name": "@hermit-ui/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ccusage": "^20.0.2",
+    "dotenv": "^17.4.2",
+    "tsx": "^4.22.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20"
+  }
+}

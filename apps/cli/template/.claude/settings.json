@@ -1,0 +1,54 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "MultiEdit",
+      "NotebookEdit",
+      "NotebookRead",
+      "Read",
+      "Task",
+      "TodoWrite",
+      "WebFetch",
+      "WebSearch",
+      "Write",
+      "Write({{AGENT_DIR}}/**)",
+      "Write({{AGENT_DIR}}/.claude/**)",
+      "Edit({{AGENT_DIR}}/**)",
+      "Edit({{AGENT_DIR}}/.claude/**)",
+      "Read({{AGENT_DIR}}/**)",
+      "Read({{AGENT_DIR}}/.claude/**)",
+      "mcp__playwright",
+      "mcp__playwright-browser",
+      "mcp__plugin_telegram_telegram__reply",
+      "mcp__plugin_telegram_telegram__react",
+      "mcp__plugin_telegram_telegram__edit_message",
+      "mcp__plugin_telegram_telegram__download_attachment"
+    ]
+  },
+  "mcpServers": {
+    "playwright-browser": {
+      "command": "{{AGENT_DIR}}/scripts/playwright-mcp-launcher.sh",
+      "args": []
+    }
+  },
+  "enabledPlugins": {
+    "telegram@claude-plugins-official": true
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{AGENT_DIR}}/.claude/hooks/tg-reply-check.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

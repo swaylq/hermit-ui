@@ -1,0 +1,210 @@
+// asst-dashboard schema
+// Each Machine has an opaque access key (bcrypt-hashed). Agents, events,
+// and LaunchAgent snapshots are scoped to a machine — supports multi-host
+// later by issuing additional Machine rows, but v1 ships with one row.
+
+generator client {
+  provider      = "prisma-client"
+  output        = "../src/generated/prisma"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Machine {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  hostname     String?
+  keyHash      String
+  keyPrefix    String
+  createdAt    DateTime @default(now())
+  lastSeen     DateTime?
+
+  // Hard quotas configured per machine — gateway fills `used`, dashboard
+  // computes pct against these. Null disables the bar in UI.
+  fiveHourLimitUsd  Float?
+  weeklyLimitUsd    Float?
+
+  agents       Agent[]
+  events       Event[]
+  launchAgents LaunchAgentRecord[]
+  systemTasks  SystemTask[]
+  usageHourly  UsageHourly[]
+  usageWindows UsageWindow[]
+  chatSessions ChatSession[]
+}
+
+// Direct dashboard→agent chat. One ChatSession = one happy/claude conversation
+// scoped to (machine, agentName). Multiple sessions per agent allowed (each
+// gets its own claude `<uuid>.jsonl` underneath).
+model ChatSession {
+  id                  String    @id @default(cuid())
+  machineId           String
+  machine             Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  agentName           String
+  title               String?
+  claudeSessionId     String?   // populated by gateway once SDK boots
+  startedAt           DateTime  @default(now())
+  lastMessageAt       DateTime?
+  closedAt            DateTime?  // null = active, gateway listens; non-null = archived
+  // User-requested stop signal for the in-flight turn. Set by chat.cancelTurn,
+  // cleared by gateway via chat.ackCancel once the child process is killed.
+  cancelRequestedAt   DateTime?
+
+  messages         ChatMessage[]
+
+  @@index([machineId, agentName])
+  @@index([machineId, closedAt])
+}
+
+model ChatMessage {
+  id           String   @id @default(cuid())
+  sessionId    String
+  session      ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role         String   // user | assistant | system | tool
+  // Anthropic content-block array: [{type:'text', text}, {type:'tool_use', id, name, input}, {type:'tool_result', tool_use_id, content}, ...]
+  content      Json
+  // Used to track delivery state of user messages: null = pending pickup,
+  // ISO = gateway picked it up (so gateway doesn't re-deliver on poll).
+  deliveredAt  DateTime?
+  // Anthropic message id (msg_...) if known, useful for dedup on assistant rows.
+  externalId   String?
+  createdAt    DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([sessionId, deliveredAt])
+}
+
+// Current "window" usage snapshot. One row per (machineId, kind). Gateway
+// upserts these every 5min. Kind ∈ {fiveHour, weekly} for now.
+model UsageWindow {
+  id          String   @id @default(cuid())
+  machineId   String
+  machine     Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  kind        String
+  startTime   DateTime
+  endTime     DateTime
+  costUSD     Float
+  totalTokens Int      @default(0)
+  isActive    Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([machineId, kind])
+  @@index([machineId])
+}
+
+model Agent {
+  id              String   @id @default(cuid())
+  machineId       String
+  machine         Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  name            String
+  pid             Int?
+  alive           Boolean  @default(false)
+  state           String?
+  contextTokens   Int?
+  outputTokens   Int?
+  lastActivity    DateTime?
+  transcriptPath  String?
+  updatedAt       DateTime @updatedAt
+
+  // Cross-process restart signal. Dashboard UI sets this via tRPC; gateway
+  // polls, runs restart.sh, then nulls both fields back out.
+  restartRequestedAt DateTime?
+  restartStartedAt   DateTime?
+
+  events          Event[]
+
+  @@unique([machineId, name])
+  @@index([machineId])
+}
+
+model Event {
+  id        String   @id @default(cuid())
+  machineId String
+  machine   Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  agentId   String?
+  agent     Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  agentName String
+  type      String   @default("note")
+  title     String?
+  message   String
+  ts        DateTime @default(now())
+
+  @@index([machineId, ts])
+  @@index([agentId, ts])
+}
+
+model LaunchAgentRecord {
+  id           String   @id @default(cuid())
+  machineId    String
+  machine      Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  label        String
+  scheduleKind String?
+  intervalSec  Int?
+  calendarHour Int?
+  calendarMinute Int?
+  runAtLoad    Boolean  @default(false)
+  keepAlive    Boolean  @default(false)
+  running      Boolean?
+  logPath      String?
+  lastFire     DateTime?
+  programArgs  String[]
+  updatedAt    DateTime @updatedAt
+
+  @@unique([machineId, label])
+  @@index([machineId])
+}
+
+// User-defined cron-style tasks. Fired by the dashboard scheduler; each run
+// invokes `happy --yolo` in the target agent's directory with the configured
+// prompt. Same task reuses the same happy session via `--continue` once a
+// happySessionId has been recorded from the first run.
+model SystemTask {
+  id              String    @id @default(cuid())
+  machineId       String
+  machine         Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  name            String
+  agentName       String                             // which sibling agent dir owns this task
+  directory       String?                            // override cwd (e.g. nested subdir)
+  prompt          String                             // the task's prompt body
+  intervalSec     Int                                // fire every N seconds
+  enabled         Boolean   @default(true)
+
+  happySessionId  String?                            // captured from first run, used for resume
+
+  lastFire        DateTime?
+  lastStatus      String?                            // ok | fail | running | unknown
+  lastOutput      String?                            // tail (last 4KB) of latest run
+  lastDurationMs  Int?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([machineId, name])
+  @@index([machineId, agentName])
+}
+
+// Per-hour usage bucket pushed by the gateway. Rows are unique on
+// (machineId, agentName, hourBucket). For weekly / daily views, aggregate at
+// query time; for the all-time tile, sum the whole partition.
+model UsageHourly {
+  id                  String   @id @default(cuid())
+  machineId           String
+  machine             Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  agentName           String
+  hourBucket          DateTime                            // truncated to UTC hour
+  cost                Float    @default(0)
+  inputTokens         Int      @default(0)
+  outputTokens        Int      @default(0)
+  cacheCreationTokens Int      @default(0)
+  cacheReadTokens     Int      @default(0)
+  sessions            Int      @default(0)
+
+  updatedAt           DateTime @updatedAt
+
+  @@unique([machineId, agentName, hourBucket])
+  @@index([machineId, hourBucket])
+}

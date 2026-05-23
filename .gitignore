@@ -1,0 +1,25 @@
+node_modules/
+.next/
+dist/
+build/
+*.log
+.env
+.env.local
+.env.*.local
+.DS_Store
+.playwright-mcp/
+.trash-*/
+logs/
+task-logs/
+
+# Per-agent local state
+agents/*/.claude/state/
+agents/*/agent.pid
+agents/*/restart.log
+
+# Don't ship secrets
+**/ACCOUNTS.md
+**/.vps-*
+
+# Image uploads (filesystem-backed)
+uploads/

@@ -1,0 +1,26 @@
+node_modules/
+package-lock.json
+.DS_Store
+
+# Agent runtime state
+agent.pid
+restart.log
+claude-agent.log
+*.log
+.claude/state/
+browser/user-data/
+browser/chrome.json
+browser/chrome.log
+.playwright-mcp/
+
+# Secrets — never commit
+.claude/settings.local.json
+
+# Daily memory is personal — gitignore by default; uncomment to share
+memory/*.md
+!memory/.gitkeep
+
+# ACCOUNTS.md often has logged-in account identifiers.
+# It ships as a stub, but uncomment the line below if you don't want
+# your own entries tracked.
+# ACCOUNTS.md
