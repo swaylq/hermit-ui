@@ -1,13 +1,14 @@
-// asst-gateway — long-running Mac-local process that pushes filesystem-derived
-// state up to the VPS dashboard and fires SystemTasks against the local agent
-// tree.
+// hermit-ui gateway — long-running Mac-local process that pushes filesystem-
+// derived state up to the dashboard's postgres and fires SystemTasks against
+// the local agent tree.
 //
 // Intervals are intentionally staggered so we don't tax the dashboard or
 // burn ccusage runs needlessly:
-//   agents       30s
-//   tasks tick   15s
-//   launchagents  5min
-//   usage         5min
+//   agents          15s   (M4.4: bumped from 30s — dashboard never pulls now)
+//   agent-snapshots 60s   (JSONL tail aggregation for /agents detail sheet)
+//   tasks tick      15s
+//   launchagents    5min
+//   usage           5min
 
 import { collectAgents } from './collect/agents';
 import { collectAgentSnapshots } from './collect/agent-snapshot';
@@ -114,7 +115,7 @@ function loop(fn: () => Promise<void>, ms: number) {
   await pushRestartTick();
 })();
 
-loop(pushAgents, 30_000);
+loop(pushAgents, 15_000);
 loop(pushAgentSnapshots, 60_000);
 loop(pushTaskTick, 15_000);
 loop(pushRestartTick, 10_000);
