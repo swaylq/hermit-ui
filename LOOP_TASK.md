@@ -57,7 +57,7 @@
 
 ### M4 — Dashboard local-first
 
-- [ ] **delete `ensureSnapshot()` from `agents.list`** — `apps/dashboard/src/server/routers/agents.ts` reads from DB only. Browser open should produce zero filesystem activity on the VPS.
+- [x] **delete `ensureSnapshot()` from `agents.list`** — removed all 3 callsites (`agents.list`, `agents.byName`, `tasks.list`) plus their imports. Deleted now-orphaned files: `apps/dashboard/src/server/collect/{snapshot,agents,launchAgents}.ts` (gateway owns this collection on the Mac side; dashboard never reads FS on the VPS). The shell-grep snippets in `agents.byName` for `lastUserPrompt`/`lastAssistantText` are still there — they only fire on detail-sheet open, and M4.3 will lift them into DB columns. `npm run typecheck` + `next build` both green.
 - [ ] **gateway pre-aggregation** — `apps/gateway/src/collect/agent-snapshot.ts` reads JSONL tail, extracts `lastUserPrompt` + `lastAssistantText`, posts to new `/api/sync/agent-snapshot`. New DB columns on `Agent`: `lastUserPrompt`, `lastAssistantText`, `snapshotAt`.
 - [ ] **agents.byName uses DB columns** — drop the `sh("grep ... | jq ...")` shell-out. Detail sheet shows whatever the gateway last pushed.
 - [ ] **launchAgents-style polling cadence** — bump `collectAgents` from 30s to 15s since dashboard no longer pulls.

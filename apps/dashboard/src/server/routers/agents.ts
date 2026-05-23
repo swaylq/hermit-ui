@@ -2,16 +2,20 @@ import { z } from 'zod';
 import { spawnSync } from 'node:child_process';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
-import { ensureSnapshot } from '../collect/snapshot';
 
 function sh(cmd: string, timeoutMs = 3000) {
   const r = spawnSync('sh', ['-c', cmd], { encoding: 'utf8', timeout: timeoutMs });
   return (r.stdout ?? '').trim();
 }
 
+// Dashboard reads agent state purely from postgres — the gateway pushes via
+// /api/sync/agents on its 30s tick. Browser opening /agents triggers ZERO
+// filesystem activity on the VPS. The shell-grep snippets in byName below
+// are the last remaining FS-touching path; M4.3 lifts those into DB columns
+// the gateway pre-aggregates.
+
 export const agentsRouter = router({
   list: machineProcedure.query(async ({ ctx }) => {
-    await ensureSnapshot(ctx.machine.id);
     return prisma.agent.findMany({
       where: { machineId: ctx.machine.id },
       orderBy: { name: 'asc' },
@@ -61,7 +65,6 @@ export const agentsRouter = router({
   byName: machineProcedure
     .input(z.object({ name: z.string() }))
     .query(async ({ ctx, input }) => {
-      await ensureSnapshot(ctx.machine.id);
       const agent = await prisma.agent.findUnique({
         where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
       });

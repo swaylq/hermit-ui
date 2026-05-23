@@ -9,7 +9,6 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
-import { ensureSnapshot } from '../collect/snapshot';
 
 const SAFE_LABEL = /^ai\.(claudeclaw|openclaw)\.[\w.-]+$/;
 
@@ -46,8 +45,9 @@ const TaskInput = z.object({
 
 export const tasksRouter = router({
   // ─── LaunchAgent listing (read-only) ──────────────────────────────────────
+  // Dashboard reads launchAgent rows only from postgres — gateway pushes via
+  // /api/sync/launchagents every 5 min. No FS touch on the VPS.
   list: machineProcedure.query(async ({ ctx }) => {
-    await ensureSnapshot(ctx.machine.id);
     const rows = await prisma.launchAgentRecord.findMany({
       where: { machineId: ctx.machine.id },
       orderBy: { label: 'asc' },
