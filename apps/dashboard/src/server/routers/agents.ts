@@ -1,18 +1,12 @@
 import { z } from 'zod';
-import { spawnSync } from 'node:child_process';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 
-function sh(cmd: string, timeoutMs = 3000) {
-  const r = spawnSync('sh', ['-c', cmd], { encoding: 'utf8', timeout: timeoutMs });
-  return (r.stdout ?? '').trim();
-}
-
-// Dashboard reads agent state purely from postgres — the gateway pushes via
-// /api/sync/agents on its 30s tick. Browser opening /agents triggers ZERO
-// filesystem activity on the VPS. The shell-grep snippets in byName below
-// are the last remaining FS-touching path; M4.3 lifts those into DB columns
-// the gateway pre-aggregates.
+// Dashboard reads agent state purely from postgres. The Mac-side gateway
+// pushes /api/sync/agents on its 30s tick and /api/sync/agent-snapshot on
+// its 60s tick — there is NO filesystem activity on the VPS triggered by
+// any tRPC call here. The /agents detail sheet's lastUserPrompt /
+// lastAssistantText come straight out of the Agent row.
 
 export const agentsRouter = router({
   list: machineProcedure.query(async ({ ctx }) => {
@@ -75,25 +69,12 @@ export const agentsRouter = router({
         take: 30,
       });
 
-      // Best-effort: last user/assistant snippet from JSONL.
-      let lastUserPrompt: string | null = null;
-      let lastAssistantText: string | null = null;
-      if (agent.transcriptPath) {
-        const userRaw = sh(
-          `grep '"type":"user"' ${JSON.stringify(agent.transcriptPath)} | tail -1 | ` +
-            `jq -r '.message.content // empty | if type == "array" then map(.text // "") | join(" ") else . end' 2>/dev/null`,
-          1500,
-        );
-        if (userRaw) lastUserPrompt = userRaw.slice(0, 600);
-
-        const assistRaw = sh(
-          `grep '"type":"assistant"' ${JSON.stringify(agent.transcriptPath)} | tail -1 | ` +
-            `jq -r '[.message.content[]? | select(.type=="text") | .text] | join(" ") // empty' 2>/dev/null`,
-          1500,
-        );
-        if (assistRaw) lastAssistantText = assistRaw.slice(0, 600);
-      }
-
-      return { agent, events, lastUserPrompt, lastAssistantText };
+      // Pre-aggregated by the gateway's snapshot tick; freshness ≤ 60s.
+      return {
+        agent,
+        events,
+        lastUserPrompt: agent.lastUserPrompt,
+        lastAssistantText: agent.lastAssistantText,
+      };
     }),
 });
