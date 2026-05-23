@@ -31,6 +31,7 @@ import {
 
 import { AGENTS_ROOT } from './config';
 import { api } from './api';
+import { relayImages } from './image-relay';
 
 type PendingMsg = { id: string; sessionId: string; role: string; content: any; createdAt: string };
 type PendingSession = { id: string; agentName: string; claudeSessionId: string | null };
@@ -135,10 +136,41 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // dashboard already has each as its own ChatMessage row, so we only need to
   // feed claude. Use double-newline as a soft separator — when the user fires
   // off several messages quickly, they all reach claude as one turn.
-  const promptText = msgs
+  const textPart = msgs
     .map((m) => extractText(m.content))
     .filter(Boolean)
     .join('\n\n');
+
+  // Relay any attached images: download each from the dashboard into the local
+  // gateway cache so the tmux-driven claude can Read them. Failed downloads
+  // surface as a system row in the dashboard — they're not fatal to the turn.
+  const relay = await relayImages(msgs.map((m) => m.content));
+  if (relay.errors.length > 0) {
+    console.warn(`[chat] image relay errors for ${session.id.slice(0, 8)}:`, relay.errors);
+    await api
+      .syncChatMessages([
+        {
+          sessionId: session.id,
+          role: 'system',
+          content: [
+            {
+              type: 'text',
+              text: `[gateway] failed to relay ${relay.errors.length} image(s): ${relay.errors.map((e) => e.url).join(', ')}`,
+            },
+          ],
+          externalId: null,
+        },
+      ])
+      .catch(() => {});
+  }
+
+  // Assemble the prompt: user text first, then explicit Read lines for each
+  // cached image so claude consumes them via its Read tool (which is what
+  // pipes the bytes into the context). tmux send-keys can't carry binaries.
+  const promptParts: string[] = [];
+  if (textPart) promptParts.push(textPart);
+  for (const p of relay.paths) promptParts.push(`Read ${p}`);
+  const promptText = promptParts.join('\n\n');
 
   if (!promptText) {
     await api.ackChatDelivered(msgs.map((m) => m.id)).catch(() => {});
@@ -152,7 +184,8 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
 
   console.log(
     `[chat] → ${session.agentName} session=${session.id.slice(0, 8)} ` +
-      `claude=${state.claudeUuid.slice(0, 8)} (${promptText.length}c)`,
+      `claude=${state.claudeUuid.slice(0, 8)} ` +
+      `(${textPart.length}c text + ${relay.paths.length} image${relay.paths.length === 1 ? '' : 's'})`,
   );
 
   try {
