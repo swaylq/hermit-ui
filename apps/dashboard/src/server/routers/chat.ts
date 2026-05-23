@@ -93,17 +93,55 @@ export const chatRouter = router({
     }),
 
   send: machineProcedure
-    .input(z.object({ sessionId: z.string(), text: z.string().min(1).max(64_000) }))
+    .input(
+      z.object({
+        sessionId: z.string(),
+        // Text is optional when at least one image is attached. We still
+        // require AT LEAST ONE of text/images so we never insert empty rows.
+        text: z.string().max(64_000).default(''),
+        images: z
+          .array(
+            z.object({
+              url: z.string().min(1),
+              mimeType: z.string().min(1),
+              width: z.number().int().nullable().optional(),
+              height: z.number().int().nullable().optional(),
+            }),
+          )
+          .max(10)
+          .optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
       if (s.closedAt) throw new Error('session is closed');
+
+      const text = input.text.trim();
+      const images = input.images ?? [];
+      if (!text && images.length === 0) throw new Error('empty message');
+
+      // Anthropic-style content blocks: text first (matches user's mental
+      // model of "I typed, then attached"), then each image as a source.url
+      // block. Gateway picks these up via pollPending and feeds claude.
+      const content: Array<Record<string, unknown>> = [];
+      if (text) content.push({ type: 'text', text });
+      for (const img of images) {
+        content.push({
+          type: 'image',
+          source: { type: 'url', url: img.url, media_type: img.mimeType },
+          // width/height are non-anthropic but helpful for the dashboard's
+          // markdown renderer to size the inline thumbnail before fetch.
+          ...(img.width != null && img.height != null
+            ? { width: img.width, height: img.height }
+            : {}),
+        });
+      }
+
       const msg = await prisma.chatMessage.create({
-        data: {
-          sessionId: input.sessionId,
-          role: 'user',
-          content: [{ type: 'text', text: input.text }],
-        },
+        // content is JSON in the DB; prisma wants Prisma.InputJsonValue, the
+        // Record-shaped union confuses inference, hence the cast.
+        data: { sessionId: input.sessionId, role: 'user', content: content as unknown as Parameters<typeof prisma.chatMessage.create>[0]['data']['content'] },
       });
       // Clear any stale cancel signal from a previous turn so this new
       // turn isn't immediately killed by the gateway.

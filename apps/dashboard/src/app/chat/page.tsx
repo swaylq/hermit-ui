@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, useCallback, type ChangeEvent, Suspense } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, type ChangeEvent, type ClipboardEvent, type DragEvent, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { MenuIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -12,8 +12,15 @@ import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { Markdown } from '@/components/markdown';
 import { CtxBar } from '@/components/ctx-bar';
+import { getStoredKey } from '@/app/providers';
 
-type Block = { type: string; text?: string; name?: string; input?: any; tool_use_id?: string; content?: any };
+type Block = { type: string; text?: string; name?: string; input?: any; tool_use_id?: string; content?: any; source?: any; width?: number; height?: number };
+
+// In-flight or finished image upload attached to the composer.
+type Attachment =
+  | { id: string; kind: 'uploading'; name: string; previewUrl: string }
+  | { id: string; kind: 'ready'; name: string; previewUrl: string; data: { url: string; mimeType: string; width: number | null; height: number | null } }
+  | { id: string; kind: 'error'; name: string; error: string };
 
 function ymdLocal(d: Date | string): string {
   const x = typeof d === 'string' ? new Date(d) : d;
@@ -292,6 +299,7 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
   );
 
   const [draft, setDraft] = useState('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -429,14 +437,22 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
       </ScrollArea>
 
       <ComposeBar
+        sessionId={sessionId}
         disabled={!!session?.closedAt}
         sending={send.isPending}
         inFlight={isInFlight}
         stopping={cancelTurn.isPending}
         onStop={() => cancelTurn.mutate({ sessionId })}
-        onSend={(text) => send.mutate({ sessionId, text }, { onSuccess: () => setDraft('') })}
+        onSend={(text, images) =>
+          send.mutate(
+            { sessionId, text, images },
+            { onSuccess: () => { setDraft(''); setAttachments([]); } },
+          )
+        }
         draft={draft}
         setDraft={setDraft}
+        attachments={attachments}
+        setAttachments={setAttachments}
         taRef={taRef}
       />
     </>
@@ -548,6 +564,7 @@ function EmptyChat({ agentName, onPickPrompt }: { agentName?: string; onPickProm
 }
 
 function ComposeBar({
+  sessionId,
   disabled,
   sending,
   inFlight,
@@ -555,9 +572,12 @@ function ComposeBar({
   onStop,
   draft,
   setDraft,
+  attachments,
+  setAttachments,
   onSend,
   taRef,
 }: {
+  sessionId: string;
   disabled: boolean;
   sending: boolean;
   inFlight: boolean;
@@ -565,7 +585,9 @@ function ComposeBar({
   onStop: () => void;
   draft: string;
   setDraft: (s: string) => void;
-  onSend: (text: string) => void;
+  attachments: Attachment[];
+  setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
+  onSend: (text: string, images: Array<{ url: string; mimeType: string; width: number | null; height: number | null }>) => void;
   taRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
 
@@ -577,26 +599,110 @@ function ComposeBar({
     el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
   }, [setDraft]);
 
+  // Upload one or more image files to /api/upload; track each via an
+  // Attachment record so the UI can show a thumbnail+spinner during upload.
+  const addFiles = useCallback(async (files: File[]) => {
+    const ok = files.filter((f) => f.type.startsWith('image/'));
+    if (ok.length === 0) return;
+    for (const file of ok) {
+      const id = (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+      const previewUrl = URL.createObjectURL(file);
+      setAttachments((prev) => [...prev, { id, kind: 'uploading', name: file.name || 'pasted-image', previewUrl }]);
+      try {
+        const fd = new FormData();
+        fd.append('sessionId', sessionId);
+        fd.append('file', file);
+        const r = await fetch('/api/upload', { method: 'POST', headers: { 'x-asst-key': getStoredKey() }, body: fd });
+        if (!r.ok) throw new Error(`upload failed (${r.status}): ${await r.text().catch(() => '')}`);
+        const data = await r.json() as { url: string; mimeType: string; width: number | null; height: number | null };
+        setAttachments((prev) => prev.map((a) => a.id === id ? { id, kind: 'ready', name: file.name || 'pasted-image', previewUrl, data: { url: data.url, mimeType: data.mimeType, width: data.width, height: data.height } } : a));
+      } catch (e) {
+        setAttachments((prev) => prev.map((a) => a.id === id ? { id, kind: 'error', name: file.name || 'pasted-image', error: e instanceof Error ? e.message : String(e) } : a));
+      }
+    }
+  }, [sessionId, setAttachments]);
+
+  const onPaste = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (const it of Array.from(items)) {
+      if (it.kind === 'file') {
+        const f = it.getAsFile();
+        if (f && f.type.startsWith('image/')) files.push(f);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      void addFiles(files);
+    }
+  }, [addFiles]);
+
+  const [dragHover, setDragHover] = useState(false);
+  const onDragOver = useCallback((e: DragEvent<HTMLFormElement>) => {
+    if (Array.from(e.dataTransfer.items).some((it) => it.kind === 'file')) {
+      e.preventDefault();
+      setDragHover(true);
+    }
+  }, []);
+  const onDragLeave = useCallback(() => setDragHover(false), []);
+  const onDrop = useCallback((e: DragEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setDragHover(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) void addFiles(files);
+  }, [addFiles]);
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => {
+      const target = prev.find((a) => a.id === id);
+      if (target && 'previewUrl' in target && target.previewUrl) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return prev.filter((a) => a.id !== id);
+    });
+  }, [setAttachments]);
+
+  const readyAttachments = useMemo(
+    () => attachments.filter((a): a is Attachment & { kind: 'ready' } => a.kind === 'ready'),
+    [attachments],
+  );
+  const uploadingCount = attachments.filter((a) => a.kind === 'uploading').length;
+
   const submit = () => {
     const text = draft.trim();
-    if (!text || sending || disabled || inFlight) return;
-    onSend(text);
+    if (sending || disabled || inFlight) return;
+    if (!text && readyAttachments.length === 0) return;
+    onSend(
+      text,
+      readyAttachments.map((a) => ({ url: a.data.url, mimeType: a.data.mimeType, width: a.data.width, height: a.data.height })),
+    );
   };
 
   // While the assistant is producing output, swap the green send button for a
-  // rose-tinted stop. Click → POST chat.cancelTurn, which flags the session
-  // and the gateway SIGTERMs the in-flight claude child within ~1.5s.
+  // rose-tinted stop. Click → POST chat.cancelTurn → gateway sends Escape.
   const showStop = inFlight && !disabled;
+  const canSend = !sending && !disabled && !inFlight && (draft.trim().length > 0 || readyAttachments.length > 0);
 
   return (
     <form
-      className="border-t border-border bg-background px-4 py-3"
-      onSubmit={(e) => {
-        e.preventDefault();
-        submit();
-      }}
+      className={cn(
+        'border-t border-border bg-background px-4 py-3 transition-colors',
+        dragHover && 'bg-accent/30',
+      )}
+      onSubmit={(e) => { e.preventDefault(); submit(); }}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
     >
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-3xl mx-auto space-y-2">
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {attachments.map((a) => (
+              <AttachmentChip key={a.id} attachment={a} onRemove={() => removeAttachment(a.id)} />
+            ))}
+          </div>
+        )}
         <div
           className={cn(
             'flex items-end gap-2 rounded-md border bg-background pl-3 pr-1.5 py-1.5 transition-colors duration-100 ease-out',
@@ -604,6 +710,8 @@ function ComposeBar({
               ? 'border-border opacity-60'
               : showStop
               ? 'border-rose-500/40'
+              : dragHover
+              ? 'border-foreground/40'
               : 'border-border focus-within:border-foreground/30',
           )}
         >
@@ -611,13 +719,22 @@ function ComposeBar({
             ref={taRef}
             value={draft}
             onChange={onChange}
+            onPaste={onPaste}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 submit();
               }
             }}
-            placeholder={disabled ? 'session is closed' : showStop ? 'assistant is working… (esc to stop)' : 'message (⌘↵ to send)'}
+            placeholder={
+              disabled
+                ? 'session is closed'
+                : showStop
+                ? 'assistant is working… (esc to stop)'
+                : uploadingCount > 0
+                ? `uploading ${uploadingCount}…`
+                : 'message (⌘↵ to send · paste/drop images to attach)'
+            }
             disabled={disabled || showStop}
             rows={1}
             className="flex-1 bg-transparent text-sm resize-none outline-none leading-relaxed min-h-[24px] max-h-[360px] overflow-auto py-1.5 text-foreground placeholder:text-muted-foreground/70 disabled:cursor-not-allowed"
@@ -636,10 +753,10 @@ function ComposeBar({
           ) : (
             <button
               type="submit"
-              disabled={!draft.trim() || sending || disabled}
+              disabled={!canSend}
               className={cn(
                 'rounded h-7 w-7 p-0 shrink-0 inline-flex items-center justify-center text-sm transition-colors',
-                draft.trim() && !sending && !disabled
+                canSend
                   ? 'text-background bg-foreground hover:bg-foreground/90'
                   : 'text-muted-foreground/50 bg-muted cursor-not-allowed',
               )}
@@ -651,6 +768,43 @@ function ComposeBar({
         </div>
       </div>
     </form>
+  );
+}
+
+function AttachmentChip({ attachment: a, onRemove }: { attachment: Attachment; onRemove: () => void }) {
+  const previewUrl = 'previewUrl' in a ? a.previewUrl : null;
+  return (
+    <div className="relative group inline-flex items-center gap-2 rounded-md border border-border bg-background px-1.5 py-1 text-[11px] font-mono">
+      {previewUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={previewUrl} alt={a.name} className={cn(
+          'h-10 w-10 rounded object-cover',
+          a.kind === 'uploading' && 'opacity-50',
+          a.kind === 'error' && 'opacity-30 grayscale',
+        )} />
+      ) : (
+        <div className="h-10 w-10 rounded bg-muted text-muted-foreground/60 flex items-center justify-center">!</div>
+      )}
+      <div className="min-w-0 max-w-[120px]">
+        <div className="truncate text-foreground/80">{a.name}</div>
+        <div className={cn(
+          'text-[10px] tabular-nums',
+          a.kind === 'uploading' && 'text-muted-foreground',
+          a.kind === 'ready' && 'text-emerald-600',
+          a.kind === 'error' && 'text-rose-500',
+        )}>
+          {a.kind === 'uploading' ? 'uploading…' : a.kind === 'ready' ? `${a.data.width ?? '?'}×${a.data.height ?? '?'}` : a.error.slice(0, 40)}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label="remove attachment"
+        className="opacity-60 hover:opacity-100 hover:text-rose-500 px-1 text-xs"
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
@@ -756,7 +910,25 @@ type Group =
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; calls: Array<{ id: string; name: string; input: any }> }
+  | { kind: 'image'; url: string; mimeType: string | null; width: number | null; height: number | null }
   | { kind: 'unknown'; block: Block };
+
+// Coerce an Anthropic image block's `source` into a URL the dashboard can show.
+// Three variants in the wild:
+//   { type: 'url', url: '/uploads/...' }              → our composer uploads
+//   { type: 'url', url: 'https://…' }                 → external (gateway-relayed)
+//   { type: 'base64', media_type, data }              → MCP attach_image-style
+function imageSourceToUrl(src: any): { url: string; mimeType: string | null } | null {
+  if (!src || typeof src !== 'object') return null;
+  if (src.type === 'url' && typeof src.url === 'string') {
+    return { url: src.url, mimeType: src.media_type ?? null };
+  }
+  if (src.type === 'base64' && typeof src.data === 'string') {
+    const mt = src.media_type || 'image/png';
+    return { url: `data:${mt};base64,${src.data}`, mimeType: mt };
+  }
+  return null;
+}
 
 function groupConsecutiveTools(blocks: Block[]): Group[] {
   const out: Group[] = [];
@@ -771,6 +943,17 @@ function groupConsecutiveTools(blocks: Block[]): Group[] {
       const call = { id: (b as any).id ?? '', name: (b as any).name ?? '?', input: (b as any).input ?? {} };
       if (prev && prev.kind === 'tool') prev.calls.push(call);
       else out.push({ kind: 'tool', calls: [call] });
+    } else if (b.type === 'image') {
+      const src = imageSourceToUrl(b.source);
+      if (src) {
+        out.push({
+          kind: 'image',
+          url: src.url,
+          mimeType: src.mimeType,
+          width: typeof b.width === 'number' ? b.width : null,
+          height: typeof b.height === 'number' ? b.height : null,
+        });
+      }
     } else {
       out.push({ kind: 'unknown', block: b });
     }
@@ -780,6 +963,19 @@ function groupConsecutiveTools(blocks: Block[]): Group[] {
 
 function GroupView({ group, dark, inline = false }: { group: Group; dark: boolean; inline?: boolean }) {
   if (group.kind === 'text') return <Markdown>{group.text}</Markdown>;
+  if (group.kind === 'image') {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <a href={group.url} target="_blank" rel="noopener noreferrer" className="inline-block">
+        <img
+          src={group.url}
+          alt={`attachment${group.width && group.height ? ` ${group.width}×${group.height}` : ''}`}
+          className="max-w-[320px] max-h-[320px] rounded border border-border"
+          loading="lazy"
+        />
+      </a>
+    );
+  }
   if (group.kind === 'thinking') {
     return (
       <details className="text-xs italic text-zinc-500/80">
