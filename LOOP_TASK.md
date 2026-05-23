@@ -71,7 +71,8 @@
 
 ### M6 — Telegram removal + create-hermit-agent v1
 
-- [ ] **`apps/cli` package.json** — bump to v1.0.0, set `name: create-hermit-agent`, publish flag `--access=public`.
+- [x] **`apps/cli` package.json** — bumped `0.2.0 → 1.0.0` (semver-major: communicates the Telegram→dashboard break). Added `publishConfig.access: 'public'` so `npm publish` no longer needs `--access=public` flag. Dropped dead `scripts.test` (referenced `test/smoke.mjs` which doesn't exist). Tightened `files` to explicit `bin/create-hermit-agent.js` instead of whole `bin/` (excludes the now-removed `bin/create-hermit-agent.legacy.js`). `npm pack --dry-run` → 47 files / 73.3 kB tarball, name+version stamped correctly. **Note:** `template/scripts/{idle-hibernator,multi-agent-status-report,wake-poller,launchd-sync,systemd-sync,…}.sh` are vestigial Telegram-era helpers still in the tarball — separate cleanup PENDING below.
+- [ ] **trim `template/scripts/` of Telegram/hibernation-era helpers** — `idle-hibernator.sh`, `wake-poller.sh`, `multi-agent-status-report.sh`, `launchd-sync.sh`, `systemd-sync.sh`, `reap-dead-sessions.sh`, `hibernate-agent.sh`, `wake-agent.sh`, `claude-quota-probe.sh`, `playwright-mcp-launcher.sh`. Keep: `restart.sh`, `start.sh`, `safe-image.sh`, `exec-cli-command.sh`, `with-timeout.sh`, browser-automation under `scripts/browser/`.
 - [ ] **template/README.md** — rewrite to walk through: install → cli scaffold → dashboard URL → first chat. No bot tokens.
 - [ ] **hermit-agent repo README.md** — update GitHub README to point to dash.swaylab.ai-style UI; deprecate Telegram path.
 - [ ] **npm publish** — `npm publish` from `apps/cli/` after `npm pack --dry-run` smoke check.

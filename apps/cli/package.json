@@ -1,6 +1,6 @@
 {
   "name": "create-hermit-agent",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Scaffold a hermit-ui Claude Code agent — chat from the web dashboard, no Telegram required.",
   "type": "module",
   "bin": {
@@ -15,9 +15,6 @@
   ],
   "dependencies": {
     "prompts": "^2.4.2"
-  },
-  "scripts": {
-    "test": "node test/smoke.mjs"
   },
   "keywords": [
     "claude-code",
@@ -40,10 +37,13 @@
     "url": "https://github.com/swaylq/hermit-agent/issues"
   },
   "files": [
-    "bin/",
+    "bin/create-hermit-agent.js",
     "template/",
     "assets/",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }
