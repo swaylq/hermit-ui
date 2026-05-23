@@ -44,6 +44,16 @@ export function hasSession(name: string): boolean {
   return tmux(['has-session', '-t', `=${name}`]).ok;
 }
 
+/** True iff the hermit-ui pane for `sessionId` is currently running. */
+export function tmuxSessionExists(sessionId: string): boolean {
+  return hasSession(paneName(sessionId));
+}
+
+/** Public version of the pane name function — callers may need it. */
+export function tmuxPaneName(sessionId: string): string {
+  return paneName(sessionId);
+}
+
 /** List all tmux sessions whose name starts with the given prefix. */
 export function listSessions(prefix: string): string[] {
   const r = tmux(['list-sessions', '-F', '#{session_name}']);

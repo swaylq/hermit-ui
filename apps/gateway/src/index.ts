@@ -16,7 +16,7 @@ import { collectUsageWindows } from './collect/window';
 import { api } from './api';
 import { tick as taskTick } from './system-task-runner';
 import { restartTick } from './restart-runner';
-import { chatTick, chatCancelTick } from './chat-runner';
+import { chatTick, chatCancelTick, shutdownChatRunner } from './chat-runner';
 
 console.log('[gateway] starting');
 
@@ -113,7 +113,10 @@ loop(pushLaunchAgents, 5 * 60_000);
 loop(pushUsage, 5 * 60_000);
 loop(pushUsageWindows, 5 * 60_000);
 
-process.on('SIGINT', () => {
-  console.log('[gateway] SIGINT, exiting');
+function shutdown(signal: string) {
+  console.log(`[gateway] ${signal}, exiting`);
+  try { shutdownChatRunner(); } catch {}
   process.exit(0);
-});
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
