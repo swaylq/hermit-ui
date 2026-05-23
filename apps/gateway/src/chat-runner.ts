@@ -18,6 +18,7 @@
 
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import {
   ensureSession,
   sendKeys,
@@ -29,9 +30,30 @@ import {
   tmuxSessionExists,
 } from '@hermit-ui/tmux-driver';
 
-import { AGENTS_ROOT } from './config';
+import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
 import { relayImages } from './image-relay';
+
+// MCP stub gives the in-pane claude three tools: set_session_title, log_status,
+// attach_image. Spawned as a stdio child of `claude --mcp-config <json>`.
+const MCP_STUB_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-stub.cjs');
+
+function buildMcpConfigArg(chatSessionId: string): string {
+  const config = {
+    mcpServers: {
+      hermit: {
+        command: 'node',
+        args: [MCP_STUB_PATH],
+        env: {
+          HERMIT_SESSION_ID: chatSessionId,
+          HERMIT_DASHBOARD_URL: DASHBOARD_URL,
+          HERMIT_KEY: ASST_KEY,
+        },
+      },
+    },
+  };
+  return JSON.stringify(config);
+}
 
 type PendingMsg = { id: string; sessionId: string; role: string; content: any; createdAt: string };
 type PendingSession = { id: string; agentName: string; claudeSessionId: string | null };
@@ -234,6 +256,14 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
   } else {
     // Fresh: pre-assign uuid via --session-id (added by ensureSession).
     claudeUuid = randomUUID();
+  }
+
+  // Wire the hermit-ui MCP stub on every spawn (fresh OR --resume). claude
+  // picks up the in-pane config and exposes mcp__hermit__{set_session_title,
+  // log_status, attach_image} to the agent. Reattach path skips this — the
+  // already-running claude inherited its mcp-config at original spawn.
+  if (!paneAlive) {
+    claudeArgs.push('--mcp-config', buildMcpConfigArg(session.id));
   }
 
   const { created, preExistingUuids } = ensureSession({

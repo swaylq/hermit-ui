@@ -1,21 +1,34 @@
 #!/usr/bin/env node
-// MCP stub spawned by `claude --mcp-config` for each chat turn.
+// MCP stub spawned by `claude --mcp-config` once per tmux chat session.
 //
-// Reads ASST_SESSION_ID + ASST_DASHBOARD_URL + ASST_KEY from env.
+// Reads HERMIT_SESSION_ID + HERMIT_DASHBOARD_URL + HERMIT_KEY from env (set by
+// chat-runner when assembling the --mcp-config payload).
+//
 // Exposes tools the agent can call mid-turn that route back to the dashboard:
-//   - set_session_title(title)  — rename this chat session
-//   - log_status(text)          — drop a system note into the chat timeline
+//   - set_session_title(title)        rename this chat session
+//   - log_status(text)                drop a system note in the timeline
+//   - attach_image(filePath, caption) upload a local image + render inline
 //
-// Talks JSON-RPC 2.0 over stdio per MCP spec, no SDK required (the SDK pulls
-// in too many deps for what is a 100-line transport).
+// Talks JSON-RPC 2.0 over stdio per MCP spec — no SDK needed (the SDK pulls in
+// too many deps for what is a 200-line transport).
 
 'use strict';
 
 const readline = require('node:readline');
+const fs = require('node:fs');
+const path = require('node:path');
 
-const SESSION_ID = process.env.ASST_SESSION_ID || '';
-const DASHBOARD_URL = process.env.ASST_DASHBOARD_URL || 'https://dash.swaylab.ai';
-const KEY = process.env.ASST_KEY || '';
+const SESSION_ID = process.env.HERMIT_SESSION_ID || '';
+const DASHBOARD_URL = process.env.HERMIT_DASHBOARD_URL || 'http://127.0.0.1:4101';
+const KEY = process.env.HERMIT_KEY || '';
+
+const MIME_BY_EXT = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+};
 
 function sendJson(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
@@ -36,7 +49,7 @@ async function trpcMutate(procedure, input) {
     headers: { 'content-type': 'application/json', 'x-asst-key': KEY },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`${procedure} → ${r.status}`);
+  if (!r.ok) throw new Error(`${procedure} → ${r.status}: ${await r.text().catch(() => '')}`);
   return r.json();
 }
 
@@ -46,7 +59,28 @@ async function postChatMessage(items) {
     headers: { 'content-type': 'application/json', 'x-asst-key': KEY },
     body: JSON.stringify({ items }),
   });
-  if (!r.ok) throw new Error(`sync/chat-message → ${r.status}`);
+  if (!r.ok) throw new Error(`sync/chat-message → ${r.status}: ${await r.text().catch(() => '')}`);
+  return r.json();
+}
+
+// Upload a file from local disk to /api/upload (multipart). Returns the
+// dashboard's response body (url, originalUrl, mimeType, width, height, …).
+async function uploadFile(filePath) {
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) throw new Error(`not a file: ${filePath}`);
+  const ext = path.extname(filePath).toLowerCase().replace(/^\./, '');
+  const mt = MIME_BY_EXT[ext];
+  if (!mt) throw new Error(`unsupported extension: ${ext || '<empty>'}`);
+  const buf = fs.readFileSync(filePath);
+  const fd = new FormData();
+  fd.append('sessionId', SESSION_ID);
+  fd.append('file', new Blob([buf], { type: mt }), path.basename(filePath));
+  const r = await fetch(`${DASHBOARD_URL}/api/upload`, {
+    method: 'POST',
+    headers: { 'x-asst-key': KEY },
+    body: fd,
+  });
+  if (!r.ok) throw new Error(`upload → ${r.status}: ${await r.text().catch(() => '')}`);
   return r.json();
 }
 
@@ -66,7 +100,7 @@ const TOOLS = [
   {
     name: 'log_status',
     description:
-      'Drop a short, italic system note into the chat timeline — useful for "starting long task X" / "checkpoint Y reached" updates that the user benefits from seeing in-line.',
+      'Drop a short system note into the chat timeline — useful for "starting long task X" / "checkpoint Y reached" updates that the user benefits from seeing in-line.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -75,10 +109,23 @@ const TOOLS = [
       required: ['text'],
     },
   },
+  {
+    name: 'attach_image',
+    description:
+      'Send an image to the user. Pass an absolute path to a PNG / JPEG / GIF / WebP file on the local filesystem (e.g. a screenshot you just produced, a generated diagram). Optional caption renders above the image. The dashboard auto-resizes anything over 2000px long-edge so this is safe to use on full-page screenshots.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Absolute path to the image file on this machine.' },
+        caption: { type: 'string', description: 'Optional caption rendered above the image in the chat.' },
+      },
+      required: ['filePath'],
+    },
+  },
 ];
 
 async function dispatchTool(name, args) {
-  if (!SESSION_ID) throw new Error('ASST_SESSION_ID missing');
+  if (!SESSION_ID) throw new Error('HERMIT_SESSION_ID missing');
   if (name === 'set_session_title') {
     if (typeof args?.title !== 'string') throw new Error('title required');
     await trpcMutate('chat.setTitle', { id: SESSION_ID, title: args.title.slice(0, 120) });
@@ -95,6 +142,32 @@ async function dispatchTool(name, args) {
       },
     ]);
     return 'ok — logged';
+  }
+  if (name === 'attach_image') {
+    const fp = args?.filePath;
+    if (typeof fp !== 'string' || !fp) throw new Error('filePath required');
+    if (!fs.existsSync(fp)) throw new Error(`file not found: ${fp}`);
+    const up = await uploadFile(fp);
+    const blocks = [];
+    if (typeof args?.caption === 'string' && args.caption.trim()) {
+      blocks.push({ type: 'text', text: args.caption.trim() });
+    }
+    blocks.push({
+      type: 'image',
+      source: { type: 'url', url: up.url, media_type: up.mimeType },
+      ...(typeof up.width === 'number' && typeof up.height === 'number'
+        ? { width: up.width, height: up.height }
+        : {}),
+    });
+    await postChatMessage([
+      {
+        sessionId: SESSION_ID,
+        role: 'assistant',
+        content: blocks,
+        externalId: `attach-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      },
+    ]);
+    return `ok — image attached (${up.width ?? '?'}×${up.height ?? '?'} → ${up.url})`;
   }
   throw new Error(`unknown tool: ${name}`);
 }
@@ -114,7 +187,7 @@ rl.on('line', async (line) => {
       sendResult(id, {
         protocolVersion: '2024-11-05',
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'asst-mcp', version: '0.1.0' },
+        serverInfo: { name: 'hermit-mcp', version: '0.2.0' },
       });
       return;
     }
