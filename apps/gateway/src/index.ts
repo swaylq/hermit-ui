@@ -10,6 +10,7 @@
 //   usage         5min
 
 import { collectAgents } from './collect/agents';
+import { collectAgentSnapshots } from './collect/agent-snapshot';
 import { collectLaunchAgents } from './collect/launchAgents';
 import { collectUsage } from './collect/usage';
 import { collectUsageWindows } from './collect/window';
@@ -34,6 +35,14 @@ async function pushAgents() {
   await safe('agents', async () => {
     const agents = collectAgents();
     await api.syncAgents(agents);
+  });
+}
+
+async function pushAgentSnapshots() {
+  await safe('agent-snapshots', async () => {
+    const items = collectAgentSnapshots();
+    if (items.length === 0) return;
+    await api.syncAgentSnapshots(items);
   });
 }
 
@@ -97,6 +106,7 @@ function loop(fn: () => Promise<void>, ms: number) {
 // Initial run kicks all uploaders ASAP so the dashboard isn't empty.
 (async () => {
   await pushAgents();
+  await pushAgentSnapshots();
   await pushLaunchAgents();
   await pushUsage();
   await pushUsageWindows();
@@ -105,6 +115,7 @@ function loop(fn: () => Promise<void>, ms: number) {
 })();
 
 loop(pushAgents, 30_000);
+loop(pushAgentSnapshots, 60_000);
 loop(pushTaskTick, 15_000);
 loop(pushRestartTick, 10_000);
 loop(pushChatTick, 2_000);

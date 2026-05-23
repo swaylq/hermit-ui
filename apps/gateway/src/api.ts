@@ -22,6 +22,7 @@ async function get<T>(path: string): Promise<T> {
 
 export const api = {
   syncAgents: (agents: any[]) => post('/api/sync/agents', { agents }),
+  syncAgentSnapshots: (items: any[]) => post('/api/sync/agent-snapshot', { items }),
   syncLaunchAgents: (items: any[]) => post('/api/sync/launchagents', { items }),
   syncUsage: (items: any[]) => post('/api/sync/usage', { items }),
   syncUsageWindows: (items: any[]) => post('/api/sync/usage-window', { items }),

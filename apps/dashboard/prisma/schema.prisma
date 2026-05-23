@@ -110,6 +110,13 @@ model Agent {
   transcriptPath  String?
   updatedAt       DateTime @updatedAt
 
+  // Gateway-pre-aggregated tail snippets of the latest JSONL transcript.
+  // Dashboard's /agents detail sheet reads these directly — no shell-out on
+  // the VPS. Refreshed on the gateway's snapshot tick (~60s).
+  lastUserPrompt    String?  @db.Text
+  lastAssistantText String?  @db.Text
+  snapshotAt        DateTime?
+
   // Cross-process restart signal. Dashboard UI sets this via tRPC; gateway
   // polls, runs restart.sh, then nulls both fields back out.
   restartRequestedAt DateTime?
