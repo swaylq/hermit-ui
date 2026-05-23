@@ -1,7 +1,7 @@
 {
   "name": "create-hermit-agent",
-  "version": "0.1.57",
-  "description": "Bootstrap a Telegram-connected Claude Code agent. Hermit-crab style — borrow the shell, bring your own body.",
+  "version": "0.2.0",
+  "description": "Scaffold a hermit-ui Claude Code agent — chat from the web dashboard, no Telegram required.",
   "type": "module",
   "bin": {
     "create-hermit-agent": "bin/create-hermit-agent.js"
@@ -22,11 +22,12 @@
   "keywords": [
     "claude-code",
     "claude",
-    "telegram",
     "agent",
-    "bot",
     "assistant",
-    "hermit-crab"
+    "hermit-agent",
+    "hermit-ui",
+    "tmux",
+    "dashboard"
   ],
   "author": "swaylq",
   "license": "MIT",
@@ -41,10 +42,8 @@
   "files": [
     "bin/",
     "template/",
-    "template-codex/",
     "assets/",
     "README.md",
-    "README.zh-CN.md",
     "LICENSE"
   ]
 }

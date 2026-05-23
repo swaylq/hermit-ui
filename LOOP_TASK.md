@@ -35,7 +35,7 @@
 - [x] **fork `apps/cli` from hermit-agent** — package + template copied; npm-publish name kept as `create-hermit-agent`. Internal rewrite still pending in M2.
 - [x] **DB reset** — `pg_dump asst_dashboard > _research/db-backups/asst_dashboard-pre-hermit-ui-20260523-140356.sql.gz`, `DROP SCHEMA public CASCADE; CREATE SCHEMA public;`, `prisma migrate deploy` ran 8 migrations clean, `seed-machine.ts` seeded `hermit-ui-dev` row.
 
-### M2 — Agent template (no Telegram)
+### M2 — Agent template (no Telegram) ✓ COMPLETE
 
 - [x] **merge SOUL + IDENTITY → IDENTITY.md** — done; persona core values + name/vibe folded into one file; SOUL.md removed from template.
 - [x] **merge TOOLS + ACCOUNTS → TOOLS.md** — done; `## Accounts` section at the bottom; ACCOUNTS.md deleted.
@@ -46,7 +46,7 @@
 - [x] **rewrite `template/CLAUDE.md`** — done; new bootstrap order: IDENTITY → USER → AGENTS → TOOLS → `evolution/lessons.md`. No SOUL, no MEMORY.
 - [x] **scaffold test agent `agents/alpha`** — done; template copied + placeholders substituted (sway / Alpha / test assistant); 0 `{{`-style placeholders remain.
 - [x] **rewrite `apps/cli/bin/create-hermit-agent.js`** — fresh 330-line implementation (was 1680 lines, stashed as `create-hermit-agent.legacy.js`). Drops Telegram bot validation / plugin install / chat_id / clone-of doppel / --host codex / state-dir .env writing. Keeps: agent name, persona, user name, dashboard URL prompt, optional brave-key, pre-ack of Claude first-run dialogs, npm install. Smoke test: `node bin/create-hermit-agent.js beta -y --persona "smoke test" --user sway --dashboard-url http://127.0.0.1:4101` → scaffolds clean `agents/beta/` with 0 unsubstituted placeholders + valid settings.local.json scoped to beta's path. The `--dashboard-url` argument + `HERMIT_DASHBOARD_URL` env in settings replace `--user-id` / `--bot-token` as the network identity, deferring machine-key fetch to M6 (the CLI doesn't talk to the dashboard yet).
-- [ ] **rewrite `apps/cli/package.json` description + remove --host codex path** — description still mentions Telegram, template-codex/ still exists. Quick follow-up.
+- [x] **rewrite `apps/cli/package.json` description + remove --host codex path** — bumped version 0.1.57 → 0.2.0; description rewritten ("Scaffold a hermit-ui Claude Code agent — chat from the web dashboard, no Telegram required"); keywords trimmed (removed `telegram`, `bot`; added `hermit-ui`, `tmux`, `dashboard`); files manifest dropped `template-codex/` (it was never rsynced over anyway) and `README.zh-CN.md` (the en README rewrite is an M6 item). Verified `node bin/create-hermit-agent.js --help` still renders cleanly. No telegram refs left in active CLI surface (the only match is a self-disclaiming header comment).
 
 ### M3 — Tmux chat driver
 
