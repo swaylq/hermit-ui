@@ -68,6 +68,13 @@ export interface EnsureOpts {
   sessionId: string;
   /** Working directory for the spawned claude. */
   cwd: string;
+  /**
+   * Pre-assign claude's transcript uuid. When set, `--session-id <uuid>` is
+   * appended to claudeArgs so the JSONL filename is known up-front — avoids
+   * the race when two ChatSessions spin up against the same agent dir in
+   * parallel (both would otherwise see "the new jsonl" and pick the same one).
+   */
+  claudeSessionUuid?: string;
   /** Extra args to pass to `claude` (e.g. ['--model', 'opus']). */
   claudeArgs?: string[];
   /** Path to the claude binary. Defaults to `claude` on PATH. */
@@ -93,7 +100,11 @@ export function ensureSession(opts: EnsureOpts): { name: string; created: boolea
   }
 
   const claudeBin = opts.claudeBin ?? 'claude';
-  const claudeCmd = [claudeBin, ...(opts.claudeArgs ?? [])]
+  const extraArgs = [...(opts.claudeArgs ?? [])];
+  if (opts.claudeSessionUuid) {
+    extraArgs.push('--session-id', opts.claudeSessionUuid);
+  }
+  const claudeCmd = [claudeBin, ...extraArgs]
     .map((a) => shellQuote(a))
     .join(' ');
 
@@ -204,6 +215,21 @@ export async function getClaudeSessionUuid(opts: {
     await sleep(pollMs);
   }
   throw new Error(`Timed out waiting for claude transcript in ${projectDir}`);
+}
+
+/**
+ * Wait for a specific JSONL path to exist and be non-empty. Use this when
+ * the caller pre-assigned the uuid via `claudeSessionUuid` — no need to
+ * scan for "new" files.
+ */
+export async function awaitTranscript(jsonlPath: string, timeoutMs = 30_000, pollMs = 100): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const st = safeStat(jsonlPath);
+    if (st && st.size > 0) return;
+    await sleep(pollMs);
+  }
+  throw new Error(`Timed out waiting for transcript at ${jsonlPath}`);
 }
 
 /** Returns the encoded project directory under ~/.claude/projects/. */

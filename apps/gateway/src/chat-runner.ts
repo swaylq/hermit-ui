@@ -17,11 +17,13 @@
 // `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` is Anthropic-native.
 
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   ensureSession,
   sendKeys,
   sendInterrupt,
   getClaudeSessionUuid,
+  awaitTranscript,
   watchTranscript,
   encodedProjectDir,
   tmuxSessionExists,
@@ -179,36 +181,43 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
   // the watcher — don't spawn a second claude in the same pane.
   const paneAlive = tmuxSessionExists(session.id);
 
-  // Resume semantics: when respawning a previously-known session (DB has the
-  // claude uuid AND the pane is gone), pass --resume to inherit conversation.
+  // Pre-generate the claude session uuid for fresh spawns so we never race on
+  // "which new jsonl is mine?" when two sessions start against the same agent
+  // cwd at the same time. For resume, claude generates its own new uuid that
+  // includes the resumed history — we sniff via getClaudeSessionUuid.
   const claudeArgs: string[] = [];
-  if (session.claudeSessionId && !paneAlive) {
+  let claudeUuid: string;
+  let waitForResumeUuid = false;
+
+  if (paneAlive && session.claudeSessionId) {
+    // Already running — trust the DB.
+    claudeUuid = session.claudeSessionId;
+  } else if (session.claudeSessionId && !paneAlive) {
+    // Resume: claude --resume forks into a brand-new JSONL with full prior
+    // history (per happy's findings). Sniff the new uuid after spawn.
     claudeArgs.push('--resume', session.claudeSessionId);
+    waitForResumeUuid = true;
+    claudeUuid = ''; // filled in after spawn
+  } else {
+    // Fresh: pre-assign uuid via --session-id (added by ensureSession).
+    claudeUuid = randomUUID();
   }
 
   const { created, preExistingUuids } = ensureSession({
     sessionId: session.id,
     cwd,
     claudeArgs,
+    claudeSessionUuid: waitForResumeUuid ? undefined : claudeUuid || undefined,
   });
 
-  // Figure out which JSONL we're tailing.
-  let claudeUuid: string;
-  if (paneAlive && session.claudeSessionId) {
-    // Reattach to existing transcript.
-    claudeUuid = session.claudeSessionId;
-  } else if (session.claudeSessionId && claudeArgs.includes('--resume')) {
-    // claude --resume forks into a brand-new JSONL with full prior history
-    // (see happy's findings re: --resume rewriting session ids). Wait for it.
+  if (waitForResumeUuid) {
     claudeUuid = await getClaudeSessionUuid({ cwd, preExistingUuids });
   } else if (created) {
-    // Fresh session.
-    claudeUuid = await getClaudeSessionUuid({ cwd, preExistingUuids });
-  } else {
-    // Pane exists but DB had no uuid — pick the most-recently-modified jsonl.
-    // This only happens if we lost DB state somehow; log loudly.
-    console.warn(`[chat] session ${session.id.slice(0, 8)}: pane alive but no claudeSessionId in DB, falling back to newest jsonl`);
-    claudeUuid = await getClaudeSessionUuid({ cwd, preExistingUuids: new Set() });
+    // Pre-assigned uuid; just wait for claude to materialize the file.
+    await awaitTranscript(path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`)).catch((e) => {
+      // Non-fatal — the watcher will keep retrying as the file appears.
+      console.warn(`[chat] ${session.id.slice(0, 8)}: ${e.message}`);
+    });
   }
 
   const jsonlPath = path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`);

@@ -73,3 +73,13 @@ Format: title in `##`, then **What failed** / **Why** / **How to avoid**, ≤8 l
 **Why:** _(tbd)_
 
 **How to avoid:** Always `pg_dump` the asst_dashboard DB to a timestamped file before running any new `prisma migrate`. Use a separate schema namespace `hermit_ui` if conflicts arise.
+
+---
+
+## L8 — `getClaudeSessionUuid` polling races when sessions share a cwd
+
+**What failed:** Multi-session test spawned two tmux panes against the same agent cwd in parallel. Both `getClaudeSessionUuid` calls polled `~/.claude/projects/<encoded>/` after the same `preExistingUuids` snapshot, both saw the FIRST new `.jsonl` to appear, and both returned the same uuid. Result: both watchers tailed the same file, cross-contaminated, the second pane's transcript was orphaned.
+
+**Why:** "Pick the first new file in the dir after spawn" can't tell which file belongs to which spawn when multiple spawns are concurrent. The snapshot-diff approach assumes one writer at a time.
+
+**How to avoid:** Pre-assign claude's session uuid via `claude --session-id <uuid>` (added to `EnsureOpts.claudeSessionUuid` in `@hermit-ui/tmux-driver`). Then the JSONL path is known up-front; no scan needed. `awaitTranscript(path)` waits for that specific file. Reserve `getClaudeSessionUuid` for the `--resume` path only (where claude forks into a new uuid we can't predict).
