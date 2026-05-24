@@ -39,7 +39,6 @@
   "files": [
     "bin/create-hermit-agent.js",
     "template/",
-    "assets/",
     "README.md",
     "LICENSE"
   ],
