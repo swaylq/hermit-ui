@@ -1,14 +1,19 @@
+// tsx is hoisted to the workspace root under npm workspaces. `cwd: __dirname`
+// keeps `src/index.ts` resolution + .env discovery happy.
 const path = require('path');
+
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
 module.exports = {
   apps: [
     {
-      name: 'asst-gateway',
+      name: 'hermit-ui-gateway',
       cwd: __dirname,
-      script: path.join(__dirname, 'node_modules/.bin/tsx'),
+      script: path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx'),
       args: 'src/index.ts',
+      // DASHBOARD_URL / ASST_KEY / AGENTS_ROOT come from apps/gateway/.env
+      // — keep ecosystem.env minimal so VPS deploys can override via .env.
       env: {
-        DASHBOARD_URL: 'https://dash.swaylab.ai',
         NODE_ENV: 'production',
       },
       autorestart: true,

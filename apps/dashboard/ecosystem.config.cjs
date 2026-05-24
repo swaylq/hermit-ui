@@ -1,15 +1,19 @@
 // Same ecosystem on Mac and VPS. Paths use __dirname so it survives both.
-// Node interpreter falls back to whatever `node` resolves to in $PATH.
+// `next` lives in the monorepo's hoisted root node_modules; apps/dashboard/
+// doesn't have its own node_modules under npm workspaces, so we look two
+// levels up.
 const path = require('path');
+
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
 module.exports = {
   apps: [
     {
-      name: 'asst-dashboard',
+      name: 'hermit-ui-dashboard',
       cwd: __dirname,
-      script: path.join(__dirname, 'node_modules/next/dist/bin/next'),
-      args: `start -p ${process.env.PORT || '4100'}`,
-      env: { NODE_ENV: 'production', PORT: process.env.PORT || '4100' },
+      script: path.join(REPO_ROOT, 'node_modules', 'next', 'dist', 'bin', 'next'),
+      args: `start -p ${process.env.PORT || '4101'}`,
+      env: { NODE_ENV: 'production', PORT: process.env.PORT || '4101' },
       autorestart: true,
       max_restarts: 20,
       restart_delay: 2000,
