@@ -137,15 +137,15 @@ repos I star.
 The CLI scaffolds **per-agent artifacts**. Don't try to replicate **host-wide infrastructure** into every new agent — pick a single coordinator (by convention the first hermit on the box, usually `asst`) and keep those things there only.
 
 **Centralize in the coordinator, do NOT duplicate per-agent:**
-- LaunchAgents that should fire once per machine, not once per agent. The 10-min status digest (`com.hermit-agent.<coordinator>.status-reporter.plist`) is the canonical example — the CLI already detects an existing `com.hermit-agent.*.status-reporter.plist` and skips installing another, but anything *you* add (disk monitors, log rotation, queue drainers) needs the same discipline.
-- Cross-agent watchdogs and aggregators. `scripts/multi-agent-status-report.sh` already scans `../*/` and reports on every sibling; running a copy in each agent would N-multiply the work and spam the digest.
+- LaunchAgents that should fire once per machine, not once per agent (disk monitors, log rotation, queue drainers).
+- Cross-agent watchdogs and aggregators — under hermit-ui the dashboard's gateway already collects per-agent state for every sibling under AGENTS_ROOT; don't install a parallel scanner in each agent.
 - Shared lockfiles, global cron jobs, anything that would create N copies of one logical resource if run from each agent.
 
 **OK per-agent** (the CLI handles these correctly):
 - `restart.sh`, `start.sh`, the agent's `tmux` session.
 - Image-safety hooks, Playwright + Chrome profile.
-- `HEARTBEAT.md`, the session-scoped cron skill (dies with the session).
-- The agent's own bot token + `~/.claude/channels/telegram-<name>/`.
+- The session-scoped cron skill (dies with the session).
+- Anything the agent itself owns — its IDENTITY/USER/TOOLS markdown, its `evolution/` notes.
 
 Heuristic: if the artifact watches **the host** ("/tmp filling up", "every running agent"), put it in the coordinator. If it watches **one agent's own state** (its tmux pane, its `agent.pid`), per-agent is fine. When in doubt, default to coordinator-only — it's easier to copy a script later than to deduplicate N copies after they've drifted.
 

@@ -174,7 +174,6 @@ The `rm -rf` is safe because the workspace files are symlinks — removing a sym
 
 ## Notes
 
-- The status reporter (`scripts/multi-agent-status-report.sh`) auto-discovers doppels because each has a CLAUDE.md (symlinked) and `.claude/state/session-status.json` (per-clone real). Doppels show up as separate rows in the digest.
-- `ccusage` / claude-quota-probe see doppel sessions correctly because each session has its own encoded-cwd project dir under `~/.claude/projects/`. Top-spender list shows doppels as separate entries.
-- The `claude plugin install` step modifies `~/.claude/plugins/installed_plugins.json`. Same path the fresh-agent flow uses; not a `claude mcp` call, so it doesn't break running sessions' MCP handles.
+- The hermit-ui gateway auto-discovers doppels because each has a `CLAUDE.md` (symlinked) and its own `agent.pid` (per-clone real). Doppels show up as separate rows in the dashboard's /agents view.
+- `ccusage` sees doppel sessions correctly because each session has its own encoded-cwd project dir under `~/.claude/projects/`. Top-spender list shows doppels as separate entries.
 - If the parent has `FIRST_RUN.md`, it gets symlinked too. The clone reads it on first start (because AGENTS.md says to), follows it, then deletes the link — but since it's a symlink, deleting the link doesn't touch the parent's FIRST_RUN.md. (If parent's was already gone, no symlink is created.)

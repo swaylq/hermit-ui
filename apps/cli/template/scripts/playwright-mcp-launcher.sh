@@ -1,8 +1,12 @@
 #!/bin/bash
-# playwright-mcp-launcher.sh — Start playwright-mcp connected to this agent's Chrome.
+# playwright-mcp-launcher.sh — Start playwright-mcp connected to our self-managed Chrome
 #
-# Used as the MCP server command in .claude/settings.json (mcpServers.playwright-browser).
-# Ensures Chrome is running before attaching.
+# This script:
+# 1. Reads CDP port from browser/chrome.json
+# 2. Starts Chrome if not running
+# 3. Launches @playwright/mcp with --cdp-endpoint pointing to our Chrome
+#
+# Used as MCP server command in .claude/settings.json
 
 set -euo pipefail
 
@@ -18,7 +22,9 @@ if [ -f "$CHROME_JSON" ]; then
 fi
 
 if [ -z "${CDP_PORT:-}" ] || [ -z "${PID:-}" ] || ! kill -0 "$PID" 2>/dev/null; then
+  # Chrome not running, start it
   "$SCRIPT_DIR/chrome-launcher.sh" start >&2
+  # Re-read config
   if [ -f "$CHROME_JSON" ]; then
     CDP_PORT=$(python3 -c "import json; print(json.load(open('$CHROME_JSON')).get('cdp_port', ''))" 2>/dev/null || true)
   fi
@@ -31,17 +37,21 @@ fi
 
 CDP_ENDPOINT="http://127.0.0.1:${CDP_PORT}"
 
+# Prefer local installation over npx
 LOCAL_BIN="$AGENT_DIR/node_modules/.bin/playwright-mcp"
 
+# Build args
 ARGS=(
   "--cdp-endpoint" "$CDP_ENDPOINT"
   "--viewport-size" "1280x800"
 )
 
+# Add stealth init script if exists
 if [ -f "$STEALTH_JS" ]; then
   ARGS+=("--init-script" "$STEALTH_JS")
 fi
 
+# Launch playwright-mcp (local binary preferred)
 if [ -x "$LOCAL_BIN" ]; then
   exec "$LOCAL_BIN" "${ARGS[@]}"
 else
