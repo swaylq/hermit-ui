@@ -1,0 +1,191 @@
+# Deploying hermit-ui to a VPS
+
+Target shape after this guide:
+
+- `dash.swaylab.ai` → VPS `127.0.0.1:4101` (hermit-ui-dashboard, pm2-managed)
+- Postgres `asst_dashboard` (or fresh `hermit_ui`) hosts the schema; gateway pushes from Mac
+- Old `asst-dashboard` pm2 process stopped + archived
+
+This is a destructive cutover. Run the smoke pass below (and let it sit overnight at minimum) before flipping production DNS.
+
+## 0. Prereqs on VPS
+
+```bash
+# already there per TOOLS.md, but verify:
+ssh ubuntu@45.89.234.110 -- 'which node tmux pm2 caddy psql && node --version'
+# expected: node ≥ 20, tmux, pm2 9.x, caddy 2.x, psql client
+```
+
+## 1. Stage hermit-ui on VPS
+
+From Mac:
+
+```bash
+# Mac → VPS rsync, exclude noise
+rsync -av \
+  --exclude=node_modules --exclude=.next --exclude=.git \
+  --exclude='apps/*/logs' --exclude='_research/' --exclude='agents/' \
+  /Users/mac/claudeclaw/asst/hermit-ui/ \
+  ubuntu@45.89.234.110:/home/ubuntu/hermit-ui/
+```
+
+`agents/` is intentionally excluded — the gateway running on the Mac stays the authoritative source of agent state. The VPS dashboard only hosts the web UI + DB + receives gateway POSTs.
+
+## 2. Install deps + build on VPS
+
+```bash
+ssh ubuntu@45.89.234.110 << 'EOF'
+cd ~/hermit-ui
+npm install --no-audit --no-fund
+cd apps/dashboard
+node ../../node_modules/next/dist/bin/next build
+EOF
+```
+
+Build artifacts land in `apps/dashboard/.next/`.
+
+## 3. Postgres setup
+
+Pick one:
+
+**Option A — reuse `asst_dashboard` (matches the dev DB).** Schema is identical to local since we ran the same migrations.
+
+```bash
+ssh ubuntu@45.89.234.110 -- 'pg_dump asst_dashboard | gzip > ~/db-backups/asst_dashboard-pre-hermit-ui-$(date +%Y%m%d).sql.gz'
+ssh ubuntu@45.89.234.110 << 'EOF'
+cd ~/hermit-ui/apps/dashboard
+DATABASE_URL='postgresql://...local creds...' \
+  node ../../node_modules/prisma/build/index.js migrate deploy
+EOF
+```
+
+**Option B — fresh `hermit_ui` DB.** Cleaner, but the gateway needs `DASHBOARD_URL` + `ASST_KEY` re-seeded for the new machine row.
+
+```bash
+ssh ubuntu@45.89.234.110 -- 'createdb hermit_ui'
+# adjust apps/dashboard/.env DATABASE_URL on the VPS, then migrate deploy
+```
+
+## 4. Env on VPS
+
+`apps/dashboard/.env` (gitignored — write manually):
+
+```env
+DATABASE_URL="postgresql://mac@localhost:5432/asst_dashboard?schema=public"
+PORT=4101
+NODE_ENV=production
+HERMIT_UPLOAD_DIR=/var/hermit-ui/uploads
+```
+
+```bash
+ssh ubuntu@45.89.234.110 << 'EOF'
+sudo mkdir -p /var/hermit-ui/uploads
+sudo chown ubuntu:ubuntu /var/hermit-ui/uploads
+chmod 755 /var/hermit-ui/uploads
+EOF
+```
+
+## 5. Seed a machine + grab the X-Asst-Key
+
+```bash
+ssh ubuntu@45.89.234.110 << 'EOF'
+cd ~/hermit-ui/apps/dashboard
+node ../../node_modules/.bin/tsx scripts/seed-machine.ts hermit-ui-prod
+EOF
+# prints the X-Asst-Key once — STORE IT in 1Password / Keychain
+```
+
+That key goes into the **Mac-side** `apps/gateway/.env` (replacing the dev key) so the local gateway pushes to the VPS dashboard:
+
+```env
+DASHBOARD_URL=https://dash.swaylab.ai
+AGENTS_ROOT=/Users/mac/claudeclaw
+ASST_KEY=<paste from seed-machine.ts output>
+```
+
+`AGENTS_ROOT` switches from `hermit-ui/agents/` (dev) back to `/Users/mac/claudeclaw/` (real agents).
+
+## 6. pm2 start on VPS (staging port, NOT prod URL yet)
+
+```bash
+ssh ubuntu@45.89.234.110 << 'EOF'
+cd ~/hermit-ui/apps/dashboard
+pm2 start ecosystem.config.cjs
+pm2 save
+EOF
+```
+
+`hermit-ui-dashboard` is now serving on `127.0.0.1:4101` on the VPS, alongside the still-running `asst-dashboard` on `4100`.
+
+## 7. Caddy staging route — `dash-staging.swaylab.ai`
+
+Add to `/etc/caddy/Caddyfile` on the VPS:
+
+```caddy
+dash-staging.swaylab.ai {
+  reverse_proxy 127.0.0.1:4101
+  encode gzip zstd
+}
+```
+
+```bash
+ssh ubuntu@45.89.234.110 -- 'sudo caddy reload --config /etc/caddy/Caddyfile'
+```
+
+DNS: add `dash-staging.swaylab.ai` A-record → `45.89.234.110`.
+
+## 8. Smoke pass
+
+From your laptop / phone:
+
+- Open `https://dash-staging.swaylab.ai`
+- Log in with the X-Asst-Key from step 5
+- Verify `/agents` shows every entry from `~/claudeclaw/*` (Mac gateway pushes these)
+- Open a chat with a test agent, send a message, verify the reply streams back
+- Paste a screenshot into the composer, verify it renders inline
+- Let it sit overnight — collect anything weird
+
+## 9. Cutover — flip `dash.swaylab.ai` from 4100 → 4101
+
+Once smoke passes, swap the production block in `/etc/caddy/Caddyfile`:
+
+```diff
+ dash.swaylab.ai {
+-  reverse_proxy 127.0.0.1:4100
++  reverse_proxy 127.0.0.1:4101
+   encode gzip zstd
+ }
+```
+
+```bash
+ssh ubuntu@45.89.234.110 -- 'sudo caddy reload --config /etc/caddy/Caddyfile'
+```
+
+Then stop the old asst-dashboard:
+
+```bash
+ssh ubuntu@45.89.234.110 -- 'pm2 stop asst-dashboard && pm2 save'
+```
+
+## 10. Rollback (if cutover goes bad)
+
+```bash
+# 1. Revert Caddy block to 127.0.0.1:4100
+ssh ubuntu@45.89.234.110 -- 'sudo caddy reload'
+
+# 2. Bring asst-dashboard back
+ssh ubuntu@45.89.234.110 -- 'pm2 start asst-dashboard && pm2 save'
+
+# 3. (Optional) hermit-ui can stay running on 4101 for the next attempt
+```
+
+The chat history is in the postgres DB, so rollback doesn't drop user data — both dashboards read the same rows.
+
+## 11. Archive (after a clean week)
+
+```bash
+ssh ubuntu@45.89.234.110 -- 'pm2 delete asst-dashboard && pm2 save'
+ssh ubuntu@45.89.234.110 -- 'mv ~/asst-dashboard ~/asst-dashboard.deprecated'
+```
+
+Optionally drop the staging Caddy block + DNS once you're sure.
