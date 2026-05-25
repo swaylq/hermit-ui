@@ -136,12 +136,24 @@ function ChatPageInner() {
         )}
         aria-label="sessions"
       >
-        <div className="px-3 h-11 border-b border-border flex items-center justify-between">
+        <div className="px-3 h-11 border-b border-border flex items-center">
           <span className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground font-medium">
             Sessions <span className="text-muted-foreground/50">·</span> <span className="text-foreground tabular-nums">{sessions.data?.length ?? 0}</span>
           </span>
-          <Button size="sm" variant="ghost" className="h-7 text-xs px-2 -mr-1" onClick={() => setNewOpen((v) => !v)}>
-            + new
+        </div>
+        {/* Prominent "New chat" CTA at the top of the sidebar — ChatGPT-style.
+            Full-width affordance, becomes a Cancel toggle while the form is
+            open so the user can dismiss without losing their place. */}
+        <div className="px-2 pt-2">
+          <Button
+            variant={newOpen ? 'secondary' : 'outline'}
+            size="sm"
+            className="w-full justify-start gap-2 h-9"
+            onClick={() => setNewOpen((v) => !v)}
+            aria-expanded={newOpen}
+          >
+            <span className="text-base leading-none">{newOpen ? '×' : '+'}</span>
+            <span>{newOpen ? 'Cancel new chat' : 'New chat'}</span>
           </Button>
         </div>
 
@@ -197,7 +209,7 @@ function ChatPageInner() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-baseline justify-between gap-2">
                           <span className={cn('text-sm truncate', selected ? 'text-foreground font-medium' : 'text-foreground/90')}>
-                            {s.title || s.agentName}
+                            {s.title || s.preview || s.agentName}
                           </span>
                           <span className="text-[10px] font-mono text-muted-foreground/70 shrink-0 tabular-nums">
                             {relTime(s.lastMessageAt ?? s.startedAt)}
@@ -235,8 +247,8 @@ function ChatPageInner() {
             >
               <MenuIcon className="h-4 w-4" /> open sessions
             </Button>
-            <span className="hidden lg:block">pick a session on the left, or &quot;+ new&quot;</span>
-            <span className="lg:hidden text-xs text-muted-foreground">tap above, or &quot;+ new&quot; inside the drawer</span>
+            <span className="hidden lg:block">pick a session on the left, or start a New chat</span>
+            <span className="lg:hidden text-xs text-muted-foreground">tap above to open sessions, or start a New chat</span>
           </div>
         )}
       </main>
@@ -336,11 +348,58 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll on new messages.
+  // Track whether the messages viewport is pinned to the bottom. We only
+  // auto-scroll when the user is already there — otherwise reading older
+  // messages while the assistant streams would yank scroll position.
+  // The "scroll to bottom" pill below the messages reveals itself whenever
+  // `pinnedToBottom` is false.
+  const [pinnedToBottom, setPinnedToBottom] = useState(true);
+  // Treat the very first render as a "scroll to bottom" event regardless of
+  // the user's scroll position (which is meaningless before the first paint).
+  const firstScrollRef = useRef(true);
+
+  const getViewport = useCallback((): HTMLElement | null => {
+    return scrollRef.current?.querySelector(
+      '[data-slot="scroll-area-viewport"]',
+    ) as HTMLElement | null;
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const el = getViewport();
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+    setPinnedToBottom(true);
+  }, [getViewport]);
+
+  // Snap to bottom whenever message count changes — but only if the user is
+  // already at the bottom (or on first render). This is the "sticky bottom"
+  // pattern ChatGPT uses: streaming output keeps scrolling, but if you scroll
+  // up to re-read something, the assistant doesn't drag you back down.
   useEffect(() => {
-    const el = scrollRef.current?.querySelector('[data-slot="scroll-area-viewport"]') as HTMLElement | null;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.data?.length]);
+    const el = getViewport();
+    if (!el) return;
+    if (firstScrollRef.current) {
+      el.scrollTop = el.scrollHeight;
+      firstScrollRef.current = false;
+      return;
+    }
+    if (pinnedToBottom) el.scrollTop = el.scrollHeight;
+  }, [messages.data?.length, getViewport, pinnedToBottom]);
+
+  // Listen to viewport scroll to keep `pinnedToBottom` accurate. ~40px slack
+  // tolerates small layout shifts (image loads, code highlight) without
+  // unpinning the user.
+  useEffect(() => {
+    const el = getViewport();
+    if (!el) return;
+    const onScroll = () => {
+      const atBottom =
+        el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      setPinnedToBottom(atBottom);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [getViewport]);
 
   // user message just sent + still pending? (deliveredAt null on the latest user row)
   const lastMsg = messages.data?.[messages.data.length - 1];
@@ -494,6 +553,26 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
           {isWaitingAssistant && !streamingTailId && <TypingIndicator />}
         </div>
       </ScrollArea>
+      {/* Scroll-to-bottom pill: floats above the ComposeBar, only when the
+          user has scrolled up and the conversation has content. Pointer-events
+          gated so the pill doesn't catch clicks when hidden. */}
+      {!pinnedToBottom && (messages.data?.length ?? 0) > 0 && (
+        <div className="relative h-0 z-10 pointer-events-none">
+          <button
+            type="button"
+            onClick={() => scrollToBottom('smooth')}
+            aria-label="scroll to latest"
+            className={cn(
+              'pointer-events-auto absolute left-1/2 -translate-x-1/2 bottom-3',
+              'inline-flex items-center gap-1 rounded-full border border-border bg-background/95',
+              'px-3 py-1 text-xs font-medium text-foreground shadow-sm backdrop-blur',
+              'hover:bg-accent hover:text-foreground transition-colors cursor-pointer',
+            )}
+          >
+            <span aria-hidden="true">↓</span> latest
+          </button>
+        </div>
+      )}
 
       <ComposeBar
         sessionId={sessionId}
@@ -518,23 +597,49 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
   );
 }
 
-// Claude Code's harness writes "No response requested." as a single-text-block
-// assistant turn whenever a turn ends without the model producing substantive
-// text (turn killed mid-tool-call, prompt interpreted as pure instruction,
-// post-restart --resume picking up stale tool state, etc.). It's a JSONL
-// terminator marker, not the model's actual output — drop it from the UI.
+// Claude Code's harness writes "No response requested." as the visible-text
+// portion of an assistant turn whenever the model exited without producing
+// substantive output — typically post-restart `--resume` picking up a half-
+// finished tool task, a prompt the model read as pure instruction, or a turn
+// killed mid-tool-call. It's a JSONL terminator marker, not the model's
+// real reply. We keep the row visible (so the timeline doesn't lose a turn
+// boundary), but swap the misleading text for an honest one-liner explaining
+// what actually happened. Accepts accompanying thinking/empty blocks; bails
+// on anything else (tool_use / tool_result / image / real text).
 function isHarnessTerminator(content: unknown): boolean {
-  if (!Array.isArray(content) || content.length !== 1) return false;
-  const b = content[0];
-  if (!b || b.type !== 'text') return false;
-  return /^\s*no response requested\.?\s*$/i.test(String(b.text ?? ''));
+  if (!Array.isArray(content) || content.length === 0) return false;
+  let sawTerminator = false;
+  for (const b of content) {
+    if (!b || typeof b !== 'object') return false;
+    if (b.type === 'thinking') continue;
+    if (b.type === 'text') {
+      const text = String(b.text ?? '').trim();
+      if (!text) continue;
+      if (/^no response requested\.?$/i.test(text)) {
+        sawTerminator = true;
+        continue;
+      }
+      return false;
+    }
+    return false;
+  }
+  return sawTerminator;
+}
+
+function HarnessTerminatorRow({ ts }: { ts: Date | string }) {
+  return (
+    <div className="flex justify-center my-2">
+      <span
+        className="text-[11px] italic text-muted-foreground/70 font-mono px-2 py-0.5 rounded border border-dashed border-border"
+        title="Claude Code 在没产出回复文字的情况下结束了这一轮 — 通常发生在 restart 后 --resume 接续上一轮被中断的 tool 调用、或 prompt 被模型读成纯指令时。"
+      >
+        — turn ended without a reply · {relTime(ts)}
+      </span>
+    </div>
+  );
 }
 
 function MessageTimeline({ messages, streamingTailId }: { messages: Array<{ id: string; role: string; content: any; createdAt: Date | string }>; streamingTailId?: string | null }) {
-  // Filter out the harness-emitted "No response requested." placeholder turns
-  // up front so date-divider math + grouping aren't confused by them.
-  messages = messages.filter((m) => !(m.role === 'assistant' && isHarnessTerminator(m.content)));
-
   // Insert date dividers when day rolls over. Also coalesce consecutive
   // tool-result-only messages into a single row so a parallel-fanout batch
   // (e.g. 6 Read calls → 6 result rows) collapses to one expandable chip.
@@ -546,6 +651,13 @@ function MessageTimeline({ messages, streamingTailId }: { messages: Array<{ id: 
     if (!prevDay || !isSameDay(prevDay, m.createdAt)) {
       out.push(<DateDivider key={`d-${m.id}`} day={m.createdAt} />);
       prevDay = m.createdAt;
+    }
+    // Harness "No response requested." terminator → render as a small dashed
+    // pill explaining what actually ended the turn, not as a normal bubble.
+    if (m.role === 'assistant' && isHarnessTerminator(m.content)) {
+      out.push(<HarnessTerminatorRow key={m.id} ts={m.createdAt} />);
+      i += 1;
+      continue;
     }
     const blocks = m.content as Block[];
     const isToolResultOnly = blocks.length > 0 && blocks.every((b) => b.type === 'tool_result');
@@ -603,34 +715,37 @@ function EmptyChat({ agentName, onPickPrompt }: { agentName?: string; onPickProm
   const initials = (agentName ?? '?').slice(0, 2).toUpperCase();
   const suggestions = useMemo(
     () => [
-      `say hi to ${agentName ?? 'them'}`,
-      'what are you working on right now?',
-      'anything broken? show me recent failures from your daily log',
+      { title: 'Say hi', body: `say hi to ${agentName ?? 'them'}` },
+      { title: 'Check in', body: 'what are you working on right now?' },
+      { title: 'Triage failures', body: 'anything broken? show me recent failures from your daily log' },
+      { title: 'Reflect', body: 'what did you learn this week? any patterns worth saving to evolution.md?' },
     ],
     [agentName],
   );
   return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
+    <div className="flex min-h-[calc(100vh-12rem)] flex-col items-center justify-center px-4 py-16 text-center">
       <div
-        className="h-12 w-12 rounded-md bg-muted text-muted-foreground flex items-center justify-center font-mono text-xs font-medium"
+        className="h-16 w-16 rounded-2xl bg-foreground text-background flex items-center justify-center font-mono text-base font-medium shadow-sm"
         aria-hidden="true"
       >
         {initials}
       </div>
-      <h3 className="mt-4 text-sm font-medium text-foreground">
+      <h3 className="mt-5 text-lg font-medium tracking-tight text-foreground">
         Start a chat with <span className="font-mono">{agentName ?? '?'}</span>
       </h3>
-      <p className="mt-1 text-xs text-muted-foreground">pick a prompt or type your own below</p>
-      <div className="w-full max-w-md mt-6 space-y-1">
-        {suggestions.map((text, i) => (
+      <p className="mt-1.5 text-xs text-muted-foreground">pick a starter, or just type below</p>
+      <div className="w-full max-w-xl mt-7 grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {suggestions.map((s, i) => (
           <button
             type="button"
             key={i}
-            onClick={() => onPickPrompt(text)}
-            className="group w-full flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-left text-sm text-foreground/80 hover:text-foreground hover:border-foreground/30 hover:bg-accent/40 transition-colors cursor-pointer"
+            onClick={() => onPickPrompt(s.body)}
+            className="group h-full text-left rounded-xl border border-border bg-background px-3.5 py-3 hover:border-foreground/30 hover:bg-accent/40 transition-colors cursor-pointer"
           >
-            <span className="flex-1 truncate">{text}</span>
-            <span className="text-muted-foreground/60 group-hover:text-emerald-600 text-[11px] font-mono transition-colors" aria-hidden="true">↵</span>
+            <div className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground/80 group-hover:text-foreground/80 transition-colors">
+              {s.title}
+            </div>
+            <div className="mt-1 text-sm text-foreground/85 line-clamp-2">{s.body}</div>
           </button>
         ))}
       </div>
@@ -936,8 +1051,17 @@ function MessageRow({ role, content, ts, streamingTail = false }: { role: string
     );
   }
 
+  // Flatten visible text blocks into one plain-text string so the hover Copy
+  // action grabs only what the user can actually read (skip tool calls,
+  // thinking, images). Used by MessageActions below.
+  const plainText = content
+    .filter((b) => b.type === 'text' && (b as { text?: string }).text)
+    .map((b) => (b as { text?: string }).text ?? '')
+    .join('\n\n')
+    .trim();
+
   return (
-    <div className={`flex ${isHumanUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`group/msg flex ${isHumanUser ? 'justify-end' : 'justify-start'}`}>
       <div
         className={cn(
           'max-w-[85%] space-y-2 text-sm',
@@ -957,13 +1081,60 @@ function MessageRow({ role, content, ts, streamingTail = false }: { role: string
           </div>
         )}
         <div className={cn(
-          'text-[10px] font-mono pt-0.5 tabular-nums',
-          isHumanUser ? 'text-background/60' : 'text-muted-foreground/60',
+          'flex items-center gap-1.5 pt-0.5',
+          isHumanUser ? 'justify-end' : 'justify-start',
         )}>
-          {relTime(ts)}
+          <div className={cn(
+            'text-[10px] font-mono tabular-nums',
+            isHumanUser ? 'text-background/60' : 'text-muted-foreground/60',
+          )}>
+            {relTime(ts)}
+          </div>
+          {/* Hidden until row hover (or focus inside), to keep the rest text. */}
+          {plainText && !streamingTail && !isSystem && (
+            <MessageActions
+              text={plainText}
+              tone={isHumanUser ? 'on-dark' : 'on-light'}
+            />
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+// Compact hover-action cluster shown below a message bubble. Currently just
+// Copy; adding Edit/Regenerate later means dropping more icon buttons here.
+// `tone` flips foreground colors so the icon stays readable on light vs dark
+// bubble backgrounds.
+function MessageActions({ text, tone }: { text: string; tone: 'on-light' | 'on-dark' }) {
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // clipboard write can fail in non-secure contexts or when permission is
+      // denied — silently swallow rather than throw at the user.
+    }
+  }, [text]);
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={copied ? 'copied' : 'copy message'}
+      title={copied ? 'copied' : 'copy'}
+      className={cn(
+        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono transition-opacity cursor-pointer',
+        'opacity-0 group-hover/msg:opacity-100 focus-visible:opacity-100',
+        tone === 'on-dark'
+          ? 'text-background/70 hover:text-background hover:bg-background/10'
+          : 'text-muted-foreground/70 hover:text-foreground hover:bg-accent',
+      )}
+    >
+      {copied ? '✓ copied' : 'copy'}
+    </button>
   );
 }
 
@@ -1188,8 +1359,13 @@ function InlineToolResultBatch({ results }: { results: Array<{ type: string; too
 
 function oneLineArg(input: any): string {
   if (!input || typeof input !== 'object') return '';
-  // Prefer common single-arg fields by name.
-  for (const k of ['file_path', 'path', 'url', 'command', 'pattern', 'query', 'name', 'text']) {
+  // Path-shaped fields get tail-truncation so the basename stays visible —
+  // `…/long/path/foo.tsx` is more informative than `/Users/mac/…`.
+  for (const k of ['file_path', 'path']) {
+    if (typeof input[k] === 'string') return shortenPath(input[k]);
+  }
+  // URLs, commands, etc. stay head-anchored.
+  for (const k of ['url', 'command', 'pattern', 'query', 'name', 'text']) {
     if (typeof input[k] === 'string') return shorten(input[k]);
   }
   // Fall back to first string value.
@@ -1201,6 +1377,17 @@ function oneLineArg(input: any): string {
 function shorten(s: string, n = 60) {
   if (s.length <= n) return s;
   return s.slice(0, n - 1) + '…';
+}
+// Keep file basename visible — chip width is small, and basename + nearest
+// parent dir is what readers actually scan for. We pad with the parent dir
+// when we have room (e.g. `…/components/markdown.tsx`).
+function shortenPath(p: string, n = 48): string {
+  if (p.length <= n) return p;
+  const parts = p.split('/');
+  const tail = parts.slice(-2).join('/');
+  if (tail.length <= n - 1) return '…/' + tail;
+  // Last segment alone is still too long — fall back to head trunc.
+  return shorten(parts[parts.length - 1], n);
 }
 function firstLine(s: string): string {
   const i = s.indexOf('\n');

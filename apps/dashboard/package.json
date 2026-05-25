@@ -32,6 +32,7 @@
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
+    "remark-cjk-friendly": "^2.0.1",
     "remark-gfm": "^4.0.1",
     "shadcn": "^4.8.0",
     "superjson": "^2.2.6",

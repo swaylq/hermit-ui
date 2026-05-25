@@ -29,7 +29,7 @@ export const chatRouter = router({
   listSessions: machineProcedure
     .input(z.object({ agentName: z.string().optional() }).default({}))
     .query(async ({ ctx, input }) => {
-      return prisma.chatSession.findMany({
+      const rows = await prisma.chatSession.findMany({
         where: {
           machineId: ctx.machine.id,
           ...(input.agentName ? { agentName: input.agentName } : {}),
@@ -52,7 +52,24 @@ export const chatRouter = router({
           lastActivity: true,
           snapshotAt: true,
           _count: { select: { messages: true } },
+          // First user message → "preview" shown in the sidebar so two
+          // untitled sessions for the same agent are distinguishable. Limit
+          // to one row per session via Prisma's nested `take`.
+          messages: {
+            where: { role: 'user' },
+            orderBy: { createdAt: 'asc' },
+            take: 1,
+            select: { content: true },
+          },
         },
+      });
+      return rows.map((s) => {
+        const firstUserBlock = (s.messages[0]?.content as Array<{ type?: string; text?: string }> | undefined)?.find(
+          (b) => b?.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0,
+        );
+        const preview = firstUserBlock?.text?.replace(/\s+/g, ' ').trim().slice(0, 120) ?? null;
+        const { messages: _drop, ...rest } = s;
+        return { ...rest, preview };
       });
     }),
 
