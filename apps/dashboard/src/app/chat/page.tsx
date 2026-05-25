@@ -518,7 +518,23 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
   );
 }
 
+// Claude Code's harness writes "No response requested." as a single-text-block
+// assistant turn whenever a turn ends without the model producing substantive
+// text (turn killed mid-tool-call, prompt interpreted as pure instruction,
+// post-restart --resume picking up stale tool state, etc.). It's a JSONL
+// terminator marker, not the model's actual output — drop it from the UI.
+function isHarnessTerminator(content: unknown): boolean {
+  if (!Array.isArray(content) || content.length !== 1) return false;
+  const b = content[0];
+  if (!b || b.type !== 'text') return false;
+  return /^\s*no response requested\.?\s*$/i.test(String(b.text ?? ''));
+}
+
 function MessageTimeline({ messages, streamingTailId }: { messages: Array<{ id: string; role: string; content: any; createdAt: Date | string }>; streamingTailId?: string | null }) {
+  // Filter out the harness-emitted "No response requested." placeholder turns
+  // up front so date-divider math + grouping aren't confused by them.
+  messages = messages.filter((m) => !(m.role === 'assistant' && isHarnessTerminator(m.content)));
+
   // Insert date dividers when day rolls over. Also coalesce consecutive
   // tool-result-only messages into a single row so a parallel-fanout batch
   // (e.g. 6 Read calls → 6 result rows) collapses to one expandable chip.
