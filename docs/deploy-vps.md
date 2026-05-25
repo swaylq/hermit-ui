@@ -1,5 +1,10 @@
 # Deploying hermit-ui to a VPS
 
+> **2026-05-25 — initial cutover done.** `dash.swaylab.ai` now serves hermit-ui from VPS:4101. Three notes for next time:
+> - Production asst-dashboard was on `:4180`, **not** `:4100` (4100 hosts a different Clerk-authed next app — leave it alone). Caddy block was `dash.swaylab.ai:8443 → localhost:4180`.
+> - DB role + password live in `~/asst-dashboard/.vps-pgpass` on VPS; the role name is `asst_dashboard` (not `ubuntu`). For `pg_dump`, use `sudo -u postgres pg_dump asst_dashboard`.
+> - sudo prints `unable to resolve host japan-dev` warnings (no /etc/hosts entry). Harmless — commands still run.
+
 Target shape after this guide:
 
 - `dash.swaylab.ai` → VPS `127.0.0.1:4101` (hermit-ui-dashboard, pm2-managed)
