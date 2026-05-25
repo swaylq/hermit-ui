@@ -5,11 +5,17 @@ import Link from 'next/link';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { AgentDetailSheet } from '@/components/agent-detail-sheet';
-import { fmtBytes, ctxPct, relTime, stateColor } from '@/lib/format';
+import { relTime } from '@/lib/format';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
+
+type AgentListRow = inferRouterOutputs<AppRouter>['agents']['list'][number];
 
 export default function AgentsPage() {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 5000 });
+  // Agent metadata changes infrequently (gateway refreshes ~5min); session
+  // counts can change faster but 10s refetch is plenty.
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 10_000 });
 
   return (
     <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 space-y-4">
@@ -47,9 +53,7 @@ export default function AgentsPage() {
   );
 }
 
-function AgentRow({ agent, onOpenDetail }: { agent: any; onOpenDetail: () => void }) {
-  const c = stateColor(agent.state, agent.alive);
-  const pct = ctxPct(agent.contextTokens);
+function AgentRow({ agent, onOpenDetail }: { agent: AgentListRow; onOpenDetail: () => void }) {
   const initials = agent.name.slice(0, 2).toUpperCase();
 
   return (
@@ -66,9 +70,7 @@ function AgentRow({ agent, onOpenDetail }: { agent: any; onOpenDetail: () => voi
       className="group relative flex items-center gap-3 px-3 py-3 transition-colors hover:bg-accent/50 cursor-pointer focus:outline-none focus-visible:bg-accent/50"
     >
       <div
-        className={`h-8 w-8 rounded-md bg-muted text-muted-foreground flex items-center justify-center font-mono text-[10px] font-medium shrink-0 group-hover:text-foreground transition-colors ${
-          agent.alive ? '' : 'opacity-50'
-        }`}
+        className="h-8 w-8 rounded-md bg-muted text-muted-foreground flex items-center justify-center font-mono text-[10px] font-medium shrink-0 group-hover:text-foreground transition-colors"
         aria-hidden="true"
       >
         {initials}
@@ -78,25 +80,19 @@ function AgentRow({ agent, onOpenDetail }: { agent: any; onOpenDetail: () => voi
         <div className="flex items-center justify-between gap-2">
           <span className="font-medium text-sm truncate text-foreground">{agent.name}</span>
           <span className="text-[10px] font-mono text-muted-foreground/70 shrink-0 tabular-nums">
-            {relTime(agent.lastActivity)}
+            {agent.metadataAt ? relTime(agent.metadataAt) : 'never synced'}
           </span>
         </div>
-        <div className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground mt-0.5">
-          <span className="inline-flex items-center gap-1">
-            <span className={`h-1.5 w-1.5 rounded-full ${c.dot}`} />
-            {agent.alive ? agent.state ?? 'live' : 'down'}
-          </span>
-          {agent.contextTokens != null && (
-            <>
-              <span className="text-muted-foreground/40">·</span>
-              <span className="tabular-nums">
-                ctx <span className="text-foreground/80">{fmtBytes(agent.contextTokens)}</span>{' '}
-                <span className={pct >= 80 ? 'text-rose-500' : pct >= 50 ? 'text-amber-500' : 'text-muted-foreground/60'}>
-                  ({pct.toFixed(0)}%)
-                </span>
-              </span>
-            </>
+        <div className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground mt-0.5 tabular-nums">
+          <span>{agent.sessionCount} session{agent.sessionCount === 1 ? '' : 's'}</span>
+          {agent.activeSessionCount > 0 && (
+            <span className="inline-flex items-center gap-1 text-emerald-600">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              {agent.activeSessionCount} active
+            </span>
           )}
+          <span className="text-muted-foreground/40">·</span>
+          <span>{agent.skillNames.length} skill{agent.skillNames.length === 1 ? '' : 's'}</span>
         </div>
       </div>
 

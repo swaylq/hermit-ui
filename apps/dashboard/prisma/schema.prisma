@@ -60,6 +60,21 @@ model ChatSession {
   // Cleared by chat.ackSessionRestart once the pane is gone.
   restartRequestedAt  DateTime?
 
+  // ── Per-session runtime state (pushed by gateway session-snapshot tick) ──
+  // Each ChatSession is its own claude process inside its own tmux pane
+  // (`hermit-<sessionId>`). The dashboard's chat header + the agent-detail
+  // sheet's session list both render from these columns.
+  pid               Int?
+  alive             Boolean   @default(false)
+  state             String?
+  contextTokens     Int?
+  outputTokens      Int?
+  lastActivity      DateTime?
+  transcriptPath    String?
+  lastUserPrompt    String?   @db.Text
+  lastAssistantText String?   @db.Text
+  snapshotAt        DateTime?
+
   messages         ChatMessage[]
 
   @@index([machineId, agentName])
@@ -102,31 +117,28 @@ model UsageWindow {
   @@index([machineId])
 }
 
+// An Agent is a *static* workspace folder — its IDENTITY/USER/AGENTS/TOOLS
+// markdowns, scheduled tasks, skills, evolution notes. It has NO runtime
+// state (no pid, no alive, no ctx). Runtime lives on each ChatSession that
+// targets this agent (each gets its own claude inside `hermit-<sessionId>`).
 model Agent {
   id              String   @id @default(cuid())
   machineId       String
   machine         Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
   name            String
-  pid             Int?
-  alive           Boolean  @default(false)
-  state           String?
-  contextTokens   Int?
-  outputTokens   Int?
-  lastActivity    DateTime?
-  transcriptPath  String?
+  directory       String?  // absolute path on the gateway's host
   updatedAt       DateTime @updatedAt
 
-  // Gateway-pre-aggregated tail snippets of the latest JSONL transcript.
-  // Dashboard's /agents detail sheet reads these directly — no shell-out on
-  // the VPS. Refreshed on the gateway's snapshot tick (~60s).
-  lastUserPrompt    String?  @db.Text
-  lastAssistantText String?  @db.Text
-  snapshotAt        DateTime?
-
-  // Cross-process restart signal. Dashboard UI sets this via tRPC; gateway
-  // polls, runs restart.sh, then nulls both fields back out.
-  restartRequestedAt DateTime?
-  restartStartedAt   DateTime?
+  // Static-metadata blob pushed by the gateway every ~5 min. The detail
+  // sheet renders each text as markdown; `skillNames` is a chip list.
+  identityText      String?   @db.Text
+  userText          String?   @db.Text
+  agentsText        String?   @db.Text
+  toolsText         String?   @db.Text
+  evolutionLessons  String?   @db.Text
+  skillNames        String[]  @default([])
+  memorySummary     String?   @db.Text
+  metadataAt        DateTime?
 
   events          Event[]
 

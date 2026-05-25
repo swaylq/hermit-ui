@@ -90,7 +90,7 @@ function ChatPageInner() {
   }, [drawerOpen]);
 
   return (
-    <div className="h-[calc(100vh-3.5rem)] grid lg:grid-cols-[280px_1fr] overflow-hidden bg-background">
+    <div className="h-[calc(100vh-3.5rem)] grid grid-rows-1 lg:grid-cols-[280px_1fr] overflow-hidden bg-background">
       {/* mobile-only backdrop — lg:hidden hides it on desktop */}
       <div
         onClick={() => setDrawerOpen(false)}
@@ -296,10 +296,6 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
   });
   const closeS = trpc.chat.closeSession.useMutation({ onSuccess: () => sessionMeta.refetch() });
   const reopenS = trpc.chat.reopenSession.useMutation({ onSuccess: () => sessionMeta.refetch() });
-  const agentInfo = trpc.agents.byName.useQuery(
-    { name: session?.agentName ?? '' },
-    { enabled: !!session, refetchInterval: 10_000 },
-  );
 
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -308,7 +304,7 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
 
   // Auto-scroll on new messages.
   useEffect(() => {
-    const el = scrollRef.current?.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement | null;
+    const el = scrollRef.current?.querySelector('[data-slot="scroll-area-viewport"]') as HTMLElement | null;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.data?.length]);
 
@@ -397,15 +393,19 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
             </div>
             <div className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground truncate">
               <span className="text-foreground/70">{session?.agentName}</span>
-              {agentInfo.data?.agent && (
+              {session && (
                 <>
                   <span className="text-muted-foreground/40">·</span>
                   <span className="inline-flex items-center gap-1">
-                    <span className={`h-1.5 w-1.5 rounded-full ${agentInfo.data.agent.alive ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-                    {agentInfo.data.agent.state ?? (agentInfo.data.agent.alive ? 'live' : 'down')}
+                    <span className={`h-1.5 w-1.5 rounded-full ${session.alive ? 'bg-emerald-500' : 'bg-zinc-500'}`} />
+                    {session.alive ? session.state ?? 'live' : 'idle'}
                   </span>
-                  <span className="text-muted-foreground/40">·</span>
-                  <CtxBar tokens={agentInfo.data.agent.contextTokens} />
+                  {session.contextTokens != null && (
+                    <>
+                      <span className="text-muted-foreground/40">·</span>
+                      <CtxBar tokens={session.contextTokens} />
+                    </>
+                  )}
                 </>
               )}
               {session?.closedAt && <><span className="text-muted-foreground/40">·</span><span className="text-muted-foreground">closed</span></>}
@@ -423,7 +423,7 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
         )}
       </div>
 
-      <ScrollArea ref={scrollRef} className="flex-1 bg-background">
+      <ScrollArea ref={scrollRef} className="flex-1 min-h-0 bg-background">
         <div className="px-4 py-4 max-w-3xl mx-auto">
           {messages.isPending ? (
             <Skeleton className="h-32" />
@@ -724,10 +724,14 @@ function ComposeBar({
             onChange={onChange}
             onPaste={onPaste}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                submit();
-              }
+              if (e.key !== 'Enter') return;
+              // IME composition (中文输入法 etc.): Enter confirms a candidate,
+              // not a send. keyCode 229 covers older browsers that don't set
+              // isComposing.
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (e.shiftKey) return;
+              e.preventDefault();
+              submit();
             }}
             placeholder={
               disabled
@@ -736,7 +740,7 @@ function ComposeBar({
                 ? 'assistant is working… (esc to stop)'
                 : uploadingCount > 0
                 ? `uploading ${uploadingCount}…`
-                : 'message (⌘↵ to send · paste/drop images to attach)'
+                : 'message (↵ to send · ⇧↵ newline · paste/drop images to attach)'
             }
             disabled={disabled || showStop}
             rows={1}

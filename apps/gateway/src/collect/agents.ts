@@ -1,142 +1,97 @@
-// Walk /Users/mac/claudeclaw/* for agents, probe state, return rows for upload.
-// Same logic as the previous dashboard collect/agents.ts but pure (no DB write).
+// collect/agents.ts — STATIC metadata reader.
+//
+// Walks AGENTS_ROOT, finds every directory with a CLAUDE.md (the hermit
+// scaffold marker), reads its IDENTITY/USER/AGENTS/TOOLS markdowns + the
+// evolution lesson log + the skill folder list + a memory summary. No pid
+// probing, no JSONL tailing, no lsof — all runtime state lives on
+// ChatSession now (see collect/session-snapshot.ts).
+//
+// Cadence: pushed every ~5 min via index.ts. Markdown files barely churn.
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { AGENTS_ROOT, PROJECTS_ROOT } from '../config';
+import { AGENTS_ROOT } from '../config';
 
-function safeRead(p: string): string | null {
-  try {
-    return fs.readFileSync(p, 'utf8');
-  } catch {
-    return null;
-  }
-}
-function readJson<T = unknown>(p: string): T | null {
-  const s = safeRead(p);
-  if (!s) return null;
-  try {
-    return JSON.parse(s) as T;
-  } catch {
-    return null;
-  }
-}
-function alive(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function sh(cmd: string, timeoutMs = 2000): string {
-  const r = spawnSync('sh', ['-c', cmd], { encoding: 'utf8', timeout: timeoutMs });
-  return (r.stdout ?? '').trim();
-}
+const MAX_TEXT_BYTES = 16 * 1024;       // 16 KB per markdown — anything bigger gets truncated
+const MEMORY_TOPN = 6;                  // top N memory files to mention by name
 
-let claudePidByCwd: Map<string, number> | null = null;
-function findClaudeProcessByCwd(cwd: string): number | null {
-  if (!claudePidByCwd) {
-    claudePidByCwd = new Map();
-    const pids = sh(`pgrep -u "$USER" -f '/.local/share/claude/versions/' 2>/dev/null`, 1500)
-      .split('\n')
-      .filter(Boolean);
-    for (const pidStr of pids) {
-      const pid = Number(pidStr);
-      if (!pid) continue;
-      const lsofOut = sh(`lsof -a -p ${pid} -d cwd 2>/dev/null | tail -1`, 1500);
-      const m = lsofOut.match(/\s(\/\S+)\s*$/);
-      if (m) claudePidByCwd.set(m[1], pid);
-    }
-  }
-  return claudePidByCwd.get(cwd) ?? null;
-}
-
-function latestJsonl(projectDir: string): { path: string; mtimeMs: number } | null {
-  if (!fs.existsSync(projectDir)) return null;
-  let best: { path: string; mtimeMs: number } | null = null;
-  for (const ent of fs.readdirSync(projectDir)) {
-    if (!ent.endsWith('.jsonl')) continue;
-    const full = path.join(projectDir, ent);
-    try {
-      const st = fs.statSync(full);
-      if (!best || st.mtimeMs > best.mtimeMs) best = { path: full, mtimeMs: st.mtimeMs };
-    } catch {}
-  }
-  return best;
-}
-
-function lastUsage(jsonlPath: string | null): { totalIn: number; output: number } | null {
-  if (!jsonlPath) return null;
-  const cmd = `grep '"type":"assistant"' ${JSON.stringify(jsonlPath)} | tail -1 | jq -c '.message.usage // empty' 2>/dev/null`;
-  const out = sh(cmd, 3000);
-  if (!out) return null;
+function safeRead(p: string, maxBytes = MAX_TEXT_BYTES): string | null {
   try {
-    const u = JSON.parse(out);
-    return {
-      totalIn: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0),
-      output: u.output_tokens || 0,
-    };
+    const buf = fs.readFileSync(p);
+    if (buf.length <= maxBytes) return buf.toString('utf8');
+    return buf.subarray(0, maxBytes).toString('utf8') + `\n\n…[truncated ${buf.length - maxBytes} bytes]`;
   } catch {
     return null;
   }
 }
 
-export type AgentRow = {
+function listSkills(agentDir: string): string[] {
+  const skillsDir = path.join(agentDir, '.claude', 'skills');
+  if (!fs.existsSync(skillsDir)) return [];
+  try {
+    return fs
+      .readdirSync(skillsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort();
+  } catch {
+    return null as unknown as string[]; // unreachable; lint guard only
+  }
+}
+
+function memorySummary(agentDir: string): string | null {
+  const memDir = path.join(agentDir, 'memory');
+  if (!fs.existsSync(memDir)) return null;
+  let entries: string[];
+  try {
+    entries = fs
+      .readdirSync(memDir, { withFileTypes: true })
+      .filter((d) => d.isFile() && d.name.endsWith('.md'))
+      .map((d) => d.name)
+      .sort()
+      .reverse(); // newest first when names are YYYY-MM-DD.md
+  } catch {
+    return null;
+  }
+  if (entries.length === 0) return null;
+  const top = entries.slice(0, MEMORY_TOPN).join(', ');
+  const tail = entries.length > MEMORY_TOPN ? ` …+${entries.length - MEMORY_TOPN} more` : '';
+  return `${entries.length} files in memory/: ${top}${tail}`;
+}
+
+export interface AgentRow {
   name: string;
-  pid: number | null;
-  alive: boolean;
-  state: string | null;
-  contextTokens: number | null;
-  outputTokens: number | null;
-  lastActivity: string | null;
-  transcriptPath: string | null;
-};
+  directory: string;
+  identityText: string | null;
+  userText: string | null;
+  agentsText: string | null;
+  toolsText: string | null;
+  evolutionLessons: string | null;
+  skillNames: string[];
+  memorySummary: string | null;
+}
 
-function probe(name: string): AgentRow | null {
-  const dir = path.join(AGENTS_ROOT, name);
-  if (!fs.existsSync(path.join(dir, 'CLAUDE.md'))) return null;
-
-  const pidRaw = (safeRead(path.join(dir, 'agent.pid')) ?? '').trim();
-  let pid: number | null = pidRaw && /^\d+$/.test(pidRaw) ? Number(pidRaw) : null;
-  let pidAlive = pid != null && alive(pid);
-  if (!pidAlive) {
-    const claudePid = findClaudeProcessByCwd(dir);
-    if (claudePid) {
-      pid = claudePid;
-      pidAlive = true;
-    }
-  }
-
-  const status = readJson<{ state?: string; last_activity?: string }>(
-    path.join(dir, '.claude/state/session-status.json'),
-  );
-  const projectDir = path.join(PROJECTS_ROOT, `-Users-mac-claudeclaw-${name}`);
-  const jsonl = latestJsonl(projectDir);
-  const usage = lastUsage(jsonl?.path ?? null);
-
+function probe(agentDir: string, name: string): AgentRow | null {
+  if (!fs.existsSync(path.join(agentDir, 'CLAUDE.md'))) return null;
   return {
     name,
-    pid,
-    alive: pidAlive,
-    state: status?.state ?? null,
-    contextTokens: usage?.totalIn ?? null,
-    outputTokens: usage?.output ?? null,
-    lastActivity: status?.last_activity ?? (jsonl ? new Date(jsonl.mtimeMs).toISOString() : null),
-    transcriptPath: jsonl?.path ?? null,
+    directory: agentDir,
+    identityText: safeRead(path.join(agentDir, 'IDENTITY.md')),
+    userText: safeRead(path.join(agentDir, 'USER.md')),
+    agentsText: safeRead(path.join(agentDir, 'AGENTS.md')),
+    toolsText: safeRead(path.join(agentDir, 'TOOLS.md')),
+    evolutionLessons: safeRead(path.join(agentDir, 'evolution', 'lessons.md')),
+    skillNames: listSkills(agentDir),
+    memorySummary: memorySummary(agentDir),
   };
 }
 
 export function collectAgents(): AgentRow[] {
-  claudePidByCwd = null; // reset per call
-  const dirs = fs
+  if (!fs.existsSync(AGENTS_ROOT)) return [];
+  return fs
     .readdirSync(AGENTS_ROOT, { withFileTypes: true })
     .filter((d) => d.isDirectory())
-    .map((d) => d.name)
-    .filter((n) => !['scripts', 'agentos'].includes(n));
-  return dirs
-    .map((n) => probe(n))
+    .map((d) => probe(path.join(AGENTS_ROOT, d.name), d.name))
     .filter((r): r is AgentRow => r !== null)
     .sort((a, b) => a.name.localeCompare(b.name));
 }

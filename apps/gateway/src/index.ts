@@ -2,22 +2,23 @@
 // derived state up to the dashboard's postgres and fires SystemTasks against
 // the local agent tree.
 //
-// Intervals are intentionally staggered so we don't tax the dashboard or
-// burn ccusage runs needlessly:
-//   agents          15s   (M4.4: bumped from 30s — dashboard never pulls now)
-//   agent-snapshots 60s   (JSONL tail aggregation for /agents detail sheet)
-//   tasks tick      15s
-//   launchagents    5min
-//   usage           5min
+// Intervals (staggered):
+//   agents              5 min  (static folder metadata — markdowns barely churn)
+//   session-snapshots   30 s   (per-ChatSession runtime: alive/pid/ctx/jsonl tail)
+//   tasks tick          15 s
+//   chat tick           2  s
+//   chat-cancel tick    1.5s
+//   chat-restart tick   2  s
+//   launchagents        5 min
+//   usage               5 min
 
 import { collectAgents } from './collect/agents';
-import { collectAgentSnapshots } from './collect/agent-snapshot';
+import { collectSessionSnapshots } from './collect/session-snapshot';
 import { collectLaunchAgents } from './collect/launchAgents';
 import { collectUsage } from './collect/usage';
 import { collectUsageWindows } from './collect/window';
 import { api } from './api';
 import { tick as taskTick } from './system-task-runner';
-import { restartTick } from './restart-runner';
 import { chatTick, chatCancelTick, chatRestartTick, shutdownChatRunner } from './chat-runner';
 
 console.log('[gateway] starting');
@@ -39,11 +40,11 @@ async function pushAgents() {
   });
 }
 
-async function pushAgentSnapshots() {
-  await safe('agent-snapshots', async () => {
-    const items = collectAgentSnapshots();
+async function pushSessionSnapshots() {
+  await safe('session-snapshots', async () => {
+    const items = await collectSessionSnapshots();
     if (items.length === 0) return;
-    await api.syncAgentSnapshots(items);
+    await api.syncSessionSnapshots(items);
   });
 }
 
@@ -80,12 +81,6 @@ async function pushTaskTick() {
   });
 }
 
-async function pushRestartTick() {
-  await safe('restart-tick', async () => {
-    await restartTick();
-  });
-}
-
 async function pushChatTick() {
   await safe('chat-tick', async () => {
     await chatTick();
@@ -113,18 +108,16 @@ function loop(fn: () => Promise<void>, ms: number) {
 // Initial run kicks all uploaders ASAP so the dashboard isn't empty.
 (async () => {
   await pushAgents();
-  await pushAgentSnapshots();
+  await pushSessionSnapshots();
   await pushLaunchAgents();
   await pushUsage();
   await pushUsageWindows();
   await pushTaskTick();
-  await pushRestartTick();
 })();
 
-loop(pushAgents, 15_000);
-loop(pushAgentSnapshots, 60_000);
+loop(pushAgents, 5 * 60_000);
+loop(pushSessionSnapshots, 30_000);
 loop(pushTaskTick, 15_000);
-loop(pushRestartTick, 10_000);
 loop(pushChatTick, 2_000);
 loop(pushChatCancelTick, 1_500);
 loop(pushChatRestartTick, 2_000);

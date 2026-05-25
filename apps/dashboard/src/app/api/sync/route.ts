@@ -29,15 +29,20 @@ async function resolveMachine(req: NextRequest) {
   return null;
 }
 
+// Agent is now PURELY static (no runtime fields). The gateway pushes the
+// folder's IDENTITY/USER/AGENTS/TOOLS markdowns + skill names + memory
+// summary. Runtime (pid/alive/ctx/etc.) lives on ChatSession; pushed via
+// /api/sync/session-snapshot.
 const AgentInput = z.object({
   name: z.string(),
-  pid: z.number().int().nullable().optional(),
-  alive: z.boolean().optional(),
-  state: z.string().nullable().optional(),
-  contextTokens: z.number().int().nullable().optional(),
-  outputTokens: z.number().int().nullable().optional(),
-  lastActivity: z.string().datetime().nullable().optional(),
-  transcriptPath: z.string().nullable().optional(),
+  directory: z.string().nullable().optional(),
+  identityText: z.string().nullable().optional(),
+  userText: z.string().nullable().optional(),
+  agentsText: z.string().nullable().optional(),
+  toolsText: z.string().nullable().optional(),
+  evolutionLessons: z.string().nullable().optional(),
+  skillNames: z.array(z.string()).optional(),
+  memorySummary: z.string().nullable().optional(),
 });
 
 const LaunchAgentInput = z.object({

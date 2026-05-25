@@ -1,3 +1,7 @@
+// POST /api/sync/agents — gateway pushes the static folder metadata for every
+// agent under AGENTS_ROOT. Runtime state (pid/alive/ctx/etc.) lives on
+// ChatSession and arrives via /api/sync/session-snapshot.
+
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
@@ -17,29 +21,23 @@ export async function POST(req: NextRequest) {
   }
 
   let updated = 0;
+  const now = new Date();
   for (const a of body.agents) {
+    const data = {
+      directory: a.directory ?? null,
+      identityText: a.identityText ?? null,
+      userText: a.userText ?? null,
+      agentsText: a.agentsText ?? null,
+      toolsText: a.toolsText ?? null,
+      evolutionLessons: a.evolutionLessons ?? null,
+      skillNames: a.skillNames ?? [],
+      memorySummary: a.memorySummary ?? null,
+      metadataAt: now,
+    };
     await prisma.agent.upsert({
       where: { machineId_name: { machineId: machine.id, name: a.name } },
-      create: {
-        machineId: machine.id,
-        name: a.name,
-        pid: a.pid ?? null,
-        alive: a.alive ?? false,
-        state: a.state ?? null,
-        contextTokens: a.contextTokens ?? null,
-        outputTokens: a.outputTokens ?? null,
-        lastActivity: a.lastActivity ? new Date(a.lastActivity) : null,
-        transcriptPath: a.transcriptPath ?? null,
-      },
-      update: {
-        pid: a.pid ?? null,
-        alive: a.alive ?? false,
-        state: a.state ?? null,
-        contextTokens: a.contextTokens ?? null,
-        outputTokens: a.outputTokens ?? null,
-        lastActivity: a.lastActivity ? new Date(a.lastActivity) : null,
-        transcriptPath: a.transcriptPath ?? null,
-      },
+      create: { machineId: machine.id, name: a.name, ...data },
+      update: data,
     });
     updated++;
   }

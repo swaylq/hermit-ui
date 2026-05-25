@@ -44,6 +44,13 @@ export const chatRouter = router({
           lastMessageAt: true,
           closedAt: true,
           restartRequestedAt: true,
+          pid: true,
+          alive: true,
+          state: true,
+          contextTokens: true,
+          outputTokens: true,
+          lastActivity: true,
+          snapshotAt: true,
           _count: { select: { messages: true } },
         },
       });
