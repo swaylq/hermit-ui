@@ -43,6 +43,7 @@ export const chatRouter = router({
           startedAt: true,
           lastMessageAt: true,
           closedAt: true,
+          restartRequestedAt: true,
           _count: { select: { messages: true } },
         },
       });
@@ -214,6 +215,42 @@ export const chatRouter = router({
       const r = await prisma.chatSession.updateMany({
         where: { id: { in: input.sessionIds }, machineId: ctx.machine.id },
         data: { cancelRequestedAt: null },
+      });
+      return { ok: true, updated: r.count };
+    }),
+
+  // Per-session restart. Kills the tmux pane backing this ChatSession; the
+  // next user message will respawn `claude --resume <claudeSessionId>` so
+  // history is preserved. Used when claude is wedged, MCP went stale, etc.
+  requestSessionRestart: machineProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
+      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      await prisma.chatSession.update({
+        where: { id: input.id },
+        data: { restartRequestedAt: new Date() },
+      });
+      return { ok: true };
+    }),
+
+  // Gateway polls every ~2s. Each returned session id triggers a tmux
+  // `kill(sessionId)` then `ackSessionRestart`.
+  pollSessionRestarts: machineProcedure.query(async ({ ctx }) => {
+    const rows = await prisma.chatSession.findMany({
+      where: { machineId: ctx.machine.id, restartRequestedAt: { not: null } },
+      select: { id: true, restartRequestedAt: true },
+    });
+    return rows;
+  }),
+
+  ackSessionRestart: machineProcedure
+    .input(z.object({ sessionIds: z.array(z.string()) }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.sessionIds.length === 0) return { ok: true, updated: 0 };
+      const r = await prisma.chatSession.updateMany({
+        where: { id: { in: input.sessionIds }, machineId: ctx.machine.id },
+        data: { restartRequestedAt: null },
       });
       return { ok: true, updated: r.count };
     }),

@@ -23,6 +23,7 @@ import {
   ensureSession,
   sendKeys,
   sendInterrupt,
+  kill as killTmuxSession,
   getClaudeSessionUuid,
   awaitTranscript,
   watchTranscript,
@@ -75,6 +76,45 @@ const sessionStates = new Map<string, SessionState>();
 const settingUp = new Set<string>();
 
 // ── Cancellation tick ────────────────────────────────────────────────────────
+
+// Per-session restart: poll for `restartRequestedAt` rows, kill each pane,
+// ack. The next user message into that session will respawn claude with
+// --resume <claudeSessionId> (history preserved). Used when a single session
+// is wedged but other sessions on the same agent are fine.
+export async function chatRestartTick() {
+  let rows: Awaited<ReturnType<typeof api.pollSessionRestarts>>;
+  try {
+    rows = await api.pollSessionRestarts();
+  } catch (e) {
+    console.error('[chat-restart] poll failed:', e);
+    return;
+  }
+  if (rows.length === 0) return;
+
+  const ackIds: string[] = [];
+  for (const row of rows) {
+    try {
+      // Tear down in-memory state first so the next deliverMessages call
+      // hits setupSession fresh (which will see paneAlive=false and respawn
+      // with --resume).
+      const state = sessionStates.get(row.id);
+      if (state) {
+        try { state.stopWatcher(); } catch {}
+        sessionStates.delete(row.id);
+      }
+      await killTmuxSession(row.id, 2_000);
+      console.log(`[chat-restart] killed session=${row.id.slice(0, 8)}`);
+    } catch (e) {
+      console.error('[chat-restart] kill failed:', e);
+    }
+    ackIds.push(row.id);
+  }
+  try {
+    await api.ackSessionRestart(ackIds);
+  } catch (e) {
+    console.error('[chat-restart] ack failed:', e);
+  }
+}
 
 export async function chatCancelTick() {
   let rows: Awaited<ReturnType<typeof api.pollChatCancellations>>;

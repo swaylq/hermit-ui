@@ -54,6 +54,12 @@ model ChatSession {
   // cleared by gateway via chat.ackCancel once the child process is killed.
   cancelRequestedAt   DateTime?
 
+  // User-requested session restart. Set by chat.requestSessionRestart; gateway
+  // kills the tmux pane (`hermit-<sessionId>`) so the next user message
+  // respawns claude with `--resume <claudeSessionId>` (history preserved).
+  // Cleared by chat.ackSessionRestart once the pane is gone.
+  restartRequestedAt  DateTime?
+
   messages         ChatMessage[]
 
   @@index([machineId, agentName])

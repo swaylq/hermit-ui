@@ -194,7 +194,10 @@ function ChatPageInner() {
         </ScrollArea>
       </aside>
 
-      <main className="flex flex-col min-w-0">
+      {/* min-h-0 is the critical bit: without it, a tall ScrollArea expands the
+         flex column past viewport and pushes ComposeBar off-screen. With it,
+         flex-1 children clamp to remaining height and scroll internally. */}
+      <main className="flex flex-col min-w-0 min-h-0 overflow-hidden">
         {selectedId ? (
           <SessionPane sessionId={selectedId} onOpenDrawer={() => setDrawerOpen(true)} />
         ) : (
@@ -382,7 +385,7 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
             <button
               type="button"
               onClick={onOpenDrawer}
-              className="lg:hidden -ml-1 p-1.5 rounded text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+              className="lg:hidden -ml-1 p-1.5 rounded text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
               aria-label="open sessions"
             >
               <MenuIcon className="h-4 w-4" />
@@ -687,7 +690,7 @@ function ComposeBar({
   return (
     <form
       className={cn(
-        'border-t border-border bg-background px-4 py-3 transition-colors',
+        'shrink-0 border-t border-border bg-background px-4 py-3 transition-colors',
         dragHover && 'bg-accent/30',
       )}
       onSubmit={(e) => { e.preventDefault(); submit(); }}
@@ -744,7 +747,7 @@ function ComposeBar({
               type="button"
               onClick={onStop}
               disabled={stopping}
-              className="rounded h-7 w-7 p-0 shrink-0 inline-flex items-center justify-center text-rose-500 hover:bg-rose-500/10 disabled:opacity-50 disabled:cursor-wait transition-colors"
+              className="rounded h-7 w-7 p-0 shrink-0 inline-flex items-center justify-center cursor-pointer text-rose-500 hover:bg-rose-500/10 disabled:opacity-50 disabled:cursor-wait transition-colors"
               aria-label={stopping ? 'stopping' : 'stop assistant turn'}
               title={stopping ? 'stopping…' : 'stop assistant turn'}
             >
@@ -757,7 +760,7 @@ function ComposeBar({
               className={cn(
                 'rounded h-7 w-7 p-0 shrink-0 inline-flex items-center justify-center text-sm transition-colors',
                 canSend
-                  ? 'text-background bg-foreground hover:bg-foreground/90'
+                  ? 'text-background bg-foreground hover:bg-foreground/90 cursor-pointer'
                   : 'text-muted-foreground/50 bg-muted cursor-not-allowed',
               )}
               aria-label="send"
@@ -800,7 +803,7 @@ function AttachmentChip({ attachment: a, onRemove }: { attachment: Attachment; o
         type="button"
         onClick={onRemove}
         aria-label="remove attachment"
-        className="opacity-60 hover:opacity-100 hover:text-rose-500 px-1 text-xs"
+        className="opacity-60 hover:opacity-100 hover:text-rose-500 px-1 text-xs cursor-pointer"
       >
         ×
       </button>

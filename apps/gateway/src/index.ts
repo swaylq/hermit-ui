@@ -18,7 +18,7 @@ import { collectUsageWindows } from './collect/window';
 import { api } from './api';
 import { tick as taskTick } from './system-task-runner';
 import { restartTick } from './restart-runner';
-import { chatTick, chatCancelTick, shutdownChatRunner } from './chat-runner';
+import { chatTick, chatCancelTick, chatRestartTick, shutdownChatRunner } from './chat-runner';
 
 console.log('[gateway] starting');
 
@@ -98,6 +98,12 @@ async function pushChatCancelTick() {
   });
 }
 
+async function pushChatRestartTick() {
+  await safe('chat-restart-tick', async () => {
+    await chatRestartTick();
+  });
+}
+
 function loop(fn: () => Promise<void>, ms: number) {
   setInterval(() => {
     fn().catch(() => {});
@@ -121,6 +127,7 @@ loop(pushTaskTick, 15_000);
 loop(pushRestartTick, 10_000);
 loop(pushChatTick, 2_000);
 loop(pushChatCancelTick, 1_500);
+loop(pushChatRestartTick, 2_000);
 loop(pushLaunchAgents, 5 * 60_000);
 loop(pushUsage, 5 * 60_000);
 loop(pushUsageWindows, 5 * 60_000);

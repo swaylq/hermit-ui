@@ -21,7 +21,7 @@ export function NavBar({ machine, onLogout }: { machine?: MachineInfo; onLogout:
         <div className="flex items-center gap-5 min-w-0">
           <Link
             href="/chat"
-            className="shrink-0 rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="shrink-0 rounded cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             aria-label="asst home"
           >
             <AsstLogomark />
@@ -34,7 +34,7 @@ export function NavBar({ machine, onLogout }: { machine?: MachineInfo; onLogout:
                   key={t.href}
                   href={t.href}
                   className={
-                    'px-3 py-1.5 text-sm transition-colors ' +
+                    'px-3 py-1.5 text-sm transition-colors cursor-pointer ' +
                     (active
                       ? 'text-foreground font-medium'
                       : 'text-muted-foreground hover:text-foreground')

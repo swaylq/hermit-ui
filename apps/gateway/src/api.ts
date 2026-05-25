@@ -99,6 +99,26 @@ export const api = {
     if (!r.ok) throw new Error(`ackChatCancel → ${r.status}`);
   },
 
+  pollSessionRestarts: async (): Promise<Array<{ id: string; restartRequestedAt: string }>> => {
+    const r = await get<any>(
+      '/api/trpc/chat.pollSessionRestarts?batch=1&input=' +
+        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+
+  ackSessionRestart: async (sessionIds: string[]) => {
+    if (sessionIds.length === 0) return;
+    const url = `${DASHBOARD_URL}/api/trpc/chat.ackSessionRestart?batch=1`;
+    const body = { '0': { json: { sessionIds } } };
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`ackSessionRestart → ${r.status}`);
+  },
+
   syncChatMessages: async (
     items: Array<{
       sessionId: string;

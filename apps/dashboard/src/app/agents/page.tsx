@@ -53,7 +53,18 @@ function AgentRow({ agent, onOpenDetail }: { agent: any; onOpenDetail: () => voi
   const initials = agent.name.slice(0, 2).toUpperCase();
 
   return (
-    <div className="group relative flex items-center gap-3 px-3 py-3 transition-colors hover:bg-accent/50">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpenDetail}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpenDetail();
+        }
+      }}
+      className="group relative flex items-center gap-3 px-3 py-3 transition-colors hover:bg-accent/50 cursor-pointer focus:outline-none focus-visible:bg-accent/50"
+    >
       <div
         className={`h-8 w-8 rounded-md bg-muted text-muted-foreground flex items-center justify-center font-mono text-[10px] font-medium shrink-0 group-hover:text-foreground transition-colors ${
           agent.alive ? '' : 'opacity-50'
@@ -63,10 +74,7 @@ function AgentRow({ agent, onOpenDetail }: { agent: any; onOpenDetail: () => voi
         {initials}
       </div>
 
-      <button
-        onClick={onOpenDetail}
-        className="flex-1 min-w-0 text-left"
-      >
+      <div className="flex-1 min-w-0 text-left">
         <div className="flex items-center justify-between gap-2">
           <span className="font-medium text-sm truncate text-foreground">{agent.name}</span>
           <span className="text-[10px] font-mono text-muted-foreground/70 shrink-0 tabular-nums">
@@ -90,11 +98,11 @@ function AgentRow({ agent, onOpenDetail }: { agent: any; onOpenDetail: () => voi
             </>
           )}
         </div>
-      </button>
+      </div>
 
       <Link
         href={`/chat?agent=${encodeURIComponent(agent.name)}`}
-        className="shrink-0 inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors text-xs"
+        className="shrink-0 inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors text-xs cursor-pointer"
         aria-label={`chat with ${agent.name}`}
         onClick={(e) => e.stopPropagation()}
         title={`chat with ${agent.name}`}
