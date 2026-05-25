@@ -91,10 +91,11 @@ export const chatRouter = router({
   listMessages: machineProcedure
     .input(z.object({ sessionId: z.string(), limit: z.number().int().min(1).max(500).default(200) }))
     .query(async ({ ctx, input }) => {
-      const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
-      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      // Owner check folded into the WHERE clause — drops the extra
+      // chatSession.findUnique round trip. Returns [] for unknown or
+      // cross-tenant sessions (vs throwing) — chat UI tolerates that.
       return prisma.chatMessage.findMany({
-        where: { sessionId: input.sessionId },
+        where: { sessionId: input.sessionId, session: { machineId: ctx.machine.id } },
         orderBy: { createdAt: 'asc' },
         take: input.limit,
       });

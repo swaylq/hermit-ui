@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -64,7 +65,7 @@ export function AgentDetailSheet({
         )}
 
         {query.data && name && (
-          <ScrollArea className="flex-1">
+          <ScrollArea className="flex-1 min-h-0">
             <div className="p-6 space-y-5">
               <SessionsSection agentName={name} sessions={sessions.data ?? null} loading={sessions.isPending} />
 
@@ -121,54 +122,63 @@ function SessionsSection({
             const pending = !!s.restartRequestedAt;
             const disabled = !!s.closedAt || pending || requestRestart.isPending;
             return (
-              <li key={s.id} className="rounded border bg-card px-2.5 py-1.5">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      'h-1.5 w-1.5 rounded-full shrink-0',
-                      s.alive ? 'bg-emerald-500' : 'bg-zinc-500',
-                    )}
-                    aria-hidden="true"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="truncate text-foreground/90">{s.title || s.id.slice(0, 8)}</span>
-                      {s.closedAt && (
-                        <Badge variant="outline" className="text-[9px] py-0 h-4">closed</Badge>
+              <li key={s.id}>
+                <Link
+                  href={`/chat?session=${encodeURIComponent(s.id)}`}
+                  className="block rounded border bg-card px-2.5 py-1.5 hover:bg-accent/40 hover:border-foreground/30 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        'h-1.5 w-1.5 rounded-full shrink-0',
+                        s.alive ? 'bg-emerald-500' : 'bg-zinc-500',
                       )}
-                      {s.alive && s.state && (
-                        <Badge variant="outline" className="text-[9px] py-0 h-4 font-mono">{s.state}</Badge>
-                      )}
+                      aria-hidden="true"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="truncate text-foreground/90">{s.title || s.id.slice(0, 8)}</span>
+                        {s.closedAt && (
+                          <Badge variant="outline" className="text-[9px] py-0 h-4">closed</Badge>
+                        )}
+                        {s.alive && s.state && (
+                          <Badge variant="outline" className="text-[9px] py-0 h-4 font-mono">{s.state}</Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground tabular-nums mt-0.5">
+                        <span>{s._count.messages} msg</span>
+                        <span className="text-muted-foreground/40">·</span>
+                        <span>last {relTime(s.lastMessageAt ?? s.startedAt)}</span>
+                        {s.contextTokens != null && (
+                          <>
+                            <span className="text-muted-foreground/40">·</span>
+                            <CtxBar tokens={s.contextTokens} />
+                          </>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground tabular-nums mt-0.5">
-                      <span>{s._count.messages} msg</span>
-                      <span className="text-muted-foreground/40">·</span>
-                      <span>last {relTime(s.lastMessageAt ?? s.startedAt)}</span>
-                      {s.contextTokens != null && (
-                        <>
-                          <span className="text-muted-foreground/40">·</span>
-                          <CtxBar tokens={s.contextTokens} />
-                        </>
-                      )}
-                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs px-2 shrink-0"
+                      disabled={disabled}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        requestRestart.mutate({ id: s.id });
+                      }}
+                      title={
+                        s.closedAt
+                          ? 'session is closed'
+                          : pending
+                            ? 'restart already requested — gateway will pick it up'
+                            : "kill this session's tmux pane; next message respawns with --resume"
+                      }
+                    >
+                      {pending ? 'queued…' : requestRestart.isPending ? '…' : 'restart'}
+                    </Button>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 text-xs px-2 shrink-0"
-                    disabled={disabled}
-                    onClick={() => requestRestart.mutate({ id: s.id })}
-                    title={
-                      s.closedAt
-                        ? 'session is closed'
-                        : pending
-                          ? 'restart already requested — gateway will pick it up'
-                          : "kill this session's tmux pane; next message respawns with --resume"
-                    }
-                  >
-                    {pending ? 'queued…' : requestRestart.isPending ? '…' : 'restart'}
-                  </Button>
-                </div>
+                </Link>
               </li>
             );
           })}

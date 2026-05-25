@@ -49,11 +49,36 @@ function ChatPageInner() {
   const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 10_000 });
   const sessions = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
 
+  // Prefetch message history for every session in the sidebar so opening one
+  // is instant. Stagger by 80 ms so we don't fire N parallel requests at once.
+  const utils = trpc.useUtils();
+  useEffect(() => {
+    if (!sessions.data) return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    sessions.data.slice(0, 20).forEach((s, i) => {
+      timers.push(
+        setTimeout(() => {
+          void utils.chat.listMessages.prefetch(
+            { sessionId: s.id, limit: 300 },
+            { staleTime: 60_000 },
+          );
+        }, i * 80),
+      );
+    });
+    return () => { timers.forEach(clearTimeout); };
+  }, [sessions.data, utils]);
+
   // Deep-link: /chat?agent=foo → open new-session form preset with that agent.
   const agentParam = search.get('agent');
   useEffect(() => {
     if (agentParam) setNewOpen(true);
   }, [agentParam]);
+
+  // Deep-link: /chat?session=<id> → jump straight to that session.
+  const sessionParam = search.get('session');
+  useEffect(() => {
+    if (sessionParam) setSelectedId(sessionParam);
+  }, [sessionParam]);
 
   useEffect(() => {
     if (!selectedId && sessions.data && sessions.data.length > 0) {
@@ -280,6 +305,12 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
         if (ageMs < 3_000) return 600;
         return 2_000;
       },
+      // Revisiting a session within 1 min skips the network roundtrip entirely
+      // (cache is considered fresh). Combined with the sidebar prefetch in
+      // ChatPageInner, virtually every session click is a cache hit — no
+      // Skeleton flash, no waiting. `refetchInterval` still drives background
+      // updates while the user is looking at the session.
+      staleTime: 60_000,
     },
   );
 
