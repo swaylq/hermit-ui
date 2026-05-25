@@ -90,6 +90,10 @@ DATABASE_URL="postgresql://mac@localhost:5432/asst_dashboard?schema=public"
 PORT=4101
 NODE_ENV=production
 HERMIT_UPLOAD_DIR=/var/hermit-ui/uploads
+# REQUIRED: bypasses Next.js's broken bundling of Prisma's custom-output engine
+# search paths. Without this, runtime fails with "Prisma Client could not locate
+# the Query Engine for runtime debian-openssl-3.0.x" after any pm2 restart.
+PRISMA_QUERY_ENGINE_LIBRARY=/home/ubuntu/hermit-ui/apps/dashboard/src/generated/prisma/libquery_engine-debian-openssl-3.0.x.so.node
 ```
 
 ```bash

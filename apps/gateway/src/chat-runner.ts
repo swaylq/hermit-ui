@@ -104,6 +104,22 @@ export async function chatRestartTick() {
       }
       await killTmuxSession(row.id, 2_000);
       console.log(`[chat-restart] killed session=${row.id.slice(0, 8)}`);
+
+      // Post a system row so the chat UI stops thinking it's mid-turn. If
+      // the user clicked restart while waiting on a reply, the DB's last
+      // message is still role=user → the page would show "assistant is
+      // working…" forever. The system row breaks that, AND it doubles as
+      // an "OK, ready for the next prompt" affordance.
+      await api
+        .syncChatMessages([
+          {
+            sessionId: row.id,
+            role: 'system',
+            content: [{ type: 'text', text: '[session restarted — send a message to continue]' }],
+            externalId: `restart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          },
+        ])
+        .catch((e) => console.error('[chat-restart] post system row failed:', e));
     } catch (e) {
       console.error('[chat-restart] kill failed:', e);
     }
