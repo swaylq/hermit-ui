@@ -26,15 +26,25 @@ ssh ubuntu@45.89.234.110 -- 'which node tmux pm2 caddy psql && node --version'
 From Mac:
 
 ```bash
-# Mac → VPS rsync, exclude noise
-rsync -av \
+# Mac → VPS rsync, exclude noise. NOTE the leading slashes on /agents/ and
+# /_research/ — that anchors them to the repo root so the deeper
+# apps/dashboard/src/app/api/sync/agents/ route directory isn't ALSO excluded
+# (it would be if you wrote --exclude='agents/'). Also exclude .env files
+# so the Mac dev creds don't clobber the VPS-only DATABASE_URL.
+rsync -az \
   --exclude=node_modules --exclude=.next --exclude=.git \
-  --exclude='apps/*/logs' --exclude='_research/' --exclude='agents/' \
+  --exclude='apps/*/logs' --exclude='/_research/' --exclude='/agents/' \
+  --exclude='apps/*/.env' \
+  --exclude='.playwright-mcp' --exclude='*.tgz' \
   /Users/mac/claudeclaw/asst/hermit-ui/ \
   ubuntu@45.89.234.110:/home/ubuntu/hermit-ui/
 ```
 
-`agents/` is intentionally excluded — the gateway running on the Mac stays the authoritative source of agent state. The VPS dashboard only hosts the web UI + DB + receives gateway POSTs.
+`/agents/` is intentionally excluded — the gateway running on the Mac stays the authoritative source of agent state. The VPS dashboard only hosts the web UI + DB + receives gateway POSTs.
+
+**Pitfall (2026-05-25 cutover):** initial deploy used `--exclude='agents/'` without the leading slash. rsync matched the pattern at EVERY level, so it ate `apps/dashboard/src/app/api/sync/agents/route.ts` along with the workspace-level `agents/` dir. Result: `/api/sync/agents` returned 404 on the VPS while every other sync route worked. Fix: anchor with leading slash + always re-run `next build` after rsync repairs.
+
+**Pitfall (same cutover):** the second rsync overwrote VPS `apps/dashboard/.env` with Mac dev creds (`postgresql://mac@localhost/…`), causing Prisma "Authentication failed for role `mac`" 500s. Fix above: add `--exclude='apps/*/.env'`. Either way, after any rsync, sanity-check the env on VPS before restarting pm2.
 
 ## 2. Install deps + build on VPS
 

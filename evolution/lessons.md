@@ -83,3 +83,13 @@ Format: title in `##`, then **What failed** / **Why** / **How to avoid**, ≤8 l
 **Why:** "Pick the first new file in the dir after spawn" can't tell which file belongs to which spawn when multiple spawns are concurrent. The snapshot-diff approach assumes one writer at a time.
 
 **How to avoid:** Pre-assign claude's session uuid via `claude --session-id <uuid>` (added to `EnsureOpts.claudeSessionUuid` in `@hermit-ui/tmux-driver`). Then the JSONL path is known up-front; no scan needed. `awaitTranscript(path)` waits for that specific file. Reserve `getClaudeSessionUuid` for the `--resume` path only (where claude forks into a new uuid we can't predict).
+
+---
+
+## L9 — rsync `--exclude='name/'` matches at every depth, and `--exclude=.env` saves you
+
+**What failed:** During the VPS cutover, `rsync --exclude='agents/'` (intended to skip the workspace-level `agents/` test dir) also ate `apps/dashboard/src/app/api/sync/agents/route.ts`. The next route went 404 on the VPS while every other sibling under `api/sync/` worked. Then a second pass ALSO overwrote VPS `apps/dashboard/.env` with Mac dev creds, causing Prisma "auth failed for role `mac`" 500s for ~2 min.
+
+**Why:** rsync's unanchored `--exclude='dir/'` matches `dir/` at any depth. The cure is a **leading slash** (`/dir/`) which pins the pattern to the source root. And `.env` files are per-host secrets — rsyncing them in is wrong by default.
+
+**How to avoid:** When sending a repo with embedded `node_modules`/`agents`/`docs` etc. dirs that share names with source paths, write `--exclude='/dir/'` not `--exclude='dir/'`. Always pair with `--exclude='apps/*/.env'`. After any rsync to a host that has its own runtime config, **manually sanity-check `.env`/`settings.local.json` before restarting services**.
