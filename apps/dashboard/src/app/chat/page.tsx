@@ -327,6 +327,9 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
   });
   const closeS = trpc.chat.closeSession.useMutation({ onSuccess: () => sessionMeta.refetch() });
   const reopenS = trpc.chat.reopenSession.useMutation({ onSuccess: () => sessionMeta.refetch() });
+  const restartSession = trpc.chat.requestSessionRestart.useMutation({
+    onSuccess: () => sessionMeta.refetch(),
+  });
 
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -443,15 +446,37 @@ function SessionPane({ sessionId, onOpenDrawer }: { sessionId: string; onOpenDra
             </div>
           </div>
         </div>
-        {session?.closedAt ? (
-          <Button size="sm" variant="ghost" onClick={() => reopenS.mutate({ id: sessionId })}>
-            reopen
-          </Button>
-        ) : (
-          <Button size="sm" variant="ghost" onClick={() => closeS.mutate({ id: sessionId })}>
-            close
-          </Button>
-        )}
+        <div className="flex items-center gap-1 shrink-0">
+          {session?.closedAt ? (
+            <Button size="sm" variant="ghost" onClick={() => reopenS.mutate({ id: sessionId })}>
+              reopen
+            </Button>
+          ) : (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs px-2"
+                disabled={
+                  !session ||
+                  !!session.restartRequestedAt ||
+                  restartSession.isPending
+                }
+                onClick={() => restartSession.mutate({ id: sessionId })}
+                title="kill this session's tmux pane; next message respawns claude with --resume (history preserved)"
+              >
+                {session?.restartRequestedAt
+                  ? 'restarting…'
+                  : restartSession.isPending
+                    ? '…'
+                    : 'restart'}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => closeS.mutate({ id: sessionId })}>
+                close
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       <ScrollArea ref={scrollRef} className="flex-1 min-h-0 bg-background">
