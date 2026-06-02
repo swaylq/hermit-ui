@@ -609,18 +609,28 @@ function RecentSessions() {
   };
 
   // Prefetch message history for the top sessions so opening one is instant.
+  // Key on the session-ID LIST (a value-stable string), NOT the row objects:
+  // listSessions' rows get a fresh reference every ~8s snapshot tick (state /
+  // contextTokens / snapshotAt churn) — depending on `sessions.data` directly
+  // re-fired this whole loop every few seconds, re-fetching every OTHER session's
+  // 60-message window on a timer (heavy idle network). The joined-id string only
+  // changes when the set/order of sessions actually changes, so idle is quiet and
+  // re-prefetch happens only on real activity (a new message reorders the list).
+  const prefetchIds = useMemo(
+    () => (sessions.data ?? []).slice(0, 8).map((s) => s.id).join(','),
+    [sessions.data],
+  );
   useEffect(() => {
-    if (!sessions.data) return;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    sessions.data.slice(0, 20).forEach((s, i) => {
-      timers.push(setTimeout(() => {
+    if (!prefetchIds) return;
+    const timers = prefetchIds.split(',').map((id, i) =>
+      setTimeout(() => {
         // limit MUST equal chat/page.tsx INITIAL_WINDOW so the click-to-open
         // query key matches and stays a cache hit (no skeleton flash).
-        void utils.chat.listMessages.prefetch({ sessionId: s.id, limit: 60 }, { staleTime: 60_000 });
-      }, i * 80));
-    });
+        void utils.chat.listMessages.prefetch({ sessionId: id, limit: 60 }, { staleTime: 60_000 });
+      }, i * 80),
+    );
     return () => timers.forEach(clearTimeout);
-  }, [sessions.data, utils]);
+  }, [prefetchIds, utils]);
 
   const agentNames = useMemo(() => {
     const names = new Set<string>();
