@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, useCallback, memo, type ChangeEvent, type ClipboardEvent, type DragEvent, Suspense } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, memo, type ChangeEvent, type ClipboardEvent, type DragEvent, Suspense } from 'react';
 import { keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -56,6 +56,11 @@ function isTouchPrimary(): boolean {
 // session click stays a cache hit. "load earlier" grows the window by PAGE_STEP.
 const INITIAL_WINDOW = 60;
 const PAGE_STEP = 200;
+
+// useLayoutEffect on the client (runs before the browser paints — used to restore
+// scroll position synchronously after a history prepend so there's no visible
+// lurch), plain useEffect on the server to dodge React's SSR warning.
+const useIsoLayoutEffect = typeof document !== 'undefined' ? useLayoutEffect : useEffect;
 
 // ── SSE message-list merge ──────────────────────────────────────────────────
 // The stream pushes the entire newest-N window every ~250ms. Writing it into
@@ -758,7 +763,7 @@ function SessionPane({ sessionId }: { sessionId: string }) {
   // Restore the top-anchor after a "load earlier" prepend (guarded by the ref,
   // so streaming-driven length changes don't trigger it). The bottom-pin effect
   // above no-ops here because the user isn't pinned when loading history.
-  useEffect(() => {
+  useIsoLayoutEffect(() => {
     const p = pendingRestoreRef.current;
     if (!p) return;
     pendingRestoreRef.current = null;
