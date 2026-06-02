@@ -296,16 +296,11 @@ function WindowCard({
         )}
       </div>
 
-      {limit != null && costPctClamped != null && (
-        <AnimatedBar pct={costPctClamped} color={pctBarColor(costPctClamped)} />
-      )}
-
       <div className="space-y-1.5">
         <div className="flex items-baseline justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
           <span>{elapsed.hours}h window elapsed</span>
           <span className={`font-mono ${pctTextColor(elapsed.pct)}`}>{elapsed.pct.toFixed(0)}%</span>
         </div>
-        <AnimatedBar pct={elapsed.pct} color={pctBarColor(elapsed.pct)} />
         <div className="flex items-baseline justify-between text-[10px] font-mono text-muted-foreground/80">
           <span>{new Date(w.startTime).toLocaleString()}</span>
           <span>{new Date(w.endTime).toLocaleString()}</span>
