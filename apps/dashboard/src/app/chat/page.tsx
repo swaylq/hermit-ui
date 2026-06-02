@@ -77,6 +77,14 @@ function rowSig(m: { content: unknown }): string {
   return s;
 }
 type CachedMsg = { id: string; role: string; content: unknown; createdAt: Date | string };
+// Flatten a message's content blocks to plain text — used to match an optimistic
+// outbound row against its real counterpart once that lands in the query cache.
+function msgText(content: unknown): string {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content.map((b: any) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('').trim();
+}
+
 function mergeMessagesById<T extends CachedMsg>(prev: T[] | undefined, next: T[]): T[] {
   if (!prev || prev.length === 0) return next;
   const byId = new Map(prev.map((m) => [m.id, m]));
@@ -630,6 +638,13 @@ function SessionPane({ sessionId }: { sessionId: string }) {
   // text). Auto-cleared when the draft empties on send / Escape.
   useEffect(() => { saveDraft(sessionId, draft); }, [sessionId, draft]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Optimistic outbound messages — render the user's bubble instantly on send so
+  // it doesn't wait for the send round-trip + SSE echo (~200ms). Kept in a SEPARATE
+  // overlay (NOT the query cache): the SSE rewrites the cache via
+  // mergeMessagesById(prev,next) => next, which would drop an in-cache optimistic
+  // row on the next stream push (and flicker it mid-turn). Merged into `view` at
+  // render-time and auto-dropped once the real row (same text) lands in the cache.
+  const [pending, setPending] = useState<Array<{ id: string; role: 'user'; content: { type: 'text'; text: string }[]; createdAt: string }>>([]);
   // Armed when the user clicks Restart on a dead session — reveals the composer
   // again so their next message respawns claude (--resume). Reset on session
   // switch (SessionPane is keyed by sessionId).
@@ -693,10 +708,26 @@ function SessionPane({ sessionId }: { sessionId: string }) {
 
   // The rendered timeline. Summary mode collapses each turn to its final reply;
   // useMemo keeps the array reference stable between refetches so memo(MessageTimeline) still bails on no-op ticks.
-  const view = useMemo(
-    () => (summaryMode ? toSummaryView(messages.data ?? []) : (messages.data ?? [])),
-    [messages.data, summaryMode],
-  );
+  const view = useMemo(() => {
+    const base = summaryMode ? toSummaryView(messages.data ?? []) : (messages.data ?? []);
+    if (pending.length === 0) return base;
+    // Drop any optimistic row whose real counterpart (same user text) has landed.
+    const sent = new Set((messages.data ?? []).filter((m) => m.role === 'user').map((m) => msgText(m.content)));
+    const live = pending.filter((p) => !sent.has(msgText(p.content)));
+    return live.length ? [...base, ...live] : base;
+  }, [messages.data, summaryMode, pending]);
+
+  // Prune optimistic rows once reflected in the cache so `pending` doesn't grow
+  // over a long session. Same-ref return guards against a render loop.
+  useEffect(() => {
+    if (pending.length === 0) return;
+    const sent = new Set((messages.data ?? []).filter((m) => m.role === 'user').map((m) => msgText(m.content)));
+    setPending((p) => {
+      const next = p.filter((x) => !sent.has(msgText(x.content)));
+      return next.length === p.length ? p : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.data]);
 
   // Sticky bottom. A ResizeObserver on the message content follows EVERY height
   // change to the bottom while pinned — new messages, streaming growth, and
@@ -1173,9 +1204,30 @@ function SessionPane({ sessionId }: { sessionId: string }) {
               // Sending always re-pins to the bottom (even if the user had
               // scrolled up) so their message + the reply scroll into view.
               scrollToBottom('auto');
+              // Optimistic: show the user's bubble + clear the composer instantly
+              // instead of waiting for the round-trip + SSE echo. The overlay row
+              // drops itself when the real row lands (see `pending` / `view`);
+              // restore the draft if the send itself fails.
+              const prevDraft = draft;
+              const prevAttachments = attachments;
+              const optimisticId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              if (text.trim()) {
+                setPending((p) => [
+                  ...p,
+                  { id: optimisticId, role: 'user', content: [{ type: 'text', text }], createdAt: new Date().toISOString() },
+                ]);
+              }
+              setDraft('');
+              setAttachments([]);
               send.mutate(
                 { sessionId, text, images, files },
-                { onSuccess: () => { setDraft(''); setAttachments([]); } },
+                {
+                  onError: () => {
+                    setPending((p) => p.filter((x) => x.id !== optimisticId));
+                    setDraft(prevDraft);
+                    setAttachments(prevAttachments);
+                  },
+                },
               );
             }}
             draft={draft}
