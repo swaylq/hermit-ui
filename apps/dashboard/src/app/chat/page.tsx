@@ -1127,7 +1127,7 @@ function SessionPane({ sessionId }: { sessionId: string }) {
         <div className="px-4 py-4 max-w-3xl mx-auto overflow-x-clip [overflow-anchor:none]">
           {messages.isPending ? (
             <Skeleton className="h-32" />
-          ) : messages.data?.length === 0 ? (
+          ) : view.length === 0 ? (
             <EmptyChat agentName={session?.agentName} onPickPrompt={pickPrompt} />
           ) : (
             <>
