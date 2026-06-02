@@ -8,6 +8,7 @@ import { Plus, ArrowUp, FileText, RotateCw, Trash2, Check, X, Terminal, Pencil, 
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
@@ -151,7 +152,10 @@ function ChatPageInner() {
         // browser-native and can't be swallowed; the reload is fine for a
         // deliberate "start chat" and lands cleanly on the new session.
         onCreated={(id) => { window.location.href = `/chat?session=${encodeURIComponent(id)}`; }}
-        onCancel={() => router.replace(sessionParam ? `/chat?session=${encodeURIComponent(sessionParam)}` : '/chat')}
+        // Same Next16 swallow as onCreated: router.replace to a same-path query
+        // REMOVAL (/chat?new=1 → /chat) silently no-ops, so the cancel button did
+        // nothing. window.location is browser-native and can't be swallowed.
+        onCancel={() => { window.location.href = sessionParam ? `/chat?session=${encodeURIComponent(sessionParam)}` : '/chat'; }}
       />
     );
   }
@@ -200,14 +204,14 @@ function NewChatPane({ agents, preset, onCreated, onCancel }: { agents: string[]
           </div>
           <label className="block">
             <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Agent</span>
-            <select
-              value={agent}
-              onChange={(e) => setAgent(e.target.value)}
-              className="mt-1.5 w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground cursor-pointer focus:outline-none focus:border-foreground/30"
-            >
-              {agents.length === 0 && <option value="">no agents found</option>}
-              {agents.map((n) => <option key={n} value={n}>{n}</option>)}
-            </select>
+            <Select value={agent} onValueChange={(v) => setAgent(v ?? '')} modal={false}>
+              <SelectTrigger aria-label="select agent" className="mt-1.5 w-full py-2 text-sm font-mono">
+                <SelectValue>{(v: string | null) => (v ? v : (agents.length ? 'Pick an agent' : 'no agents found'))}</SelectValue>
+              </SelectTrigger>
+              <SelectContent className="font-mono">
+                {agents.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </label>
           <div className="flex gap-2">
             <Button type="submit" disabled={!agent || create.isPending} className="flex-1 h-10">
