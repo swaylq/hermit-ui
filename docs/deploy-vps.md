@@ -1,5 +1,63 @@
 # Deploying hermit-ui to a VPS
 
+## Routine deploys (git pull) — current method
+
+Since **2026-06-02** the repo is public at **https://github.com/swaylq/hermit-ui** and
+the VPS deploys by **pulling from GitHub**, not by rsync from the Mac.
+
+**The two-step flow:**
+
+1. **On the Mac** (source of truth — the gateway runs here): commit and push.
+   ```bash
+   cd /Users/mac/claudeclaw/asst/hermit-ui
+   git add -A && git commit -m "…" && git push
+   # if gateway code changed, restart it locally (gateway runs on the Mac):
+   pm2 restart hermit-ui-gateway
+   ```
+2. **On the VPS** (hosts the dashboard only): pull + rebuild + restart, one command.
+   ```bash
+   ssh ubuntu@45.89.234.110 -- '~/hermit-ui/scripts/vps-deploy.sh'
+   ```
+
+`scripts/vps-deploy.sh` runs: `git pull --ff-only` → (only if deps changed) `npm install`
+→ (only if `prisma/` changed) `migrate deploy` + `generate` → `next build` → `pm2 restart
+hermit-ui-dashboard` → health check on `:4101`. It **builds before restarting**, so a failed
+build leaves the live dashboard untouched. No-op when there are no new commits (`--force`
+rebuilds anyway).
+
+**Preserved across every pull** (gitignored, never overwritten): `apps/*/.env` (the VPS
+`DATABASE_URL` + `PRISMA_QUERY_ENGINE_LIBRARY`), `node_modules/`, `.next/`, and
+`apps/dashboard/src/generated/` (the debian Prisma engine).
+
+### One-time VPS git setup (done 2026-06-02 — recorded for rebuilds)
+
+The VPS checkout `~/hermit-ui` tracks `origin` over **anonymous HTTPS** (a public repo
+needs no credentials). Two repo-local overrides were required because the box was set up
+for the now-**suspended `voidborne-d`** account:
+
+- the global `~/.gitconfig` has `url.git@github.com:.insteadOf = https://github.com/`,
+  which rewrites every GitHub URL to SSH — and the box's SSH key is voidborne-d's, so the
+  push/pull fails with *"account suspended"*;
+- so a longer-prefix local override keeps swaylq URLs on HTTPS, and the credential helper
+  is blanked so no stale token is presented:
+
+```bash
+git -C ~/hermit-ui config --local url.https://github.com/swaylq/.insteadOf https://github.com/swaylq/
+git -C ~/hermit-ui config --local credential.helper ""
+git -C ~/hermit-ui remote set-url origin https://github.com/swaylq/hermit-ui.git
+```
+
+To re-create the checkout from scratch: `cd ~ && git clone https://github.com/swaylq/hermit-ui.git`
+(apply the two overrides above), then write `apps/dashboard/.env` (see §4) and `npm install`.
+
+---
+
+## Historical: the original rsync cutover (2026-05-25)
+
+> The sections below document the **one-time** migration from `asst-dashboard` to
+> hermit-ui via rsync. Kept for the Postgres / Caddy / seed-machine details and the
+> hard-won pitfalls. **Routine deploys now use git pull (above), not rsync.**
+
 > **2026-05-25 — initial cutover done.** `dash.swaylab.ai` now serves hermit-ui from VPS:4101. Three notes for next time:
 > - Production asst-dashboard was on `:4180`, **not** `:4100` (4100 hosts a different Clerk-authed next app — leave it alone). Caddy block was `dash.swaylab.ai:8443 → localhost:4180`.
 > - DB role + password live in `~/asst-dashboard/.vps-pgpass` on VPS; the role name is `asst_dashboard` (not `ubuntu`). For `pg_dump`, use `sudo -u postgres pg_dump asst_dashboard`.
