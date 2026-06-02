@@ -4,11 +4,14 @@
 //
 // Intervals (staggered):
 //   agents              5 min  (static folder metadata — markdowns barely churn)
-//   session-snapshots   15 s   (per-ChatSession runtime: working/idle from the
+//   session-snapshots   8 s    (per-ChatSession runtime: working/idle from the
 //                               pane's TUI via capture-pane, alive/pid/ctx/jsonl
-//                               tail. 15s keeps the state badge close to live
-//                               without hammering tmux; the chat page also flips
-//                               to "working" instantly off its own SSE stream.)
+//                               tail. Drives sidebar badges + context% + loop-card
+//                               freshness. Was 15s "to avoid hammering"; halved to
+//                               8s once the shared bcrypt auth cache made /api/sync
+//                               cheap — collector is async (execFile) so it never
+//                               blocks the loop. The chat page still flips to
+//                               "working" instantly off its own SSE stream.)
 //   cron tick           15 s   (fires due Cron jobs via tmux + claude)
 //   chat tick           2  s
 //   chat-cancel tick    1.5s
@@ -145,7 +148,7 @@ function loop(fn: () => Promise<void>, ms: number) {
 startControlChannel();
 
 loop(pushAgents, 5 * 60_000);
-loop(pushSessionSnapshots, 15_000);
+loop(pushSessionSnapshots, 8_000);
 loop(pushCronTick, 15_000);
 loop(pushChatTick, 2_000);
 loop(pushChatCancelTick, 1_500);
