@@ -1,7 +1,7 @@
 // 5-hour block + weekly snapshot. ccusage's `blocks` view is the Anthropic
 // 5-hour billing window; `weekly` view aggregates Mon-Sun ISO weeks.
 
-import { spawnSync } from 'node:child_process';
+import { execCapture } from '../exec';
 
 type Block = {
   id: string;
@@ -18,10 +18,10 @@ type WeeklyRow = {
   totalTokens?: number;
 };
 
-function runCcusage(view: 'blocks' | 'weekly', extraArgs: string[] = []): any {
-  const r = spawnSync('npx', ['--yes', 'ccusage', view, '--json', ...extraArgs], {
-    encoding: 'utf8',
-    timeout: 20_000,
+async function runCcusage(view: 'blocks' | 'weekly', extraArgs: string[] = []): Promise<any> {
+  // Async spawn so the 5h/weekly ccusage scans don't freeze the event loop.
+  const r = await execCapture('npx', ['--yes', 'ccusage', view, '--json', ...extraArgs], {
+    timeoutMs: 90_000,
   });
   if (r.status !== 0) return null;
   try {
@@ -44,7 +44,7 @@ export async function collectUsageWindows(): Promise<WindowRow[]> {
   const out: WindowRow[] = [];
 
   // Active 5h block.
-  const blocksPayload = runCcusage('blocks');
+  const blocksPayload = await runCcusage('blocks');
   if (blocksPayload?.blocks?.length) {
     const blocks: Block[] = blocksPayload.blocks;
     const active = blocks.find((b) => b.isActive && !b.isGap);
@@ -77,7 +77,7 @@ export async function collectUsageWindows(): Promise<WindowRow[]> {
   // Current weekly bucket. ccusage weekly keys each entry by the Monday date
   // of that week (e.g. "2026-05-18"). Match by computing this week's Monday.
   const { startTime, endTime, mondayKey } = weekRange(new Date());
-  const weeklyPayload = runCcusage('weekly');
+  const weeklyPayload = await runCcusage('weekly');
   if (weeklyPayload?.weekly?.length) {
     const weekly: WeeklyRow[] = weeklyPayload.weekly;
     const cur = weekly.find((w) => w.period === mondayKey);

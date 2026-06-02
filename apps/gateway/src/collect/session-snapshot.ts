@@ -1,22 +1,35 @@
 // collect/session-snapshot.ts — runtime state per ChatSession.
 //
 // For each active ChatSession the dashboard tracks, derive the per-session
-// runtime metrics (alive, pid, contextTokens, last user/asst snippet, etc.)
-// and push them via /api/sync/session-snapshot.
+// runtime metrics (alive, pid, working/idle, contextTokens, last user/asst
+// snippet, etc.) and push them via /api/sync/session-snapshot.
 //
-// Active sessions are discovered via api.pollChatPending (which already
-// returns `closedAt: null` sessions for the chat-tick); we read its
-// `sessions` array and synthesize a snapshot per session.
+// Active sessions are discovered via api.pollChatPending (which already returns
+// `closedAt: null` sessions for the chat-tick).
+//
+// Two hard-won implementation rules baked in below:
+//   1. Everything shells out ASYNC + the 8 session probes run CONCURRENTLY
+//      (Promise.all). The old spawnSync version blocked the single-threaded
+//      gateway event loop for the whole collection (~8s with many panes),
+//      starving chat delivery and other ticks. async exec means the snapshot
+//      wall-time ≈ the slowest single probe, and the loop stays responsive.
+//   2. `maxBuffer` is bumped to 32 MB. The Node default is 1 MB; asst transcripts
+//      interleave very large single lines (base64 images, big tool outputs — one
+//      was 316 KB), so `tail -n 500` / `tail -c 8M` overflow 1 MB and the child
+//      errors out → empty → null ctx. THAT (not a timeout) is why busy agents
+//      showed ctx "—" while small idle test agents didn't.
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { encodedProjectDir, tmuxSessionExists, tmuxPaneName } from '@hermit-ui/tmux-driver';
+import { execFile } from 'node:child_process';
+import { encodedProjectDir, tmuxPaneName } from '@hermit-ui/tmux-driver';
 import { AGENTS_ROOT } from '../config';
 import { api } from '../api';
 
 const TAIL_LINES = 500;
-const TAIL_TIMEOUT_MS = 1500;
+const TAIL_TIMEOUT_MS = 4000;
+const TMUX_TIMEOUT_MS = 2000;
+const MAX_BUF = 32 * 1024 * 1024; // big-line transcripts blow the 1 MB default
 const PROMPT_MAX_CHARS = 600;
 
 export interface SessionSnapshot {
@@ -30,29 +43,81 @@ export interface SessionSnapshot {
   transcriptPath: string | null;
   lastUserPrompt: string | null;
   lastAssistantText: string | null;
+  // Whatever JSON the agent's cron skill left in <AGENT_DIR>/.loop-state.json.
+  // Opaque to the gateway — dashboard renders it.
+  loopState: unknown | null;
 }
 
-function tmuxPanePid(sessionId: string): number | null {
-  const name = tmuxPaneName(sessionId);
-  const r = spawnSync('tmux', ['display', '-p', '-t', `=${name}`, '#{pane_pid}'], {
-    encoding: 'utf8',
-    timeout: 1500,
+// Async exec → stdout, or null on non-zero exit / timeout / buffer overflow.
+function run(cmd: string, args: string[], timeoutMs = TAIL_TIMEOUT_MS): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: MAX_BUF }, (err, stdout) => {
+      resolve(err ? null : stdout ?? '');
+    });
   });
-  if (r.status !== 0) return null;
-  const n = Number((r.stdout || '').trim());
+}
+
+// `tmux has-session` exits 0 iff the pane exists.
+async function paneAlive(sessionId: string): Promise<boolean> {
+  return (await run('tmux', ['has-session', '-t', `=${tmuxPaneName(sessionId)}`], TMUX_TIMEOUT_MS)) !== null;
+}
+
+async function tmuxPanePid(sessionId: string): Promise<number | null> {
+  const out = await run('tmux', ['display', '-p', '-t', `=${tmuxPaneName(sessionId)}`, '#{pane_pid}'], TMUX_TIMEOUT_MS);
+  if (out == null) return null;
+  const n = Number(out.trim());
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// Claude Code's TUI shows "esc to interrupt" in its mode line ONLY while a turn
+// is in flight (thinking, running a tool, streaming) and drops it the instant it
+// goes idle. That marker is the ground truth for working-vs-idle and matches
+// exactly what the user sees in the pane — unlike the old "last JSONL line < 30s
+// ago" heuristic, which went stale during long silent turns (a 3-min think
+// writes no JSONL line → looked idle while clearly working). Scan only the last
+// few lines (the mode line sits at the bottom) so a chat message that happens to
+// contain the words can't trigger a false "working".
+const WORK_MARKER_RE = /\besc(?:ape)?\s+to\s+(?:interrupt|cancel|stop)\b/i;
+async function paneIsWorking(sessionId: string): Promise<boolean> {
+  const out = await run('tmux', ['capture-pane', '-t', tmuxPaneName(sessionId), '-p'], TMUX_TIMEOUT_MS);
+  if (out == null) return false;
+  const lines = out.replace(/\x1b\[[0-9;]*m/g, '').split('\n').filter((l) => l.trim());
+  return WORK_MARKER_RE.test(lines.slice(-6).join('\n'));
+}
+
 function transcriptPath(claudeSessionId: string, agentDir: string): string | null {
-  const projectDir = encodedProjectDir(agentDir);
-  const p = path.join(projectDir, `${claudeSessionId}.jsonl`);
+  const p = path.join(encodedProjectDir(agentDir), `${claudeSessionId}.jsonl`);
   return fs.existsSync(p) ? p : null;
 }
 
-function tail(jsonl: string, n = TAIL_LINES): string[] {
-  const r = spawnSync('tail', ['-n', String(n), jsonl], { encoding: 'utf8', timeout: TAIL_TIMEOUT_MS });
-  if (r.status !== 0) return [];
-  return (r.stdout || '').split('\n').filter(Boolean);
+async function tailLines(jsonl: string, n = TAIL_LINES): Promise<string[]> {
+  const out = await run('tail', ['-n', String(n), jsonl]);
+  return out == null ? [] : out.split('\n').filter(Boolean);
+}
+
+// Most-recent context size, robust to very long turns. The 500-line window can
+// miss the last assistant `usage` when a turn emits hundreds of tool lines that
+// push it out of view. We read a byte-bounded tail (NOT line-bounded): `tail -c`
+// reads a fixed window from the end, fast regardless of line size; 8 MB clears
+// recent big lines to reach the last usage. Only runs when the main scan came
+// up empty.
+async function lastUsageTokens(jsonl: string): Promise<{ contextTokens: number; outputTokens: number } | null> {
+  const out = await run('tail', ['-c', String(8 * 1024 * 1024), jsonl]);
+  if (out == null) return null;
+  const lines = out.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('"output_tokens"')) continue;
+    try {
+      const u = JSON.parse(lines[i])?.message?.usage;
+      if (u) {
+        return {
+          contextTokens: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0),
+          outputTokens: u.output_tokens || 0,
+        };
+      }
+    } catch { /* keep scanning older matches */ }
+  }
+  return null;
 }
 
 function extractText(content: unknown): string {
@@ -68,29 +133,51 @@ function hasToolResult(content: unknown): boolean {
   return Array.isArray(content) && content.some((b: any) => b?.type === 'tool_result');
 }
 
-function probe(sessionId: string, agentName: string, claudeSessionId: string | null): SessionSnapshot {
-  const agentDir = path.join(AGENTS_ROOT, agentName);
-  const alive = tmuxSessionExists(sessionId);
-  const pid = alive ? tmuxPanePid(sessionId) : null;
-
-  if (!claudeSessionId) {
-    return {
-      sessionId, pid, alive, state: alive ? 'starting' : null,
-      contextTokens: null, outputTokens: null,
-      lastActivity: null, transcriptPath: null,
-      lastUserPrompt: null, lastAssistantText: null,
-    };
+// Read the per-agent loop / scheduled-task state file the cron skill maintains.
+// Absent / unparseable returns null (dashboard hides the chip). Lives at the
+// agent dir level — multiple chat sessions on the same agent see the union.
+function readLoopState(agentDir: string): unknown | null {
+  try {
+    const p = path.join(agentDir, '.loop-state.json');
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return null;
   }
+}
 
-  const tp = transcriptPath(claudeSessionId, agentDir);
-  if (!tp) {
-    return {
-      sessionId, pid, alive, state: alive ? 'starting' : null,
-      contextTokens: null, outputTokens: null,
-      lastActivity: null, transcriptPath: null,
-      lastUserPrompt: null, lastAssistantText: null,
-    };
-  }
+async function probe(
+  sessionId: string,
+  agentName: string,
+  agentDirectory: string | null,
+  claudeSessionId: string | null,
+): Promise<SessionSnapshot> {
+  // DB-leader: prefer the agent's stored directory (works for imported agents
+  // whose path lives outside AGENTS_ROOT). Fall back to the old AGENTS_ROOT
+  // guess so a freshly-created agent whose directory hasn't been written back
+  // yet still gets probed.
+  const agentDir = agentDirectory ?? path.join(AGENTS_ROOT, agentName);
+  const loopState = readLoopState(agentDir);
+  const empty = {
+    sessionId, pid: null, contextTokens: null, outputTokens: null,
+    lastActivity: null, transcriptPath: null, lastUserPrompt: null,
+    lastAssistantText: null, loopState,
+  };
+
+  const alive = await paneAlive(sessionId);
+  if (!alive) return { ...empty, alive: false, state: null };
+
+  const tp = claudeSessionId ? transcriptPath(claudeSessionId, agentDir) : null;
+
+  // Independent shell-outs run concurrently — none blocks the event loop.
+  const [pid, working, lines] = await Promise.all([
+    tmuxPanePid(sessionId),
+    paneIsWorking(sessionId),
+    tp ? tailLines(tp) : Promise.resolve<string[]>([]),
+  ]);
+  const state = working ? 'working' : 'idle';
+
+  if (!tp) return { ...empty, alive, pid, state: 'starting' };
 
   let lastActivityMs = 0;
   let contextTokens: number | null = null;
@@ -98,7 +185,6 @@ function probe(sessionId: string, agentName: string, claudeSessionId: string | n
   let lastUser: string | null = null;
   let lastAssistant: string | null = null;
 
-  const lines = tail(tp);
   for (let i = lines.length - 1; i >= 0; i--) {
     if (lastUser != null && lastAssistant != null && contextTokens != null) break;
     let ev: any;
@@ -123,21 +209,25 @@ function probe(sessionId: string, agentName: string, claudeSessionId: string | n
     }
   }
 
+  // ctx fallback: a long current turn can bury the last usage past the line
+  // window — read it from a byte-bounded tail so the percentage is available.
+  if (contextTokens == null) {
+    const u = await lastUsageTokens(tp);
+    if (u) { contextTokens = u.contextTokens; outputTokens = u.outputTokens; }
+  }
+
   return {
     sessionId,
     pid,
     alive,
-    state: !alive
-      ? null
-      : lastActivityMs > 0 && Date.now() - lastActivityMs < 30_000
-        ? 'running'
-        : 'idle',
+    state,
     contextTokens,
     outputTokens,
     lastActivity: lastActivityMs > 0 ? new Date(lastActivityMs).toISOString() : null,
     transcriptPath: tp,
     lastUserPrompt: lastUser,
     lastAssistantText: lastAssistant,
+    loopState,
   };
 }
 
@@ -149,5 +239,9 @@ export async function collectSessionSnapshots(): Promise<SessionSnapshot[]> {
     console.error('[session-snapshots] poll failed:', e);
     return [];
   }
-  return pending.sessions.map((s) => probe(s.id, s.agentName, s.claudeSessionId));
+  // All session probes run concurrently — the collection is as fast as the
+  // slowest single probe, not the sum.
+  return Promise.all(
+    pending.sessions.map((s) => probe(s.id, s.agentName, s.agentDirectory, s.claudeSessionId)),
+  );
 }

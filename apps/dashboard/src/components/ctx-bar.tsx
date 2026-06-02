@@ -19,26 +19,45 @@ function textColor(pct: number): string {
  * Designed to drop into a flex row of small mono text without breaking baseline.
  * Inherits font-size / family from the parent so it can be used inside the
  * chat header or any 10-12px caption strip.
+ *
+ * ALWAYS renders — even when `tokens` is null (no completed turn yet) it shows a
+ * muted `ctx —` so the percentage is present in every session state, per the
+ * "ctx 占比任何状态都要显示" requirement. `variant="compact"` drops the token
+ * count + bar and shows just `ctx NN%` for tight rows (the sidebar).
  */
 export function CtxBar({
   tokens,
   total = 1_000_000,
   showLabel = true,
+  variant = 'full',
 }: {
   tokens: number | null | undefined;
   total?: number;
   showLabel?: boolean;
+  variant?: 'full' | 'compact';
 }) {
-  if (tokens == null) return null;
-  const pct = ctxPct(tokens, total);
-  const fill = Math.max(2, Math.min(100, pct));
+  const known = tokens != null;
+  const pct = known ? ctxPct(tokens, total) : 0;
+  const fill = known ? Math.max(2, Math.min(100, pct)) : 0;
+  const pctText = known ? `${pct.toFixed(0)}%` : '—';
+  const pctClass = known ? textColor(pct) : 'text-muted-foreground/50';
+  const title = known
+    ? `context ${tokens!.toLocaleString()} / ${total.toLocaleString()} tokens (${pct.toFixed(1)}%)`
+    : 'context usage unknown — no completed turn yet';
+
+  if (variant === 'compact') {
+    return (
+      <span className="inline-flex items-center gap-1" title={title}>
+        {showLabel && <span className="text-muted-foreground/70">ctx</span>}
+        <span className={`tabular-nums ${pctClass}`}>{pctText}</span>
+      </span>
+    );
+  }
+
   return (
-    <span
-      className="inline-flex items-center gap-1.5"
-      title={`context ${tokens.toLocaleString()} / ${total.toLocaleString()} tokens (${pct.toFixed(1)}%)`}
-    >
+    <span className="inline-flex items-center gap-1.5" title={title}>
       {showLabel && <span className="text-muted-foreground/70">ctx</span>}
-      <span className="tabular-nums text-foreground">{fmtBytes(tokens)}</span>
+      <span className="tabular-nums text-foreground">{known ? fmtBytes(tokens!) : '—'}</span>
       <span
         className="relative h-[4px] w-14 overflow-hidden rounded-full bg-foreground/10 ring-1 ring-foreground/5"
         aria-hidden="true"
@@ -48,7 +67,7 @@ export function CtxBar({
           style={{ width: `${fill}%` }}
         />
       </span>
-      <span className={`tabular-nums ${textColor(pct)}`}>{pct.toFixed(0)}%</span>
+      <span className={`tabular-nums ${pctClass}`}>{pctText}</span>
     </span>
   );
 }

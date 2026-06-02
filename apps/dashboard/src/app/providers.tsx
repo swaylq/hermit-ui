@@ -43,8 +43,20 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     }),
   );
 
-  // No-op effect to keep React happy if key changes during session
-  useEffect(() => {}, []);
+  // iOS Safari ignores `user-scalable=no` / `maximum-scale` in the viewport
+  // meta, so block its pinch-zoom gestures directly. (Android & WKWebView honour
+  // the meta; on them these `gesture*` events never fire, so this is a no-op.)
+  useEffect(() => {
+    const block = (e: Event) => e.preventDefault();
+    document.addEventListener('gesturestart', block, { passive: false });
+    document.addEventListener('gesturechange', block, { passive: false });
+    document.addEventListener('gestureend', block, { passive: false });
+    return () => {
+      document.removeEventListener('gesturestart', block);
+      document.removeEventListener('gesturechange', block);
+      document.removeEventListener('gestureend', block);
+    };
+  }, []);
 
   return (
     <trpc.Provider client={trpcClient} queryClient={queryClient}>

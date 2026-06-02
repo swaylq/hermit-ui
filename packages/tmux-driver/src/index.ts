@@ -82,6 +82,14 @@ export interface EnsureOpts {
   /** Pane dimensions. Default 200x50 — wide enough that claude doesn't truncate tool output. */
   width?: number;
   height?: number;
+  /**
+   * Extra environment variables for the pane, passed via `tmux new-session -e
+   * K=V`. claude AND every subprocess it spawns (notably PreToolUse hooks)
+   * inherit these — so the permission hook gets the dashboard URL + key without
+   * them ever touching the command line. Values are passed as literal argv
+   * entries (no shell), so no quoting is needed.
+   */
+  env?: Record<string, string>;
 }
 
 /**
@@ -108,12 +116,20 @@ export function ensureSession(opts: EnsureOpts): { name: string; created: boolea
     .map((a) => shellQuote(a))
     .join(' ');
 
+  // `-e K=V` per env entry — sets the pane's session environment, inherited by
+  // claude and its hook subprocesses. Literal argv (no shell), so no quoting.
+  const envFlags: string[] = [];
+  for (const [k, v] of Object.entries(opts.env ?? {})) {
+    if (v != null && v !== '') envFlags.push('-e', `${k}=${v}`);
+  }
+
   const r = tmux([
     'new-session', '-d',
     '-s', name,
     '-c', opts.cwd,
     '-x', String(opts.width ?? 200),
     '-y', String(opts.height ?? 50),
+    ...envFlags,
     claudeCmd,
   ]);
   if (!r.ok) {
@@ -152,6 +168,37 @@ export function sendKeys(sessionId: string, text: string): void {
   // Submit.
   const r = tmux(['send-keys', '-t', `${name}.0`, 'Enter']);
   if (!r.ok) throw new Error(`tmux send-keys (Enter) failed: ${r.stderr || 'exit ' + r.status}`);
+}
+
+// True if the composer's input line (`❯ …`) still holds unsent text.
+function composerHasText(name: string): boolean {
+  const r = tmux(['capture-pane', '-t', `${name}.0`, '-p'], { timeoutMs: 2000 });
+  if (!r.ok) return false;
+  const lines = r.stdout.replace(/\x1b\[[0-9;]*m/g, '').split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const idx = lines[i].indexOf('❯');
+    if (idx >= 0) return lines[i].slice(idx + 1).trim().length > 0;
+  }
+  return false;
+}
+
+/**
+ * Make sure a sent message actually submitted. claude's Ink TUI occasionally
+ * drops the submit Enter when a multi-line paste (e.g. user text + a `Read
+ * <image>` line) is still settling — the text lands in the composer but never
+ * sends. We let it settle, then re-send Enter while the composer still shows
+ * buffered text. Idempotent: an Enter on an already-empty composer is a no-op,
+ * so an extra round never double-submits. (Past incident: a text+image message
+ * sat unsent until a manual tmux Enter.)
+ */
+export async function confirmSubmitted(sessionId: string, tries = 4, gapMs = 200): Promise<void> {
+  const name = paneName(sessionId);
+  if (!hasSession(name)) return;
+  for (let i = 0; i < tries; i++) {
+    await sleep(gapMs);
+    if (!composerHasText(name)) return; // cleared → submitted
+    tmux(['send-keys', '-t', `${name}.0`, 'Enter']);
+  }
 }
 
 /** Send Escape to interrupt the in-flight turn (claude's cancel key). */

@@ -6,7 +6,7 @@ import { getStoredKey, setStoredKey } from '@/app/providers';
 import { LoginScreen } from '@/components/login-screen';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { NavBar } from '@/components/nav-bar';
+import { AppSidebar, SidebarProvider } from '@/components/app-sidebar';
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [hasKey, setHasKey] = useState(false);
@@ -53,9 +53,11 @@ function Authed({ onLogout, children }: { onLogout: () => void; children: React.
   }
 
   return (
-    <div className="flex flex-1 flex-col min-h-screen">
-      <NavBar machine={me.data} onLogout={onLogout} />
-      <main className="flex-1 w-full">{children}</main>
-    </div>
+    <SidebarProvider>
+      <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
+        <AppSidebar machine={me.data} onLogout={onLogout} />
+        <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">{children}</main>
+      </div>
+    </SidebarProvider>
   );
 }

@@ -31,8 +31,8 @@
 #   pane_state_check at hermit-agent v0.1.55).
 # - This script does NOT pass `--channels` to claude, so no MCP plugins load.
 #   That keeps startup fast (~8s instead of 15-20s) and avoids accidentally
-#   sending Telegram from a cron context. If a cron needs to report back via
-#   Telegram, use Bot API curl in the prompt (see AGENTS.md Cron Safety).
+#   loading channel MCP from a cron context. If a cron needs to report back,
+#   have the prompt push to the dashboard (see AGENTS.md Cron Safety).
 
 set -uo pipefail
 

@@ -100,30 +100,6 @@ Cron tasks run via LaunchAgents (macOS) or systemd-user timers (Linux).
 2. **Never call `AskUserQuestion`.** That tool renders a TUI modal to the local pane only — {{USER_NAME}} on the web can't see it, so the turn hangs. To pose a choice, write a numbered list in your reply and end the turn — {{USER_NAME}} answers in the next inbound. A PreToolUse hook (`scripts/hook-block-askuserquestion.sh`) blocks the call defensively.
 3. **Image upload works.** {{USER_NAME}} can paste/drag images into the composer. They arrive in your prompt as `Read <local cache path>` — pass through `scripts/safe-image.sh` first.
 
-## CLI Commands via Natural Language
-
-{{USER_NAME}} triggers Claude Code built-in slash commands — and full session restart — through plain language. Recognize the intent, then route through `scripts/exec-cli-command.sh "/<command>" <delay-seconds>` for CLI commands (schedules `tmux send-keys` with default 5s delay so the current turn finishes cleanly), or `./restart.sh $(cat agent.pid) &` via Bash for full restart.
-
-Safe → invoke directly, then reply confirming:
-
-- "compact" / "压缩上下文" → `/compact`
-- "switch to opus/sonnet/haiku" → `/model opus` (always pass the model as arg; bare `/model` opens a picker and is blocked)
-- "status" / "查状态" → `/status`
-
-Destructive → confirm once unless {{USER_NAME}} said "force" / "yes" / "立即":
-
-- "clear context" / "reset" / "清空" → `/clear`
-- "exit" / "logout" / "退出" → `/exit` or `/logout`
-- "restart" / "重启" → run `./restart.sh $(cat agent.pid) &` via Bash. `restart.sh` sleeps 3s, kills the old PID, tmux respawns. Loses current turn state but recovers from wedges.
-
-Interactive commands are BLOCKED by `exec-cli-command.sh` (exit 4) — they open modal panels that freeze the REPL. If asked, explain it's interactive-only:
-
-- `/help /config /memory /agents /mcp /permissions /bashes /hooks /ide`
-- `/login /resume /bug /output-style /statusline /terminal-setup /vim`
-- `/model` with NO arg
-
-Reply pattern after invoking: "Scheduled /compact — new turn will start from compacted context in ~5s." Don't silently fire.
-
 ## Reporting Style
 
 **散文用中文**：完成 / 修复 / 合并 / 回滚 / 实测 / 发布 / 改动

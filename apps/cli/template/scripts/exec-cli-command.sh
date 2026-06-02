@@ -57,7 +57,7 @@ Interactive commands (UNSAFE — opens modal, blocks REPL until dismissed):
   /model    (no arg — picker UI)
 
 Interactive commands are blocked by default; they'd hang the tmux REPL
-and cut off Telegram replies until a human dismisses the panel at the
+and cut off the agent's replies until a human dismisses the panel at the
 terminal. Pass --force if you truly want to inject one anyway.
 
 Notes:
@@ -87,7 +87,7 @@ if [ "$IS_INTERACTIVE" -eq 1 ] && [ "$FORCE" -eq 0 ]; then
 Error: '$CMD' is an interactive command — it opens a modal panel and
 takes over the TUI, blocking the REPL until dismissed at the terminal.
 Injecting it remotely (via tmux send-keys) will hang the session and
-cut off Telegram replies.
+cut off the agent's replies to the dashboard.
 
 Safe alternatives:
   /clear /compact /cost /status /exit /logout /init /fast

@@ -1,25 +1,32 @@
 // hermit-ui gateway — long-running Mac-local process that pushes filesystem-
-// derived state up to the dashboard's postgres and fires SystemTasks against
+// derived state up to the dashboard's postgres and fires Cron jobs against
 // the local agent tree.
 //
 // Intervals (staggered):
 //   agents              5 min  (static folder metadata — markdowns barely churn)
-//   session-snapshots   30 s   (per-ChatSession runtime: alive/pid/ctx/jsonl tail)
-//   tasks tick          15 s
+//   session-snapshots   15 s   (per-ChatSession runtime: working/idle from the
+//                               pane's TUI via capture-pane, alive/pid/ctx/jsonl
+//                               tail. 15s keeps the state badge close to live
+//                               without hammering tmux; the chat page also flips
+//                               to "working" instantly off its own SSE stream.)
+//   cron tick           15 s   (fires due Cron jobs via tmux + claude)
 //   chat tick           2  s
 //   chat-cancel tick    1.5s
 //   chat-restart tick   2  s
-//   launchagents        5 min
-//   usage               5 min
+//   usage               30 min  (was 5 min — dashboard now relies on these
+//                                pushes exclusively, no on-demand ccusage)
 
-import { collectAgents } from './collect/agents';
+import { collectAgentsFromList } from './collect/agents';
 import { collectSessionSnapshots } from './collect/session-snapshot';
-import { collectLaunchAgents } from './collect/launchAgents';
 import { collectUsage } from './collect/usage';
 import { collectUsageWindows } from './collect/window';
+import { collectPlanUsage } from './collect/plan-usage';
 import { api } from './api';
-import { tick as taskTick } from './system-task-runner';
+import { tick as cronTick } from './cron-runner';
 import { chatTick, chatCancelTick, chatRestartTick, shutdownChatRunner } from './chat-runner';
+import { agentRequestTick } from './agent-lifecycle';
+import { pushGlobalSkills, globalSkillRequestTick } from './global-skills';
+import { startControlChannel, shutdownControlChannel } from './control-channel';
 
 console.log('[gateway] starting');
 
@@ -35,9 +42,33 @@ async function safe(label: string, fn: () => Promise<void>) {
 
 async function pushAgents() {
   await safe('agents', async () => {
-    const agents = collectAgents();
-    await api.syncAgents(agents);
+    // DB-leader: the dashboard owns which agents exist + where they live.
+    // We pull the (name, directory) pairs, read each directory's markdowns,
+    // and push content updates. No filesystem scan of AGENTS_ROOT.
+    const entries = await api.listAgentDirectories();
+    const rows = collectAgentsFromList(entries);
+    if (rows.length === 0) return;
+    await api.syncAgents(rows);
   });
+}
+
+async function pushGlobalSkillsTick() {
+  await safe('global-skills', async () => { await pushGlobalSkills(); });
+}
+
+// Scrape the REAL Claude Max plan % from `claude /usage` (throwaway tmux pane)
+// and push it. The only accurate source — ccusage is a cost estimate that never
+// matches /usage. Each run spins a ~20s claude session + one minimal API call,
+// so it runs infrequently.
+async function pushPlanUsage() {
+  await safe('plan-usage', async () => {
+    const pu = await collectPlanUsage();
+    if (pu) await api.syncPlanUsage(pu);
+  });
+}
+
+async function globalSkillReqTick() {
+  await safe('global-skill-requests', async () => { await globalSkillRequestTick(); });
 }
 
 async function pushSessionSnapshots() {
@@ -45,13 +76,6 @@ async function pushSessionSnapshots() {
     const items = await collectSessionSnapshots();
     if (items.length === 0) return;
     await api.syncSessionSnapshots(items);
-  });
-}
-
-async function pushLaunchAgents() {
-  await safe('launchagents', async () => {
-    const items = collectLaunchAgents();
-    await api.syncLaunchAgents(items);
   });
 }
 
@@ -75,9 +99,9 @@ async function pushUsageWindows() {
   });
 }
 
-async function pushTaskTick() {
-  await safe('task-tick', async () => {
-    await taskTick();
+async function pushCronTick() {
+  await safe('cron-tick', async () => {
+    await cronTick();
   });
 }
 
@@ -108,26 +132,40 @@ function loop(fn: () => Promise<void>, ms: number) {
 // Initial run kicks all uploaders ASAP so the dashboard isn't empty.
 (async () => {
   await pushAgents();
+  await pushGlobalSkillsTick();
   await pushSessionSnapshots();
-  await pushLaunchAgents();
   await pushUsage();
   await pushUsageWindows();
-  await pushTaskTick();
+  await pushCronTick();
+  await pushPlanUsage(); // last — runs after the blocking ccusage scans, not starved by them
 })();
 
+// Persistent outbound control WebSocket to the dashboard for the browser
+// terminal feature. Fires-and-reconnects-forever; no loop needed.
+startControlChannel();
+
 loop(pushAgents, 5 * 60_000);
-loop(pushSessionSnapshots, 30_000);
-loop(pushTaskTick, 15_000);
+loop(pushSessionSnapshots, 15_000);
+loop(pushCronTick, 15_000);
 loop(pushChatTick, 2_000);
 loop(pushChatCancelTick, 1_500);
 loop(pushChatRestartTick, 2_000);
-loop(pushLaunchAgents, 5 * 60_000);
-loop(pushUsage, 5 * 60_000);
-loop(pushUsageWindows, 5 * 60_000);
+loop(() => safe('agent-requests', agentRequestTick), 3_000);
+loop(pushGlobalSkillsTick, 60_000);
+loop(globalSkillReqTick, 3_000);
+// Real plan % via `claude /usage` scrape — every 12 min (initial run is the last
+// step of the startup IIFE above, so it isn't starved by the ccusage block).
+loop(pushPlanUsage, 12 * 60_000);
+// Usage is the dashboard's only source for spend numbers (the live ccusage
+// shell-out was removed). 30 min keeps ccusage's stdin scan light while still
+// showing fresh-enough data for human-paced quota watching.
+loop(pushUsage, 30 * 60_000);
+loop(pushUsageWindows, 30 * 60_000);
 
 function shutdown(signal: string) {
   console.log(`[gateway] ${signal}, exiting`);
   try { shutdownChatRunner(); } catch {}
+  try { shutdownControlChannel(); } catch {}
   process.exit(0);
 }
 process.on('SIGINT', () => shutdown('SIGINT'));

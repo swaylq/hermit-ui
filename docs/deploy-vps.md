@@ -31,16 +31,20 @@ From Mac:
 # apps/dashboard/src/app/api/sync/agents/ route directory isn't ALSO excluded
 # (it would be if you wrote --exclude='agents/'). Also exclude .env files
 # so the Mac dev creds don't clobber the VPS-only DATABASE_URL.
-rsync -az \
+rsync -az --delete \
   --exclude=node_modules --exclude=.next --exclude=.git \
   --exclude='apps/*/logs' --exclude='/_research/' --exclude='/agents/' \
-  --exclude='apps/*/.env' \
+  --exclude='apps/*/.env' --exclude='apps/*/src/generated' \
   --exclude='.playwright-mcp' --exclude='*.tgz' \
   /Users/mac/claudeclaw/asst/hermit-ui/ \
   ubuntu@45.89.234.110:/home/ubuntu/hermit-ui/
 ```
 
 `/agents/` is intentionally excluded — the gateway running on the Mac stays the authoritative source of agent state. The VPS dashboard only hosts the web UI + DB + receives gateway POSTs.
+
+**Pitfall (2026-05-29 cron deploy):** the rsync above now uses `--delete` + excludes `apps/*/src/generated`. Two hard lessons:
+- **Without `--delete`**, files DELETED in the source (routes/components removed during a refactor) linger on the VPS and break `next build` with stale-import errors. `--delete` makes the VPS mirror the source.
+- **`src/generated` MUST be excluded** — it holds the platform-specific Prisma query engine (`libquery_engine-debian-openssl-3.0.x.so.node`). Rsyncing the Mac's copy over it clobbers the debian binary, then `prisma generate` won't even start because `PRISMA_QUERY_ENGINE_LIBRARY` (in the VPS `.env`) points at the now-missing file. Recovery: `rm -rf src/generated/prisma` then regenerate with the env var BLANKED so generate doesn't try to resolve it: `PRISMA_QUERY_ENGINE_LIBRARY= node ../../node_modules/prisma/build/index.js generate`, then migrate/build normally.
 
 **Pitfall (2026-05-25 cutover):** initial deploy used `--exclude='agents/'` without the leading slash. rsync matched the pattern at EVERY level, so it ate `apps/dashboard/src/app/api/sync/agents/route.ts` along with the workspace-level `agents/` dir. Result: `/api/sync/agents` returned 404 on the VPS while every other sync route worked. Fix: anchor with leading slash + always re-run `next build` after rsync repairs.
 

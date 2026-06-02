@@ -57,6 +57,25 @@ export function extractImages(content: unknown): ExtractedImage[] {
   return out;
 }
 
+/**
+ * Walk a content blocks array and return `file` blocks (non-image uploads)
+ * normalized like images so they flow through the same cache+Read path. The
+ * composer emits `{ type:'file', source:{ type:'url', url, media_type }, name }`.
+ */
+export function extractFiles(content: unknown): ExtractedImage[] {
+  if (!Array.isArray(content)) return [];
+  const out: ExtractedImage[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    if ((block as any).type !== 'file') continue;
+    const src = (block as any).source;
+    if (src && typeof src === 'object' && src.type === 'url' && typeof src.url === 'string') {
+      out.push({ url: src.url, mimeType: typeof src.media_type === 'string' ? src.media_type : null, base64Data: null });
+    }
+  }
+  return out;
+}
+
 /** Derive a stable on-disk filename for a given image source. */
 function cacheFilename(img: ExtractedImage): string {
   const key = img.base64Data
@@ -68,7 +87,9 @@ function cacheFilename(img: ExtractedImage): string {
   if (!img.base64Data) {
     const pathOnly = img.url.split('?')[0];
     const fromPath = extname(pathOnly).replace(/^\./, '').toLowerCase();
-    if (/^(png|jpg|jpeg|gif|webp)$/.test(fromPath)) {
+    // Preserve any reasonable extension (images AND relayed files) so claude's
+    // Read tool parses by type (.pdf / .md / .ts / …), not just images.
+    if (/^[a-z0-9]{1,8}$/.test(fromPath)) {
       ext = fromPath === 'jpeg' ? 'jpg' : fromPath;
     }
   }
@@ -130,7 +151,7 @@ export async function ensureCached(img: ExtractedImage): Promise<string> {
  */
 export async function relayImages(contents: unknown[]): Promise<{ paths: string[]; errors: Array<{ url: string; error: string }> }> {
   const all: ExtractedImage[] = [];
-  for (const c of contents) all.push(...extractImages(c));
+  for (const c of contents) all.push(...extractImages(c), ...extractFiles(c));
   if (all.length === 0) return { paths: [], errors: [] };
 
   const paths: string[] = [];

@@ -10,6 +10,7 @@
       "NotebookRead",
       "Read",
       "Task",
+      "ToolSearch",
       "TodoWrite",
       "WebFetch",
       "WebSearch",
@@ -22,10 +23,7 @@
       "Read({{AGENT_DIR}}/.claude/**)",
       "mcp__playwright",
       "mcp__playwright-browser",
-      "mcp__plugin_telegram_telegram__reply",
-      "mcp__plugin_telegram_telegram__react",
-      "mcp__plugin_telegram_telegram__edit_message",
-      "mcp__plugin_telegram_telegram__download_attachment"
+      "mcp__hermit"
     ]
   },
   "mcpServers": {
@@ -34,18 +32,25 @@
       "args": []
     }
   },
-  "enabledPlugins": {
-    "telegram@claude-plugins-official": true
-  },
   "hooks": {
-    "Stop": [
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{AGENT_DIR}}/scripts/hook-block-askuserquestion.sh",
+            "timeout": 10
+          }
+        ]
+      },
       {
         "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "{{AGENT_DIR}}/.claude/hooks/tg-reply-check.sh",
-            "timeout": 10
+            "command": "{{AGENT_DIR}}/scripts/hook-web-permission.sh",
+            "timeout": 14400
           }
         ]
       }

@@ -43,6 +43,20 @@ const EXT_BY_MIME: Record<string, string> = {
   'image/webp': 'webp',
 };
 
+// Non-image extensions we accept. Mirrors `SAFE_FILE_EXTS` on the client.
+// Anything outside → 415; keeps loose binaries / executables out. Archives are
+// allowed (stored as-is) — the gateway hands the agent an "extract via Bash"
+// instruction rather than Read'ing them.
+const SAFE_FILE_EXT_SET = new Set<string>([
+  'txt','md','markdown','rtf','log','pdf',
+  'json','yaml','yml','toml','ini','conf','env','xml','html','svg','csv','tsv','sql',
+  'ts','tsx','js','jsx','mjs','cjs','py','rb','php','go','rs',
+  'c','cpp','cc','cxx','h','hpp','java','kt','swift','scala','clj','ex','exs',
+  'sh','bash','zsh','fish','ps1','dart','lua','r',
+  // archives — extracted by the agent via Bash (see image-relay / chat-runner)
+  'zip','tar','gz','tgz','bz2','tbz2','xz','txz','7z','rar','zst',
+]);
+
 function uploadRoot(): string {
   const fromEnv = process.env.HERMIT_UPLOAD_DIR;
   if (fromEnv) return fromEnv;
@@ -57,6 +71,12 @@ function safeJoin(root: string, ...parts: string[]): string | null {
   const rootResolved = resolve(root);
   if (joined !== rootResolved && !joined.startsWith(rootResolved + sep)) return null;
   return joined;
+}
+
+// Sanitize a user filename's extension → short alnum token, else "bin".
+function safeExtFromName(name: string): string {
+  const e = extname(name).replace(/^\./, '').toLowerCase();
+  return /^[a-z0-9]{1,8}$/.test(e) ? e : 'bin';
 }
 
 function which(bin: string): string | null {
@@ -131,9 +151,7 @@ export async function POST(req: NextRequest) {
   if (file.size > MAX_BYTES) return NextResponse.json({ error: `file too large (>${MAX_BYTES} bytes)` }, { status: 413 });
 
   const mime = (file.type || '').toLowerCase();
-  if (!ALLOWED_MIME.has(mime)) {
-    return NextResponse.json({ error: `unsupported mime: ${mime || '<empty>'}` }, { status: 415 });
-  }
+  const isImage = ALLOWED_MIME.has(mime);
 
   // Confirm the session belongs to this machine — prevents cross-tenant writes.
   const session = await prisma.chatSession.findFirst({
@@ -148,33 +166,61 @@ export async function POST(req: NextRequest) {
   await mkdir(dir, { recursive: true });
 
   const uuid = randomUUID();
-  const ext = EXT_BY_MIME[mime];
-  const origPath = join(dir, `${uuid}.${ext}`);
-  const safePath = join(dir, `${uuid}.safe.${ext}`);
-
-  // Pipe the multipart blob → disk.
   const bytes = Buffer.from(await file.arrayBuffer());
-  await writeFile(origPath, bytes, { mode: 0o644 });
 
-  const resized = resizeSafe(origPath, safePath);
-  if (!resized) {
-    // sips/convert absent or failed: fall back to a byte-for-byte copy so the
-    // url still resolves. Downstream callers can still check width/height to
-    // decide whether to forward the image to claude.
-    await writeFile(safePath, bytes, { mode: 0o644 });
+  // ── Images: keep the original + a ≤2000px ".safe." sidecar. Both the gateway
+  // relay and the inline thumbnail consume the .safe. url; reading an oversized
+  // image wedges the model session (see evolution/lessons.md L4). ──
+  if (isImage) {
+    const ext = EXT_BY_MIME[mime];
+    const origPath = join(dir, `${uuid}.${ext}`);
+    const safePath = join(dir, `${uuid}.safe.${ext}`);
+    await writeFile(origPath, bytes, { mode: 0o644 });
+    const resized = resizeSafe(origPath, safePath);
+    if (!resized) {
+      // sips/convert absent or failed: byte-for-byte copy so the url resolves.
+      await writeFile(safePath, bytes, { mode: 0o644 });
+    }
+    const safeStatRes = await stat(safePath).catch(() => null);
+    const dims = imageDims(safePath) ?? imageDims(origPath);
+    return NextResponse.json({
+      ok: true,
+      kind: 'image',
+      url: `/uploads/${sessionId}/${uuid}.safe.${ext}`,
+      originalUrl: `/uploads/${sessionId}/${uuid}.${ext}`,
+      mimeType: mime,
+      width: dims?.width ?? null,
+      height: dims?.height ?? null,
+      bytes: safeStatRes?.size ?? bytes.length,
+      resized,
+    });
   }
 
-  const safeStatRes = await stat(safePath).catch(() => null);
-  const dims = imageDims(safePath) ?? imageDims(origPath);
-
+  // ── Other files: store as-is (no resize). The gateway relay downloads them
+  // onto the Mac and hands claude a `Read <path>` so the agent can consume the
+  // contents (text/code/pdf/etc). No ".safe." marker — relay handles non-images.
+  const fname = (file as File).name || '';
+  // Allowlist check: reject anything not on SAFE_FILE_EXT_SET before writing
+  // to disk. Defense-in-depth (the client already filters, but the server is
+  // the trust boundary).
+  const rawExt = extname(fname).replace(/^\./, '').toLowerCase();
+  if (!SAFE_FILE_EXT_SET.has(rawExt)) {
+    return NextResponse.json(
+      { error: `unsupported file type${rawExt ? ` (.${rawExt})` : ''}` },
+      { status: 415 },
+    );
+  }
+  const ext = safeExtFromName(fname);
+  const filePath = join(dir, `${uuid}.${ext}`);
+  await writeFile(filePath, bytes, { mode: 0o644 });
   return NextResponse.json({
     ok: true,
-    url: `/uploads/${sessionId}/${uuid}.safe.${ext}`,
-    originalUrl: `/uploads/${sessionId}/${uuid}.${ext}`,
-    mimeType: mime,
-    width: dims?.width ?? null,
-    height: dims?.height ?? null,
-    bytes: safeStatRes?.size ?? bytes.length,
-    resized,
+    kind: 'file',
+    url: `/uploads/${sessionId}/${uuid}.${ext}`,
+    mimeType: mime || 'application/octet-stream',
+    name: fname || `${uuid}.${ext}`,
+    width: null,
+    height: null,
+    bytes: bytes.length,
   });
 }

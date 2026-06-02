@@ -1,31 +1,45 @@
-// Hourly usage collector. Walks each agent's project dir JSONLs, parses each
-// assistant message's timestamp + usage, tallies per hour bucket using ccusage
-// pricing.
+// Per-agent usage collector. Runs `ccusage session --json` and tallies each
+// claude session's tokens/cost into per-agent, per-UTC-day buckets the dashboard
+// stores as UsageHourly rows.
 //
-// For v1 we ship resolution = day (one bucket per agent per UTC day) because
-// ccusage's `session` view only carries a date-level lastActivity. The
-// dashboard's UsageHourly schema is granular enough to switch to true hour
-// buckets later by parsing JSONL line-by-line.
+// DB-leader (same model as chat-runner / session-snapshot / pushAgents): the set
+// of agents AND each agent's on-disk path come straight from the dashboard DB via
+// `api.listAgentDirectories()` (Agent.name + Agent.directory). We do NOT scan a
+// filesystem root or reconstruct paths — we read each registered agent's stored
+// `directory`, turn it into its claude project dir, and map the session UUIDs in
+// that dir to the agent. So usage covers exactly the agents the dashboard knows
+// about; agents absent from the DB are intentionally not reported.
+//
+// ccusage `session --json` row shape (ccusage 20.x, verified 2026-05-31):
+//   { period: "<session-uuid>", metadata: { lastActivity: "YYYY-MM-DD" },
+//     totalCost, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens }
+// `period` IS the claude session uuid and `metadata.lastActivity` IS the date;
+// the row's own `agent` field is unusable (always "Unknown"), so we attribute via
+// which agent's project dir holds `<uuid>.jsonl`.
+//
+// Granularity caveat: ccusage's `session` view carries only a date-level
+// lastActivity, so each session's spend lands in one UTC-day bucket. Per-agent
+// TOTALS are exact; the hour/week time-series is day-grained. True hour buckets
+// need line-by-line JSONL parsing — a later upgrade.
 
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import path from 'node:path';
-import { AGENTS_ROOT, PROJECTS_ROOT } from '../config';
+import { execCapture } from '../exec';
+import { encodedProjectDir } from '@hermit-ui/tmux-driver';
+import { api } from '../api';
 
 type SessionRow = {
-  period: string; // session UUID
-  totalCost: number;
-  totalTokens?: number;
-  cacheCreationTokens?: number;
-  cacheReadTokens?: number;
+  period: string; // claude session uuid
+  totalCost?: number;
   inputTokens?: number;
   outputTokens?: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
   metadata?: { lastActivity?: string };
 };
 
 export type UsageRow = {
   agentName: string;
-  hourBucket: string; // ISO timestamp at hour boundary
+  hourBucket: string; // ISO timestamp at hour boundary (UTC day for v1)
   cost: number;
   inputTokens: number;
   outputTokens: number;
@@ -34,23 +48,28 @@ export type UsageRow = {
   sessions: number;
 };
 
-function listAgents(): string[] {
-  return fs
-    .readdirSync(AGENTS_ROOT, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name)
-    .filter((n) => !['scripts', 'agentos'].includes(n))
-    .filter((n) => fs.existsSync(path.join(AGENTS_ROOT, n, 'CLAUDE.md')));
-}
-
-function uuidByAgent(): Map<string, string> {
+// session uuid → agentName, sourced from the DB's agent list. For each registered
+// agent we read the claude project dir of its stored `directory` and claim every
+// `<uuid>.jsonl` in it. Each agent.directory is distinct → a distinct project dir,
+// so no uuid is claimed twice.
+async function uuidByAgent(): Promise<Map<string, string>> {
+  let agents: Array<{ name: string; directory: string | null }>;
+  try {
+    agents = await api.listAgentDirectories();
+  } catch {
+    return new Map();
+  }
   const out = new Map<string, string>();
-  for (const agent of listAgents()) {
-    const dir = path.join(PROJECTS_ROOT, `-Users-mac-claudeclaw-${agent}`);
-    if (!fs.existsSync(dir)) continue;
-    for (const ent of fs.readdirSync(dir)) {
-      if (!ent.endsWith('.jsonl')) continue;
-      out.set(ent.replace(/\.jsonl$/, ''), agent);
+  for (const a of agents) {
+    if (!a.directory) continue;
+    let files: string[];
+    try {
+      files = fs.readdirSync(encodedProjectDir(a.directory));
+    } catch {
+      continue; // no project dir yet (agent never ran) — fine
+    }
+    for (const f of files) {
+      if (f.endsWith('.jsonl')) out.set(f.replace(/\.jsonl$/, ''), a.name);
     }
   }
   return out;
@@ -64,9 +83,10 @@ function startOfUTCDay(dateStr: string): Date {
 
 export async function collectUsage(daysBack = 35): Promise<UsageRow[]> {
   const since = new Date(Date.now() - daysBack * 86_400_000).toISOString().slice(0, 10);
-  const r = spawnSync('npx', ['--yes', 'ccusage', 'session', '--json', '--since', since], {
-    encoding: 'utf8',
-    timeout: 30_000,
+  // Async spawn (not spawnSync) — ccusage takes 15-44s and must NOT freeze the
+  // gateway's single event loop while it runs (that starved chat polls + ticks).
+  const r = await execCapture('npx', ['--yes', 'ccusage', 'session', '--json', '--since', since], {
+    timeoutMs: 90_000,
   });
   if (r.status !== 0) return [];
 
@@ -77,12 +97,12 @@ export async function collectUsage(daysBack = 35): Promise<UsageRow[]> {
     return [];
   }
   const sessions = payload.session ?? [];
-  const map = uuidByAgent();
+  const map = await uuidByAgent();
 
   const buckets = new Map<string, UsageRow>(); // key = `${agent}|${hourBucket}`
   for (const s of sessions) {
     const agent = map.get(s.period);
-    if (!agent) continue;
+    if (!agent) continue; // not a registered agent's session
     const last = s.metadata?.lastActivity;
     if (!last) continue;
     const bucket = startOfUTCDay(last); // day-level for v1

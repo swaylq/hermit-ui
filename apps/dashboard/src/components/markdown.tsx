@@ -1,6 +1,6 @@
 'use client';
 
-import { isValidElement, useCallback, useRef, useState, type ReactNode } from 'react';
+import { Component, isValidElement, memo, useCallback, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 // CJK-friendly emphasis: stock CommonMark won't close `**bold**` when followed
@@ -74,8 +74,10 @@ function extractLanguage(children: ReactNode): string | undefined {
 // text color (dark on light bubbles, light on dark bubbles) so we don't need
 // per-theme styling everywhere. Code blocks get a dim background with
 // syntax-highlighted spans (rehype-highlight + highlight.js) and a small
-// language label in the top-right corner; tables / lists / inline code follow
-// Tailwind defaults.
+// language label in the top-right corner. Lists carry explicit
+// list-disc/list-decimal: Tailwind v4's preflight resets `ol/ul` to
+// `list-style: none`, and there's no @tailwindcss/typography plugin here, so
+// without these the markers (ordered numbers / bullets) silently vanish.
 
 // Code block with a language pill (top-right) and a hover Copy button. We
 // reach into the rendered <pre> via a ref to pull `textContent` instead of
@@ -131,47 +133,93 @@ function CodeBlock({
   );
 }
 
-export function Markdown({ children }: { children: string }) {
+// React error boundary so a broken plugin or a malformed markdown token can't
+// silently truncate a turn. Caught errors land in the console with their stack
+// (so a dev can find which plugin blew up); the bubble falls back to the raw
+// markdown source rendered as preformatted text. The user sees something
+// useful instead of a turn that just stops mid-word.
+class MarkdownErrorBoundary extends Component<{ children: ReactNode; raw: string }, { hasError: boolean }> {
+  state = { hasError: false };
+  static getDerivedStateFromError(): { hasError: true } {
+    return { hasError: true };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[Markdown] render failed, falling back to raw text:', error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <pre className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground/85">
+          {this.props.raw}
+        </pre>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// Memoized on the `children` string: markdown output is a pure function of its
+// source, so an unchanged bubble never re-parses (remark) or re-highlights
+// (highlight.js) on a parent re-render. This is the single biggest win for
+// streaming smoothness — without it, every poll/SSE tick that re-rendered a row
+// re-ran the full highlight pipeline for that bubble.
+export const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
-    <div className="prose prose-sm max-w-none leading-relaxed [&_p]:my-1 [&_p]:whitespace-pre-wrap [&_code]:font-mono [&_code]:text-[12px] [&_a]:underline [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-medium [&_h1]:mt-2 [&_h2]:mt-2 [&_h3]:mt-2 [&_h1]:mb-1 [&_h2]:mb-1 [&_h3]:mb-1 [&_table]:my-2 [&_table]:text-xs [&_th]:px-2 [&_th]:py-0.5 [&_td]:px-2 [&_td]:py-0.5 [&_th]:border [&_td]:border [&_blockquote]:border-l-2 [&_blockquote]:pl-2 [&_blockquote]:opacity-80">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkCjkFriendly]}
-        rehypePlugins={[[rehypeHighlight, { languages, detect: true, ignoreMissing: true }]]}
-        components={{
-          a({ href, children: linkChildren, ...rest }) {
-            return (
-              <a href={href} target="_blank" rel="noreferrer" {...rest}>
-                {linkChildren}
-              </a>
-            );
-          },
-          pre({ children: preChildren, ...rest }) {
-            const lang = extractLanguage(preChildren);
-            return <CodeBlock lang={lang} preProps={rest}>{preChildren}</CodeBlock>;
-          },
-          code(props) {
-            const { className, children: codeChildren, ...rest } = props as {
-              className?: string;
-              children?: ReactNode;
-            };
-            const isBlock = /language-/.test(className || '');
-            if (isBlock) {
+    <MarkdownErrorBoundary raw={children}>
+      <div className="prose prose-sm max-w-none break-words [overflow-wrap:anywhere] leading-[1.65] [&_p]:my-1.5 [&_p]:whitespace-pre-wrap [&_code]:font-mono [&_code]:text-[12px] [&_a]:underline [&_a]:underline-offset-2 [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_li>p]:my-0 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-medium [&_h1]:mt-3 [&_h2]:mt-3 [&_h3]:mt-3 [&_h1]:mb-1 [&_h2]:mb-1 [&_h3]:mb-1 [&_table]:my-2 [&_table]:text-xs [&_th]:px-2 [&_th]:py-0.5 [&_td]:px-2 [&_td]:py-0.5 [&_th]:border [&_td]:border [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:my-2 [&_blockquote]:opacity-80 [&_hr]:my-3 [&_hr]:border-border">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkCjkFriendly]}
+          rehypePlugins={[[rehypeHighlight, { languages, detect: true, ignoreMissing: true }]]}
+          components={{
+            a({ href, children: linkChildren, node: _n, ...rest }) {
               return (
-                <code className={className} {...rest}>
+                <a href={href} target="_blank" rel="noreferrer" {...rest}>
+                  {linkChildren}
+                </a>
+              );
+            },
+            pre({ children: preChildren, node: _n, ...rest }) {
+              const lang = extractLanguage(preChildren);
+              return <CodeBlock lang={lang} preProps={rest}>{preChildren}</CodeBlock>;
+            },
+            code(props) {
+              // react-markdown passes a `node` prop (the mdast AST node) to component
+              // overrides — useful for plugins, but spreading it onto the underlying
+              // HTML element leaks `node="[object Object]"` as a literal attribute.
+              // Strip it so the DOM stays clean.
+              const { className, children: codeChildren, node: _n, ...rest } = props as {
+                className?: string;
+                children?: ReactNode;
+                node?: unknown;
+              };
+              const isBlock = /language-/.test(className || '');
+              if (isBlock) {
+                return (
+                  <code className={className} {...rest}>
+                    {codeChildren}
+                  </code>
+                );
+              }
+              return (
+                <code className="rounded border border-border bg-muted px-1 py-px text-[11px] break-words" {...rest}>
                   {codeChildren}
                 </code>
               );
-            }
-            return (
-              <code className="rounded border border-border bg-muted px-1 py-px text-[11px]" {...rest}>
-                {codeChildren}
-              </code>
-            );
-          },
-        }}
-      >
-        {children}
-      </ReactMarkdown>
-    </div>
+            },
+            table({ children: tableChildren, node: _n, ...rest }) {
+              // A wide table scrolls within its own box (per-message horizontal
+              // scroll) instead of pushing the whole conversation into a swipe.
+              return (
+                <div className="max-w-full overflow-x-auto">
+                  <table {...rest}>{tableChildren}</table>
+                </div>
+              );
+            },
+          }}
+        >
+          {children}
+        </ReactMarkdown>
+      </div>
+    </MarkdownErrorBoundary>
   );
-}
+});

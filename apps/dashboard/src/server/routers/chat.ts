@@ -27,7 +27,11 @@ const ContentBlock = z.union([
 
 export const chatRouter = router({
   listSessions: machineProcedure
-    .input(z.object({ agentName: z.string().optional() }).default({}))
+    // Tolerate a `null` input (some client paths serialize an omitted/undefined
+    // arg as JSON null in the GET batch → zod's `.default({})` only fills
+    // undefined, so null 400'd: 3 failed listSessions per page load + retries).
+    // null/undefined both mean "no agent filter" → normalize to {}.
+    .input(z.preprocess((v) => (v == null ? undefined : v), z.object({ agentName: z.string().optional() }).default({})))
     .query(async ({ ctx, input }) => {
       const rows = await prisma.chatSession.findMany({
         where: {
@@ -51,7 +55,7 @@ export const chatRouter = router({
           outputTokens: true,
           lastActivity: true,
           snapshotAt: true,
-          _count: { select: { messages: true } },
+          loopState: true,
           // First user message → "preview" shown in the sidebar so two
           // untitled sessions for the same agent are distinguishable. Limit
           // to one row per session via Prisma's nested `take`.
@@ -97,6 +101,41 @@ export const chatRouter = router({
       return prisma.chatSession.update({ where: { id: input.id }, data: { closedAt: null } });
     }),
 
+  // Hard delete a session + its messages (ChatMessage cascades on the FK). The
+  // dashboard's "close" action maps to this now. The session's tmux pane (if
+  // any) is orphaned — harmless, idle, reclaimed on the next gateway restart;
+  // pollPending no longer returns the deleted session so nothing re-spawns it.
+  deleteSession: machineProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
+      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      await prisma.chatSession.delete({ where: { id: input.id } });
+      return { ok: true };
+    }),
+
+  // Append a synthetic system message to a session. Used by the composer to
+  // unstick the UI right after a built-in slash command (`/status` etc.) is
+  // sent: most slash commands print to claude's TUI panel but produce NO
+  // JSONL turn, so without a follow-up the dashboard sits forever on
+  // "assistant is working…" (isWaitingAssistant is driven by lastMsg.role ===
+  // 'user'). A short "↳ sent /X" note flips lastMsg.role to 'system' and
+  // clears the in-flight state.
+  appendSystemNote: machineProcedure
+    .input(z.object({ sessionId: z.string(), text: z.string().min(1).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
+      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      const content = [{ type: 'text', text: input.text }];
+      return prisma.chatMessage.create({
+        data: {
+          sessionId: input.sessionId,
+          role: 'system',
+          content: content as unknown as Parameters<typeof prisma.chatMessage.create>[0]['data']['content'],
+        },
+      });
+    }),
+
   setTitle: machineProcedure
     .input(z.object({ id: z.string(), title: z.string().max(120) }))
     .mutation(async ({ ctx, input }) => {
@@ -106,16 +145,31 @@ export const chatRouter = router({
     }),
 
   listMessages: machineProcedure
-    .input(z.object({ sessionId: z.string(), limit: z.number().int().min(1).max(500).default(200) }))
+    .input(z.object({ sessionId: z.string(), limit: z.number().int().min(1).max(1000).default(300) }))
     .query(async ({ ctx, input }) => {
       // Owner check folded into the WHERE clause — drops the extra
       // chatSession.findUnique round trip. Returns [] for unknown or
       // cross-tenant sessions (vs throwing) — chat UI tolerates that.
-      return prisma.chatMessage.findMany({
+      //
+      // Fetch the NEWEST `limit` rows, not the oldest. `take` with an ascending
+      // order returns the FIRST N (oldest), so a session past `limit` messages
+      // would freeze on its opening N and never surface new turns — the cap
+      // reads as "the agent stopped replying". Order desc + reverse gives the
+      // newest window in ascending (oldest→newest) order for the timeline.
+      // `id` is the tiebreaker so rows sharing a `createdAt` (batch inserts
+      // collide at ms resolution) stay deterministically ordered — and match
+      // the SSE stream's ordering so the client's merge-by-id aligns.
+      const rows = await prisma.chatMessage.findMany({
         where: { sessionId: input.sessionId, session: { machineId: ctx.machine.id } },
-        orderBy: { createdAt: 'asc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: input.limit,
+        // Only the columns the timeline actually reads (`CachedMsg` in
+        // chat/page.tsx) + matches the SSE stream's shape so merge-by-id aligns.
+        // Skips deliveredAt/externalId/updatedAt/sessionId — pure per-row overhead
+        // multiplied across the window.
+        select: { id: true, role: true, content: true, createdAt: true },
       });
+      return rows.reverse();
     }),
 
   send: machineProcedure
@@ -136,6 +190,16 @@ export const chatRouter = router({
           )
           .max(10)
           .optional(),
+        files: z
+          .array(
+            z.object({
+              url: z.string().min(1),
+              mimeType: z.string().min(1),
+              name: z.string().min(1).max(256),
+            }),
+          )
+          .max(10)
+          .optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -145,7 +209,8 @@ export const chatRouter = router({
 
       const text = input.text.trim();
       const images = input.images ?? [];
-      if (!text && images.length === 0) throw new Error('empty message');
+      const files = input.files ?? [];
+      if (!text && images.length === 0 && files.length === 0) throw new Error('empty message');
 
       // Anthropic-style content blocks: text first (matches user's mental
       // model of "I typed, then attached"), then each image as a source.url
@@ -161,6 +226,15 @@ export const chatRouter = router({
           ...(img.width != null && img.height != null
             ? { width: img.width, height: img.height }
             : {}),
+        });
+      }
+      // Non-image files: a `file` block the gateway relay materializes on the
+      // Mac and feeds claude via `Read <path>`. `name` aids the dashboard chip.
+      for (const f of files) {
+        content.push({
+          type: 'file',
+          source: { type: 'url', url: f.url, media_type: f.mimeType },
+          name: f.name,
         });
       }
 
@@ -201,12 +275,30 @@ export const chatRouter = router({
       select: { id: true, agentName: true, claudeSessionId: true },
     });
     if (sessions.length === 0) return { sessions: [], messages: [] };
+
+    // DB-leader: Agent.directory holds the actual on-disk path (could be inside
+    // AGENTS_ROOT for created agents OR a user-given path for imported ones).
+    // The gateway needs this to spawn claude in the right cwd — without it the
+    // chat-runner used to hardcode `AGENTS_ROOT/<agentName>` and silently fell
+    // back to $HOME for imported agents, leaving them stuck "starting".
+    const agentNames = [...new Set(sessions.map((s) => s.agentName))];
+    const agents = await prisma.agent.findMany({
+      where: { machineId: ctx.machine.id, name: { in: agentNames } },
+      select: { name: true, directory: true },
+    });
+    const dirByName = new Map(agents.map((a) => [a.name, a.directory]));
+
+    const sessionsWithDir = sessions.map((s) => ({
+      ...s,
+      agentDirectory: dirByName.get(s.agentName) ?? null,
+    }));
+
     const sessionIds = sessions.map((s) => s.id);
     const messages = await prisma.chatMessage.findMany({
       where: { sessionId: { in: sessionIds }, role: 'user', deliveredAt: null },
       orderBy: { createdAt: 'asc' },
     });
-    return { sessions, messages };
+    return { sessions: sessionsWithDir, messages };
   }),
 
   ackDelivered: machineProcedure

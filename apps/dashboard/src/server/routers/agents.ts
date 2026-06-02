@@ -53,13 +53,195 @@ export const agentsRouter = router({
         where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
       });
       if (!agent) return null;
-      const events = await prisma.event.findMany({
-        where: { machineId: ctx.machine.id, agentName: input.name },
-        orderBy: { ts: 'desc' },
-        take: 30,
-      });
       // Sessions are queried separately by the detail sheet via
       // chat.listSessions({ agentName }), so no need to join here.
-      return { agent, events };
+      return { agent };
+    }),
+
+  // ── Dashboard-driven agent lifecycle (round-trips through the gateway) ──────
+  // The dashboard can't touch the gateway host's filesystem, so create/delete
+  // are queued as AgentRequest rows; the gateway polls, scaffolds-from-template
+  // / rm -rf's the dir, then acks. Mirrors the ChatSession restart round-trip.
+
+  requestCreate: machineProcedure
+    .input(z.object({
+      name: z.string().trim().toLowerCase()
+        .regex(/^[a-z][a-z0-9-]{0,30}$/, 'name must be lowercase: a letter then letters/digits/hyphens, ≤31 chars'),
+      // Function/persona description. Optional — when omitted (or blank), we
+      // fall back to a self-aware default below that tells the new agent to
+      // infer its role from its name and how the user interacts with it.
+      persona: z.string().trim().max(200).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const exists = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { id: true },
+      });
+      if (exists) throw new Error(`agent "${input.name}" already exists`);
+      const pending = await prisma.agentRequest.findFirst({
+        where: { machineId: ctx.machine.id, agentName: input.name, status: 'pending' },
+        select: { id: true },
+      });
+      if (pending) throw new Error(`a request for "${input.name}" is already pending`);
+      const persona = input.persona?.trim() ||
+        `An AI agent named ${input.name}. Infer your role and personality from your name and how the user interacts with you.`;
+      // DB is the source of truth — the row appears in the list immediately.
+      // `directory` stays null until the gateway scaffolds it at AGENTS_ROOT/<name>
+      // and pushes a syncAgents update with the resolved path + initial content.
+      // The AgentRequest is only the gateway's todo-list of filesystem actions.
+      return prisma.$transaction(async (tx) => {
+        await tx.agent.create({
+          data: { machineId: ctx.machine.id, name: input.name },
+        });
+        return tx.agentRequest.create({
+          data: { machineId: ctx.machine.id, kind: 'create', agentName: input.name, persona },
+        });
+      });
+    }),
+
+  // Import an existing agent dir into the dashboard. DB-leader model: we
+  // create the Agent row with `directory` set immediately, and the gateway
+  // picks it up on its next pull (api.listAgentDirectories) — at which point
+  // it reads the markdowns from that path and pushes content via syncAgents.
+  // No filesystem mutation on this path; the source folder stays where it is.
+  requestImport: machineProcedure
+    .input(z.object({
+      // Absolute path on the gateway host. POSIX-style; the gateway is Mac/Linux.
+      // 4 KB cap keeps the DB column reasonable.
+      directory: z.string().trim()
+        .min(2, 'directory required')
+        .max(4096, 'path too long')
+        .refine((p) => p.startsWith('/'), { message: 'must be an absolute path' })
+        .refine((p) => !p.includes('\0'), { message: 'invalid characters' }),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Derive a slug from the basename — letters/digits/hyphens, ≤31 chars,
+      // lowercase.
+      const raw = input.directory.replace(/\/+$/, '').split('/').pop() || '';
+      const slug = raw.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 31);
+      if (!/^[a-z][a-z0-9-]{0,30}$/.test(slug)) {
+        throw new Error('could not derive a valid agent name from that path — basename must start with a letter and contain letters/digits/hyphens');
+      }
+      const exists = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: slug } },
+        select: { id: true },
+      });
+      if (exists) throw new Error(`agent "${slug}" already exists`);
+      // No AgentRequest needed — directory is set, gateway's next list-pull
+      // sees it and reads the files.
+      return prisma.agent.create({
+        data: {
+          machineId: ctx.machine.id,
+          name: slug,
+          directory: input.directory,
+        },
+      });
+    }),
+
+  requestDelete: machineProcedure
+    .input(z.object({ name: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const agent = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { id: true },
+      });
+      if (!agent) throw new Error('agent not found');
+      const pending = await prisma.agentRequest.findFirst({
+        where: { machineId: ctx.machine.id, agentName: input.name, status: 'pending' },
+      });
+      if (pending) return pending; // already queued
+      return prisma.agentRequest.create({
+        data: { machineId: ctx.machine.id, kind: 'delete', agentName: input.name },
+      });
+    }),
+
+  // Edit one of the agent's text files. `target` is an opaque slug — never a
+  // raw path — that the gateway maps via an allow-list (see agent-lifecycle.ts).
+  // Allowed: identity / user / agents / tools / evolution / claude / skill:<name>.
+  requestEdit: machineProcedure
+    .input(z.object({
+      name: z.string(),
+      target: z.string().regex(/^(identity|user|agents|tools|evolution|claude|skill:[a-z0-9][a-z0-9-]{0,30})$/, 'invalid target'),
+      content: z.string().max(64 * 1024, 'content too large (>64KB)'),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const agent = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { id: true },
+      });
+      if (!agent) throw new Error('agent not found');
+      return prisma.agentRequest.create({
+        data: {
+          machineId: ctx.machine.id,
+          kind: 'edit',
+          agentName: input.name,
+          target: input.target,
+          content: input.content,
+        },
+      });
+    }),
+
+  // Pending lifecycle requests — the agents page shows "creating…/deleting…".
+  pendingRequests: machineProcedure.query(async ({ ctx }) => {
+    return prisma.agentRequest.findMany({
+      where: { machineId: ctx.machine.id, status: 'pending' },
+      select: { id: true, kind: true, agentName: true, target: true, requestedAt: true },
+    });
+  }),
+
+  // ── Gateway endpoints ──────────────────────────────────────────────────────
+  // Gateway polls ~every 3s, scaffolds/deletes on disk, then acks.
+  pollRequests: machineProcedure.query(async ({ ctx }) => {
+    const reqs = await prisma.agentRequest.findMany({
+      where: { machineId: ctx.machine.id, status: 'pending' },
+      orderBy: { requestedAt: 'asc' },
+    });
+    if (reqs.length === 0) return [];
+    // Join in each agent's directory so the gateway can scope filesystem ops
+    // (delete only if path lives under AGENTS_ROOT). Old behaviour
+    // hard-coded `path.join(AGENTS_ROOT, name)`; that's now wrong for imports
+    // whose source lives outside AGENTS_ROOT.
+    const names = [...new Set(reqs.map((r) => r.agentName))];
+    const dirs = await prisma.agent.findMany({
+      where: { machineId: ctx.machine.id, name: { in: names } },
+      select: { name: true, directory: true },
+    });
+    const dirByName = new Map(dirs.map((d) => [d.name, d.directory]));
+    return reqs.map((r) => ({ ...r, agentDirectory: dirByName.get(r.agentName) ?? null }));
+  }),
+
+  // Source-of-truth list for the gateway's content-refresh tick. The gateway
+  // pulls (name, directory) from here, reads each directory's markdowns, and
+  // pushes content back via /api/sync/agents. Rows with null directory are
+  // freshly-created agents the gateway hasn't scaffolded yet — gateway skips
+  // those until the matching AgentRequest(create) is processed.
+  listForGateway: machineProcedure.query(async ({ ctx }) => {
+    return prisma.agent.findMany({
+      where: { machineId: ctx.machine.id },
+      select: { name: true, directory: true },
+      orderBy: { name: 'asc' },
+    });
+  }),
+
+  ackRequest: machineProcedure
+    .input(z.object({ id: z.string(), status: z.enum(['done', 'error']), error: z.string().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const r = await prisma.agentRequest.findUnique({ where: { id: input.id } });
+      if (!r || r.machineId !== ctx.machine.id) throw new Error('not found');
+      // On a successful delete, drop the Agent row + its chat sessions so the
+      // dashboard reflects it immediately.
+      if (r.kind === 'delete' && input.status === 'done') {
+        await prisma.chatSession.deleteMany({ where: { machineId: ctx.machine.id, agentName: r.agentName } });
+        await prisma.agent.deleteMany({ where: { machineId: ctx.machine.id, name: r.agentName } });
+      }
+      // On a failed create, drop the placeholder row we optimistically created
+      // in requestCreate so the user isn't stuck with a permanently-empty agent.
+      if (r.kind === 'create' && input.status === 'error') {
+        await prisma.agent.deleteMany({ where: { machineId: ctx.machine.id, name: r.agentName, directory: null } });
+      }
+      return prisma.agentRequest.update({
+        where: { id: input.id },
+        data: { status: input.status, error: input.error ?? null, resolvedAt: new Date() },
+      });
     }),
 });

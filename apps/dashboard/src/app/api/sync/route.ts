@@ -1,32 +1,26 @@
 // /api/sync/* receives data pushed by the Mac-side gateway. Auth via X-Asst-Key
-// (same key the browser uses). The gateway is the sole writer for Agent,
-// LaunchAgentRecord, and UsageHourly tables on VPS. Browser reads only.
+// (same key the browser uses). The gateway is the sole writer for Agent, Cron,
+// and UsageHourly tables on VPS. Browser reads only.
 //
 // Routes (POST):
 //   /api/sync/agents          body: { agents: [...] }
-//   /api/sync/launchagents    body: { items: [...] }
 //   /api/sync/usage           body: { items: [...] }
-//   /api/sync/task-result     body: { id, status, output, durationMs, happySessionId? }
+//   /api/sync/cron-run        body: { phase, cronId, ... }
 //
 // All endpoints return { ok: true, updated: N } on success.
 
 import { NextRequest, NextResponse } from 'next/server';
-import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { prisma } from '@/server/db';
+import { resolveMachineByKey } from '@/server/auth';
 
+// Auth shares the tRPC resolver + cache (prefix-filtered bcrypt, see
+// ../../../server/auth). The OLD path here did a full-table `findMany()` + a
+// bcrypt against EVERY machine row on EVERY sync — and the gateway hits
+// /api/sync/chat-message on every transcript event, so an active turn ran that
+// full-table loop dozens of times a second, saturating the single event loop
+// and starving every concurrent request (the ~30s chat-poll stalls in bursts).
 async function resolveMachine(req: NextRequest) {
-  const key = req.headers.get('x-asst-key') ?? '';
-  if (!key) return null;
-  // bcrypt the key prefix to find the machine (mirrors the trpc machineProcedure).
-  const machines = await prisma.machine.findMany();
-  for (const m of machines) {
-    if (await bcrypt.compare(key, m.keyHash)) {
-      await prisma.machine.update({ where: { id: m.id }, data: { lastSeen: new Date() } });
-      return m;
-    }
-  }
-  return null;
+  return resolveMachineByKey(req.headers.get('x-asst-key') ?? '');
 }
 
 // Agent is now PURELY static (no runtime fields). The gateway pushes the
@@ -42,21 +36,32 @@ const AgentInput = z.object({
   toolsText: z.string().nullable().optional(),
   evolutionLessons: z.string().nullable().optional(),
   skillNames: z.array(z.string()).optional(),
+  skills: z.array(z.object({ name: z.string(), content: z.string() })).optional(),
   memorySummary: z.string().nullable().optional(),
 });
 
-const LaunchAgentInput = z.object({
-  label: z.string(),
-  scheduleKind: z.string().nullable().optional(),
-  intervalSec: z.number().int().nullable().optional(),
-  calendarHour: z.number().int().nullable().optional(),
-  calendarMinute: z.number().int().nullable().optional(),
-  runAtLoad: z.boolean().optional(),
-  keepAlive: z.boolean().optional(),
-  running: z.boolean().nullable().optional(),
-  logPath: z.string().nullable().optional(),
-  lastFire: z.string().datetime().nullable().optional(),
-  programArgs: z.array(z.string()).optional(),
+// Machine-global skill pushed from the gateway's ~/.claude/skills/ scan. The
+// filesystem is the source of truth — the sync route upserts what's pushed and
+// deletes any rows for this machine that are absent from the push.
+const GlobalSkillInput = z.object({
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  content: z.string().nullable().optional(),
+  refs: z.array(z.object({ name: z.string(), content: z.string() })).optional(),
+  source: z.string().optional(),
+  isBundle: z.boolean().optional(),
+  subSkills: z.array(z.string()).optional(),
+  fileCount: z.number().int().optional(),
+});
+
+// Real Claude Max plan consumption scraped from `claude /usage` by the gateway.
+const PlanUsageInput = z.object({
+  sessionPct: z.number().int().nullable().optional(),
+  weekPct: z.number().int().nullable().optional(),
+  weekSonnetPct: z.number().int().nullable().optional(),
+  sessionResetText: z.string().nullable().optional(),
+  weekResetText: z.string().nullable().optional(),
+  capturedAt: z.string().optional(),
 });
 
 const UsageInput = z.object({
@@ -70,18 +75,9 @@ const UsageInput = z.object({
   sessions: z.number().int().optional(),
 });
 
-const TaskResultInput = z.object({
-  id: z.string(),
-  status: z.string(),
-  output: z.string().optional(),
-  durationMs: z.number().int().optional(),
-  happySessionId: z.string().nullable().optional(),
-  lastFire: z.string().datetime().optional(),
-});
-
 export async function POST(req: NextRequest, { params }: { params: Promise<{ slug?: string[] }> }) {
   // Fallback handler — actual routes are co-located in /api/sync/<thing>/route.ts
   return NextResponse.json({ error: 'use /api/sync/<thing>' }, { status: 404 });
 }
 
-export { resolveMachine, AgentInput, LaunchAgentInput, UsageInput, TaskResultInput };
+export { resolveMachine, AgentInput, GlobalSkillInput, PlanUsageInput, UsageInput };

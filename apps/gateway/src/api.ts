@@ -1,10 +1,17 @@
 import { DASHBOARD_URL, ASST_KEY } from './config';
 
+// Hard ceiling on every dashboard HTTP call. Without it a hung connection (a
+// dashboard restart / network blip) never settles, and any tick that holds a
+// `busy` guard across the await wedges FOREVER — silently logging "ok in 0ms"
+// while doing nothing. The timeout turns a hang into a retryable error.
+const HTTP_TIMEOUT_MS = 30_000;
+
 async function post(path: string, body: unknown) {
   const r = await fetch(`${DASHBOARD_URL}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
   });
   const text = await r.text();
   if (!r.ok) throw new Error(`${path} → ${r.status}: ${text.slice(0, 200)}`);
@@ -14,6 +21,7 @@ async function post(path: string, body: unknown) {
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(`${DASHBOARD_URL}${path}`, {
     headers: { 'x-asst-key': ASST_KEY },
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
   });
   const text = await r.text();
   if (!r.ok) throw new Error(`${path} → ${r.status}: ${text.slice(0, 200)}`);
@@ -23,22 +31,28 @@ async function get<T>(path: string): Promise<T> {
 export const api = {
   syncAgents: (agents: any[]) => post('/api/sync/agents', { agents }),
   syncSessionSnapshots: (items: any[]) => post('/api/sync/session-snapshot', { items }),
-  syncLaunchAgents: (items: any[]) => post('/api/sync/launchagents', { items }),
   syncUsage: (items: any[]) => post('/api/sync/usage', { items }),
   syncUsageWindows: (items: any[]) => post('/api/sync/usage-window', { items }),
-  taskResult: (body: any) => post('/api/sync/task-result', body),
+  // Real Claude Max plan consumption scraped from `claude /usage` (the only
+  // source for the true 5h/weekly window %; ccusage is a cost estimate).
+  syncPlanUsage: (planUsage: any) => post('/api/sync/plan-usage', { planUsage }),
 
-  // Reuse dashboard's tRPC for read queries. Url shape per @trpc/server v11.
-  listSystemTasks: async (): Promise<any[]> => {
+  // ── Cron jobs (gateway cron-runner) ───────────────────────────────────────
+  // Enabled crons joined with their agent's on-disk directory; the runner fires
+  // the due ones via tmux + claude. Mirrors pollChatPending's directory join.
+  listCrons: async (): Promise<any[]> => {
     const r = await get<any>(
-      '/api/trpc/tasks.systemList?batch=1&input=' +
-        encodeURIComponent(JSON.stringify({ '0': { json: {} } })),
+      '/api/trpc/cron.listForGateway?batch=1&input=' +
+        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
     );
     return r[0]?.result?.data?.json ?? [];
   },
+  // Record a run. phase:'start' creates a CronRun(running) + stamps lastFire /
+  // nextFire and returns { runId }; phase:'finish' closes it with the result.
+  cronRun: (body: any) => post('/api/sync/cron-run', body),
 
   pollChatPending: async (): Promise<{
-    sessions: Array<{ id: string; agentName: string; claudeSessionId: string | null }>;
+    sessions: Array<{ id: string; agentName: string; claudeSessionId: string | null; agentDirectory: string | null }>;
     messages: Array<{ id: string; sessionId: string; role: string; content: any; createdAt: string }>;
   }> => {
     const r = await get<any>(
@@ -98,6 +112,66 @@ export const api = {
       body: JSON.stringify(body),
     });
     if (!r.ok) throw new Error(`ackSessionRestart → ${r.status}`);
+  },
+
+  // ── Agent lifecycle (create/delete/edit) round-trip ─────────────────────
+  // Returns one row per pending AgentRequest, joined with the agent's stored
+  // directory (null if the agent doesn't exist yet — only happens between
+  // requestCreate's transaction inserting Agent + AgentRequest, and us picking
+  // both up, so in practice always set for delete/edit; null for fresh create
+  // while gateway hasn't scaffolded yet).
+  pollAgentRequests: async (): Promise<Array<{ id: string; kind: string; agentName: string; persona: string | null; target: string | null; content: string | null; agentDirectory: string | null }>> => {
+    const r = await get<any>(
+      '/api/trpc/agents.pollRequests?batch=1&input=' +
+        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+
+  // Source-of-truth list of {name, directory} the dashboard knows about. The
+  // gateway's pushAgents tick reads markdowns from each `directory` and pushes
+  // content via syncAgents. No filesystem scan — DB is leader.
+  listAgentDirectories: async (): Promise<Array<{ name: string; directory: string | null }>> => {
+    const r = await get<any>(
+      '/api/trpc/agents.listForGateway?batch=1&input=' +
+        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+
+  ackAgentRequest: async (body: { id: string; status: 'done' | 'error'; error?: string }) => {
+    const url = `${DASHBOARD_URL}/api/trpc/agents.ackRequest?batch=1`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
+      body: JSON.stringify({ '0': { json: body } }),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+    if (!r.ok) throw new Error(`ackAgentRequest → ${r.status}`);
+  },
+
+  // ── Machine-global skills (~/.claude/skills/) round-trip ────────────────────
+  // syncGlobalSkills pushes the full scanned set (filesystem is leader);
+  // poll/ack mirror the agent lifecycle for dashboard-queued create/edit/delete.
+  syncGlobalSkills: (skills: any[]) => post('/api/sync/global-skills', { skills }),
+
+  pollGlobalSkillRequests: async (): Promise<Array<{ id: string; kind: string; skillName: string; content: string | null }>> => {
+    const r = await get<any>(
+      '/api/trpc/skills.pollRequests?batch=1&input=' +
+        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+
+  ackGlobalSkillRequest: async (body: { id: string; status: 'done' | 'error'; error?: string }) => {
+    const url = `${DASHBOARD_URL}/api/trpc/skills.ackRequest?batch=1`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
+      body: JSON.stringify({ '0': { json: body } }),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+    if (!r.ok) throw new Error(`ackGlobalSkillRequest → ${r.status}`);
   },
 
   syncChatMessages: async (

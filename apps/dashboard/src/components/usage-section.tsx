@@ -13,7 +13,9 @@ function $(n: number) {
 }
 
 export function UsageSection() {
-  const q = trpc.usage.list.useQuery(undefined, { refetchInterval: 30_000 });
+  // Gateway pushes UsageHourly every 30 min — DB-backed; 5 min poll keeps
+  // freshness within ~quarter of the data cycle without hammering.
+  const q = trpc.usage.list.useQuery(undefined, { refetchInterval: 5 * 60_000 });
 
   if (q.isPending) {
     return <Skeleton className="h-32" />;
@@ -21,7 +23,7 @@ export function UsageSection() {
   if (!q.data?.rows.length) {
     return (
       <Card className="p-4 text-sm text-muted-foreground">
-        no usage data — ccusage returned empty or every agent is brand new.
+        no usage data yet — waiting on the gateway&apos;s next 30 min push.
       </Card>
     );
   }
@@ -35,7 +37,7 @@ export function UsageSection() {
         <div className="space-y-0.5">
           <div className="text-sm font-medium">Usage</div>
           <p className="text-xs text-muted-foreground">
-            ccusage · refreshed {relTime(q.data.fetchedAt)} · TTL {Math.round(q.data.ttlMs / 1000)}s
+            gateway-pushed · last sync {relTime(q.data.fetchedAt)}
           </p>
         </div>
         <div className="text-right">

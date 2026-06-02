@@ -15,50 +15,130 @@ datasource db {
 }
 
 model Machine {
-  id           String   @id @default(cuid())
-  name         String   @unique
-  hostname     String?
-  keyHash      String
-  keyPrefix    String
-  createdAt    DateTime @default(now())
-  lastSeen     DateTime?
+  id        String    @id @default(cuid())
+  name      String    @unique
+  hostname  String?
+  keyHash   String
+  keyPrefix String
+  createdAt DateTime  @default(now())
+  lastSeen  DateTime?
 
   // Hard quotas configured per machine — gateway fills `used`, dashboard
   // computes pct against these. Null disables the bar in UI.
-  fiveHourLimitUsd  Float?
-  weeklyLimitUsd    Float?
+  fiveHourLimitUsd Float?
+  weeklyLimitUsd   Float?
 
-  agents       Agent[]
-  events       Event[]
-  launchAgents LaunchAgentRecord[]
-  systemTasks  SystemTask[]
-  usageHourly  UsageHourly[]
-  usageWindows UsageWindow[]
-  chatSessions ChatSession[]
+  agents              Agent[]
+  crons               Cron[]
+  usageHourly         UsageHourly[]
+  usageWindows        UsageWindow[]
+  chatSessions        ChatSession[]
+  agentRequests       AgentRequest[]
+  globalSkills        GlobalSkill[]
+  globalSkillRequests GlobalSkillRequest[]
+  planUsage           PlanUsage?
+}
+
+// Real Claude Max plan consumption, scraped from `claude /usage` by the gateway
+// (the only accurate source for the true 5h/weekly window %; UsageWindow/
+// UsageHourly are ccusage cost ESTIMATES). One row per machine, upserted.
+model PlanUsage {
+  machineId        String   @id
+  machine          Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  sessionPct       Int? // 5-hour rolling window % used
+  weekPct          Int? // weekly (all models) % used
+  weekSonnetPct    Int? // weekly Sonnet sub-limit % used
+  sessionResetText String? // e.g. "1:30pm (Asia/Shanghai)"
+  weekResetText    String? // e.g. "Jun 3 at 7am (Asia/Shanghai)"
+  capturedAt       DateTime @default(now())
+}
+
+// Dashboard-requested agent lifecycle ops (create / delete). The dashboard
+// can't touch the gateway host's filesystem, so it queues a request here; the
+// Mac-side gateway polls, scaffolds-from-template / rm -rf's the agent dir,
+// then acks. Mirrors the ChatSession.restartRequestedAt round-trip.
+model AgentRequest {
+  id          String    @id @default(cuid())
+  machineId   String
+  machine     Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  kind        String // "create" | "delete" | "edit"
+  agentName   String
+  persona     String? // create: the agent's one-line purpose ({{PERSONA}})
+  // edit: which file to write + its new content. `target` is an opaque slug
+  // mapped to an allow-listed relative path on the gateway side (see
+  // agent-lifecycle.ts); raw paths are never accepted from the dashboard.
+  target      String?
+  content     String?   @db.Text
+  status      String    @default("pending") // pending | done | error
+  error       String?   @db.Text
+  requestedAt DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  @@index([machineId, status])
+}
+
+// Machine-global skills under ~/.claude/skills/ on the gateway host — shared by
+// every Claude Code session on that machine, not scoped to an agent. The gateway
+// scans the directory and pushes; the FILESYSTEM is the source of truth (the
+// sync upserts what's present and deletes what's gone). Mutations round-trip via
+// GlobalSkillRequest, mirroring AgentRequest.
+model GlobalSkill {
+  id          String   @id @default(cuid())
+  machineId   String
+  machine     Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  name        String // directory name under ~/.claude/skills/
+  description String?  @db.Text
+  content     String?  @db.Text // SKILL.md text; null for bundles
+  refs        Json     @default("[]") // Array<{ name, content }> from references/
+  source      String   @default("manual") // manual | git | plugin
+  isBundle    Boolean  @default(false) // a plugin/framework with nested skills/ — read-only
+  subSkills   String[] @default([]) // bundle: nested sub-skill names
+  fileCount   Int      @default(0)
+  metadataAt  DateTime @default(now())
+
+  @@unique([machineId, name])
+}
+
+// Dashboard-requested global-skill lifecycle ops. The dashboard can't touch the
+// gateway host's filesystem, so it queues a request here; the Mac-side gateway
+// polls, writes/removes ~/.claude/skills/<name>/, then acks. Mirrors AgentRequest.
+model GlobalSkillRequest {
+  id          String    @id @default(cuid())
+  machineId   String
+  machine     Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  kind        String // "create" | "edit" | "delete"
+  skillName   String
+  content     String?   @db.Text // create / edit: full SKILL.md
+  status      String    @default("pending") // pending | done | error
+  error       String?   @db.Text
+  requestedAt DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  @@index([machineId, status])
 }
 
 // Direct dashboard→agent chat. One ChatSession = one happy/claude conversation
 // scoped to (machine, agentName). Multiple sessions per agent allowed (each
 // gets its own claude `<uuid>.jsonl` underneath).
 model ChatSession {
-  id                  String    @id @default(cuid())
-  machineId           String
-  machine             Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  agentName           String
-  title               String?
-  claudeSessionId     String?   // populated by gateway once SDK boots
-  startedAt           DateTime  @default(now())
-  lastMessageAt       DateTime?
-  closedAt            DateTime?  // null = active, gateway listens; non-null = archived
+  id                String    @id @default(cuid())
+  machineId         String
+  machine           Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  agentName         String
+  title             String?
+  claudeSessionId   String? // populated by gateway once SDK boots
+  startedAt         DateTime  @default(now())
+  lastMessageAt     DateTime?
+  closedAt          DateTime? // null = active, gateway listens; non-null = archived
   // User-requested stop signal for the in-flight turn. Set by chat.cancelTurn,
   // cleared by gateway via chat.ackCancel once the child process is killed.
-  cancelRequestedAt   DateTime?
+  cancelRequestedAt DateTime?
 
   // User-requested session restart. Set by chat.requestSessionRestart; gateway
   // kills the tmux pane (`hermit-<sessionId>`) so the next user message
   // respawns claude with `--resume <claudeSessionId>` (history preserved).
   // Cleared by chat.ackSessionRestart once the pane is gone.
-  restartRequestedAt  DateTime?
+  restartRequestedAt DateTime?
 
   // ── Per-session runtime state (pushed by gateway session-snapshot tick) ──
   // Each ChatSession is its own claude process inside its own tmux pane
@@ -73,30 +153,70 @@ model ChatSession {
   transcriptPath    String?
   lastUserPrompt    String?   @db.Text
   lastAssistantText String?   @db.Text
+  // Loop / scheduled-task state, pushed alongside the other runtime fields.
+  // The agent's `cron` skill rewrites <AGENT_DIR>/.loop-state.json every time
+  // a /loop, /schedule, CronCreate, or CronDelete fires; the gateway forwards
+  // whatever it finds on each session-snapshot tick. Shape is open:
+  // `{ loops: [...], schedules: [...], updatedAt: <iso> }`. Dashboard renders
+  // a small chip in the chat header from it.
+  loopState         Json?
   snapshotAt        DateTime?
 
-  messages         ChatMessage[]
+  messages     ChatMessage[]
+  interactions Interaction[]
 
   @@index([machineId, agentName])
   @@index([machineId, closedAt])
 }
 
 model ChatMessage {
-  id           String   @id @default(cuid())
-  sessionId    String
-  session      ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  role         String   // user | assistant | system | tool
+  id          String      @id @default(cuid())
+  sessionId   String
+  session     ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role        String // user | assistant | system | tool
   // Anthropic content-block array: [{type:'text', text}, {type:'tool_use', id, name, input}, {type:'tool_result', tool_use_id, content}, ...]
-  content      Json
+  content     Json
   // Used to track delivery state of user messages: null = pending pickup,
   // ISO = gateway picked it up (so gateway doesn't re-deliver on poll).
-  deliveredAt  DateTime?
+  deliveredAt DateTime?
   // Anthropic message id (msg_...) if known, useful for dedup on assistant rows.
-  externalId   String?
-  createdAt    DateTime @default(now())
+  externalId  String?
+  createdAt   DateTime    @default(now())
+  // Bumped on every insert AND in-place upsert (the gateway updates a row by
+  // externalId as its turn streams). The SSE stream uses MAX(updatedAt) + count
+  // as a cheap change signal instead of fetching + stringifying the whole
+  // window each 250ms tick — see api/chat/stream/route.ts.
+  updatedAt   DateTime    @default(now()) @updatedAt
 
   @@index([sessionId, createdAt])
   @@index([sessionId, deliveredAt])
+  @@index([sessionId, updatedAt])
+}
+
+// A blocking interaction a running claude turn needs the WEB user to resolve —
+// the TUI prompts (permission approval, AskUserQuestion) that render only in the
+// local tmux pane and never reach the JSONL, so the dashboard user can't see or
+// answer them and the turn hangs. The gateway's permission hook (kind=permission)
+// and the mcp__hermit__ask tool (kind=question) create one of these, post a
+// matching ChatMessage with a {type:'interaction'} block, then LONG-POLL `status`
+// until the user clicks a button (interaction.resolve writes `decision`). Whoever
+// is blocked reads `decision` and continues — no TUI ever renders.
+model Interaction {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  kind      String // "permission" | "question"
+  // permission: { tool, input, cwd, claudeSessionId }
+  // question:   { question, options: [{label, description?}], multiSelect }
+  payload   Json
+  status    String      @default("pending") // pending | resolved | canceled
+  // permission: { behavior: "allow" | "deny", reason? }
+  // question:   { answers: string[] }   (custom free-text answer ⇒ answers:[text])
+  decision  Json?
+  createdAt DateTime    @default(now())
+  resolvedAt DateTime?
+
+  @@index([sessionId, status])
 }
 
 // Current "window" usage snapshot. One row per (machineId, kind). Gateway
@@ -122,94 +242,70 @@ model UsageWindow {
 // state (no pid, no alive, no ctx). Runtime lives on each ChatSession that
 // targets this agent (each gets its own claude inside `hermit-<sessionId>`).
 model Agent {
-  id              String   @id @default(cuid())
-  machineId       String
-  machine         Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  name            String
-  directory       String?  // absolute path on the gateway's host
-  updatedAt       DateTime @updatedAt
-
-  // Static-metadata blob pushed by the gateway every ~5 min. The detail
-  // sheet renders each text as markdown; `skillNames` is a chip list.
-  identityText      String?   @db.Text
-  userText          String?   @db.Text
-  agentsText        String?   @db.Text
-  toolsText         String?   @db.Text
-  evolutionLessons  String?   @db.Text
-  skillNames        String[]  @default([])
-  memorySummary     String?   @db.Text
-  metadataAt        DateTime?
-
-  events          Event[]
-
-  @@unique([machineId, name])
-  @@index([machineId])
-}
-
-model Event {
   id        String   @id @default(cuid())
   machineId String
   machine   Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  agentId   String?
-  agent     Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
-  agentName String
-  type      String   @default("note")
-  title     String?
-  message   String
-  ts        DateTime @default(now())
+  name      String
+  directory String? // absolute path on the gateway's host
+  updatedAt DateTime @updatedAt
 
-  @@index([machineId, ts])
-  @@index([agentId, ts])
-}
+  // Static-metadata blob pushed by the gateway every ~5 min. The detail
+  // sheet renders each text as markdown; `skillNames` is a chip list.
+  identityText     String?   @db.Text
+  userText         String?   @db.Text
+  agentsText       String?   @db.Text
+  toolsText        String?   @db.Text
+  evolutionLessons String?   @db.Text
+  skillNames       String[]  @default([])
+  // Per-skill SKILL.md contents pushed by the gateway alongside skillNames so
+  // the detail sheet can render + edit them. Shape: Array<{name, content}>.
+  skills           Json      @default("[]")
+  memorySummary    String?   @db.Text
+  metadataAt       DateTime?
 
-model LaunchAgentRecord {
-  id           String   @id @default(cuid())
-  machineId    String
-  machine      Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  label        String
-  scheduleKind String?
-  intervalSec  Int?
-  calendarHour Int?
-  calendarMinute Int?
-  runAtLoad    Boolean  @default(false)
-  keepAlive    Boolean  @default(false)
-  running      Boolean?
-  logPath      String?
-  lastFire     DateTime?
-  programArgs  String[]
-  updatedAt    DateTime @updatedAt
-
-  @@unique([machineId, label])
+  @@unique([machineId, name])
   @@index([machineId])
 }
 
-// User-defined cron-style tasks. Fired by the dashboard scheduler; each run
-// invokes `happy --yolo` in the target agent's directory with the configured
-// prompt. Same task reuses the same happy session via `--continue` once a
-// happySessionId has been recorded from the first run.
-model SystemTask {
-  id              String    @id @default(cuid())
-  machineId       String
-  machine         Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  name            String
-  agentName       String                             // which sibling agent dir owns this task
-  directory       String?                            // override cwd (e.g. nested subdir)
-  prompt          String                             // the task's prompt body
-  intervalSec     Int                                // fire every N seconds
-  enabled         Boolean   @default(true)
+// User-defined recurring tasks. Fired by the gateway cron-runner: every fire
+// runs the prompt through a FRESH tmux + claude turn in the agent's directory
+// (no happy, no `claude -p`) and records a CronRun. Interval-based with an
+// optional jitter window so the next fire = lastFire + intervalSec ± random.
+model Cron {
+  id          String  @id @default(cuid())
+  machineId   String
+  machine     Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  agentName   String // owning agent dir
+  directory   String? // override cwd (default = agent dir)
+  title       String? // short label for the list
+  prompt      String  @db.Text // the task prompt
+  intervalSec Int // base period: fire every N seconds
+  jitterSec   Int     @default(0) // ± uniform random applied to each fire
+  enabled     Boolean @default(true)
 
-  happySessionId  String?                            // captured from first run, used for resume
+  lastFire   DateTime?
+  nextFire   DateTime? // lastFire + intervalSec ± jitter; runner reads this
+  lastStatus String? // ok | fail | running
 
-  lastFire        DateTime?
-  lastStatus      String?                            // ok | fail | running | unknown
-  lastOutput      String?                            // tail (last 4KB) of latest run
-  lastDurationMs  Int?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  runs      CronRun[]
 
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-
-  @@unique([machineId, name])
   @@index([machineId, agentName])
+}
+
+// One execution of a Cron. The cron detail page reads these for the run log.
+model CronRun {
+  id         String    @id @default(cuid())
+  cronId     String
+  cron       Cron      @relation(fields: [cronId], references: [id], onDelete: Cascade)
+  firedAt    DateTime  @default(now())
+  finishedAt DateTime?
+  status     String // running | ok | fail
+  output     String?   @db.Text // tail of the run's claude output
+  durationMs Int?
+
+  @@index([cronId, firedAt])
 }
 
 // Per-hour usage bucket pushed by the gateway. Rows are unique on
@@ -220,7 +316,7 @@ model UsageHourly {
   machineId           String
   machine             Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
   agentName           String
-  hourBucket          DateTime                            // truncated to UTC hour
+  hourBucket          DateTime // truncated to UTC hour
   cost                Float    @default(0)
   inputTokens         Int      @default(0)
   outputTokens        Int      @default(0)
@@ -228,7 +324,7 @@ model UsageHourly {
   cacheReadTokens     Int      @default(0)
   sessions            Int      @default(0)
 
-  updatedAt           DateTime @updatedAt
+  updatedAt DateTime @updatedAt
 
   @@unique([machineId, agentName, hourBucket])
   @@index([machineId, hourBucket])

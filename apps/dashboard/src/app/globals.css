@@ -129,12 +129,11 @@
   }
 }
 
-/* streaming indicator: a thin emerald sliver slides through a hairline
-   track to signal "still working" without bouncing dots. */
-@keyframes stream {
-  0%   { transform: translateX(0); }
-  50%  { transform: translateX(300%); }
-  100% { transform: translateX(0); }
+/* "thinking" indicator: a single solid dot that gently breathes — ChatGPT
+   style. Scale + opacity oscillate so it reads as "alive", not bouncing. */
+@keyframes breathe {
+  0%, 100% { opacity: 0.25; transform: scale(0.7); }
+  50%      { opacity: 1;    transform: scale(1); }
 }
 
 /* highlight.js theme — modern minimal palette, single accent + neutral text.
@@ -210,4 +209,12 @@
   background: rgba(244, 63, 94, 0.08);
   display: inline-block;
   width: 100%;
+}
+/* In-chat find (Cmd-F) — CSS Custom Highlight API overlays, no DOM mutation. */
+::highlight(chat-find) {
+  background-color: rgba(250, 204, 21, 0.40); /* amber-300 @ 40% */
+}
+::highlight(chat-find-current) {
+  background-color: rgba(249, 115, 22, 0.85); /* orange-500 — the active match */
+  color: #0a0a0a;
 }

@@ -3,11 +3,13 @@
 #
 # AskUserQuestion is Claude Code's built-in tool for prompting the user to pick
 # from a set of options. It renders a TUI modal directly to stdin/stdout — in
-# the hermit-agent headless tmux + Telegram setup, the user never sees it and
-# the turn hangs forever waiting on stdin.
+# the hermit-agent headless tmux + web dashboard setup, the user never sees it
+# and the turn hangs forever waiting on stdin.
 #
-# Block the call and tell the agent to use Telegram reply with numbered options
-# instead. The reason text reaches the model so it can adapt mid-turn.
+# Block the call and redirect the agent to mcp__hermit__ask, which renders the
+# same multiple-choice question as CLICKABLE options in the dashboard, blocks
+# until the user picks, and returns their choice as the tool result. The reason
+# text reaches the model mid-turn.
 
 exec /usr/bin/env python3 -c '
 import json, sys
@@ -21,12 +23,12 @@ if event.get("tool_name") != "AskUserQuestion":
     sys.exit(0)
 
 reason = (
-    "AskUserQuestion is disabled in this hermit (headless tmux + Telegram). "
-    "Its TUI modal renders to the local pane only — the user is on Telegram and never sees it, "
+    "AskUserQuestion is disabled in this hermit (headless tmux + web dashboard). "
+    "Its TUI modal renders to the local pane only — the user is on the dashboard and never sees it, "
     "so the turn would hang forever waiting on stdin. "
-    "Instead: send a Telegram reply via mcp__plugin_telegram_telegram__reply with the "
-    "options as numbered lines (e.g. \"1. <label>\\n2. <label>\\n3. <label>\"), end the turn, "
-    "and let the user answer in the next inbound message."
+    "Instead call mcp__hermit__ask with {question, options:[{label, description?}], multiSelect?} — "
+    "it shows clickable option buttons in the chat, blocks until the user picks, "
+    "and returns their choice as the tool result so you can continue this same turn."
 )
 
 print(json.dumps({

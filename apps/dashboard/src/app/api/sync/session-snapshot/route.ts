@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { Prisma } from '@/generated/prisma/client';
 import { prisma } from '@/server/db';
 import { resolveMachine } from '../route';
 
@@ -21,6 +22,9 @@ const Item = z.object({
   transcriptPath: z.string().nullable().optional(),
   lastUserPrompt: z.string().nullable().optional(),
   lastAssistantText: z.string().nullable().optional(),
+  // Opaque JSON written by the agent's cron skill — dashboard treats it as
+  // a black box (renders a count chip + an expandable detail dropdown).
+  loopState: z.any().nullable().optional(),
 });
 const Body = z.object({ items: z.array(Item) });
 
@@ -40,20 +44,29 @@ export async function POST(req: NextRequest) {
   for (const it of body.items) {
     // updateMany scoped to (machineId, id) — silently skips sessions the
     // gateway already cleaned up.
+    const data: Prisma.ChatSessionUpdateManyMutationInput = {
+      pid: it.pid ?? null,
+      alive: it.alive ?? false,
+      state: it.state ?? null,
+      lastActivity: it.lastActivity ? new Date(it.lastActivity) : null,
+      transcriptPath: it.transcriptPath ?? null,
+      lastUserPrompt: it.lastUserPrompt ?? null,
+      lastAssistantText: it.lastAssistantText ?? null,
+      // Prisma's Json? column needs Prisma.DbNull for SQL NULL; a bare
+      // `null` literal is rejected by the generated client.
+      loopState: it.loopState == null ? Prisma.DbNull : (it.loopState as Prisma.InputJsonValue),
+      snapshotAt: now,
+    };
+    // ctx/output tokens are sticky: a probe that couldn't locate the usage block
+    // (a long turn pushed it past the tail window, or a transient timeout under
+    // load) sends null — don't overwrite a known value with it, or the ctx %
+    // flickers to "—" between turns. Only advance when we actually have a number.
+    if (it.contextTokens != null) data.contextTokens = it.contextTokens;
+    if (it.outputTokens != null) data.outputTokens = it.outputTokens;
+
     const r = await prisma.chatSession.updateMany({
       where: { id: it.sessionId, machineId: machine.id },
-      data: {
-        pid: it.pid ?? null,
-        alive: it.alive ?? false,
-        state: it.state ?? null,
-        contextTokens: it.contextTokens ?? null,
-        outputTokens: it.outputTokens ?? null,
-        lastActivity: it.lastActivity ? new Date(it.lastActivity) : null,
-        transcriptPath: it.transcriptPath ?? null,
-        lastUserPrompt: it.lastUserPrompt ?? null,
-        lastAssistantText: it.lastAssistantText ?? null,
-        snapshotAt: now,
-      },
+      data,
     });
     updated += r.count;
   }

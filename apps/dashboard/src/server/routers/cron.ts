@@ -1,0 +1,183 @@
+// Cron jobs — user-defined recurring tasks fired by the gateway cron-runner.
+// CRUD for the /cron page; `listForGateway` feeds the runner (enabled crons
+// joined with their agent's on-disk directory). Results land back via
+// /api/sync/cron-run. Each fire is a fresh tmux + claude turn in the agent dir.
+
+import { z } from 'zod';
+import { router, machineProcedure } from '../trpc';
+import { prisma } from '../db';
+
+const CronInput = z.object({
+  agentName: z.string().min(1).max(64),
+  directory: z.string().max(1024).optional(),
+  title: z.string().max(120).optional(),
+  prompt: z.string().min(1).max(16_000),
+  intervalSec: z.number().int().min(60).max(604_800), // 1 min … 7 days
+  jitterSec: z.number().int().min(0).max(86_400).default(0),
+  enabled: z.boolean().default(true),
+});
+
+export const cronRouter = router({
+  // All crons for the machine — the /cron page sidebar.
+  list: machineProcedure.query(async ({ ctx }) => {
+    return prisma.cron.findMany({
+      where: { machineId: ctx.machine.id },
+      orderBy: [{ agentName: 'asc' }, { createdAt: 'asc' }],
+    });
+  }),
+
+  // All crons for one agent — the agent-detail panel's scheduled-tasks list.
+  // Narrow select (no prompt-history / run rows) since it's just a summary list
+  // that links out to /cron?id=… for the full detail/edit view.
+  listForAgent: machineProcedure
+    .input(z.object({ agentName: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      return prisma.cron.findMany({
+        where: { machineId: ctx.machine.id, agentName: input.agentName },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true, title: true, prompt: true, intervalSec: true,
+          jitterSec: true, enabled: true, lastStatus: true, lastFire: true, nextFire: true,
+        },
+      });
+    }),
+
+  // One cron + its recent runs — the detail view (read-only run log).
+  get: machineProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+    const cron = await prisma.cron.findUnique({ where: { id: input.id } });
+    if (!cron || cron.machineId !== ctx.machine.id) throw new Error('not found');
+    const runs = await prisma.cronRun.findMany({
+      where: { cronId: input.id },
+      orderBy: { firedAt: 'desc' },
+      take: 50,
+    });
+    return { cron, runs };
+  }),
+
+  create: machineProcedure.input(CronInput).mutation(async ({ ctx, input }) => {
+    // nextFire = now ⇒ first run on the next gateway tick.
+    return prisma.cron.create({
+      data: { machineId: ctx.machine.id, ...input, nextFire: new Date() },
+    });
+  }),
+
+  update: machineProcedure
+    .input(z.object({ id: z.string() }).and(CronInput.partial()))
+    .mutation(async ({ ctx, input }) => {
+      const { id, ...patch } = input;
+      const existing = await prisma.cron.findUnique({ where: { id } });
+      if (!existing || existing.machineId !== ctx.machine.id) throw new Error('not found');
+      return prisma.cron.update({ where: { id }, data: patch });
+    }),
+
+  delete: machineProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+    const existing = await prisma.cron.findUnique({ where: { id: input.id } });
+    if (!existing || existing.machineId !== ctx.machine.id) throw new Error('not found');
+    await prisma.cron.delete({ where: { id: input.id } }); // CronRuns cascade
+    return { ok: true };
+  }),
+
+  // Manual fire — set nextFire to the far past so the next gateway tick runs it.
+  runNow: machineProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+    const existing = await prisma.cron.findUnique({ where: { id: input.id } });
+    if (!existing || existing.machineId !== ctx.machine.id) throw new Error('not found');
+    await prisma.cron.update({ where: { id: input.id }, data: { nextFire: new Date(0) } });
+    return { ok: true };
+  }),
+
+  // ── Skill-facing (agent calls mcp__hermit__cron_* mid-chat) ───────────────
+  // The MCP stub knows only the chat sessionId; resolve agentName from it so a
+  // skill-created cron lands on the right agent and shows on /cron like any other.
+  createFromSession: machineProcedure
+    .input(
+      z.object({
+        sessionId: z.string(),
+        prompt: z.string().min(1).max(16_000),
+        intervalSec: z.number().int().min(60).max(604_800),
+        jitterSec: z.number().int().min(0).max(86_400).default(0),
+        title: z.string().max(120).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const session = await prisma.chatSession.findUnique({
+        where: { id: input.sessionId },
+        select: { agentName: true, machineId: true },
+      });
+      if (!session || session.machineId !== ctx.machine.id) throw new Error('session not found');
+      return prisma.cron.create({
+        data: {
+          machineId: ctx.machine.id,
+          agentName: session.agentName,
+          prompt: input.prompt,
+          intervalSec: input.intervalSec,
+          jitterSec: input.jitterSec,
+          title: input.title,
+          nextFire: new Date(),
+        },
+      });
+    }),
+
+  listForSession: machineProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const session = await prisma.chatSession.findUnique({
+        where: { id: input.sessionId },
+        select: { agentName: true, machineId: true },
+      });
+      if (!session || session.machineId !== ctx.machine.id) return [];
+      return prisma.cron.findMany({
+        where: { machineId: ctx.machine.id, agentName: session.agentName },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true, title: true, prompt: true, intervalSec: true,
+          jitterSec: true, enabled: true, lastStatus: true, lastFire: true,
+        },
+      });
+    }),
+
+  deleteFromSession: machineProcedure
+    .input(z.object({ sessionId: z.string(), id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const session = await prisma.chatSession.findUnique({
+        where: { id: input.sessionId },
+        select: { agentName: true, machineId: true },
+      });
+      if (!session || session.machineId !== ctx.machine.id) throw new Error('session not found');
+      const cron = await prisma.cron.findUnique({ where: { id: input.id } });
+      if (!cron || cron.machineId !== ctx.machine.id || cron.agentName !== session.agentName) {
+        throw new Error('cron not found for this agent');
+      }
+      await prisma.cron.delete({ where: { id: input.id } });
+      return { ok: true };
+    }),
+
+  // ── Gateway-facing ────────────────────────────────────────────────────────
+  // Enabled crons joined with their agent's stored directory (DB-leader, mirrors
+  // chat.pollPending). The cron-runner reads `nextFire`/`lastFire` to decide what
+  // is due and fires it in `agentDirectory`.
+  listForGateway: machineProcedure.query(async ({ ctx }) => {
+    const crons = await prisma.cron.findMany({
+      where: { machineId: ctx.machine.id, enabled: true },
+    });
+    const names = [...new Set(crons.map((c) => c.agentName))];
+    const agents = names.length
+      ? await prisma.agent.findMany({
+          where: { machineId: ctx.machine.id, name: { in: names } },
+          select: { name: true, directory: true },
+        })
+      : [];
+    const dirByName = new Map(agents.map((a) => [a.name, a.directory]));
+    return crons.map((c) => ({
+      id: c.id,
+      agentName: c.agentName,
+      agentDirectory: dirByName.get(c.agentName) ?? null,
+      directory: c.directory,
+      prompt: c.prompt,
+      intervalSec: c.intervalSec,
+      jitterSec: c.jitterSec,
+      enabled: c.enabled,
+      lastFire: c.lastFire?.toISOString() ?? null,
+      nextFire: c.nextFire?.toISOString() ?? null,
+    }));
+  }),
+});

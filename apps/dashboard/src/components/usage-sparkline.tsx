@@ -22,7 +22,7 @@ function hourLabel(d: Date) {
 type Bucket = { hour: Date; cost: number; tokens: number };
 
 export function UsageSparkline() {
-  const q = trpc.usage.byHour.useQuery({ hours: 48 }, { refetchInterval: 60_000 });
+  const q = trpc.usage.byHour.useQuery({ hours: 48 }, { refetchInterval: 5 * 60_000 });
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setMounted(true), 60);

@@ -17,11 +17,13 @@
 // `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` is Anthropic-native.
 
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   ensureSession,
   sendKeys,
+  confirmSubmitted,
   sendInterrupt,
   kill as killTmuxSession,
   getClaudeSessionUuid,
@@ -35,8 +37,8 @@ import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
 import { relayImages } from './image-relay';
 
-// MCP stub gives the in-pane claude three tools: set_session_title, log_status,
-// attach_image. Spawned as a stdio child of `claude --mcp-config <json>`.
+// MCP stub gives the in-pane claude these tools: set_session_title, log_status,
+// attach_image, attach_file. Spawned as a stdio child of `claude --mcp-config <json>`.
 const MCP_STUB_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-stub.cjs');
 
 function buildMcpConfigArg(chatSessionId: string): string {
@@ -45,6 +47,11 @@ function buildMcpConfigArg(chatSessionId: string): string {
       hermit: {
         command: 'node',
         args: [MCP_STUB_PATH],
+        // 4h5m: the `ask` tool blocks until the user clicks a button in the
+        // dashboard; this per-server ceiling sits just ABOVE the stub's own 4h
+        // ASK_MAX_MS so the stub returns a clean "timed out" result before
+        // claude force-kills the tool call (which would error the turn).
+        timeout: 14_700_000,
         env: {
           HERMIT_SESSION_ID: chatSessionId,
           HERMIT_DASHBOARD_URL: DASHBOARD_URL,
@@ -57,7 +64,7 @@ function buildMcpConfigArg(chatSessionId: string): string {
 }
 
 type PendingMsg = { id: string; sessionId: string; role: string; content: any; createdAt: string };
-type PendingSession = { id: string; agentName: string; claudeSessionId: string | null };
+type PendingSession = { id: string; agentName: string; claudeSessionId: string | null; agentDirectory: string | null };
 
 interface SessionState {
   claudeUuid: string;
@@ -74,6 +81,10 @@ interface SessionState {
 const sessionStates = new Map<string, SessionState>();
 // Concurrency guard: don't run setup twice for the same session.
 const settingUp = new Set<string>();
+// Concurrency guard for chatRestartTick: the kill can take up to 2s but the
+// tick re-fires every 2s (setInterval doesn't await), so overlapping ticks
+// would re-process the same not-yet-acked row. Skip rows already in flight.
+const restartingSessions = new Set<string>();
 
 // ── Cancellation tick ────────────────────────────────────────────────────────
 
@@ -93,6 +104,11 @@ export async function chatRestartTick() {
 
   const ackIds: string[] = [];
   for (const row of rows) {
+    // The kill below can take up to 2s, but this tick re-fires every 2s and
+    // setInterval doesn't await — so overlapping ticks would each re-process
+    // the same not-yet-acked row. Skip rows already in flight here.
+    if (restartingSessions.has(row.id)) continue;
+    restartingSessions.add(row.id);
     try {
       // Tear down in-memory state first so the next deliverMessages call
       // hits setupSession fresh (which will see paneAlive=false and respawn
@@ -110,18 +126,25 @@ export async function chatRestartTick() {
       // message is still role=user → the page would show "assistant is
       // working…" forever. The system row breaks that, AND it doubles as
       // an "OK, ready for the next prompt" affordance.
+      //
+      // externalId is STABLE per restart request (sessionId + requestedAt), so
+      // any overlapping tick or retry collapses to a single banner via the
+      // sync route's (sessionId, externalId) upsert — instead of spamming a
+      // fresh row every tick (the old Date.now()+random id never deduped).
       await api
         .syncChatMessages([
           {
             sessionId: row.id,
             role: 'system',
             content: [{ type: 'text', text: '[session restarted — send a message to continue]' }],
-            externalId: `restart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            externalId: `restart-${row.id}-${new Date(row.restartRequestedAt).getTime()}`,
           },
         ])
         .catch((e) => console.error('[chat-restart] post system row failed:', e));
     } catch (e) {
       console.error('[chat-restart] kill failed:', e);
+    } finally {
+      restartingSessions.delete(row.id);
     }
     ackIds.push(row.id);
   }
@@ -173,6 +196,39 @@ export async function chatTick() {
     console.error('[chat] poll failed:', e);
     return;
   }
+  // Reattach JSONL watchers for alive sessions that lost theirs. sessionStates
+  // is in-memory and wiped on every gateway restart; otherwise it's only rebuilt
+  // when a user message arrives (deliverMessages → setupSession). A session
+  // running an autonomous loop (cron / `/loop`) sends no user messages, so after
+  // a gateway restart its cron-fired turns land in the JSONL with nothing tailing
+  // it — the dashboard then shows only the iterations that ran before the restart
+  // (the exact "loop reported once, then nothing" symptom). Proactively
+  // reattaching here keeps autonomous turns flowing and backfills any missed
+  // while the watcher was down (watchTranscript replays from line 1; the
+  // dashboard upserts by externalId so re-forwarding is idempotent).
+  //
+  // setupSession reattaches without spawning a second claude when the pane is
+  // alive (ensureSession no-ops on an existing pane) and never sends keys, so
+  // this only attaches the tail. Sessions with a pending user message are left
+  // to deliverMessages below, which sets the watcher up on the same path.
+  const havePending = new Set(payload.messages.map((m) => m.sessionId));
+  for (const s of payload.sessions) {
+    if (havePending.has(s.id)) continue;
+    if (sessionStates.has(s.id) || settingUp.has(s.id)) continue;
+    // Don't reattach a session that's mid-restart: chatRestartTick is about to
+    // (or is currently) killing its pane. Reattaching here would re-populate
+    // sessionStates with a state pointing at the doomed pane (the stale-state
+    // race that left dead panes un-respawned). The next user message respawns it.
+    if (restartingSessions.has(s.id)) continue;
+    if (!s.claudeSessionId) continue; // no transcript to tail yet (fresh, pre-uuid)
+    if (!tmuxSessionExists(s.id)) continue; // pane not running — nothing to watch
+    settingUp.add(s.id);
+    setupSession(s)
+      .then((st) => { sessionStates.set(s.id, st); })
+      .catch((e) => console.error(`[chat] watcher reattach failed for ${s.id.slice(0, 8)}:`, e))
+      .finally(() => settingUp.delete(s.id));
+  }
+
   if (payload.messages.length === 0) return;
 
   const grouped = new Map<string, PendingMsg[]>();
@@ -193,9 +249,161 @@ export async function chatTick() {
   }
 }
 
+// Stream a slash-command's TUI panel back to the dashboard chat by polling
+// `tmux capture-pane` and upserting a single system row (same externalId).
+// The repeated upserts feed the SSE stream, so the user watches the panel
+// grow live instead of seeing a single stale snapshot. Completion is read from
+// claude's own footer: a long op like /compact shows "esc to interrupt" while
+// it works, so we finish when that footer has cleared (the pane settled back to
+// idle); a quick command that never shows it finishes when the panel stops
+// changing. A 3-min hard cap backstops either path. If the pane advertises an
+// "Esc to cancel/exit" hint, we send Escape once to dismiss the modal and keep
+// capturing for the post-dismiss state.
+async function streamSlashOutput({
+  sessionId,
+  cmd,
+  paneN,
+}: {
+  sessionId: string;
+  cmd: string;
+  paneN: string;
+}): Promise<void> {
+  const POLL_FAST_MS = 700;           // ~1.4Hz — responsive for quick commands
+  const POLL_SLOW_MS = 2_000;         // ease off once a long op (e.g. /compact) is clearly running
+  const BACKOFF_AFTER_MS = 8_000;     // switch to slow polling past this point
+  const STABLE_TICKS_DONE = 3;        // 3 quiet ticks ≈ done for instant/modal commands
+  const SETTLE_TICKS_DONE = 2;        // 2 ticks with the work footer gone = a long op finished
+  const MAX_DURATION_MS = 180_000;    // 3-min backstop — /compact on a big transcript is slow
+  const ESC_HINT_RE = /\besc(?:ape)?\s+to\s+(?:cancel|exit|close|dismiss|return|back|quit|leave)\b/i;
+  // claude's "turn in flight" footer ("esc to interrupt"). /compact shows this
+  // while it reads + summarises; its DISAPPEARANCE is how we know the command
+  // truly finished — far more reliable than "text stopped changing", which a
+  // live spinner/percentage never satisfies (the old 30s cap then truncated the
+  // panel mid-progress, e.g. a frozen "Compacting… 80%" that never hit 100%).
+  const WORK_RE = /\besc(?:ape)?\s+to\s+(?:interrupt|cancel|stop)\b/i;
+  const externalId = `slash-out-${sessionId}-${Date.now()}`;
+
+  const start = Date.now();
+  let lastText = '';
+  let stableTicks = 0;
+  let settledTicks = 0;
+  let sawWorking = false;
+  let escSent = false;
+
+  // Small head-start so the first capture sees whatever claude printed when
+  // the keys actually landed (`tmux capture-pane` is sync — no built-in wait).
+  await new Promise((r) => setTimeout(r, 400));
+
+  while (Date.now() - start < MAX_DURATION_MS) {
+    let text = '';
+    try {
+      const r = spawnSync(
+        'tmux',
+        ['capture-pane', '-t', paneN, '-p', '-J', '-S', '-80'],
+        { encoding: 'utf8', timeout: 4_000 },
+      );
+      if (r.status !== 0) break;
+      const raw = (r.stdout || '').replace(/\s+$/g, '');
+      if (raw) {
+        const lines = raw.split('\n');
+        let s = 0;
+        while (s < lines.length && lines[s].trim() === '') s++;
+        const tail = lines.slice(Math.max(s, lines.length - 40));
+        text = tail.join('\n').trim();
+      }
+    } catch {
+      break;
+    }
+
+    if (text && text !== lastText) {
+      lastText = text;
+      stableTicks = 0;
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      void api
+        .syncChatMessages([
+          {
+            sessionId,
+            role: 'system',
+            content: [
+              { type: 'text', text: `↳ \`${cmd}\` output (${elapsed}s):\n\n\`\`\`\n${text}\n\`\`\`` },
+            ],
+            externalId,
+          },
+        ])
+        .catch(() => {});
+    } else if (text) {
+      stableTicks++;
+    }
+
+    // Track claude's work footer so we can tell "still compacting" from "done".
+    const working = WORK_RE.test(text);
+    if (working) sawWorking = true;
+
+    // Auto-dismiss a TUI modal once. Keep capturing afterwards so the
+    // post-Esc redraw lands in the same row.
+    if (!escSent && ESC_HINT_RE.test(text)) {
+      escSent = true;
+      try {
+        spawnSync('tmux', ['send-keys', '-t', paneN, 'Escape'], { timeout: 4_000 });
+      } catch { /* best effort */ }
+    }
+
+    // Completion, two regimes:
+    //  • Long op (we saw the work footer): done once it's been GONE for
+    //    SETTLE_TICKS_DONE consecutive ticks — the pane settled back to idle.
+    //    This is what lets /compact stream through to its real "Compacted"
+    //    result instead of freezing at the old 30s cap mid-percentage.
+    //  • Instant / modal command (footer never appeared): an unchanging panel
+    //    for STABLE_TICKS_DONE ticks means it finished.
+    if (sawWorking) {
+      settledTicks = working ? 0 : settledTicks + 1;
+      if (settledTicks >= SETTLE_TICKS_DONE) break;
+    } else if (stableTicks >= STABLE_TICKS_DONE) {
+      break;
+    }
+
+    // Poll fast at first (snappy for quick commands), then ease off once a long
+    // op is clearly in flight — keeps a 60s compact from hammering capture-pane.
+    const slow = sawWorking && Date.now() - start > BACKOFF_AFTER_MS;
+    await new Promise((r) => setTimeout(r, slow ? POLL_SLOW_MS : POLL_FAST_MS));
+  }
+
+  // Final update with a "done" marker + total elapsed. If we never captured
+  // anything (rare — `capture-pane` almost always succeeds on a live pane),
+  // write a short note so the user isn't left with just the client-side
+  // "↳ sent /X" stub and silence.
+  const total = ((Date.now() - start) / 1000).toFixed(1);
+  const finalText = lastText
+    ? `↳ \`${cmd}\` output (${total}s · done):\n\n\`\`\`\n${lastText}\n\`\`\``
+    : `↳ \`${cmd}\` produced no captured output (${total}s)`;
+  await api
+    .syncChatMessages([
+      {
+        sessionId,
+        role: 'system',
+        content: [{ type: 'text', text: finalText }],
+        externalId,
+      },
+    ])
+    .catch(() => {});
+}
+
 async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // Ensure tmux pane + watcher are up.
   let state = sessionStates.get(session.id);
+  // A restart (or any external tmux kill) can leave a STALE state pointing at a
+  // dead pane: chatRestartTick deletes the state and THEN awaits killTmuxSession
+  // (~2s), and a concurrent chatTick reattach can re-populate sessionStates during
+  // that kill window (pane still briefly alive → tmuxSessionExists true). The
+  // stale state then survives the kill, so the next deliver sends keys into a pane
+  // that no longer exists ("tmux session not found") and never respawns. Guard:
+  // if we have a cached state but the pane is gone, drop it so setupSession
+  // respawns with --resume below.
+  if (state && !tmuxSessionExists(session.id)) {
+    try { state.stopWatcher(); } catch {}
+    sessionStates.delete(session.id);
+    state = undefined;
+  }
   if (!state) {
     if (settingUp.has(session.id)) return;
     settingUp.add(session.id);
@@ -247,7 +455,22 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // pipes the bytes into the context). tmux send-keys can't carry binaries.
   const promptParts: string[] = [];
   if (textPart) promptParts.push(textPart);
-  for (const p of relay.paths) promptParts.push(`Read ${p}`);
+  // Archives are binary — Read'ing them is gibberish. Detect by extension and
+  // tell claude to extract via Bash instead, so an uploaded .zip/.tar/.gz is
+  // actually usable. Everything else flows through the normal `Read <path>`.
+  const ARCHIVE_EXTS = new Set(['zip', 'tar', 'gz', 'tgz', 'bz2', 'tbz2', 'xz', 'txz', '7z', 'rar', 'zst']);
+  const isArchive = (p: string) => ARCHIVE_EXTS.has((p.split('.').pop() || '').toLowerCase());
+  for (const p of relay.paths) {
+    if (isArchive(p)) {
+      promptParts.push(
+        `An uploaded archive is at ${p} — it is binary, so do NOT Read it directly. ` +
+          `Run \`file ${p}\` to confirm the type, then extract it into a fresh temp directory ` +
+          `(unzip / tar -xf / gunzip / 7z as appropriate) and inspect the extracted files.`,
+      );
+    } else {
+      promptParts.push(`Read ${p}`);
+    }
+  }
   const promptText = promptParts.join('\n\n');
 
   if (!promptText) {
@@ -268,6 +491,27 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
 
   try {
     sendKeys(session.id, promptText);
+    // Slash commands print to claude's TUI panel but never touch the JSONL
+    // we tail — so the dashboard would have no idea what `/status` etc.
+    // produced. Stream the pane back via `streamSlashOutput`: repeated
+    // `capture-pane` + upsert (same externalId) so the user watches the
+    // output land live and sees a "done" marker when it settles.
+    const trimmed = textPart.trim();
+    if (trimmed.startsWith('/')) {
+      const cmd = trimmed.split(/\s+/)[0];
+      // Pane name matches tmux-driver's `paneName()`: last-12 of the session
+      // id (cuids are 25 chars; the entropic suffix is what we keep).
+      const paneN = `hermit-${session.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-12)}`;
+      void streamSlashOutput({ sessionId: session.id, cmd, paneN });
+    } else {
+      // Make sure the message actually submitted. claude's TUI sometimes drops
+      // the submit Enter on a multi-line paste (esp. text + a `Read <image>`
+      // line) — the text lands in the composer but never sends until a manual
+      // Enter. confirmSubmitted re-sends Enter while the composer still holds
+      // buffered text. Slash commands skip this — streamSlashOutput drives the
+      // pane (incl. Escape to dismiss modals) and a stray Enter could interfere.
+      await confirmSubmitted(session.id);
+    }
   } catch (e) {
     console.error(`[chat] sendKeys failed for ${session.id.slice(0, 8)}:`, e);
     await api
@@ -286,7 +530,12 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
 // ── Session setup (spawn or reattach) ────────────────────────────────────────
 
 async function setupSession(session: PendingSession): Promise<SessionState> {
-  const cwd = path.join(AGENTS_ROOT, session.agentName);
+  // DB-leader: the agent's actual on-disk path lives on Agent.directory and the
+  // dashboard joins it onto pollPending. Fall back to the old AGENTS_ROOT-based
+  // guess only if the dashboard didn't supply one (older dashboard or a brand-
+  // new create where the scaffold ack hasn't filled in `directory` yet — that
+  // case will resolve to the same AGENTS_ROOT/<name> path the scaffold uses).
+  const cwd = session.agentDirectory ?? path.join(AGENTS_ROOT, session.agentName);
 
   // If the gateway restarted but the tmux pane is still alive, just reattach
   // the watcher — don't spawn a second claude in the same pane.
@@ -316,9 +565,14 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
 
   // Wire the hermit-ui MCP stub on every spawn (fresh OR --resume). claude
   // picks up the in-pane config and exposes mcp__hermit__{set_session_title,
-  // log_status, attach_image} to the agent. Reattach path skips this — the
+  // log_status, attach_image, attach_file} to the agent. Reattach path skips this — the
   // already-running claude inherited its mcp-config at original spawn.
   if (!paneAlive) {
+    // Full-autonomy (2026-06-02): dashboard-chat sessions run gate-free, matching
+    // the agents' own (already-bypass) main sessions. The web-permission hook
+    // self-defers in bypassPermissions mode, so nothing routes to the web and no
+    // invisible TUI prompt can hang the chat. Revert this flag to restore gating.
+    claudeArgs.push('--dangerously-skip-permissions');
     claudeArgs.push('--mcp-config', buildMcpConfigArg(session.id));
   }
 
@@ -327,6 +581,13 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     cwd,
     claudeArgs,
     claudeSessionUuid: waitForResumeUuid ? undefined : claudeUuid || undefined,
+    // Pane env inherited by claude's PreToolUse permission hook so it can reach
+    // the dashboard (URL + key) and resolve this session — never on argv.
+    env: {
+      HERMIT_DASHBOARD_URL: DASHBOARD_URL,
+      HERMIT_KEY: ASST_KEY,
+      HERMIT_SESSION_ID: session.id,
+    },
   });
 
   if (waitForResumeUuid) {
