@@ -935,6 +935,15 @@ function SessionPane({ sessionId }: { sessionId: string }) {
     { refetchInterval: (q) => (isInFlight || (q.state.data?.length ?? 0) > 0 ? 2_000 : false) },
   );
   const queueLen = queue.data?.length ?? 0;
+  // A message sent to an IDLE session is the imminent ACTIVE turn, not a queued
+  // item — yet it lingers in queue.data (deliveredAt=null) for the ~2s until the
+  // gateway picks it up, so it would flash in the QueueBar. Capture its id at send
+  // time (when no turn was in flight) and hide just that one. Messages sent while
+  // a turn IS running were never starters, so they stay as the real queue. No
+  // cleanup needed: each idle send overwrites the id, and filtering an id that's
+  // no longer in queue.data is a harmless no-op.
+  const [activeStarterId, setActiveStarterId] = useState<string | null>(null);
+  const displayQueue = (queue.data ?? []).filter((m) => m.id !== activeStarterId);
   // Status badge: gateway's pane-derived state, flipped to "working" instantly
   // off our own in-flight signal. unread=false — we're looking at this session,
   // so it's read by definition (never the red "unread" dot in its own header).
@@ -1225,7 +1234,7 @@ function SessionPane({ sessionId }: { sessionId: string }) {
             disabled={!!session?.closedAt}
           />
           <QueueBar
-            items={queue.data ?? []}
+            items={displayQueue}
             onCancel={(id) => dequeue.mutate({ messageId: id })}
             onClear={() => clearQueue.mutate({ sessionId })}
             clearing={clearQueue.isPending}
@@ -1243,6 +1252,10 @@ function SessionPane({ sessionId }: { sessionId: string }) {
               // Sending always re-pins to the bottom (even if the user had
               // scrolled up) so their message + the reply scroll into view.
               scrollToBottom('auto');
+              // Was a turn already running BEFORE this send? If not, this message
+              // IS the active turn (not a queue item) — remember it so the QueueBar
+              // doesn't flash it while the gateway picks it up (see activeStarterId).
+              const wasIdle = !isInFlight;
               // Optimistic: show the user's bubble + clear the composer instantly
               // instead of waiting for the round-trip + SSE echo. The overlay row
               // drops itself when the real row lands (see `pending` / `view`);
@@ -1261,6 +1274,9 @@ function SessionPane({ sessionId }: { sessionId: string }) {
               send.mutate(
                 { sessionId, text, images, files },
                 {
+                  onSuccess: (msg) => {
+                    if (wasIdle) setActiveStarterId(msg.id);
+                  },
                   onError: () => {
                     setPending((p) => p.filter((x) => x.id !== optimisticId));
                     setDraft(prevDraft);
