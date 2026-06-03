@@ -76,6 +76,7 @@ function AgentMain({ name, pendingRequests }: { name: string; pendingRequests: P
   const requestDelete = trpc.agents.requestDelete.useMutation({
     onSuccess: () => {
       utils.agents.list.invalidate();
+      utils.agents.listTrashed.invalidate();
       utils.agents.pendingRequests.invalidate();
     },
   });
@@ -92,7 +93,7 @@ function AgentMain({ name, pendingRequests }: { name: string; pendingRequests: P
             <span className="text-[11px] text-muted-foreground animate-pulse">scaffolding…</span>
           )}
           {isDeleting && (
-            <span className="text-[11px] text-rose-500 animate-pulse">deleting…</span>
+            <span className="text-[11px] text-amber-500 animate-pulse">moving to recycle bin…</span>
           )}
         </div>
         <div className="flex-1" />
@@ -124,7 +125,8 @@ function AgentMain({ name, pendingRequests }: { name: string; pendingRequests: P
   );
 }
 
-// Two-step header delete: first click arms it, second click confirms; auto-disarms.
+// Two-step header soft-delete (→ recycle bin): first click arms it, second click
+// confirms; auto-disarms. The agent is recoverable from the sidebar Recycle bin.
 function ConfirmDeleteButton({
   name,
   disabled,
@@ -146,9 +148,9 @@ function ConfirmDeleteButton({
         <button
           type="button"
           onClick={() => { setArmed(false); onConfirm(); }}
-          className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs font-medium text-rose-600 hover:bg-rose-500/10 cursor-pointer"
+          className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs font-medium text-amber-600 hover:bg-amber-500/10 cursor-pointer"
         >
-          <Check className="h-3.5 w-3.5" /> confirm
+          <Check className="h-3.5 w-3.5" /> recycle bin
         </button>
         <button
           type="button"
@@ -166,9 +168,9 @@ function ConfirmDeleteButton({
       type="button"
       onClick={() => setArmed(true)}
       disabled={disabled}
-      title={`delete ${name}`}
-      aria-label={`delete ${name}`}
-      className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 transition-colors cursor-pointer disabled:opacity-40"
+      title={`move ${name} to recycle bin`}
+      aria-label={`move ${name} to recycle bin`}
+      className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:bg-amber-500/10 hover:text-amber-600 transition-colors cursor-pointer disabled:opacity-40"
     >
       <Trash2 className="h-3.5 w-3.5" />
     </button>

@@ -1,7 +1,8 @@
 // Dashboard-driven agent create/delete/edit. Polls AgentRequest rows
 // (agents.pollRequests), scaffolds a new agent dir from apps/cli/template
-// with placeholder substitution, rm -rf's an existing one (only if it lives
-// inside AGENTS_ROOT — imported agents' source dirs are left untouched), or
+// with placeholder substitution, soft-deletes one to the recycle bin (moves its
+// dir to AGENTS_ROOT/.hermit-trash; restore moves it back, purge rm -rf's it —
+// only for dirs inside AGENTS_ROOT; imported agents' sources are left alone), or
 // writes a file edit, then acks (agents.ackRequest). Mirrors the chat-runner
 // restart round-trip — the dashboard can't touch this host's FS.
 //
@@ -91,28 +92,72 @@ function scaffold(name: string, persona: string): string {
   return targetDir;
 }
 
-// Delete an agent's filesystem footprint. For agents we scaffolded, that's the
-// dir under AGENTS_ROOT — rm -rf. For imported agents (directory lives outside
-// AGENTS_ROOT), we leave the source folder alone; the dashboard handles row
-// deletion in ackRequest.
+// Recycle bin lives at AGENTS_ROOT/.hermit-trash/<name>. An agent's `name` is
+// unique per machine and stays reserved while its row is trashed (we don't drop
+// the row until purge), so a bare <name> never collides with another trashed
+// agent. The dotdir is invisible to the DB-driven collectors (they read agent
+// dirs from the DB, not by scanning AGENTS_ROOT).
+function trashPathFor(name: string): string {
+  return path.join(AGENTS_ROOT, '.hermit-trash', name);
+}
+
+// Is this a directory WE own — a direct child of AGENTS_ROOT? Path-only check:
+// it does NOT require the dir to currently exist there, so it stays valid during
+// restore (when the dir is sitting in .hermit-trash). Imported agents live
+// outside AGENTS_ROOT; their recycle-bin lifecycle is DB-only — their source is
+// never moved.
+function isUnderAgentsRoot(directory: string | null): directory is string {
+  if (!directory) return false;
+  return path.dirname(path.resolve(directory)) === path.resolve(AGENTS_ROOT);
+}
+
+// Soft-delete: move the agent's dir into the recycle bin. For agents we
+// scaffolded (dir under AGENTS_ROOT). Imported agents keep their source
+// untouched — recycle-bin state is DB-only for them. The Agent row stays
+// (trashed) until purge, so this is reversible via restoreAgent.
 function deleteAgent(name: string, directory: string | null) {
   // Kill the tmux session regardless (defensive — there might be a stale pane).
   try { spawnSync('tmux', ['kill-session', '-t', `claude-${name}`], { timeout: 5_000 }); } catch { /* no pane */ }
 
-  if (!directory) return;  // Never had a directory (failed scaffold) — nothing to remove.
+  if (!isUnderAgentsRoot(directory)) return; // imported / no dir — nothing to move
+  const home = path.resolve(directory);
+  if (!fs.existsSync(home)) return;                          // already moved / gone
+  if (!fs.existsSync(path.join(home, 'CLAUDE.md'))) return;  // not an agent dir — don't touch
+  // Symlink guard (legacy v1 imports): unlink the link only, never its target.
+  if (fs.lstatSync(home).isSymbolicLink()) { fs.unlinkSync(home); return; }
 
-  const resolved = path.resolve(directory);
-  const rootResolved = path.resolve(AGENTS_ROOT);
-  // Only touch the filesystem if the directory is a direct child of AGENTS_ROOT
-  // — i.e. an agent WE scaffolded. Anything else (imported path) is the user's
-  // own working copy; out of scope.
-  if (path.dirname(resolved) !== rootResolved) return;
-  if (!fs.existsSync(path.join(resolved, 'CLAUDE.md'))) return;  // not an agent dir
-  // Defense in depth: in case anyone left a symlink in there from the v1 import
-  // flow, unlink the link only — never recurse into its target.
-  const ls = fs.lstatSync(resolved);
-  if (ls.isSymbolicLink()) fs.unlinkSync(resolved);
-  else fs.rmSync(resolved, { recursive: true, force: true });
+  const trash = trashPathFor(name);
+  fs.mkdirSync(path.dirname(trash), { recursive: true });
+  fs.rmSync(trash, { recursive: true, force: true }); // clear any stale trash entry
+  fs.renameSync(home, trash);
+}
+
+// Restore from the recycle bin: move the dir back from .hermit-trash/ to its
+// home path. DB-only for imported agents (their source never moved).
+function restoreAgent(name: string, directory: string | null) {
+  if (!isUnderAgentsRoot(directory)) return;
+  const home = path.resolve(directory);
+  const trash = trashPathFor(name);
+  if (!fs.existsSync(trash)) return; // nothing trashed (imported / already restored)
+  if (fs.existsSync(home)) return;   // home occupied — don't clobber; leave trash for manual recovery
+  fs.mkdirSync(path.dirname(home), { recursive: true });
+  fs.renameSync(trash, home);
+}
+
+// Permanent delete: rm -rf the trash dir. DB-only for imported agents (we never
+// owned their source). Backstop: if a prior mv-to-trash failed and the dir is
+// still at home, remove that too — purge means "gone for good" regardless.
+function purgeAgent(name: string, directory: string | null) {
+  try { spawnSync('tmux', ['kill-session', '-t', `claude-${name}`], { timeout: 5_000 }); } catch { /* no pane */ }
+  const trash = trashPathFor(name);
+  if (fs.existsSync(trash)) fs.rmSync(trash, { recursive: true, force: true });
+  if (isUnderAgentsRoot(directory)) {
+    const home = path.resolve(directory);
+    if (fs.existsSync(path.join(home, 'CLAUDE.md'))) {
+      if (fs.lstatSync(home).isSymbolicLink()) fs.unlinkSync(home);
+      else fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
 }
 
 // Map an opaque editor target → a relative path inside the agent dir. Anything
@@ -163,6 +208,10 @@ export async function agentRequestTick() {
           refreshAfter.push({ name: r.agentName, directory: dir });
         } else if (r.kind === 'delete') {
           deleteAgent(r.agentName, r.agentDirectory);
+        } else if (r.kind === 'restore') {
+          restoreAgent(r.agentName, r.agentDirectory);
+        } else if (r.kind === 'purge') {
+          purgeAgent(r.agentName, r.agentDirectory);
         } else if (r.kind === 'edit') {
           if (!r.target || r.content == null) throw new Error('edit request missing target/content');
           editAgentFile(r.agentName, r.agentDirectory, r.target, r.content);

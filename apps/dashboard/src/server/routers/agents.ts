@@ -15,7 +15,8 @@ import { prisma } from '../db';
 export const agentsRouter = router({
   list: machineProcedure.query(async ({ ctx }) => {
     const rows = await prisma.agent.findMany({
-      where: { machineId: ctx.machine.id },
+      // Trashed agents (soft-deleted) are hidden here — they live in listTrashed.
+      where: { machineId: ctx.machine.id, trashedAt: null },
       orderBy: { name: 'asc' },
       select: {
         id: true,
@@ -44,6 +45,15 @@ export const agentsRouter = router({
       sessionCount: sessionCount.get(r.name) ?? 0,
       activeSessionCount: activeCount.get(r.name) ?? 0,
     }));
+  }),
+
+  // The recycle bin: agents soft-deleted (trashedAt set) but not yet purged.
+  listTrashed: machineProcedure.query(async ({ ctx }) => {
+    return prisma.agent.findMany({
+      where: { machineId: ctx.machine.id, trashedAt: { not: null } },
+      orderBy: { trashedAt: 'desc' },
+      select: { id: true, name: true, directory: true, trashedAt: true, skillNames: true },
+    });
   }),
 
   byName: machineProcedure
@@ -138,20 +148,66 @@ export const agentsRouter = router({
       });
     }),
 
+  // Soft-delete → recycle bin. Sets trashedAt right away (DB is leader, so the
+  // agent drops out of the list immediately) and queues a 'delete' AgentRequest;
+  // the gateway moves the dir into AGENTS_ROOT/.hermit-trash/. Imported agents'
+  // source dirs are left untouched (DB-only). The row survives until purge.
   requestDelete: machineProcedure
     .input(z.object({ name: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const agent = await prisma.agent.findUnique({
         where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
-        select: { id: true },
+        select: { id: true, trashedAt: true },
       });
       if (!agent) throw new Error('agent not found');
-      const pending = await prisma.agentRequest.findFirst({
-        where: { machineId: ctx.machine.id, agentName: input.name, status: 'pending' },
+      if (agent.trashedAt) return agent; // already in the recycle bin
+      await prisma.agent.update({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        data: { trashedAt: new Date() },
       });
-      if (pending) return pending; // already queued
       return prisma.agentRequest.create({
         data: { machineId: ctx.machine.id, kind: 'delete', agentName: input.name },
+      });
+    }),
+
+  // Restore from the recycle bin: clear trashedAt and queue a 'restore' so the
+  // gateway moves the dir back out of .hermit-trash/ to its home path.
+  requestRestore: machineProcedure
+    .input(z.object({ name: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const agent = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { id: true, trashedAt: true },
+      });
+      if (!agent) throw new Error('agent not found');
+      if (!agent.trashedAt) return agent; // not trashed — nothing to restore
+      await prisma.agent.update({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        data: { trashedAt: null },
+      });
+      return prisma.agentRequest.create({
+        data: { machineId: ctx.machine.id, kind: 'restore', agentName: input.name },
+      });
+    }),
+
+  // Permanently delete a trashed agent: queue a 'purge' so the gateway rm -rf's
+  // the trash dir; ackRequest then drops the Agent row + its chat sessions. Only
+  // valid once the agent is already in the recycle bin.
+  requestPurge: machineProcedure
+    .input(z.object({ name: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const agent = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { id: true, trashedAt: true },
+      });
+      if (!agent) throw new Error('agent not found');
+      if (!agent.trashedAt) throw new Error('agent must be in the recycle bin before it can be permanently deleted');
+      const pending = await prisma.agentRequest.findFirst({
+        where: { machineId: ctx.machine.id, agentName: input.name, kind: 'purge', status: 'pending' },
+      });
+      if (pending) return pending;
+      return prisma.agentRequest.create({
+        data: { machineId: ctx.machine.id, kind: 'purge', agentName: input.name },
       });
     }),
 
@@ -217,7 +273,9 @@ export const agentsRouter = router({
   // those until the matching AgentRequest(create) is processed.
   listForGateway: machineProcedure.query(async ({ ctx }) => {
     return prisma.agent.findMany({
-      where: { machineId: ctx.machine.id },
+      // Trashed agents are skipped — their dirs are in .hermit-trash, so there's
+      // nothing for the gateway to read; their content stays frozen until restore.
+      where: { machineId: ctx.machine.id, trashedAt: null },
       select: { name: true, directory: true },
       orderBy: { name: 'asc' },
     });
@@ -228,9 +286,10 @@ export const agentsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const r = await prisma.agentRequest.findUnique({ where: { id: input.id } });
       if (!r || r.machineId !== ctx.machine.id) throw new Error('not found');
-      // On a successful delete, drop the Agent row + its chat sessions so the
-      // dashboard reflects it immediately.
-      if (r.kind === 'delete' && input.status === 'done') {
+      // A soft-delete ('delete') keeps the row — it's now trashed, and the gateway
+      // just moved its dir into .hermit-trash. Only a 'purge' (permanent delete)
+      // drops the Agent row + its chat sessions.
+      if (r.kind === 'purge' && input.status === 'done') {
         await prisma.chatSession.deleteMany({ where: { machineId: ctx.machine.id, agentName: r.agentName } });
         await prisma.agent.deleteMany({ where: { machineId: ctx.machine.id, name: r.agentName } });
       }
