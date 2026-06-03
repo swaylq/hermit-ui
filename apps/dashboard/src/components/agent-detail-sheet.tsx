@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { Pencil, Check, X, RotateCw } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
@@ -293,170 +294,230 @@ function CronsSection({ agentName }: { agentName: string }) {
   );
 }
 
-// ── Skills ──────────────────────────────────────────────────────────────────
+// ── Skills (list → modal) ────────────────────────────────────────────────────
 
 function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent']; agentName: string }) {
   // Per-skill SKILL.md contents come down on the agent sync (Agent.skills Json).
   // Falls back to a chip-only list if the gateway hasn't synced contents yet.
   const skills = ((agent as unknown as { skills?: Array<{ name: string; content: string }> }).skills) ?? [];
   const hasContent = skills.length > 0;
+  const items: FileItem[] = agent.skillNames.map((name) => ({
+    key: `skill:${name}`,
+    label: name,
+    body: skills.find((s) => s.name === name)?.content ?? null,
+    target: `skill:${name}`,
+    monoLabel: true,
+  }));
   return (
-    <section className="space-y-4">
-      <div className="space-y-1.5">
-        <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
-          skills · {agent.skillNames.length}
-        </h3>
-        {agent.skillNames.length === 0 ? (
-          <p className="text-xs text-muted-foreground">no skills installed under <code className="font-mono">.claude/skills/</code>.</p>
-        ) : hasContent ? (
-          <div className="space-y-1.5">
-            {agent.skillNames.map((name) => {
-              const body = skills.find((s) => s.name === name)?.content ?? '';
-              return (
-                <CollapsibleBlock
-                  key={name}
-                  label={name}
-                  body={body}
-                  agentName={agentName}
-                  target={`skill:${name}`}
-                  monoLabel
-                />
-              );
-            })}
-          </div>
-        ) : (
-          // Pre-sync fallback: chip-only list (no contents yet to view/edit).
-          <div className="flex flex-wrap gap-1.5">
-            {agent.skillNames.map((s) => (
-              <Badge key={s} variant="outline" className="font-mono text-[11px]">{s}</Badge>
-            ))}
-          </div>
-        )}
-      </div>
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
+        skills · {agent.skillNames.length}
+      </h3>
+      {agent.skillNames.length === 0 ? (
+        <p className="text-xs text-muted-foreground">no skills installed under <code className="font-mono">.claude/skills/</code>.</p>
+      ) : hasContent ? (
+        <FileList items={items} agentName={agentName} />
+      ) : (
+        // Pre-sync fallback: chip-only list (no contents yet to view/edit).
+        <div className="flex flex-wrap gap-1.5">
+          {agent.skillNames.map((s) => (
+            <Badge key={s} variant="outline" className="font-mono text-[11px]">{s}</Badge>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
 
-// ── Identity / User / Workspace / Tools / Evolution (collapsible) ───────────
+// ── Identity / User / Workspace / Tools / Evolution / Memory (list → modal) ──
 
 function MarkdownSections({ agent, agentName }: { agent: AgentByNameOutput['agent']; agentName: string }) {
-  const blocks: Array<{ label: string; text: string | null; target: string; defaultOpen?: boolean }> = [
-    { label: 'Identity', text: agent.identityText, target: 'identity', defaultOpen: true },
-    { label: 'User', text: agent.userText, target: 'user' },
-    { label: 'Workspace rules', text: agent.agentsText, target: 'agents' },
-    { label: 'Tools', text: agent.toolsText, target: 'tools' },
-    { label: 'Evolution', text: agent.evolutionLessons, target: 'evolution' },
+  const items: FileItem[] = [
+    { key: 'identity', label: 'Identity', body: agent.identityText, target: 'identity' },
+    { key: 'user', label: 'User', body: agent.userText, target: 'user' },
+    { key: 'agents', label: 'Workspace rules', body: agent.agentsText, target: 'agents' },
+    { key: 'tools', label: 'Tools', body: agent.toolsText, target: 'tools' },
+    { key: 'evolution', label: 'Evolution', body: agent.evolutionLessons, target: 'evolution' },
+    // Memory is an auto-generated listing, not one file — read-only (no target).
+    ...(agent.memorySummary ? [{ key: 'memory', label: 'Memory', body: agent.memorySummary } as FileItem] : []),
   ];
   return (
-    <section className="space-y-2">
-      {blocks.map((b) => (
-        <CollapsibleBlock
-          key={b.label}
-          label={b.label}
-          body={b.text}
-          defaultOpen={b.defaultOpen}
-          agentName={agentName}
-          target={b.target}
-        />
-      ))}
-      {/* Memory is an auto-generated listing, not one file — read-only. */}
-      {agent.memorySummary && <CollapsibleBlock label="Memory" body={agent.memorySummary} />}
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
+        files · {items.filter((i) => i.body).length}
+      </h3>
+      <FileList items={items} agentName={agentName} />
     </section>
   );
 }
 
-function CollapsibleBlock({
-  label,
-  body,
-  defaultOpen = false,
-  agentName,
-  target,
-  monoLabel = false,
-}: {
+// ── List row + detail modal ──────────────────────────────────────────────────
+// Each markdown file / skill is a flat row; clicking opens a portal modal to read
+// the rendered markdown and (when a write target is given) edit it. The edit
+// pipeline is unchanged — Save → agents.requestEdit → gateway writes the file and
+// re-syncs. Memory has no target ⇒ read-only. Bare createPortal (NOT base-ui
+// Dialog) per the overlay-compositing gotcha; the detail only ever renders inside
+// the inline /agents page (no Sheet) so there's no focus trap to fight.
+
+type FileItem = {
+  key: string;
   label: string;
   body: string | null;
-  defaultOpen?: boolean;
-  // When both agentName and target are given, the block becomes editable
-  // (Pencil → textarea → Save queues an AgentRequest the gateway writes).
-  agentName?: string;
+  // A write target (identity | user | agents | tools | evolution | skill:<name>)
+  // makes the modal editable. Omit for read-only (Memory).
   target?: string;
   monoLabel?: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
-  const utils = trpc.useUtils();
-  const editable = !!agentName && !!target;
+};
 
-  const save = trpc.agents.requestEdit.useMutation({
-    onSuccess: () => {
-      if (agentName) utils.agents.byName.invalidate({ name: agentName });
-      setEditing(false);
-    },
-  });
-  const pending = trpc.agents.pendingRequests.useQuery(undefined, {
-    enabled: editable,
-    refetchInterval: editable ? 2_000 : false,
-  });
-  const isSaving = editable && (pending.data ?? []).some(
-    (p) => p.kind === 'edit' && p.agentName === agentName && p.target === target,
+function fmtSize(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+}
+
+function FileList({ items, agentName }: { items: FileItem[]; agentName: string }) {
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  // Derive the open item from the LIVE `items` each render so an edit + re-sync
+  // refreshes the modal body, instead of pinning the snapshot from click time.
+  const openItem = items.find((i) => i.key === openKey && i.body != null) ?? null;
+  return (
+    <>
+      <div className="space-y-1.5">
+        {items.map((it) => (
+          <FileRow key={it.key} item={it} onClick={() => setOpenKey(it.key)} />
+        ))}
+      </div>
+      <DetailModal item={openItem} agentName={agentName} onClose={() => setOpenKey(null)} />
+    </>
   );
+}
 
-  if (!body) {
+function FileRow({ item, onClick }: { item: FileItem; onClick: () => void }) {
+  if (!item.body) {
     return (
-      <div className="text-xs text-muted-foreground/70 px-3 py-2 rounded border border-dashed">
-        <span className={cn('uppercase tracking-wide', monoLabel && 'normal-case tracking-normal font-mono text-foreground/80')}>{label}</span>
-        <span className="text-muted-foreground/50"> — not present</span>
+      <div className="flex items-center gap-2 px-3 py-2 rounded border border-dashed text-xs text-muted-foreground/60">
+        <span className={cn('truncate', item.monoLabel ? 'font-mono' : 'uppercase tracking-wide')}>{item.label}</span>
+        <span className="text-muted-foreground/40">— not present</span>
       </div>
     );
   }
   return (
-    <div className="rounded border bg-card">
-      <div className="w-full flex items-center justify-between px-3 py-2 gap-2">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="flex-1 min-w-0 text-left flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-        >
-          <span className={cn('truncate', monoLabel && 'normal-case tracking-normal font-mono text-foreground/85 text-[12px]')}>{label}</span>
-          {isSaving && <span className="text-[10px] text-muted-foreground animate-pulse normal-case tracking-normal">saving…</span>}
-        </button>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {open && editable && !editing && (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded border bg-card hover:bg-accent/40 hover:border-foreground/30 transition-colors cursor-pointer text-left"
+    >
+      <span className={cn('truncate text-sm text-foreground/90', item.monoLabel && 'font-mono text-[13px]')}>{item.label}</span>
+      <span className="shrink-0 text-[11px] font-mono text-muted-foreground/60 tabular-nums">{fmtSize(item.body.length)}</span>
+    </button>
+  );
+}
+
+function DetailModal({
+  item,
+  agentName,
+  onClose,
+}: {
+  item: FileItem | null;
+  agentName: string;
+  onClose: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const utils = trpc.useUtils();
+  const editable = !!item?.target;
+
+  const save = trpc.agents.requestEdit.useMutation({
+    onSuccess: () => {
+      utils.agents.byName.invalidate({ name: agentName });
+      setEditing(false);
+    },
+  });
+  const pending = trpc.agents.pendingRequests.useQuery(undefined, {
+    enabled: !!item && editable,
+    refetchInterval: !!item && editable ? 2_000 : false,
+  });
+  const isSaving =
+    editable && (pending.data ?? []).some((p) => p.kind === 'edit' && p.agentName === agentName && p.target === item?.target);
+
+  // Leave edit mode whenever the open file changes (or the modal closes).
+  useEffect(() => {
+    setEditing(false);
+    setDraft('');
+  }, [item?.key]);
+
+  // Esc + scroll-lock while open. Esc backs out one level: cancel an in-progress
+  // edit first, otherwise close the modal.
+  useEffect(() => {
+    if (!item) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (editing) { setEditing(false); setDraft(''); } else onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [item, editing, onClose]);
+
+  if (!item || item.body == null) return null;
+  const body = item.body;
+
+  // Backdrop / Esc: cancel an in-progress edit first, else close — don't silently
+  // drop a draft on an outside click.
+  const dismiss = () => {
+    if (editing) { setEditing(false); setDraft(''); } else onClose();
+  };
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60"
+      onClick={dismiss}
+    >
+      <div
+        className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-lg border border-border bg-background shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5 shrink-0">
+          <span className={cn('text-sm font-medium truncate', item.monoLabel && 'font-mono')}>{item.label}</span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {isSaving && <span className="text-[10px] text-muted-foreground animate-pulse">saving…</span>}
+            {editable && !editing && (
+              <button
+                type="button"
+                onClick={() => { setDraft(body); setEditing(true); }}
+                title={`edit ${item.label}`}
+                aria-label={`edit ${item.label}`}
+                className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => { setDraft(body); setEditing(true); }}
-              title={`edit ${label}`}
-              aria-label={`edit ${label}`}
-              className="inline-flex items-center justify-center h-6 w-6 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+              onClick={onClose}
+              aria-label="close"
+              className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
             >
-              <Pencil className="h-3.5 w-3.5" />
+              <X className="h-4 w-4" />
             </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            className="text-muted-foreground/60 font-mono text-xs hover:text-foreground transition-colors cursor-pointer"
-            aria-label={open ? 'collapse' : 'expand'}
-          >
-            {open ? '−' : '+'} {body.length.toLocaleString()}c
-          </button>
+          </div>
         </div>
-      </div>
-      {open && (
-        <div className="border-t px-3 py-2 text-sm">
+        <div className="flex-1 min-h-0 overflow-auto px-4 py-3 text-sm">
           {editing ? (
             <div className="space-y-2">
               <textarea
+                autoFocus
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                rows={Math.min(28, Math.max(8, draft.split('\n').length + 1))}
+                rows={Math.min(32, Math.max(12, draft.split('\n').length + 1))}
                 className="w-full font-mono text-[12px] leading-relaxed bg-background border border-border rounded-md px-2 py-1.5 outline-none focus:border-foreground/30 resize-y"
               />
               <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
-                  onClick={() => agentName && target && save.mutate({ name: agentName, target, content: draft })}
+                  onClick={() => item.target && save.mutate({ name: agentName, target: item.target, content: draft })}
                   disabled={save.isPending || draft === body}
                   className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs font-medium bg-foreground text-background hover:bg-foreground/90 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -470,15 +531,18 @@ function CollapsibleBlock({
                   <X className="h-3.5 w-3.5" /> cancel
                 </button>
                 {save.error && <span className="text-[11px] text-rose-500">{save.error.message}</span>}
-                {!save.error && save.isSuccess && <span className="text-[11px] text-muted-foreground">queued — gateway writes the file then re-syncs.</span>}
+                {!save.error && save.isSuccess && (
+                  <span className="text-[11px] text-muted-foreground">queued — gateway writes the file then re-syncs.</span>
+                )}
               </div>
             </div>
           ) : (
             <Markdown>{body}</Markdown>
           )}
         </div>
-      )}
-    </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
