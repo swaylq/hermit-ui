@@ -25,7 +25,7 @@ import {
 import { AGENTS_ROOT } from './config';
 import { api } from './api';
 
-const RUN_TIMEOUT_MS = 30 * 60_000; // hard cap per run
+const RUN_TIMEOUT_MS = 60 * 60_000; // hard cap per run (1h)
 const IDLE_DONE_MS = 8_000;         // assistant quiet this long ⇒ turn complete
 const OUTPUT_TAIL = 4096;
 

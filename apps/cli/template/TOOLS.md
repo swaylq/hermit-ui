@@ -18,7 +18,7 @@ _Technical configs, API keys (by path, not value), tool settings, accounts._
 
 ### Cron defaults
 
-- Long-running tasks should call `scripts/with-timeout.sh 1200` (20 min ceiling).
+- Long-running tasks should call `scripts/with-timeout.sh 3600` (1 h ceiling).
 - Cron tasks should report back to {{USER_NAME}} when done — push to the dashboard via `scripts/dashboard-push.sh "<message>" [type]`.
 
 ## Browser _(optional)_

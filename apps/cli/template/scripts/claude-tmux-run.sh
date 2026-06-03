@@ -6,7 +6,7 @@
 # on overage).
 #
 # Usage:
-#   ./scripts/claude-tmux-run.sh <prompt-file> [timeout-sec=1200] [grace-boot=8]
+#   ./scripts/claude-tmux-run.sh <prompt-file> [timeout-sec=3600] [grace-boot=8]
 #
 # Exit codes:
 #   0   — turn completed; pane scroll-back printed to stdout
@@ -37,13 +37,13 @@
 set -uo pipefail
 
 PROMPT_FILE="${1:-}"
-TIMEOUT_S="${2:-1200}"
+TIMEOUT_S="${2:-3600}"
 GRACE_BOOT="${3:-8}"
 POLL_INTERVAL=3
 DONE_GRACE=4
 
 if [ -z "$PROMPT_FILE" ] || [ ! -f "$PROMPT_FILE" ]; then
-  echo "Usage: $0 <prompt-file> [timeout-sec=1200] [grace-boot=8]" >&2
+  echo "Usage: $0 <prompt-file> [timeout-sec=3600] [grace-boot=8]" >&2
   exit 1
 fi
 
