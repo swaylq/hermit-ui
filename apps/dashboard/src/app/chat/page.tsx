@@ -1661,14 +1661,21 @@ function LoopDetail({ k, v }: { k: string; v: string }) {
   );
 }
 
-// Parse a loop round-marker message ("↻ loop `<id8>` · run N — <summary>\n\n…")
-// into its run number, the one-line summary, and the full markdown report.
-function parseLoopRun(row: { id: string; content: unknown; createdAt: string | Date }) {
+// Parse a loop round-marker message into its run number, one-line summary, and
+// full markdown report. Reports often carry a preamble before the marker line
+// ("Done — … Final report:\n\n---\n\n↻ loop `<id>` · run N — …"), so scan EVERY
+// line for the marker (anchored at line start so an inline mention isn't a false
+// round). Returns null when there's no marker line.
+type LoopRun = { id: string; run: number; summary: string; full: string; createdAt: string | Date };
+function parseLoopRun(row: { id: string; content: unknown; createdAt: string | Date }): LoopRun | null {
   const full = msgText(row.content);
-  const firstLine = full.split('\n', 1)[0] || full;
-  const m = /·\s*run\s*(\d+)\s*[—–-]\s*(.*)$/.exec(firstLine);
-  const summary = (m ? m[2] : firstLine).replace(/[*`]/g, '').trim();
-  return { id: row.id, run: m ? Number(m[1]) : null, summary, full, createdAt: row.createdAt };
+  const line = full.split('\n').find((l) => /^\s*↻\s*loop\b.*\brun\s*\d+/i.test(l));
+  if (!line) return null;
+  const runM = /\brun\s*(\d+)/i.exec(line);
+  if (!runM) return null;
+  const dashM = /[—–]\s*(.+)$/.exec(line); // summary = text after the em/en dash
+  const summary = (dashM ? dashM[1] : line).replace(/[*`]/g, '').trim();
+  return { id: row.id, run: Number(runM[1]), summary, full, createdAt: row.createdAt };
 }
 
 // The "每轮结果" list inside an expanded LoopCard. Fetches the loop's round-marker
@@ -1689,7 +1696,12 @@ function LoopRuns({
     { sessionId, loopId },
     { enabled: open, refetchInterval: open ? 60_000 : false },
   );
-  const runs = useMemo(() => (q.data ?? []).map(parseLoopRun), [q.data]);
+  const runs = useMemo(() => {
+    const parsed = (q.data ?? []).map(parseLoopRun).filter((r): r is LoopRun => r !== null);
+    // Dedupe by run number — belt-and-suspenders for any echo that slips the SQL.
+    const seen = new Set<number>();
+    return parsed.filter((r) => (seen.has(r.run) ? false : (seen.add(r.run), true)));
+  }, [q.data]);
 
   if (runs.length === 0) {
     if (!fallback) return null;
@@ -1708,7 +1720,7 @@ function LoopRuns({
         <span className="text-muted-foreground/70 text-[11px]">每轮结果 ({runs.length})</span>
         <span className="text-muted-foreground/40 text-[10px]">最新在上 · 点开看完整</span>
       </div>
-      <div className="max-h-80 overflow-auto -mx-1 px-1 space-y-1">
+      <div className="max-h-[40vh] overflow-auto -mx-1 px-1 space-y-1">
         {runs.map((r) => (
           <LoopRunRow key={r.id} run={r} />
         ))}
@@ -1718,11 +1730,7 @@ function LoopRuns({
 }
 
 // One round: a summary line (run N · time · 摘要); click expands the full report.
-function LoopRunRow({
-  run,
-}: {
-  run: { id: string; run: number | null; summary: string; full: string; createdAt: string | Date };
-}) {
+function LoopRunRow({ run }: { run: LoopRun }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded border border-border/60 bg-background/40">
@@ -1731,7 +1739,7 @@ function LoopRunRow({
         onClick={() => setOpen((o) => !o)}
         className="w-full flex items-center gap-2 px-2 py-1 text-left cursor-pointer hover:bg-accent/30 transition-colors"
       >
-        <span className="font-mono text-[11px] text-muted-foreground shrink-0">run {run.run ?? '?'}</span>
+        <span className="font-mono text-[11px] text-muted-foreground shrink-0">run {run.run}</span>
         <span className="text-muted-foreground/45 text-[10px] tabular-nums shrink-0 hidden sm:inline">{relTime(run.createdAt)}</span>
         <span className="truncate text-foreground/85 text-[12px] min-w-0 flex-1">{run.summary || '(无摘要)'}</span>
         <ChevronDown className={cn('h-3 w-3 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} aria-hidden="true" />

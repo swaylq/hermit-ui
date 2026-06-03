@@ -222,7 +222,11 @@ export const chatRouter = router({
         select: { machineId: true },
       });
       if (!s || s.machineId !== ctx.machine.id) return [];
-      const marker = `%↻ loop \`${input.loopId.slice(0, 8)}\`%`;
+      // Require the marker INSIDE a "text" block — excludes the role:'assistant'
+      // Bash tool_use messages that merely echo the marker into a file (which
+      // would otherwise double the count). jsonb sorts keys, so a text block is
+      // `{"text": "…", "type": "text"}` — match `"text": "` before the marker.
+      const marker = `%"text": "%↻ loop \`${input.loopId.slice(0, 8)}\`%`;
       const rows = await prisma.$queryRaw<Array<{ id: string; content: unknown; createdAt: Date }>>`
         SELECT id, content, "createdAt"
         FROM "ChatMessage"
