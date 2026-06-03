@@ -11,6 +11,7 @@
 // gateway writes it back on each fire so a gateway restart resumes cleanly.
 
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import {
   ensureSession,
@@ -18,6 +19,7 @@ import {
   awaitTranscript,
   watchTranscript,
   encodedProjectDir,
+  tmuxPaneName,
   kill as killSession,
 } from '@hermit-ui/tmux-driver';
 import { AGENTS_ROOT } from './config';
@@ -54,6 +56,32 @@ function extractText(content: unknown): string {
     .filter(Boolean)
     .join('\n')
     .trim();
+}
+
+const WORK_MARKER_RE = /\besc(?:ape)?\s+to\s+(?:interrupt|cancel|stop)\b/i;
+
+// True while claude's pane TUI shows its "esc to interrupt" working marker — i.e.
+// a turn is in flight (thinking, running/awaiting a tool, composing a reply). Used
+// to keep the cron pane alive through gaps that write NO transcript line: the
+// agent composing its final report, or waiting on a harness-auto-backgrounded
+// command. capture-pane runs async so it never blocks the event loop.
+function paneWorking(sessionId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn('tmux', ['capture-pane', '-t', tmuxPaneName(sessionId), '-p'], { timeout: 2_000 });
+    } catch {
+      resolve(false);
+      return;
+    }
+    let out = '';
+    child.stdout?.on('data', (d) => { out += d.toString(); });
+    child.on('error', () => resolve(false));
+    child.on('close', () => {
+      const lines = out.replace(/\x1b\[[0-9;]*m/g, '').split('\n').filter((l) => l.trim());
+      resolve(WORK_MARKER_RE.test(lines.slice(-6).join('\n')));
+    });
+  });
 }
 
 // When is this cron next eligible to fire? nextFire is authoritative once set;
@@ -159,7 +187,7 @@ async function fire(c: Cron): Promise<void> {
     // "I'll report when the background run finishes", then got killed).
     sendKeys(
       runSessionId,
-      `${c.prompt}\n\n(Scheduled cron run. This session is torn down right after you reply — so run any commands in the FOREGROUND and wait for them to finish; do NOT background them / do NOT use run_in_background (a backgrounded result can't be reported back). For a slow command, raise the Bash tool timeout (up to its 600000ms / 10-min max). Reply with a short result summary once the work is ACTUALLY done.)`,
+      `${c.prompt}\n\n(Scheduled cron run. This session is torn down right after you reply, so do NOT end your turn while a command is still running in the background — its result could never be reported. Prefer running commands in the foreground; if the harness auto-backgrounds a long one, BLOCK within this same turn until it finishes (poll its output / use the Monitor tool), then read the output and reply with a short result summary. Reply only once the work is ACTUALLY done.)`,
     );
     lastEventAt = Date.now();
 
@@ -170,11 +198,14 @@ async function fire(c: Cron): Promise<void> {
     while (Date.now() < deadline) {
       await sleep(1_000);
       if (lastText) sawAssistant = true;
-      // Only "done" once every tool call has returned AND the assistant has been
-      // quiet — so a multi-minute foreground Bash keeps the pane alive instead of
-      // being cut off mid-run (capped by RUN_TIMEOUT_MS).
-      const toolInFlight = toolsOut > toolsBack;
-      if (sawAssistant && !toolInFlight && Date.now() - lastEventAt > IDLE_DONE_MS) break;
+      // Keep the run alive while the agent is still busy: a tool in flight, OR the
+      // pane TUI still shows claude's "esc to interrupt" working marker. The pane
+      // check survives gaps that write no transcript line — the agent composing
+      // its final report, or waiting on a harness-auto-backgrounded command —
+      // which the transcript-idle heuristic alone mistook for "done" and cut the
+      // report off. Finish only after the pane has truly been idle for IDLE_DONE_MS.
+      if (toolsOut > toolsBack || (await paneWorking(runSessionId))) lastEventAt = Date.now();
+      if (sawAssistant && Date.now() - lastEventAt > IDLE_DONE_MS) break;
     }
     output = lastText;
     status = lastText ? 'ok' : 'fail';
