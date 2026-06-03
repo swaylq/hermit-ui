@@ -9,7 +9,7 @@ import {
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
-import { AsstLogomark } from '@/components/asst-logomark';
+import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { sessionStatusView } from '@/lib/session-status';
 import { useUnread } from '@/lib/session-read';
@@ -219,17 +219,17 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
           collapsed ? 'lg:w-[60px]' : 'lg:w-[300px]',
         )}
       >
-        {/* Header: logo + collapse toggle */}
-        <div className={cn('flex items-center h-12 px-2 shrink-0', collapsed ? 'lg:justify-center' : 'justify-between')}>
-          <Link href="/chat" aria-label="home" className={cn('flex items-center gap-2 rounded-md px-1.5 py-1 cursor-pointer min-w-0', collapsed && 'lg:hidden')}>
-            <AsstLogomark />
-          </Link>
+        {/* Header: workspace switcher + collapse toggle */}
+        <div className={cn('flex items-center gap-1 h-12 px-2 shrink-0', collapsed && 'lg:justify-center')}>
+          <div className={cn('flex-1 min-w-0', collapsed && 'lg:hidden')}>
+            <WorkspaceSwitcher collapsed={collapsed} />
+          </div>
           <button
             type="button"
             onClick={() => setCollapsed(!collapsed)}
             aria-label={collapsed ? 'expand sidebar' : 'collapse sidebar'}
             title={collapsed ? 'expand' : 'collapse'}
-            className="hidden lg:inline-flex p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer"
+            className="hidden lg:inline-flex p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0"
           >
             <PanelLeft className="h-4 w-4" />
           </button>

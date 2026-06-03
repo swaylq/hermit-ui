@@ -5,18 +5,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { httpBatchLink, loggerLink } from '@trpc/client';
 import superjson from 'superjson';
 import { trpc } from '@/lib/trpc';
+import { getActiveKey } from '@/lib/keyring';
 
-const KEY_STORAGE = 'asst-dashboard-key';
-
-export function getStoredKey(): string {
-  if (typeof window === 'undefined') return '';
-  return localStorage.getItem(KEY_STORAGE) ?? '';
-}
-export function setStoredKey(k: string) {
-  if (typeof window === 'undefined') return;
-  if (k) localStorage.setItem(KEY_STORAGE, k);
-  else localStorage.removeItem(KEY_STORAGE);
-}
+// Key storage moved to lib/keyring (multi-machine browser keyring). Re-export
+// the active-key getter so any importer of `@/app/providers` keeps working.
+export { getActiveKey } from '@/lib/keyring';
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -36,7 +29,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
           url: '/api/trpc',
           transformer: superjson,
           headers() {
-            return { 'x-asst-key': getStoredKey() };
+            return { 'x-asst-key': getActiveKey() };
           },
         }),
       ],

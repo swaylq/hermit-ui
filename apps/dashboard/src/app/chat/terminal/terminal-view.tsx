@@ -24,7 +24,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { getStoredKey } from '@/app/providers';
+import { getActiveKey } from '@/app/providers';
 
 type Status =
   | { kind: 'connecting' }
@@ -170,7 +170,7 @@ export function TerminalView({ sessionId }: { sessionId: string }) {
     // ── WebSocket bring-up (re-callable for reconnect) ───────────────────────
     const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const url = `${wsScheme}://${window.location.host}/api/term/${encodeURIComponent(sessionId)}`;
-    const key = getStoredKey();
+    const key = getActiveKey();
 
     function connect() {
       if (unmountedRef.current) return;

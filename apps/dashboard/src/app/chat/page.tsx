@@ -17,7 +17,7 @@ import { ImageLightbox } from '@/components/ui/image-lightbox';
 import { CtxBar } from '@/components/ctx-bar';
 import { sessionStatusView } from '@/lib/session-status';
 import { markSessionRead } from '@/lib/session-read';
-import { getStoredKey } from '@/app/providers';
+import { getActiveKey } from '@/app/providers';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 
 type Block = { type: string; text?: string; name?: string; input?: any; tool_use_id?: string; content?: any; source?: any; width?: number; height?: number };
@@ -562,7 +562,7 @@ function SessionPane({ sessionId }: { sessionId: string }) {
       (async () => {
         try {
           const res = await fetch(`/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}`, {
-            headers: { 'x-asst-key': getStoredKey() },
+            headers: { 'x-asst-key': getActiveKey() },
             signal: myCtrl.signal,
           });
           if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
@@ -1695,7 +1695,7 @@ function ComposeBar({
         const fd = new FormData();
         fd.append('sessionId', sessionId);
         fd.append('file', file);
-        const r = await fetch('/api/upload', { method: 'POST', headers: { 'x-asst-key': getStoredKey() }, body: fd });
+        const r = await fetch('/api/upload', { method: 'POST', headers: { 'x-asst-key': getActiveKey() }, body: fd });
         if (!r.ok) throw new Error(`upload failed (${r.status}): ${await r.text().catch(() => '')}`);
         const data = await r.json() as { url: string; mimeType: string; width: number | null; height: number | null };
         const clientDims = await clientDimsP;
