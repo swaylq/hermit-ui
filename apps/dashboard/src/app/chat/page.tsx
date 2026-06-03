@@ -11,6 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { relTime } from '@/lib/format';
 import { Markdown } from '@/components/markdown';
 import { ImageLightbox } from '@/components/ui/image-lightbox';
@@ -622,6 +623,7 @@ function SessionPane({ sessionId }: { sessionId: string }) {
     onSuccess: () => {
       utils.chat.listMessages.invalidate({ sessionId });
       utils.chat.listSessions.invalidate();
+      utils.chat.queue.invalidate({ sessionId });
     },
   });
   const cancelTurn = trpc.chat.cancelTurn.useMutation({
@@ -640,6 +642,18 @@ function SessionPane({ sessionId }: { sessionId: string }) {
   });
   const restartSession = trpc.chat.requestSessionRestart.useMutation({
     onSuccess: () => sessionMeta.refetch(),
+  });
+  const dequeue = trpc.chat.dequeue.useMutation({
+    onSuccess: () => {
+      utils.chat.queue.invalidate({ sessionId });
+      utils.chat.listMessages.invalidate({ sessionId }); // the cancelled bubble leaves the timeline too
+    },
+  });
+  const clearQueue = trpc.chat.clearQueue.useMutation({
+    onSuccess: () => {
+      utils.chat.queue.invalidate({ sessionId });
+      utils.chat.listMessages.invalidate({ sessionId });
+    },
   });
 
   const [draft, setDraft] = useState(() => loadDraft(sessionId));
@@ -912,6 +926,15 @@ function SessionPane({ sessionId }: { sessionId: string }) {
   // ESC while a turn is in flight = click Stop. Lives at the document level
   // since the textarea is disabled during streaming and can't receive keys.
   const isInFlight = isWaitingAssistant || !!streamingTailId;
+  // The waiting dispatch queue (undelivered user rows). Refetch only while it
+  // matters: the gateway drains as turns end (so poll while in-flight) and the
+  // user can cancel (so poll while non-empty); idle + empty → off. Mutations
+  // invalidate for instant feedback.
+  const queue = trpc.chat.queue.useQuery(
+    { sessionId },
+    { refetchInterval: (q) => (isInFlight || (q.state.data?.length ?? 0) > 0 ? 2_000 : false) },
+  );
+  const queueLen = queue.data?.length ?? 0;
   // Status badge: gateway's pane-derived state, flipped to "working" instantly
   // off our own in-flight signal. unread=false — we're looking at this session,
   // so it's read by definition (never the red "unread" dot in its own header).
@@ -1201,12 +1224,19 @@ function SessionPane({ sessionId }: { sessionId: string }) {
             onStartCron={() => pickPrompt(CRON_TEMPLATE)}
             disabled={!!session?.closedAt}
           />
+          <QueueBar
+            items={queue.data ?? []}
+            onCancel={(id) => dequeue.mutate({ messageId: id })}
+            onClear={() => clearQueue.mutate({ sessionId })}
+            clearing={clearQueue.isPending}
+          />
           <ComposeBar
             sessionId={sessionId}
             disabled={!!session?.closedAt}
             awaitingInput={!!pendingInteraction}
             sending={send.isPending}
             inFlight={isInFlight}
+            queueFull={queueLen >= QUEUE_LIMIT}
             stopping={cancelTurn.isPending}
             onStop={() => cancelTurn.mutate({ sessionId })}
             onSend={(text, images, files) => {
@@ -1607,12 +1637,65 @@ function LoopDetail({ k, v }: { k: string; v: string }) {
   );
 }
 
+// The waiting-dispatch queue strip, shown between the LoopBar and the composer
+// whenever messages are queued behind the in-flight turn. Each item can be
+// pulled (✕ → dequeue) before the gateway sends it; "清空队列" empties the lot.
+// Reuses the module-scope msgText to render a one-line preview.
+function QueueBar({
+  items,
+  onCancel,
+  onClear,
+  clearing,
+}: {
+  items: Array<{ id: string; content: unknown }>;
+  onCancel: (id: string) => void;
+  onClear: () => void;
+  clearing: boolean;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="mx-auto w-full max-w-3xl px-3">
+      <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
+        <div className="mb-1 flex items-center justify-between text-muted-foreground">
+          <span>{items.length} 条排队中 · 等当前任务完成后依次执行</span>
+          <button
+            type="button"
+            onClick={onClear}
+            disabled={clearing}
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground transition-colors disabled:opacity-40 cursor-pointer"
+          >
+            清空队列
+          </button>
+        </div>
+        <ul className="flex flex-col gap-1">
+          {items.map((it, i) => (
+            <li key={it.id} className="flex items-center gap-2 min-w-0">
+              <span className="shrink-0 tabular-nums text-muted-foreground/60">{i + 1}.</span>
+              <span className="min-w-0 flex-1 truncate text-foreground/80">{msgText(it.content) || '（附件）'}</span>
+              <button
+                type="button"
+                onClick={() => onCancel(it.id)}
+                aria-label="cancel queued message"
+                title="移出队列"
+                className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 function ComposeBar({
   sessionId,
   disabled,
   awaitingInput = false,
   sending,
   inFlight,
+  queueFull,
   stopping,
   onStop,
   draft,
@@ -1627,6 +1710,7 @@ function ComposeBar({
   awaitingInput?: boolean;
   sending: boolean;
   inFlight: boolean;
+  queueFull: boolean;
   stopping: boolean;
   onStop: () => void;
   draft: string;
@@ -1761,7 +1845,7 @@ function ComposeBar({
 
   const submit = () => {
     const text = draft.trim();
-    if (sending || disabled || inFlight) return;
+    if (sending || disabled || queueFull) return;
     if (!text && readyAttachments.length === 0) return;
     const images = readyAttachments
       .filter((a) => a.isImage)
@@ -1804,7 +1888,7 @@ function ComposeBar({
 
   // While the assistant is producing output, swap the send button for a stop.
   const showStop = inFlight && !disabled;
-  const canSend = !sending && !disabled && !inFlight && !awaitingInput && (draft.trim().length > 0 || readyAttachments.length > 0);
+  const canSend = !sending && !disabled && !awaitingInput && !queueFull && (draft.trim().length > 0 || readyAttachments.length > 0);
 
   return (
     <form
@@ -1861,7 +1945,7 @@ function ComposeBar({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || showStop || awaitingInput}
+              disabled={disabled || awaitingInput}
               aria-label="attach image or file"
               title="Attach an image or file"
               className="h-9 w-9 inline-flex items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1903,18 +1987,20 @@ function ComposeBar({
                 ? 'session is closed'
                 : awaitingInput
                 ? '↑ respond above to continue'
+                : queueFull
+                ? `queue full (${QUEUE_LIMIT}) · waiting for current turn`
                 : showStop
-                ? 'assistant is working… (esc to stop)'
+                ? 'working… ↵ to queue next'
                 : uploadingCount > 0
                 ? `uploading ${uploadingCount}…`
                 : 'Ask anything'
             }
-            disabled={disabled || showStop || awaitingInput}
+            disabled={disabled || awaitingInput}
             rows={1}
             className="flex-1 bg-transparent text-base sm:text-[15px] resize-none outline-none leading-relaxed min-h-[28px] max-h-[360px] overflow-auto py-1.5 text-foreground placeholder:text-muted-foreground/70 disabled:cursor-not-allowed"
           />
 
-          {showStop ? (
+          {showStop && (
             <button
               type="button"
               onClick={onStop}
@@ -1925,7 +2011,8 @@ function ComposeBar({
             >
               <span className="h-3 w-3 rounded-[3px] bg-current" aria-hidden="true" />
             </button>
-          ) : (
+          )}
+          {(!showStop || canSend) && (
             <button
               type="submit"
               disabled={!canSend}
@@ -1935,8 +2022,8 @@ function ComposeBar({
                   ? 'bg-foreground text-background hover:bg-foreground/90 cursor-pointer shadow-sm'
                   : 'bg-muted text-muted-foreground/40 cursor-not-allowed',
               )}
-              aria-label="send"
-              title={canSend ? 'send (↵)' : 'type a message'}
+              aria-label={inFlight ? 'queue message' : 'send'}
+              title={inFlight ? 'queue (↵)' : canSend ? 'send (↵)' : 'type a message'}
             >
               {sending ? <span className="text-sm">…</span> : <ArrowUp className="h-5 w-5" />}
             </button>
