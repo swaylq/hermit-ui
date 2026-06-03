@@ -32,6 +32,7 @@ import {
   encodedProjectDir,
   tmuxSessionExists,
 } from '@hermit-ui/tmux-driver';
+import { paneIsWorking } from './pane';
 
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
@@ -389,6 +390,16 @@ async function streamSlashOutput({
 }
 
 async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
+  // ── Idle gate (message queue) ──────────────────────────────────────────────
+  // If claude is mid-turn, hold the ENTIRE pending batch: leave every row
+  // deliveredAt=null and bail. The queue drains one message per turn — the next
+  // chatTick (~2s) re-evaluates, and once the pane goes idle we dispatch the
+  // single oldest message below. Only gate a pane that actually EXISTS; a brand-
+  // new session (no pane yet) must fall through to setupSession. (capture-pane on
+  // a missing pane returns false anyway; the explicit exists-check just avoids a
+  // pointless 2s spawn against never-started sessions.)
+  if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id))) return;
+
   // Ensure tmux pane + watcher are up.
   let state = sessionStates.get(session.id);
   // A restart (or any external tmux kill) can leave a STALE state pointing at a
@@ -418,19 +429,18 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
     }
   }
 
-  // Merge multiple queued user messages into a single submission. The
-  // dashboard already has each as its own ChatMessage row, so we only need to
-  // feed claude. Use double-newline as a soft separator — when the user fires
-  // off several messages quickly, they all reach claude as one turn.
-  const textPart = msgs
-    .map((m) => extractText(m.content))
-    .filter(Boolean)
-    .join('\n\n');
+  // Sequential drain: dispatch ONLY the oldest pending message this turn. The
+  // rest stay deliveredAt=null and are re-evaluated on the next chatTick (~2s);
+  // once this message's turn ends and the pane goes idle, the next-oldest goes.
+  // (The old behaviour coalesced all-pending into one '\n\n'-joined turn.)
+  const msg = msgs[0];
+  if (!msg) return;
+  const textPart = extractText(msg.content);
 
   // Relay any attached images: download each from the dashboard into the local
   // gateway cache so the tmux-driven claude can Read them. Failed downloads
   // surface as a system row in the dashboard — they're not fatal to the turn.
-  const relay = await relayImages(msgs.map((m) => m.content));
+  const relay = await relayImages([msg.content]);
   if (relay.errors.length > 0) {
     console.warn(`[chat] image relay errors for ${session.id.slice(0, 8)}:`, relay.errors);
     await api
@@ -474,14 +484,14 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   const promptText = promptParts.join('\n\n');
 
   if (!promptText) {
-    await api.ackChatDelivered(msgs.map((m) => m.id)).catch(() => {});
+    await api.ackChatDelivered([msg.id]).catch(() => {});
     return;
   }
 
   // Ack BEFORE sending so a sendKeys failure doesn't cause an infinite redeliver.
   // If sendKeys throws, we log; the watcher won't see the user prompt land in
   // the JSONL — the user can retry from the dashboard.
-  await api.ackChatDelivered(msgs.map((m) => m.id)).catch(() => {});
+  await api.ackChatDelivered([msg.id]).catch(() => {});
 
   console.log(
     `[chat] → ${session.agentName} session=${session.id.slice(0, 8)} ` +
