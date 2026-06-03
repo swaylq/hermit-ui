@@ -25,6 +25,7 @@ import { execFile } from 'node:child_process';
 import { encodedProjectDir, tmuxPaneName } from '@hermit-ui/tmux-driver';
 import { AGENTS_ROOT } from '../config';
 import { api } from '../api';
+import { paneIsWorking } from '../pane';
 
 const TAIL_LINES = 500;
 const TAIL_TIMEOUT_MS = 4000;
@@ -69,21 +70,8 @@ async function tmuxPanePid(sessionId: string): Promise<number | null> {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-// Claude Code's TUI shows "esc to interrupt" in its mode line ONLY while a turn
-// is in flight (thinking, running a tool, streaming) and drops it the instant it
-// goes idle. That marker is the ground truth for working-vs-idle and matches
-// exactly what the user sees in the pane — unlike the old "last JSONL line < 30s
-// ago" heuristic, which went stale during long silent turns (a 3-min think
-// writes no JSONL line → looked idle while clearly working). Scan only the last
-// few lines (the mode line sits at the bottom) so a chat message that happens to
-// contain the words can't trigger a false "working".
-const WORK_MARKER_RE = /\besc(?:ape)?\s+to\s+(?:interrupt|cancel|stop)\b/i;
-async function paneIsWorking(sessionId: string): Promise<boolean> {
-  const out = await run('tmux', ['capture-pane', '-t', tmuxPaneName(sessionId), '-p'], TMUX_TIMEOUT_MS);
-  if (out == null) return false;
-  const lines = out.replace(/\x1b\[[0-9;]*m/g, '').split('\n').filter((l) => l.trim());
-  return WORK_MARKER_RE.test(lines.slice(-6).join('\n'));
-}
+// paneIsWorking (working-vs-idle via the "esc to interrupt" pane marker) now
+// lives in ../pane — shared with the chat dispatch gate + cron-runner.
 
 function transcriptPath(claudeSessionId: string, agentDir: string): string | null {
   const p = path.join(encodedProjectDir(agentDir), `${claudeSessionId}.jsonl`);
