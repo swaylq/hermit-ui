@@ -19,7 +19,7 @@ the same machine each run it themselves when they want the refresh.
 - **Gateway** (`~/hermit-ui`): fast-forward pull → `npm install` (only if deps
   changed) → pm2 restart (delete+start, so the new code actually loads).
 - **This agent's base skills**: `brave-search`, `browser-automation`, `cron`,
-  `loop`, `update-hermit` — re-copied from the refreshed `apps/cli/template`.
+  `loop`, `update-hermit`, `reshape-agent` — re-copied from the refreshed `apps/cli/template`.
 - **This agent's common scripts**: the canonical hook + safety scripts (overlaid;
   your extra scripts are kept).
 
@@ -97,13 +97,13 @@ else
 fi
 
 # ── Refresh THIS agent's base skills + common scripts from the new template ──
-for s in brave-search browser-automation cron loop update-hermit; do
+for s in brave-search browser-automation cron loop update-hermit reshape-agent; do
   [ -d "$TPL/.claude/skills/$s" ] && { rm -rf "$AGENT/.claude/skills/$s"; cp -R "$TPL/.claude/skills/$s" "$AGENT/.claude/skills/$s"; }
 done
 mkdir -p "$AGENT/scripts/hooks"
 cp -R "$TPL/scripts/." "$AGENT/scripts/" 2>/dev/null
 chmod +x "$AGENT/scripts/"*.sh "$AGENT/scripts/hooks/"*.sh 2>/dev/null
-say "refreshed base skills (brave-search/browser-automation/cron/loop/update-hermit) + common scripts ✓"
+say "refreshed base skills (brave-search/browser-automation/cron/loop/update-hermit/reshape-agent) + common scripts ✓"
 
 # ── Surface template doc/settings drift (review manually — NOT auto-applied) ──
 if [ "$before" != "$after" ]; then
