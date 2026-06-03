@@ -132,17 +132,35 @@ async function fire(c: Cron): Promise<void> {
 
     let lastText = '';
     let lastEventAt = Date.now();
+    // Track in-flight tool calls: a long FOREGROUND tool (e.g. a multi-minute
+    // Bash) leaves the transcript silent while it runs, which must NOT be read as
+    // "turn complete". A tool is in flight while requested (tool_use) outnumber
+    // returned (tool_result).
+    let toolsOut = 0;
+    let toolsBack = 0;
     stop = watchTranscript(jsonlPath, (ev) => {
       lastEventAt = Date.now();
       if (ev.type === 'assistant' && ev.message?.content) {
         const t = extractText(ev.message.content);
         if (t) lastText = t; // keep the latest assistant text block as the result
+        if (Array.isArray(ev.message.content)) {
+          for (const b of ev.message.content) if (b?.type === 'tool_use') toolsOut++;
+        }
+      } else if (ev.type === 'user' && Array.isArray(ev.message?.content)) {
+        for (const b of ev.message.content) if (b?.type === 'tool_result') toolsBack++;
       }
     });
 
-    // Fire the prompt. A trailing nudge keeps the run from ending with no
-    // capturable text (the agent reads its own CLAUDE.md for context on boot).
-    sendKeys(runSessionId, `${c.prompt}\n\n(Scheduled cron run — reply with a short result summary when done.)`);
+    // Fire the prompt. The trailing nudge (a) keeps the run from ending with no
+    // capturable text, and (b) tells the agent NOT to background long commands:
+    // this throwaway session is torn down the instant it replies, so a
+    // backgrounded command's completion notification never arrives and its result
+    // is lost (the model-arena matchmake cron hit exactly this — it kept replying
+    // "I'll report when the background run finishes", then got killed).
+    sendKeys(
+      runSessionId,
+      `${c.prompt}\n\n(Scheduled cron run. This session is torn down right after you reply — so run any commands in the FOREGROUND and wait for them to finish; do NOT background them / do NOT use run_in_background (a backgrounded result can't be reported back). For a slow command, raise the Bash tool timeout (up to its 600000ms / 10-min max). Reply with a short result summary once the work is ACTUALLY done.)`,
+    );
     lastEventAt = Date.now();
 
     // Settle: wait until the assistant has been quiet for IDLE_DONE_MS after
@@ -152,7 +170,11 @@ async function fire(c: Cron): Promise<void> {
     while (Date.now() < deadline) {
       await sleep(1_000);
       if (lastText) sawAssistant = true;
-      if (sawAssistant && Date.now() - lastEventAt > IDLE_DONE_MS) break;
+      // Only "done" once every tool call has returned AND the assistant has been
+      // quiet — so a multi-minute foreground Bash keeps the pane alive instead of
+      // being cut off mid-run (capped by RUN_TIMEOUT_MS).
+      const toolInFlight = toolsOut > toolsBack;
+      if (sawAssistant && !toolInFlight && Date.now() - lastEventAt > IDLE_DONE_MS) break;
     }
     output = lastText;
     status = lastText ? 'ok' : 'fail';
