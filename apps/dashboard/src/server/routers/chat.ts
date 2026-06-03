@@ -26,6 +26,17 @@ const ContentBlock = z.union([
   z.object({ type: z.string(), [Symbol.for('passthrough')]: z.any() }).passthrough(),
 ]);
 
+// What counts as a QUEUE message: one the USER composed in the dashboard composer
+// (the `send` mutation), not yet picked up by the gateway. The decisive field is
+// externalId === null — `send` never sets externalId, whereas every row the
+// gateway syncs FROM the claude transcript carries one (the JSONL uuid). Those
+// transcript rows are ALSO role:'user' + deliveredAt:null (a tool_result, or an
+// image the agent Read mid-task, is role 'user' in Anthropic's format), so
+// without the externalId:null guard the queue, the cap, clearQueue, and the
+// gateway's pollPending would all scoop up the agent's OWN attachments. Shared by
+// all four so they can never drift apart.
+const USER_QUEUE_FILTER = { role: 'user', deliveredAt: null, externalId: null } as const;
+
 export const chatRouter = router({
   listSessions: machineProcedure
     // Tolerate a `null` input (some client paths serialize an omitted/undefined
@@ -184,8 +195,7 @@ export const chatRouter = router({
         where: {
           sessionId: input.sessionId,
           session: { machineId: ctx.machine.id },
-          role: 'user',
-          deliveredAt: null,
+          ...USER_QUEUE_FILTER,
         },
         orderBy: { createdAt: 'asc' },
         select: { id: true, content: true, createdAt: true },
@@ -232,12 +242,12 @@ export const chatRouter = router({
       const files = input.files ?? [];
       if (!text && images.length === 0 && files.length === 0) throw new Error('empty message');
 
-      // Queue cap: count this session's not-yet-delivered user messages (the
-      // WAITING queue — the in-flight turn's message is already delivered and so
-      // excluded). The composer also pre-disables at QUEUE_LIMIT; this is the
-      // server backstop for races.
+      // Queue cap: count this session's WAITING user-composed messages
+      // (USER_QUEUE_FILTER excludes the in-flight delivered one AND the agent's
+      // transcript rows). The composer also pre-disables at QUEUE_LIMIT; this is
+      // the server backstop for races.
       const waiting = await prisma.chatMessage.count({
-        where: { sessionId: input.sessionId, role: 'user', deliveredAt: null },
+        where: { sessionId: input.sessionId, ...USER_QUEUE_FILTER },
       });
       if (waiting >= QUEUE_LIMIT) throw new Error('queue_full');
 
@@ -304,10 +314,12 @@ export const chatRouter = router({
     .mutation(async ({ ctx, input }) => {
       const m = await prisma.chatMessage.findUnique({
         where: { id: input.messageId },
-        select: { id: true, role: true, deliveredAt: true, session: { select: { machineId: true } } },
+        select: { id: true, role: true, deliveredAt: true, externalId: true, session: { select: { machineId: true } } },
       });
       if (!m || m.session.machineId !== ctx.machine.id) throw new Error('not found');
-      if (m.role !== 'user' || m.deliveredAt) return { removed: false };
+      // Only a user-composed, still-queued row can be pulled — never a delivered
+      // one, and never a transcript row (externalId set ⇒ the agent's own).
+      if (m.role !== 'user' || m.deliveredAt || m.externalId) return { removed: false };
       await prisma.chatMessage.delete({ where: { id: input.messageId } });
       return { removed: true };
     }),
@@ -319,7 +331,9 @@ export const chatRouter = router({
       const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
       const r = await prisma.chatMessage.deleteMany({
-        where: { sessionId: input.sessionId, role: 'user', deliveredAt: null },
+        // USER_QUEUE_FILTER, NOT a bare role:'user' — a bare delete would also
+        // wipe the agent's transcript tool_result rows out of the conversation.
+        where: { sessionId: input.sessionId, ...USER_QUEUE_FILTER },
       });
       return { removed: r.count };
     }),
@@ -352,7 +366,11 @@ export const chatRouter = router({
 
     const sessionIds = sessions.map((s) => s.id);
     const messages = await prisma.chatMessage.findMany({
-      where: { sessionId: { in: sessionIds }, role: 'user', deliveredAt: null },
+      // Only user-composed sends (USER_QUEUE_FILTER) — never the transcript
+      // tool_result / image rows the gateway itself synced (those are role:'user'
+      // deliveredAt:null too, but carry an externalId). Without this the gateway
+      // would try to "deliver" the agent's own attachments back into the pane.
+      where: { sessionId: { in: sessionIds }, ...USER_QUEUE_FILTER },
       orderBy: { createdAt: 'asc' },
     });
     return { sessions: sessionsWithDir, messages };
