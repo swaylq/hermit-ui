@@ -514,13 +514,27 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
       const paneN = `hermit-${session.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-12)}`;
       void streamSlashOutput({ sessionId: session.id, cmd, paneN });
     } else {
-      // Make sure the message actually submitted. claude's TUI sometimes drops
-      // the submit Enter on a multi-line paste (esp. text + a `Read <image>`
-      // line) — the text lands in the composer but never sends until a manual
-      // Enter. confirmSubmitted re-sends Enter while the composer still holds
-      // buffered text. Slash commands skip this — streamSlashOutput drives the
-      // pane (incl. Escape to dismiss modals) and a stray Enter could interfere.
-      await confirmSubmitted(session.id);
+      // Make sure the message actually submitted. claude's TUI drops the submit
+      // Enter while it's still settling — most often right after a long turn (the
+      // pane reads idle so we deliver, but claude is still rendering that turn's
+      // output and swallows Enters); a multi-line text + `Read <image>` paste makes
+      // it likelier. confirmSubmitted re-sends Enter, polling until the composer
+      // clears. Slash commands skip this — streamSlashOutput drives the pane (incl.
+      // Escape to dismiss modals) and a stray Enter could interfere.
+      const submitted = await confirmSubmitted(session.id);
+      if (!submitted) {
+        console.warn(`[chat] ${session.id.slice(0, 8)}: composer still holds text after confirm — message may be unsent`);
+        await api
+          .syncChatMessages([
+            {
+              sessionId: session.id,
+              role: 'system',
+              content: [{ type: 'text', text: '[gateway] ⚠️ your last message may not have submitted — it is sitting in the agent\'s input. Press Enter in the pane, or resend.' }],
+              externalId: null,
+            },
+          ])
+          .catch(() => {});
+      }
     }
   } catch (e) {
     console.error(`[chat] sendKeys failed for ${session.id.slice(0, 8)}:`, e);
