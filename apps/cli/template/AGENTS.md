@@ -88,7 +88,7 @@ Credentials live at well-known paths documented in `TOOLS.md`. Reference by path
 Cron tasks run via LaunchAgents (macOS) or systemd-user timers (Linux).
 
 1. **Stay strictly on-prompt.** If `cron/<task>.md` says do X, do X — no ad-hoc exploration. Cron has no human in the loop.
-2. **Hard runtime ceiling.** Wrap every cron in `scripts/with-timeout.sh 3600` (1 h ceiling).
+2. **Hard runtime ceiling.** Wrap every cron in `scripts/with-timeout.sh 7200` (2 h ceiling).
 3. **Default to `scripts/claude-tmux-run.sh`, not `claude -p`.** Starting 2026-06-15 Anthropic splits Claude Max quota into Interactive (`claude` in a TTY) vs Agent SDK (`-p` / SDK) buckets — SDK is the smaller one priced at full API rates. `claude-tmux-run.sh` runs claude interactively inside an ephemeral tmux pane and bills the Interactive bucket.
 4. **Legacy `-p` flags (if you must):** pass `--no-session-persistence` (the post-task JSONL flush has hung past 1200s). Never `--bare` on Claude Max OAuth (it demands `ANTHROPIC_API_KEY`).
 
