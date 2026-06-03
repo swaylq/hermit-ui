@@ -374,18 +374,23 @@ git commit -m "feat(dashboard): mount switcher in sidebar; keyring-based auth-ga
 
 - [ ] **Step 1: Push branch + deploy to VPS**
 
+`vps-deploy.sh` pulls `main`, so deploy the branch manually — build before restart; gitignored `.env`/`node_modules`/`.next`/`src/generated` survive the checkout:
+
 ```bash
 git push -u origin feature/workspace-switcher
-ssh ubuntu@45.89.234.110 'cd ~/hermit-ui && git fetch && git checkout feature/workspace-switcher && ~/hermit-ui/scripts/vps-deploy.sh'
+ssh <vps> 'cd ~/hermit-ui && git fetch origin \
+  && git checkout feature/workspace-switcher && git reset --hard origin/feature/workspace-switcher \
+  && cd apps/dashboard && node ../../node_modules/next/dist/bin/next build \
+  && pm2 restart hermit-ui-dashboard --update-env'
 ```
-Expected: build succeeds, pm2 restart, healthcheck 200. (Branch deploy — `main` untouched until merge.)
+Expected: build succeeds, pm2 restart, dashboard returns 200. `main` untouched until merge.
 
 - [ ] **Step 2: Playwright smoke test**
 
 Drive `https://dash.swaylab.ai` with the playwright-browser MCP:
 1. Confirm existing session still works (legacy key migrated → switcher shows machine1).
-2. Open switcher → "Add machine" → paste machine2 key (`sway003-macmini`) → switcher now lists both, dots show online.
-3. Switch to `sway003-macmini` → page reloads → Agents list shows `asst` (machine2's agent), not machine1's agents.
+2. Open switcher → "Add machine" → paste the second machine's key → switcher now lists both, dots show online.
+3. Switch to the second machine → page reloads → Agents list shows its agent, not machine 1's.
 4. Switch back → machine1's agents return. Remove machine2 → it disappears.
 
 Expected: each step passes; no console errors.
