@@ -183,22 +183,31 @@ function composerHasText(name: string): boolean {
 }
 
 /**
- * Make sure a sent message actually submitted. claude's Ink TUI occasionally
- * drops the submit Enter when a multi-line paste (e.g. user text + a `Read
- * <image>` line) is still settling — the text lands in the composer but never
- * sends. We let it settle, then re-send Enter while the composer still shows
- * buffered text. Idempotent: an Enter on an already-empty composer is a no-op,
- * so an extra round never double-submits. (Past incident: a text+image message
- * sat unsent until a manual tmux Enter.)
+ * Make sure a sent message actually submitted. claude's Ink TUI drops the submit
+ * Enter while it's still settling — most often right after a LONG turn, when the
+ * pane reads "idle" (no "esc to interrupt" marker, so the deliver gate lets us
+ * send) but claude is still rendering that turn's large output, so Enters are
+ * swallowed. A multi-line paste (user text + a `Read <image>` line) makes it
+ * likelier still. The text lands in the composer but never sends.
+ *
+ * We re-send Enter while the composer still shows buffered text, polling until it
+ * clears. Idempotent: an Enter on an already-empty composer is a no-op, so extra
+ * rounds never double-submit. The window must outlast a big-output render settle
+ * (the old 0.8s gave up mid-render → the message sat unsent forever, since the
+ * caller has already ack'd it and won't redeliver). Returns true once the composer
+ * clears (submitted), false if it still holds text at the end — the caller surfaces
+ * that so a stuck message is never silent. (Past incident 2026-06-03: a follow-up
+ * sent right after an 8m turn sat in the composer, unsent.)
  */
-export async function confirmSubmitted(sessionId: string, tries = 4, gapMs = 200): Promise<void> {
+export async function confirmSubmitted(sessionId: string, tries = 24, gapMs = 500): Promise<boolean> {
   const name = paneName(sessionId);
-  if (!hasSession(name)) return;
+  if (!hasSession(name)) return true;
   for (let i = 0; i < tries; i++) {
     await sleep(gapMs);
-    if (!composerHasText(name)) return; // cleared → submitted
+    if (!composerHasText(name)) return true; // cleared → submitted
     tmux(['send-keys', '-t', `${name}.0`, 'Enter']);
   }
+  return !composerHasText(name);
 }
 
 /** Send Escape to interrupt the in-flight turn (claude's cancel key). */
