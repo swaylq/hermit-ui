@@ -41,9 +41,18 @@ else
   echo "==> deps unchanged -> skip npm install"
 fi
 
+# Compute prisma-changed at the repo ROOT: changed()'s pathspecs resolve
+# relative to cwd, so this MUST run before we cd into apps/dashboard — otherwise
+# the pathspec doubles to apps/dashboard/apps/dashboard/prisma, matches nothing,
+# and migrate/generate get silently skipped on a real schema change (the build
+# then fails type-checking against a stale client). Use --force to recover if a
+# prior failed deploy already pulled the prisma change.
+prisma_changed=0
+if [ "$FORCE" -eq 1 ] || changed apps/dashboard/prisma; then prisma_changed=1; fi
+
 cd apps/dashboard
 
-if [ "$FORCE" -eq 1 ] || changed apps/dashboard/prisma; then
+if [ "$prisma_changed" -eq 1 ]; then
   echo "==> prisma migrate deploy"
   node ../../node_modules/prisma/build/index.js migrate deploy
   # Blank PRISMA_QUERY_ENGINE_LIBRARY for generate: the .env points it at the
