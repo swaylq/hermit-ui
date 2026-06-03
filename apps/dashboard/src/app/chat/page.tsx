@@ -1232,6 +1232,7 @@ function SessionPane({ sessionId }: { sessionId: string }) {
             onStartLoop={() => pickPrompt(LOOP_TEMPLATE)}
             onStartCron={() => pickPrompt(CRON_TEMPLATE)}
             disabled={!!session?.closedAt}
+            sessionId={sessionId}
           />
           <QueueBar
             items={displayQueue}
@@ -1536,11 +1537,13 @@ function LoopBar({
   onStartLoop,
   onStartCron,
   disabled,
+  sessionId,
 }: {
   loopState: unknown;
   onStartLoop: () => void;
   onStartCron: () => void;
   disabled?: boolean;
+  sessionId: string;
 }) {
   const s =
     loopState && typeof loopState === 'object'
@@ -1559,7 +1562,7 @@ function LoopBar({
           the suggestion chip's left edge lines up with the composer box. */}
       <div className="mx-auto w-full max-w-3xl px-3 flex flex-col gap-1.5">
         {loops.map((l, i) => (
-          <LoopCard key={typeof l.id === 'string' ? l.id : `loop-${i}`} loop={l} />
+          <LoopCard key={typeof l.id === 'string' ? l.id : `loop-${i}`} loop={l} sessionId={sessionId} />
         ))}
         <div className="flex items-center gap-2 flex-wrap">
           {!disabled && (
@@ -1595,14 +1598,19 @@ function LoopBar({
 }
 
 // One active loop, collapsed to a status line; click toggles a detail panel.
-function LoopCard({ loop }: { loop: LoopEntry }) {
+function LoopCard({ loop, sessionId }: { loop: LoopEntry; sessionId: string }) {
   const id = typeof loop.id === 'string' ? loop.id : 'loop';
   const status = typeof loop.status === 'string' ? loop.status : 'running';
   const runCount = typeof loop.runCount === 'number' ? loop.runCount : null;
   const schedule = loop.schedule ?? loop.kind ?? 'loop';
   const stopped = status !== 'running';
+  // Track expansion so the per-round query only fires once the card is open.
+  const [open, setOpen] = useState(false);
   return (
-    <details className="group rounded-lg border border-border bg-card">
+    <details
+      className="group rounded-lg border border-border bg-card"
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
       <summary className="cursor-pointer list-none flex items-center gap-2 px-2.5 h-9 text-[12px]">
         <span
           className={cn('shrink-0', stopped ? 'text-muted-foreground' : 'text-emerald-500')}
@@ -1630,12 +1638,12 @@ function LoopCard({ loop }: { loop: LoopEntry }) {
         {runCount != null && <LoopDetail k="已运行" v={`${runCount} 次`} />}
         {loop.lastRunAt && <LoopDetail k="上次" v={new Date(loop.lastRunAt).toLocaleString()} />}
         {loop.createdAt && <LoopDetail k="开始" v={new Date(loop.createdAt).toLocaleString()} />}
-        {loop.lastResult && (
-          <div className="pt-1">
-            <div className="text-muted-foreground/70 text-[11px] mb-0.5">上次结果</div>
-            <div className="text-foreground/90 whitespace-pre-wrap line-clamp-4">{loop.lastResult}</div>
-          </div>
-        )}
+        <LoopRuns
+          sessionId={sessionId}
+          loopId={id}
+          open={open}
+          fallback={typeof loop.lastResult === 'string' ? loop.lastResult : null}
+        />
         <div className="text-muted-foreground/60 text-[11px] pt-1.5 mt-1 border-t border-border/60">
           {id.slice(0, 12)} · 结果持续发到本对话 · 重启即停
         </div>
@@ -1649,6 +1657,90 @@ function LoopDetail({ k, v }: { k: string; v: string }) {
     <div className="flex gap-2">
       <span className="text-muted-foreground/70 w-12 shrink-0">{k}</span>
       <span className="text-foreground/90 min-w-0 break-words">{v}</span>
+    </div>
+  );
+}
+
+// Parse a loop round-marker message ("↻ loop `<id8>` · run N — <summary>\n\n…")
+// into its run number, the one-line summary, and the full markdown report.
+function parseLoopRun(row: { id: string; content: unknown; createdAt: string | Date }) {
+  const full = msgText(row.content);
+  const firstLine = full.split('\n', 1)[0] || full;
+  const m = /·\s*run\s*(\d+)\s*[—–-]\s*(.*)$/.exec(firstLine);
+  const summary = (m ? m[2] : firstLine).replace(/[*`]/g, '').trim();
+  return { id: row.id, run: m ? Number(m[1]) : null, summary, full, createdAt: row.createdAt };
+}
+
+// The "每轮结果" list inside an expanded LoopCard. Fetches the loop's round-marker
+// messages directly (not bounded by the chat window) once the card is open;
+// falls back to the latest result (un-truncated) if no markers are found yet.
+function LoopRuns({
+  sessionId,
+  loopId,
+  open,
+  fallback,
+}: {
+  sessionId: string;
+  loopId: string;
+  open: boolean;
+  fallback: string | null;
+}) {
+  const q = trpc.chat.loopRuns.useQuery(
+    { sessionId, loopId },
+    { enabled: open, refetchInterval: open ? 60_000 : false },
+  );
+  const runs = useMemo(() => (q.data ?? []).map(parseLoopRun), [q.data]);
+
+  if (runs.length === 0) {
+    if (!fallback) return null;
+    return (
+      <div className="pt-1">
+        <div className="text-muted-foreground/70 text-[11px] mb-0.5">
+          上次结果{q.isFetching ? ' · 加载每轮…' : ''}
+        </div>
+        <div className="text-foreground/90 whitespace-pre-wrap max-h-60 overflow-auto">{fallback}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="pt-1">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-muted-foreground/70 text-[11px]">每轮结果 ({runs.length})</span>
+        <span className="text-muted-foreground/40 text-[10px]">最新在上 · 点开看完整</span>
+      </div>
+      <div className="max-h-80 overflow-auto -mx-1 px-1 space-y-1">
+        {runs.map((r) => (
+          <LoopRunRow key={r.id} run={r} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// One round: a summary line (run N · time · 摘要); click expands the full report.
+function LoopRunRow({
+  run,
+}: {
+  run: { id: string; run: number | null; summary: string; full: string; createdAt: string | Date };
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded border border-border/60 bg-background/40">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-2 py-1 text-left cursor-pointer hover:bg-accent/30 transition-colors"
+      >
+        <span className="font-mono text-[11px] text-muted-foreground shrink-0">run {run.run ?? '?'}</span>
+        <span className="text-muted-foreground/45 text-[10px] tabular-nums shrink-0 hidden sm:inline">{relTime(run.createdAt)}</span>
+        <span className="truncate text-foreground/85 text-[12px] min-w-0 flex-1">{run.summary || '(无摘要)'}</span>
+        <ChevronDown className={cn('h-3 w-3 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="border-t border-border/50 px-2 py-1.5 text-[12px] overflow-x-auto">
+          <Markdown>{run.full}</Markdown>
+        </div>
+      )}
     </div>
   );
 }

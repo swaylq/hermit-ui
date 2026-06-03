@@ -202,6 +202,39 @@ export const chatRouter = router({
       });
     }),
 
+  // Per-round results for a loop. Each loop iteration posts its report to the chat
+  // as an assistant message starting with "↻ loop `<id8>` · run N — …". Pull just
+  // those via a SQL LIKE on the marker so it's NOT bounded by listMessages'
+  // 300-row window — the loop card can show every round. id8 = first 8 chars (the
+  // skill's marker uses the short id; a ≤8-char custom id matches itself). Newest
+  // first.
+  loopRuns: machineProcedure
+    .input(
+      z.object({
+        sessionId: z.string(),
+        loopId: z.string(),
+        limit: z.number().int().min(1).max(200).default(50),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({
+        where: { id: input.sessionId },
+        select: { machineId: true },
+      });
+      if (!s || s.machineId !== ctx.machine.id) return [];
+      const marker = `%↻ loop \`${input.loopId.slice(0, 8)}\`%`;
+      const rows = await prisma.$queryRaw<Array<{ id: string; content: unknown; createdAt: Date }>>`
+        SELECT id, content, "createdAt"
+        FROM "ChatMessage"
+        WHERE "sessionId" = ${input.sessionId}
+          AND role = 'assistant'
+          AND content::text LIKE ${marker}
+        ORDER BY "createdAt" DESC
+        LIMIT ${input.limit}
+      `;
+      return rows;
+    }),
+
   send: machineProcedure
     .input(
       z.object({
