@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
+import { QUEUE_LIMIT } from '../../lib/chat-queue';
 
 const ContentBlock = z.union([
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -172,6 +173,25 @@ export const chatRouter = router({
       return rows.reverse();
     }),
 
+  // The pending dispatch queue for a session: user messages the gateway hasn't
+  // picked up yet (deliveredAt=null), oldest first. Small by construction (capped
+  // at QUEUE_LIMIT by `send`). Kept SEPARATE from listMessages so that hot,
+  // perf-tuned query keeps skipping deliveredAt. Drives the composer's QueueBar.
+  queue: machineProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      return prisma.chatMessage.findMany({
+        where: {
+          sessionId: input.sessionId,
+          session: { machineId: ctx.machine.id },
+          role: 'user',
+          deliveredAt: null,
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, content: true, createdAt: true },
+      });
+    }),
+
   send: machineProcedure
     .input(
       z.object({
@@ -211,6 +231,15 @@ export const chatRouter = router({
       const images = input.images ?? [];
       const files = input.files ?? [];
       if (!text && images.length === 0 && files.length === 0) throw new Error('empty message');
+
+      // Queue cap: count this session's not-yet-delivered user messages (the
+      // WAITING queue — the in-flight turn's message is already delivered and so
+      // excluded). The composer also pre-disables at QUEUE_LIMIT; this is the
+      // server backstop for races.
+      const waiting = await prisma.chatMessage.count({
+        where: { sessionId: input.sessionId, role: 'user', deliveredAt: null },
+      });
+      if (waiting >= QUEUE_LIMIT) throw new Error('queue_full');
 
       // Anthropic-style content blocks: text first (matches user's mental
       // model of "I typed, then attached"), then each image as a source.url
@@ -265,6 +294,34 @@ export const chatRouter = router({
         data: { cancelRequestedAt: new Date() },
       });
       return { ok: true };
+    }),
+
+  // Pull a single still-queued message out before the gateway sends it. Only an
+  // UNDELIVERED user row can go (a delivered one is already in claude's hands —
+  // can't un-send). Ownership checked via its session, matching send/cancelTurn.
+  dequeue: machineProcedure
+    .input(z.object({ messageId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const m = await prisma.chatMessage.findUnique({
+        where: { id: input.messageId },
+        select: { id: true, role: true, deliveredAt: true, session: { select: { machineId: true } } },
+      });
+      if (!m || m.session.machineId !== ctx.machine.id) throw new Error('not found');
+      if (m.role !== 'user' || m.deliveredAt) return { removed: false };
+      await prisma.chatMessage.delete({ where: { id: input.messageId } });
+      return { removed: true };
+    }),
+
+  // Empty the whole waiting queue for a session (undelivered user rows only).
+  clearQueue: machineProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
+      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      const r = await prisma.chatMessage.deleteMany({
+        where: { sessionId: input.sessionId, role: 'user', deliveredAt: null },
+      });
+      return { removed: r.count };
     }),
 
   // ─── Gateway endpoints ────────────────────────────────────────────────────
