@@ -215,6 +215,8 @@ function AddAgentPane({ initialMode, onClose }: { initialMode: 'new' | 'import';
 function NewAgentForm({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
   const [persona, setPersona] = useState('');
+  const [templateId, setTemplateId] = useState('');
+  const templates = trpc.market.listTemplates.useQuery();
   const router = useRouter();
   const utils = trpc.useUtils();
   const create = trpc.agents.requestCreate.useMutation({
@@ -231,7 +233,7 @@ function NewAgentForm({ onClose }: { onClose: () => void }) {
           className="w-full max-w-md rounded-2xl border border-border bg-card p-6 space-y-5 shadow-sm"
           onSubmit={(e) => {
             e.preventDefault();
-            if (nameOk) create.mutate({ name, persona: persona.trim() || undefined });
+            if (nameOk) create.mutate({ name, persona: persona.trim() || undefined, templateId: templateId || undefined });
           }}
         >
           <div className="text-center space-y-2">
@@ -266,6 +268,24 @@ function NewAgentForm({ onClose }: { onClose: () => void }) {
               className="mt-1.5 text-base sm:text-sm"
             />
           </label>
+          {(templates.data?.length ?? 0) > 0 && (
+            <label className="block">
+              <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                Template <span className="text-muted-foreground/60 normal-case">(optional)</span>
+              </span>
+              <select
+                value={templateId}
+                onChange={(e) => setTemplateId(e.target.value)}
+                className="mt-1.5 w-full h-10 sm:h-9 rounded-md border border-border bg-background px-2 text-base sm:text-sm cursor-pointer"
+              >
+                <option value="">Built-in (default)</option>
+                {(templates.data ?? []).map((t) => (
+                  <option key={t.id} value={t.id}>{t.displayName} · v{t.latestVersion}</option>
+                ))}
+              </select>
+              <span className="text-[10px] text-muted-foreground/70">从市场模板新建会套用它的 identity / 工作区规则 / skills</span>
+            </label>
+          )}
           {create.error && <p className="text-xs text-rose-500">{create.error.message}</p>}
           <div className="flex gap-2">
             <Button type="submit" disabled={!nameOk || create.isPending} className="flex-1 h-10">

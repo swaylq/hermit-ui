@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
-import { Pencil, Check, X, RotateCw, ChevronDown, Download, Trash2 } from 'lucide-react';
+import { Pencil, Check, X, RotateCw, ChevronDown, Download, Trash2, Package } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -18,6 +18,7 @@ import { Markdown } from './markdown';
 import { CtxBar } from './ctx-bar';
 import { PublishToMarketButton } from './publish-to-market-button';
 import { InstallSkillDialog } from './install-skill-dialog';
+import { PublishTemplateDialog } from './publish-template-dialog';
 import { sessionStatusView } from '@/lib/session-status';
 import { useUnread } from '@/lib/session-read';
 
@@ -53,6 +54,7 @@ export function AgentDetailBody({ name }: { name: string }) {
       <CronsSection agentName={name} />
       <SkillsAndTasks agent={query.data.agent} agentName={name} />
       <MarkdownSections agent={query.data.agent} agentName={name} />
+      <TemplatePublishSection agentName={name} />
     </div>
   );
 }
@@ -116,6 +118,8 @@ export function AgentDetailSheet({
               <SkillsAndTasks agent={query.data.agent} agentName={name} />
 
               <MarkdownSections agent={query.data.agent} agentName={name} />
+
+              <TemplatePublishSection agentName={name} />
             </div>
           </ScrollArea>
         )}
@@ -364,6 +368,23 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
 // ── Identity / User / Workspace / Tools / Evolution / Memory (list → modal) ──
 
 type FolderFile = { path: string; content: string | null };
+
+// Condense this agent into a reusable marketplace template (strips private bits).
+function TemplatePublishSection({ agentName }: { agentName: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="pt-1">
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+      >
+        <Package className="h-3.5 w-3.5" /> Publish as template
+      </button>
+      {open && <PublishTemplateDialog agentName={agentName} onClose={() => setOpen(false)} />}
+    </section>
+  );
+}
 
 function MarkdownSections({ agent, agentName }: { agent: AgentByNameOutput['agent']; agentName: string }) {
   const coreItems: FileItem[] = [

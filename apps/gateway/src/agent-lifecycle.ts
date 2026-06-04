@@ -63,9 +63,26 @@ function walkCopy(src: string, dst: string, subs: Record<string, string>) {
   }
 }
 
+// Overlay a marketplace template's files onto a freshly-scaffolded agent —
+// IDENTITY.md / AGENTS.md / .claude/skills/<n>/SKILL.md only (allow-listed),
+// with the same {{PLACEHOLDER}} substitution the base scaffold uses.
+function overlayTemplate(dir: string, files: unknown, subs: Record<string, string>) {
+  if (!Array.isArray(files)) return;
+  const root = path.resolve(dir);
+  const ALLOW = /^(IDENTITY\.md|AGENTS\.md|\.claude\/skills\/[a-z0-9][a-z0-9-]{0,30}\/SKILL\.md)$/;
+  for (const f of files as Array<{ path?: unknown; content?: unknown }>) {
+    if (!f || typeof f.path !== 'string' || typeof f.content !== 'string') continue;
+    if (f.path.includes('..') || !ALLOW.test(f.path)) continue;
+    const dst = path.resolve(root, f.path);
+    if (!dst.startsWith(root + path.sep)) continue;
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.writeFileSync(dst, f.content.replace(/\{\{(\w+)\}\}/g, (m: string, k: string) => (k in subs ? subs[k] : m)));
+  }
+}
+
 // Scaffold a new agent at AGENTS_ROOT/<name>. Returns the resolved directory
 // so the caller can push its initial content to the dashboard.
-function scaffold(name: string, persona: string): string {
+function scaffold(name: string, persona: string, templateFiles?: unknown): string {
   const targetDir = path.join(AGENTS_ROOT, name);
   if (fs.existsSync(targetDir)) throw new Error(`directory already exists: ${targetDir}`);
   if (!fs.existsSync(TEMPLATE_DIR)) throw new Error(`template not found: ${TEMPLATE_DIR}`);
@@ -89,6 +106,7 @@ function scaffold(name: string, persona: string): string {
     JSON.stringify({ env: { HERMIT_DASHBOARD_URL: DASHBOARD_URL } }, null, 2) + '\n',
   );
   fs.renameSync(tmp, targetDir);
+  if (templateFiles) overlayTemplate(targetDir, templateFiles, subs);
   return targetDir;
 }
 
@@ -225,7 +243,9 @@ export async function agentRequestTick() {
     for (const r of reqs) {
       try {
         if (r.kind === 'create') {
-          const dir = scaffold(r.agentName, (r.persona || 'a hermit agent').trim());
+          let templateFiles: unknown;
+          if (r.content) { try { templateFiles = JSON.parse(r.content)?.templateFiles; } catch { /* not a template create */ } }
+          const dir = scaffold(r.agentName, (r.persona || 'a hermit agent').trim(), templateFiles);
           refreshAfter.push({ name: r.agentName, directory: dir });
         } else if (r.kind === 'delete') {
           deleteAgent(r.agentName, r.agentDirectory);

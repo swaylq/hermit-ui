@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { resolveImport } from '../market-import';
+import { buildTemplate } from '../market-template';
 
 // Fleet-global marketplace registry — the Market* tables are NOT machineId-scoped
 // (every machine connected to this dashboard sees the same market). Procedures
@@ -337,6 +338,52 @@ export const marketRouter = router({
           slug, displayName, description: r.description, origin: r.origin, originUrl: r.originUrl, latestVersion: '1',
           publishedByMachineId: ctx.machine.id,
           versions: { create: { version: '1', content: r.content, refs: r.refs, fileCount, contentHash: hash, changelog, createdByMachineId: ctx.machine.id } },
+        },
+      });
+    }),
+
+  // ── Templates (Phase D) — condense an agent → template, stripping private ────
+  templatePreview: machineProcedure.input(z.object({ agentName: z.string() })).query(async ({ ctx, input }) => {
+    const a = await prisma.agent.findUnique({
+      where: { machineId_name: { machineId: ctx.machine.id, name: input.agentName } },
+      select: { name: true, identityText: true, agentsText: true, skills: true, skillNames: true },
+    });
+    if (!a) throw new Error('agent not found');
+    const t = buildTemplate({ name: a.name, identityText: a.identityText, agentsText: a.agentsText, skills: (a.skills as Array<{ name: string; content: string }>) ?? [], skillNames: a.skillNames });
+    return { kept: t.kept, stripped: t.stripped, fileCount: t.files.length, basePersona: t.basePersona };
+  }),
+
+  publishTemplateFromAgent: machineProcedure
+    .input(z.object({
+      agentName: z.string(),
+      slug: z.string().trim().toLowerCase().regex(SLUG_RE).optional(),
+      displayName: z.string().trim().optional(),
+      description: z.string().trim().optional(),
+      changelog: z.string().trim().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const a = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.agentName } },
+        select: { name: true, identityText: true, agentsText: true, skills: true, skillNames: true },
+      });
+      if (!a) throw new Error('agent not found');
+      const t = buildTemplate({ name: a.name, identityText: a.identityText, agentsText: a.agentsText, skills: (a.skills as Array<{ name: string; content: string }>) ?? [], skillNames: a.skillNames });
+      if (t.files.length === 0) throw new Error('nothing to publish yet — the agent identity/skills haven\'t synced');
+      const slug = input.slug ?? a.name; // agent names are already valid slugs
+      if (!SLUG_RE.test(slug)) throw new Error('invalid slug');
+      const displayName = input.displayName || a.name;
+      const changelog = input.changelog ?? null;
+      const existing = await prisma.marketTemplate.findUnique({ where: { slug }, include: { versions: { orderBy: { createdAt: 'desc' }, take: 1 } } });
+      if (existing) {
+        const nextVer = String((parseInt(existing.latestVersion, 10) || 0) + 1);
+        await prisma.marketTemplateVersion.create({ data: { marketTemplateId: existing.id, version: nextVer, files: t.files, includedSkills: a.skillNames, changelog } });
+        return prisma.marketTemplate.update({ where: { id: existing.id }, data: { latestVersion: nextVer, displayName, description: input.description ?? existing.description, basePersona: t.basePersona, sourceAgent: a.name } });
+      }
+      return prisma.marketTemplate.create({
+        data: {
+          slug, displayName, description: input.description ?? null, basePersona: t.basePersona, origin: 'uploaded',
+          sourceAgent: a.name, publishedByMachineId: ctx.machine.id, latestVersion: '1',
+          versions: { create: { version: '1', files: t.files, includedSkills: a.skillNames, changelog } },
         },
       });
     }),

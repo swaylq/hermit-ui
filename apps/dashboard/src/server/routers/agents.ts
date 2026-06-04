@@ -81,6 +81,9 @@ export const agentsRouter = router({
       // fall back to a self-aware default below that tells the new agent to
       // infer its role from its name and how the user interacts with it.
       persona: z.string().trim().max(200).optional(),
+      // Create from a marketplace template — the gateway scaffolds the base then
+      // overlays the template's IDENTITY/AGENTS/skills.
+      templateId: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const exists = await prisma.agent.findUnique({
@@ -93,7 +96,21 @@ export const agentsRouter = router({
         select: { id: true },
       });
       if (pending) throw new Error(`a request for "${input.name}" is already pending`);
-      const persona = input.persona?.trim() ||
+      // Resolve a marketplace template (latest version) into the create request;
+      // the gateway scaffolds the base then overlays these files.
+      let templateContent: string | null = null;
+      let templatePersona: string | null = null;
+      if (input.templateId) {
+        const tpl = await prisma.marketTemplate.findUnique({
+          where: { id: input.templateId },
+          include: { versions: { orderBy: { createdAt: 'desc' }, take: 1 } },
+        });
+        const ver = tpl?.versions[0];
+        if (!tpl || !ver) throw new Error('template not found');
+        templateContent = JSON.stringify({ templateFiles: ver.files });
+        templatePersona = tpl.basePersona;
+      }
+      const persona = input.persona?.trim() || templatePersona ||
         `An AI agent named ${input.name}. Infer your role and personality from your name and how the user interacts with you.`;
       // DB is the source of truth — the row appears in the list immediately.
       // `directory` stays null until the gateway scaffolds it at AGENTS_ROOT/<name>
@@ -104,7 +121,7 @@ export const agentsRouter = router({
           data: { machineId: ctx.machine.id, name: input.name },
         });
         return tx.agentRequest.create({
-          data: { machineId: ctx.machine.id, kind: 'create', agentName: input.name, persona },
+          data: { machineId: ctx.machine.id, kind: 'create', agentName: input.name, persona, content: templateContent },
         });
       });
     }),
