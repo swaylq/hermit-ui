@@ -415,12 +415,23 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
     sessionStates.delete(session.id);
     state = undefined;
   }
+  // Track a cold start (fresh spawn / --resume) so the submit-confirm below can
+  // wait longer. A just-spawned claude — especially --resume reloading full
+  // history, or one spawn in a post-gateway-restart herd — can take far longer
+  // than the default 12s confirm window to become interactively ready, and the
+  // user's first message sits typed-but-unsent in the composer until then.
+  // (Logged incident 2026-06-04: a slow zhinan-gitlab spawn took >30s to write
+  // its transcript; confirmSubmitted gave up at 12s → "composer still holds text
+  // — message may be unsent", and the stranded text risks the next message
+  // mashing into the same composer.)
+  let freshSpawn = false;
   if (!state) {
     if (settingUp.has(session.id)) return;
     settingUp.add(session.id);
     try {
       state = await setupSession(session);
       sessionStates.set(session.id, state);
+      freshSpawn = true;
     } catch (e) {
       console.error(`[chat] setup failed for ${session.id.slice(0, 8)}:`, e);
       return;
@@ -521,7 +532,13 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
       // it likelier. confirmSubmitted re-sends Enter, polling until the composer
       // clears. Slash commands skip this — streamSlashOutput drives the pane (incl.
       // Escape to dismiss modals) and a stray Enter could interfere.
-      const submitted = await confirmSubmitted(session.id);
+      // A cold start gets a much longer confirm window (60s vs the default 12s):
+      // the text is already in the composer, so re-pressing Enter until claude
+      // finishes booting submits it — instead of giving up at 12s and leaving it
+      // stranded. deliverMessages is fire-and-forget (chatTick never awaits it),
+      // so the longer wait blocks nothing; confirmSubmitted returns the instant
+      // the composer clears, so a fast spawn pays no penalty.
+      const submitted = await confirmSubmitted(session.id, freshSpawn ? 120 : 24);
       if (!submitted) {
         console.warn(`[chat] ${session.id.slice(0, 8)}: composer still holds text after confirm — message may be unsent`);
         await api
