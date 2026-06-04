@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, LogOut, MenuIcon, Plus,
-  Trash2, RotateCcw, ChevronDown, Check, X, type LucideIcon,
+  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -69,6 +69,12 @@ const NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/usage', label: 'Usage', icon: BarChart3 },
 ];
 
+// Market mode replaces the dashboard nav when the route is under /market.
+const MARKET_NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
+  { href: '/market/skills', label: 'Skills', icon: Boxes },
+  { href: '/market/templates', label: 'Templates', icon: Package },
+];
+
 export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLogout: () => void }) {
   const pathname = usePathname();
   const search = useSearchParams();
@@ -77,6 +83,7 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
   const onAgents = pathname.startsWith('/agents');
   const onCron = pathname.startsWith('/cron');
   const onSkills = pathname.startsWith('/skills');
+  const onMarket = pathname.startsWith('/market');
   // Route-aware primary CTA: New agent on /agents, New cron on /cron, New skill
   // on /skills, else New chat.
   const cta = onAgents
@@ -86,6 +93,12 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
       : onSkills
         ? { href: '/skills?new=1', label: 'New skill', Icon: Plus }
         : { href: '/chat?new=1', label: 'New chat', Icon: SquarePen };
+  // Shared chrome for the CTA-styled buttons (Market entry, Dashboard back, New-X).
+  const ctaCls = cn(
+    'flex items-center gap-2 rounded-lg h-9 text-sm font-medium transition-colors cursor-pointer',
+    'border border-sidebar-border bg-sidebar hover:bg-sidebar-accent text-sidebar-foreground',
+    collapsed ? 'lg:justify-center lg:px-0 px-3' : 'px-3',
+  );
 
   // Close the mobile drawer on navigation. Selecting a session/agent/cron only
   // changes the query string (?session= / ?name= / ?id=), not the pathname, so
@@ -236,54 +249,91 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
           </button>
         </div>
 
-        {/* Primary CTA — route-aware (see `cta` above). New agent / New cron /
-            New chat share the same chrome so the layout reads consistently. */}
-        <div className="px-2">
-          <Link
-            href={cta.href}
-            className={cn(
-              'flex items-center gap-2 rounded-lg h-9 text-sm font-medium transition-colors cursor-pointer',
-              'border border-sidebar-border bg-sidebar hover:bg-sidebar-accent text-sidebar-foreground',
-              collapsed ? 'lg:justify-center lg:px-0 px-3' : 'px-3',
-            )}
-            title={cta.label}
-          >
-            <cta.Icon className="h-4 w-4 shrink-0" />
-            <span className={cn('truncate', collapsed && 'lg:hidden')}>{cta.label}</span>
-          </Link>
-        </div>
-
-        {/* Primary nav */}
-        <nav className="px-2 pt-2 space-y-0.5">
-          {NAV.map((n) => {
-            const active = n.href === '/chat' ? onChat : pathname.startsWith(n.href);
-            const Icon = n.icon;
-            return (
-              <Link
-                key={n.href}
-                href={n.href}
-                title={n.label}
-                className={cn(
-                  'flex items-center gap-2.5 rounded-lg h-8 text-sm transition-colors cursor-pointer',
-                  collapsed ? 'lg:justify-center lg:px-0 px-3' : 'px-3',
-                  active
-                    ? 'bg-sidebar-accent text-sidebar-foreground font-medium'
-                    : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
-                )}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                <span className={cn('truncate', collapsed && 'lg:hidden')}>{n.label}</span>
+        {onMarket ? (
+          /* Market mode: back-to-dashboard + Skills/Templates nav. */
+          <>
+            <div className="px-2">
+              <Link href="/chat" title="Back to dashboard" className={ctaCls}>
+                <ArrowLeft className="h-4 w-4 shrink-0" />
+                <span className={cn('truncate', collapsed && 'lg:hidden')}>Dashboard</span>
               </Link>
-            );
-          })}
-        </nav>
+            </div>
+            <nav className="px-2 pt-2 space-y-0.5">
+              {MARKET_NAV.map((n) => {
+                const active = pathname.startsWith(n.href);
+                const Icon = n.icon;
+                return (
+                  <Link
+                    key={n.href}
+                    href={n.href}
+                    title={n.label}
+                    className={cn(
+                      'flex items-center gap-2.5 rounded-lg h-8 text-sm transition-colors cursor-pointer',
+                      collapsed ? 'lg:justify-center lg:px-0 px-3' : 'px-3',
+                      active
+                        ? 'bg-sidebar-accent text-sidebar-foreground font-medium'
+                        : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className={cn('truncate', collapsed && 'lg:hidden')}>{n.label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
+            <div className="flex-1" />
+          </>
+        ) : (
+          <>
+            {/* Market entry — CTA-styled, above the route-aware New-X CTA. */}
+            <div className="px-2 pb-1">
+              <Link href="/market/skills" title="Public marketplace" className={ctaCls}>
+                <Store className="h-4 w-4 shrink-0" />
+                <span className={cn('truncate', collapsed && 'lg:hidden')}>Market</span>
+              </Link>
+            </div>
 
-        {/* Recents — sessions on /chat, agents on /agents. Hidden when collapsed. */}
-        {!collapsed && onChat && <RecentSessions />}
-        {!collapsed && onAgents && <RecentAgents />}
-        {!collapsed && onCron && <RecentCrons />}
-        {!collapsed && onSkills && <RecentSkills />}
-        {(collapsed || (!onChat && !onAgents && !onCron && !onSkills)) && <div className="flex-1" />}
+            {/* Primary CTA — route-aware (New agent / New cron / New chat). */}
+            <div className="px-2">
+              <Link href={cta.href} title={cta.label} className={ctaCls}>
+                <cta.Icon className="h-4 w-4 shrink-0" />
+                <span className={cn('truncate', collapsed && 'lg:hidden')}>{cta.label}</span>
+              </Link>
+            </div>
+
+            {/* Primary nav */}
+            <nav className="px-2 pt-2 space-y-0.5">
+              {NAV.map((n) => {
+                const active = n.href === '/chat' ? onChat : pathname.startsWith(n.href);
+                const Icon = n.icon;
+                return (
+                  <Link
+                    key={n.href}
+                    href={n.href}
+                    title={n.label}
+                    className={cn(
+                      'flex items-center gap-2.5 rounded-lg h-8 text-sm transition-colors cursor-pointer',
+                      collapsed ? 'lg:justify-center lg:px-0 px-3' : 'px-3',
+                      active
+                        ? 'bg-sidebar-accent text-sidebar-foreground font-medium'
+                        : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className={cn('truncate', collapsed && 'lg:hidden')}>{n.label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
+
+            {/* Recents — sessions on /chat, agents on /agents. Hidden when collapsed. */}
+            {!collapsed && onChat && <RecentSessions />}
+            {!collapsed && onAgents && <RecentAgents />}
+            {!collapsed && onCron && <RecentCrons />}
+            {!collapsed && onSkills && <RecentSkills />}
+            {(collapsed || (!onChat && !onAgents && !onCron && !onSkills)) && <div className="flex-1" />}
+          </>
+        )}
 
         {/* Footer: machine + sign out */}
         <div className="border-t border-sidebar-border p-2 mt-auto shrink-0">
