@@ -264,7 +264,7 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
                 href={n.href}
                 title={n.label}
                 className={cn(
-                  'flex items-center gap-2.5 rounded-lg h-9 text-sm transition-colors cursor-pointer',
+                  'flex items-center gap-2.5 rounded-lg h-8 text-sm transition-colors cursor-pointer',
                   collapsed ? 'lg:justify-center lg:px-0 px-3' : 'px-3',
                   active
                     ? 'bg-sidebar-accent text-sidebar-foreground font-medium'
