@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Boxes, Package, GitBranch, Plug, FileText, Trash2, Pencil, Check, X, Plus } from 'lucide-react';
+import { Boxes, Package, GitBranch, Plug, FileText, Trash2, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -10,6 +10,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
+import { FileList, type FileItem } from '@/components/file-detail';
 
 // ── source badge ──────────────────────────────────────────────────────────────
 function SourceBadge({ source, isBundle }: { source: string; isBundle: boolean }) {
@@ -166,14 +167,11 @@ function SkillDetail({ name }: { name: string }) {
   const utils = trpc.useUtils();
   const q = trpc.skills.get.useQuery({ name }, { refetchInterval: 8_000 });
   const update = trpc.skills.requestEdit.useMutation({
-    onSuccess: () => { utils.skills.get.invalidate({ name }); utils.skills.list.invalidate(); setEditing(false); },
+    onSuccess: () => { utils.skills.get.invalidate({ name }); utils.skills.list.invalidate(); },
   });
   const del = trpc.skills.requestDelete.useMutation({
     onSuccess: () => { utils.skills.list.invalidate(); window.location.href = '/skills'; },
   });
-
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
 
   const skill = q.data?.skill;
 
@@ -192,6 +190,24 @@ function SkillDetail({ name }: { name: string }) {
 
   const refs = Array.isArray(skill.refs) ? (skill.refs as Array<{ name: string; content: string }>) : [];
 
+  // Every file in one list — click any to open the view/edit modal (mirrors the
+  // agent detail). SKILL.md is editable on a manual skill; bundles (git/plugin)
+  // and reference files are read-only (no onSave). Bundle content is null, so
+  // SKILL.md only appears for real single skills.
+  const files: FileItem[] = [];
+  if (skill.content) {
+    files.push({
+      key: 'SKILL.md',
+      label: 'SKILL.md',
+      body: skill.content,
+      monoLabel: true,
+      onSave: skill.isBundle ? undefined : (content) => update.mutateAsync({ name: skill.name, content }),
+    });
+  }
+  for (const r of refs) {
+    files.push({ key: `ref:${r.name}`, label: r.name, body: r.content, monoLabel: true });
+  }
+
   return (
     <>
       <header className="border-b border-border px-4 h-12 flex items-center justify-between gap-3 shrink-0">
@@ -206,30 +222,16 @@ function SkillDetail({ name }: { name: string }) {
           </div>
         </div>
         {!skill.isBundle && (
-          <div className="flex items-center gap-1 shrink-0">
-            {!editing ? (
-              <Button size="sm" variant="outline" onClick={() => { setDraft(skill.content ?? ''); setEditing(true); }}>
-                <Pencil className="size-3.5" /> Edit
-              </Button>
-            ) : (
-              <>
-                <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => { if (draft.trim()) update.mutate({ name: skill.name, content: draft }); }}>
-                  <Check className="size-3.5" /> Save
-                </Button>
-                <Button size="icon-sm" variant="ghost" onClick={() => setEditing(false)} title="cancel"><X className="size-3.5" /></Button>
-              </>
-            )}
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              className="text-muted-foreground hover:text-rose-500"
-              disabled={del.isPending}
-              onClick={() => { if (confirm(`Delete the global skill "${skill.name}"? This removes ~/.claude/skills/${skill.name}/.`)) del.mutate({ name: skill.name }); }}
-              title="delete skill"
-            >
-              <Trash2 className="size-3.5" />
-            </Button>
-          </div>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="shrink-0 text-muted-foreground hover:text-rose-500"
+            disabled={del.isPending}
+            onClick={() => { if (confirm(`Delete the global skill "${skill.name}"? This removes ~/.claude/skills/${skill.name}/.`)) del.mutate({ name: skill.name }); }}
+            title="delete skill"
+          >
+            <Trash2 className="size-3.5" />
+          </Button>
         )}
       </header>
 
@@ -239,7 +241,7 @@ function SkillDetail({ name }: { name: string }) {
             <p className="text-[13px] text-foreground/80">{skill.description}</p>
           )}
 
-          {skill.isBundle ? (
+          {skill.isBundle && (
             <section className="rounded-lg border border-border">
               <div className="px-3 h-9 flex items-center border-b border-border text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Bundle · {skill.subSkills.length} sub-skill{skill.subSkills.length === 1 ? '' : 's'}
@@ -253,43 +255,14 @@ function SkillDetail({ name }: { name: string }) {
                 </ul>
               </div>
             </section>
-          ) : (
-            <section className="rounded-lg border border-border">
-              <div className="px-3 h-9 flex items-center border-b border-border text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                SKILL.md
-              </div>
-              <div className="p-3">
-                {editing ? (
-                  <textarea
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    rows={20}
-                    className="w-full rounded-md border border-border bg-background p-2 font-mono text-[12px] outline-none focus:border-foreground/30 resize-y"
-                  />
-                ) : (
-                  <pre className="whitespace-pre-wrap break-words font-mono text-[12px] text-foreground/90">{skill.content || '(empty)'}</pre>
-                )}
-              </div>
-            </section>
           )}
 
-          {refs.length > 0 && (
+          {files.length > 0 && (
             <section>
-              <div className="px-1 pb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">references · {refs.length}</div>
-              <ul className="space-y-1">
-                {refs.map((r) => (
-                  <li key={r.name}>
-                    <details className="group rounded-md border border-border">
-                      <summary className="cursor-pointer list-none flex items-center gap-2 px-2.5 h-9 text-[12px] font-mono">
-                        <FileText className="size-3.5 text-muted-foreground" /> {r.name}
-                      </summary>
-                      <div className="border-t border-border px-3 py-2">
-                        <pre className="whitespace-pre-wrap break-words font-mono text-[11px] text-foreground/85 max-h-72 overflow-auto">{r.content}</pre>
-                      </div>
-                    </details>
-                  </li>
-                ))}
-              </ul>
+              <div className="px-1 pb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                files · {files.length}
+              </div>
+              <FileList items={files} />
             </section>
           )}
         </div>
