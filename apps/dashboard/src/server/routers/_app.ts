@@ -6,6 +6,7 @@ import { cronRouter } from './cron';
 import { usageRouter } from './usage';
 import { chatRouter } from './chat';
 import { interactionRouter } from './interaction';
+import { marketRouter } from './market';
 
 export const appRouter = router({
   machines: machinesRouter,
@@ -15,6 +16,7 @@ export const appRouter = router({
   usage: usageRouter,
   chat: chatRouter,
   interaction: interactionRouter,
+  market: marketRouter,
 });
 
 export type AppRouter = typeof appRouter;
