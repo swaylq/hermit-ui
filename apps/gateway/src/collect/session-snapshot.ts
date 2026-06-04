@@ -94,9 +94,18 @@ async function lastUsageTokens(jsonl: string): Promise<{ contextTokens: number; 
   if (out == null) return null;
   const lines = out.split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (!lines[i].includes('"output_tokens"')) continue;
+    const line = lines[i];
+    // A compact boundary is the authoritative post-compact size. Newest-first,
+    // so if it's more recent than any usage line it wins (matches the main scan).
+    if (line.includes('"compact_boundary"')) {
+      try {
+        const post = JSON.parse(line)?.compactMetadata?.postTokens;
+        if (typeof post === 'number' && post > 0) return { contextTokens: post, outputTokens: 0 };
+      } catch { /* keep scanning older matches */ }
+    }
+    if (!line.includes('"output_tokens"')) continue;
     try {
-      const u = JSON.parse(lines[i])?.message?.usage;
+      const u = JSON.parse(line)?.message?.usage;
       if (u) {
         return {
           contextTokens: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0),
@@ -186,6 +195,18 @@ async function probe(
       const u = ev.message.usage;
       contextTokens = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
       outputTokens = u.output_tokens || 0;
+    }
+    // A compact (manual /compact or auto-compact when the window fills) resets
+    // the context. Claude Code records the post-compact size on the boundary
+    // event as compactMetadata.postTokens. Without this branch the newest-first
+    // scan walks straight past the boundary to the last *pre-compact* assistant
+    // usage (the big number) and reports it until the next turn writes a fresh
+    // usage — so ctx stays stale for the whole gap right after a compact. Same
+    // `contextTokens == null` guard + newest-first means whichever is more
+    // recent wins: a post-compact turn's usage, or the boundary itself.
+    if (contextTokens == null && ev.type === 'system' && ev.subtype === 'compact_boundary') {
+      const post = ev.compactMetadata?.postTokens;
+      if (typeof post === 'number' && post > 0) contextTokens = post;
     }
     if (lastAssistant == null && ev.type === 'assistant' && ev.message?.content) {
       const t = extractText(ev.message.content).trim();
