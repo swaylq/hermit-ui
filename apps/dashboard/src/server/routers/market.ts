@@ -2,6 +2,7 @@ import { z } from 'zod';
 import crypto from 'node:crypto';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
+import { resolveImport } from '../market-import';
 
 // Fleet-global marketplace registry — the Market* tables are NOT machineId-scoped
 // (every machine connected to this dashboard sees the same market). Procedures
@@ -295,4 +296,48 @@ export const marketRouter = router({
       };
     });
   }),
+
+  // ── External import (Phase C) — server-side fetch, preview then commit ───────
+  previewImport: machineProcedure.input(z.object({ url: z.string().url() })).mutation(async ({ input }) => {
+    const r = await resolveImport(input.url);
+    return { slug: r.slug, displayName: r.displayName, description: r.description, content: r.content, refCount: r.refs.length, origin: r.origin, originUrl: r.originUrl };
+  }),
+
+  commitImport: machineProcedure
+    .input(z.object({
+      url: z.string().url(),
+      slug: z.string().trim().toLowerCase().regex(SLUG_RE).optional(),
+      displayName: z.string().trim().optional(),
+      changelog: z.string().trim().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const r = await resolveImport(input.url); // re-fetch server-side — never trust client content
+      const slug = input.slug ?? r.slug;
+      if (!SLUG_RE.test(slug)) throw new Error('invalid slug');
+      const displayName = input.displayName || r.displayName || slug;
+      const hash = hashContent(r.content, r.refs);
+      const fileCount = 1 + r.refs.length;
+      const changelog = input.changelog ?? `imported from ${r.originUrl}`;
+      const existing = await prisma.marketSkill.findUnique({
+        where: { slug }, include: { versions: { orderBy: { createdAt: 'desc' }, take: 1 } },
+      });
+      if (existing) {
+        if (existing.versions[0]?.contentHash === hash) return existing;
+        const nextVer = String((parseInt(existing.latestVersion, 10) || 0) + 1);
+        await prisma.marketSkillVersion.create({
+          data: { marketSkillId: existing.id, version: nextVer, content: r.content, refs: r.refs, fileCount, contentHash: hash, changelog, createdByMachineId: ctx.machine.id },
+        });
+        return prisma.marketSkill.update({
+          where: { id: existing.id },
+          data: { latestVersion: nextVer, description: r.description, displayName, origin: r.origin, originUrl: r.originUrl },
+        });
+      }
+      return prisma.marketSkill.create({
+        data: {
+          slug, displayName, description: r.description, origin: r.origin, originUrl: r.originUrl, latestVersion: '1',
+          publishedByMachineId: ctx.machine.id,
+          versions: { create: { version: '1', content: r.content, refs: r.refs, fileCount, contentHash: hash, changelog, createdByMachineId: ctx.machine.id } },
+        },
+      });
+    }),
 });

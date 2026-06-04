@@ -1,14 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { Boxes, Search } from 'lucide-react';
+import { Boxes, Search, Plus } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { MarketSkillDetail } from '@/components/market-skill-detail';
+import { ImportSkillDialog } from '@/components/import-skill-dialog';
 
 function OriginBadge({ origin }: { origin: string }) {
   const map: Record<string, string> = {
@@ -24,6 +26,7 @@ function OriginBadge({ origin }: { origin: string }) {
 export default function MarketSkillsPage() {
   const [q, setQ] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const skills = trpc.market.listSkills.useQuery({ q: q.trim() || undefined }, { refetchInterval: 15_000 });
 
   return (
@@ -36,6 +39,9 @@ export default function MarketSkillsPage() {
             <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="search skills" className="h-8 w-48 pl-7 text-sm" />
           </div>
+          <Button size="sm" onClick={() => setImportOpen(true)}>
+            <Plus className="h-3.5 w-3.5 mr-1" /> Import
+          </Button>
         </div>
       </header>
 
@@ -45,7 +51,7 @@ export default function MarketSkillsPage() {
             <div className="flex flex-col items-center justify-center text-center py-20 text-muted-foreground">
               <Boxes className="h-10 w-10 mb-3 opacity-30" aria-hidden="true" />
               <p className="text-sm">市场还没有 skill。</p>
-              <p className="mt-1 text-xs">在 <b>Skills</b> 页或某个 <b>agent 详情</b> 里点 skill 的「上传」按钮发布到这里,或等 C 阶段从 URL 导入。</p>
+              <p className="mt-1 text-xs">点上方 <b>Import</b> 从 URL(master.skill / GitHub)导入,或在 Skills 页 / agent 详情点 skill 的「上传」发布到这里。</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -74,6 +80,7 @@ export default function MarketSkillsPage() {
       </ScrollArea>
 
       {selected && <MarketSkillDetail slug={selected} onClose={() => setSelected(null)} />}
+      {importOpen && <ImportSkillDialog onClose={() => setImportOpen(false)} />}
     </div>
   );
 }
