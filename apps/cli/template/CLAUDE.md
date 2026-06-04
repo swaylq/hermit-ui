@@ -10,8 +10,9 @@ Before doing anything else, read these in order:
 
 Then skim:
 
-- `evolution/skills/` — codified procedures you've earned
 - `~/.claude/projects/<encoded-cwd>/memory/MEMORY.md` — auto-injected long-term memory (Claude Code feature)
+
+(Your codified procedures live as skills under `.claude/skills/` — Claude Code auto-surfaces those, no need to skim.)
 
 Do this silently. Don't ask permission. Don't announce it.
 

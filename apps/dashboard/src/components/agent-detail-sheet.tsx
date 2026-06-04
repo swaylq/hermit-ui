@@ -296,18 +296,31 @@ function CronsSection({ agentName }: { agentName: string }) {
 
 // ── Skills (list → modal) ────────────────────────────────────────────────────
 
+// A skill is "self-evolved" when its SKILL.md frontmatter carries `source:
+// evolution` — the agent codified it itself (vs template / manual). Shows a 🧬
+// badge so you can see what the agent has grown on its own.
+function isEvolvedSkill(content: string | null): boolean {
+  if (!content) return false;
+  const fm = /^---\n([\s\S]*?)\n---/.exec(content);
+  return !!fm && /(^|\n)\s*source\s*:\s*evolution\b/i.test(fm[1]);
+}
+
 function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent']; agentName: string }) {
   // Per-skill SKILL.md contents come down on the agent sync (Agent.skills Json).
   // Falls back to a chip-only list if the gateway hasn't synced contents yet.
   const skills = ((agent as unknown as { skills?: Array<{ name: string; content: string }> }).skills) ?? [];
   const hasContent = skills.length > 0;
-  const items: FileItem[] = agent.skillNames.map((name) => ({
-    key: `skill:${name}`,
-    label: name,
-    body: skills.find((s) => s.name === name)?.content ?? null,
-    target: `skill:${name}`,
-    monoLabel: true,
-  }));
+  const items: FileItem[] = agent.skillNames.map((name) => {
+    const content = skills.find((s) => s.name === name)?.content ?? null;
+    return {
+      key: `skill:${name}`,
+      label: name,
+      body: content,
+      target: `skill:${name}`,
+      monoLabel: true,
+      evolved: isEvolvedSkill(content),
+    };
+  });
   return (
     <section>
       <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
@@ -401,6 +414,8 @@ type FileItem = {
   // The file exists but its content wasn't loaded (past the folder cap). Distinct
   // from an absent core file: shows "未加载" instead of "not present".
   exists?: boolean;
+  // Self-evolved skill (SKILL.md frontmatter `source: evolution`) — shows a 🧬 badge.
+  evolved?: boolean;
 };
 
 function fmtSize(n: number): string {
@@ -440,7 +455,17 @@ function FileRow({ item, onClick }: { item: FileItem; onClick: () => void }) {
       className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded border bg-card hover:bg-accent/40 hover:border-foreground/30 transition-colors cursor-pointer text-left"
     >
       <span className={cn('truncate text-sm text-foreground/90', item.monoLabel && 'font-mono text-[13px]')}>{item.label}</span>
-      <span className="shrink-0 text-[11px] font-mono text-muted-foreground/60 tabular-nums">{fmtSize(item.body.length)}</span>
+      <span className="shrink-0 flex items-center gap-2">
+        {item.evolved && (
+          <span
+            className="inline-flex items-center gap-0.5 rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-px text-[10px] text-emerald-600 dark:text-emerald-400"
+            title="self-evolved skill (frontmatter source: evolution)"
+          >
+            🧬 evolved
+          </span>
+        )}
+        <span className="text-[11px] font-mono text-muted-foreground/60 tabular-nums">{fmtSize(item.body.length)}</span>
+      </span>
     </button>
   );
 }

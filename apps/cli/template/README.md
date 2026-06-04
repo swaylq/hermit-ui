@@ -11,7 +11,7 @@
 | `USER.md` | who {{USER_NAME}} is. Fill in as you learn. |
 | `AGENTS.md` | workspace rules (memory, image safety, MCP discipline). Safe defaults shipped. |
 | `TOOLS.md` | local configs, API keys (by path), accounts |
-| `evolution/` | your slowly-accreted knowledge — lessons learned the hard way, codified skills, weekly reflections |
+| `evolution/` | your slowly-accreted narrative — lessons learned the hard way, weekly reflections (codified *procedures* live in `.claude/skills/`) |
 | `scripts/` | safe-image, tmux runners, browser launchers, etc. |
 | `start.sh` | spawn the agent in a tmux session |
 | `restart.sh` | respawn after MCP changes / wedges |
@@ -57,7 +57,7 @@ If the dashboard says the agent is "down", check `agent.pid` against `ps -p $(ca
 - Add a new fact about {{USER_NAME}} → `USER.md`.
 - New API integration, account, or tool → `TOOLS.md`.
 - Learned a "don't do that again" → append to `evolution/lessons.md`.
-- Codified a multi-step procedure → drop a `evolution/skills/<verb>.md`.
+- Codified a multi-step procedure → a real skill at `.claude/skills/<verb>/SKILL.md` (tag `source: evolution` in the frontmatter so it shows as self-evolved).
 
 Changes take effect on the **next** turn — Claude Code re-reads these files at every session boot, and you can also force a re-read with `/compact` or `./restart.sh`.
 

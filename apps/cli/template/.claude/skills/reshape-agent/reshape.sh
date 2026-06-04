@@ -41,14 +41,14 @@ done
 chmod +x start.sh restart.sh 2>/dev/null
 
 echo "2) evolution scaffold + migrate memory"
-mkdir -p evolution/reflections evolution/skills
+mkdir -p evolution/reflections
 [ -f MEMORY.md ] && mv MEMORY.md "evolution/reflections/${STAMP}-legacy-MEMORY.md"
 # Preserve (don't delete) the old persona/account docs — soul folds into IDENTITY
 # during re-authoring, but keep the originals in reflections for reference.
 for f in SOUL HEARTBEAT ACCOUNTS; do [ -f "$f.md" ] && mv "$f.md" "evolution/reflections/${STAMP}-legacy-$f.md"; done
 [ -f "$TPL/evolution/lessons.md" ] && { cp "$TPL/evolution/lessons.md" evolution/lessons.md; render evolution/lessons.md; }
 [ -f "$TPL/evolution/README.md" ] && { cp "$TPL/evolution/README.md" evolution/README.md; render evolution/README.md; }
-touch evolution/reflections/.gitkeep evolution/skills/.gitkeep
+touch evolution/reflections/.gitkeep
 [ -d memory ] && { mv memory/*.md evolution/reflections/ 2>/dev/null; rmdir memory 2>/dev/null || mv memory evolution/reflections/_legacy-memory-dir; }
 
 echo "3) scripts: overlay template + strip telegram/openclaw cruft"

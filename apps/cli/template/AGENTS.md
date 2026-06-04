@@ -12,10 +12,10 @@ Bootstrap order lives in `CLAUDE.md`. One rule:
 
 There are two places things persist between sessions:
 
-- `evolution/` — your slowly-accreted knowledge. Three subdirectories:
+- `evolution/` — your slowly-accreted narrative knowledge. Two subdirectories:
   - `lessons.md` — short, indexable list of failure root-causes. Each entry: title, what failed, why, how to avoid. ≤200 lines total.
-  - `skills/<verb>.md` — codified procedures you figured out. SKILL.md-style: heading + steps + caveats. ≤15KB each.
   - `reflections/YYYY-MM-DD.md` — long-form daily/weekly reflections. Optional, append-only.
+  - (Codified *procedures* don't live here — write them as real skills at `.claude/skills/<verb>/SKILL.md` so Claude Code auto-surfaces + invokes them; tag self-evolved ones with `source: evolution` in the frontmatter.)
 - **Claude Code auto-memory** (`~/.claude/projects/<encoded-cwd>/memory/MEMORY.md`) — auto-injected at every session start. Use the Skill's memory-write tools when you learn something semantic (user preferences, feedback corrections, project facts). The index is loaded for you on boot; individual memory files are fetched on demand.
 
 The two are NOT redundant:
@@ -38,7 +38,7 @@ Auto-memory's `MEMORY.md` is indexed and searchable. `evolution/` is narrative a
 - Important decisions / architecture changes → `evolution/lessons.md` if it's a "don't do X again" lesson, otherwise a reflection.
 - New user feedback or stated preferences → auto-memory (use the memory skill).
 - Root-cause conclusions from debugging → `evolution/lessons.md` AND auto-memory.
-- New codified procedure → `evolution/skills/<verb>.md`.
+- New codified procedure → a real skill at `.claude/skills/<verb>/SKILL.md` with `source: evolution` in the frontmatter (Claude Code auto-surfaces + invokes it).
 
 ## Image Safety — HARD RULE
 
