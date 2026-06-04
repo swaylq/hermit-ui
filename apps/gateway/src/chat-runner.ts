@@ -241,6 +241,14 @@ export async function chatTick() {
 
   for (const [sessionId, msgs] of grouped) {
     if (settingUp.has(sessionId)) continue;
+    // Don't deliver into a session mid-restart: chatRestartTick is killing its
+    // pane (up to a 2s grace after /exit). Sending now types the message into the
+    // dying pane and loses it on exit — the same reason the reattach loop above
+    // skips restartingSessions. Leave it queued (deliveredAt=null); once the
+    // restart completes, the next chatTick respawns via --resume and delivers it
+    // to the fresh pane. Reachable now that queued messages can sit pending across
+    // a user-triggered restart (the message-queue feature).
+    if (restartingSessions.has(sessionId)) continue;
     const session = payload.sessions.find((s) => s.id === sessionId);
     if (!session) continue;
 
