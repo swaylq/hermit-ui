@@ -13,7 +13,8 @@ import { Input } from '@/components/ui/input';
 export function InstallSkillDialog({
   agentName, installedNames, onClose,
 }: {
-  agentName: string;
+  // Omit agentName for machine-level install (~/.claude/skills).
+  agentName?: string;
   installedNames: string[];
   onClose: () => void;
 }) {
@@ -21,13 +22,22 @@ export function InstallSkillDialog({
   const [q, setQ] = useState('');
   const skills = trpc.market.listSkills.useQuery({ q: q.trim() || undefined });
   const [doneSlug, setDoneSlug] = useState<string | null>(null);
-  const install = trpc.market.installToAgent.useMutation({
+  const installA = trpc.market.installToAgent.useMutation({
     onSuccess: (_r, vars) => {
-      utils.market.agentSkillStatus.invalidate({ agentName });
-      utils.agents.byName.invalidate({ name: agentName });
+      utils.market.agentSkillStatus.invalidate({ agentName: agentName! });
+      utils.agents.byName.invalidate({ name: agentName! });
       setDoneSlug(vars.slug);
     },
   });
+  const installM = trpc.market.installToMachine.useMutation({
+    onSuccess: (_r, vars) => {
+      utils.market.globalSkillStatus.invalidate();
+      utils.skills.list.invalidate();
+      setDoneSlug(vars.slug);
+    },
+  });
+  const install = agentName ? installA : installM;
+  const doInstall = (slug: string) => { if (agentName) installA.mutate({ slug, agentName }); else installM.mutate({ slug }); };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -43,7 +53,7 @@ export function InstallSkillDialog({
     <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60" onClick={onClose}>
       <div className="w-full max-w-lg max-h-[85vh] flex flex-col rounded-lg border border-border bg-background shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5 shrink-0">
-          <span className="text-sm font-medium">Install skill from market</span>
+          <span className="text-sm font-medium">Install skill {agentName ? `→ ${agentName}` : '→ this machine'}</span>
           <button type="button" onClick={onClose} aria-label="close" className="h-7 w-7 inline-flex items-center justify-center rounded text-muted-foreground hover:bg-accent cursor-pointer">
             <X className="h-4 w-4" />
           </button>
@@ -72,7 +82,7 @@ export function InstallSkillDialog({
                   size="sm"
                   variant={already && !justDone ? 'ghost' : undefined}
                   disabled={install.isPending}
-                  onClick={() => install.mutate({ slug: s.slug, agentName })}
+                  onClick={() => doInstall(s.slug)}
                 >
                   {justDone ? <><Check className="h-3.5 w-3.5 mr-1" /> installed</>
                     : already ? 'reinstall'

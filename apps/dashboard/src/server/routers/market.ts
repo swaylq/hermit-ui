@@ -231,12 +231,68 @@ export const marketRouter = router({
       return { ok: true, version: market.latestVersion };
     }),
 
-  // Agents this machine owns — for the "install to agent" picker.
-  installTargets: machineProcedure.query(async ({ ctx }) => {
-    return prisma.agent.findMany({
-      where: { machineId: ctx.machine.id, trashedAt: null },
-      orderBy: { name: 'asc' },
-      select: { name: true },
+  uninstallAgentSkill: machineProcedure
+    .input(z.object({ agentName: z.string(), skillName: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!SKILL_NAME_RE.test(input.skillName)) throw new Error('invalid skill name');
+      await prisma.agentRequest.create({
+        data: { machineId: ctx.machine.id, kind: 'delete-skill', agentName: input.agentName, target: `skill:${input.skillName}` },
+      });
+      await prisma.agentSkillInstall.deleteMany({
+        where: { machineId: ctx.machine.id, agentName: input.agentName, skillName: input.skillName },
+      });
+      return { ok: true };
+    }),
+
+  // ── Machine level (~/.claude/skills) — mirror of the agent procedures ────────
+  installToMachine: machineProcedure.input(z.object({ slug: z.string() })).mutation(async ({ ctx, input }) => {
+    if (!SKILL_NAME_RE.test(input.slug)) throw new Error('skill slug invalid for an on-disk skill name');
+    const market = await prisma.marketSkill.findUnique({
+      where: { slug: input.slug },
+      include: { versions: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    });
+    if (!market) throw new Error('market skill not found');
+    const ver = market.versions[0];
+    if (!ver || ver.content == null) throw new Error('market skill has no installable SKILL.md');
+    const exists = await prisma.globalSkill.findUnique({
+      where: { machineId_name: { machineId: ctx.machine.id, name: input.slug } },
+      select: { isBundle: true },
+    });
+    if (exists?.isBundle) throw new Error('a managed bundle with that name exists — refusing to overwrite');
+    await prisma.globalSkillRequest.create({
+      data: { machineId: ctx.machine.id, kind: exists ? 'edit' : 'create', skillName: input.slug, content: ver.content },
+    });
+    // Provenance — preserved across the gateway's filesystem push (its upsert
+    // `update` clause never touches marketSkillId). Optimistic create so /skills
+    // shows the skill before the gateway writes it.
+    await prisma.globalSkill.upsert({
+      where: { machineId_name: { machineId: ctx.machine.id, name: input.slug } },
+      create: { machineId: ctx.machine.id, name: input.slug, content: ver.content, description: market.description, marketSkillId: market.id, marketVersion: market.latestVersion },
+      update: { marketSkillId: market.id, marketVersion: market.latestVersion },
+    });
+    return { ok: true, version: market.latestVersion };
+  }),
+
+  globalSkillStatus: machineProcedure.query(async ({ ctx }) => {
+    const skills = await prisma.globalSkill.findMany({
+      where: { machineId: ctx.machine.id, marketSkillId: { not: null } },
+      select: { name: true, marketSkillId: true, marketVersion: true },
+    });
+    if (skills.length === 0) return [];
+    const markets = await prisma.marketSkill.findMany({
+      where: { id: { in: skills.map((s) => s.marketSkillId!).filter(Boolean) } },
+      select: { id: true, slug: true, latestVersion: true },
+    });
+    const byId = new Map(markets.map((m) => [m.id, m]));
+    return skills.map((s) => {
+      const m = s.marketSkillId ? byId.get(s.marketSkillId) : undefined;
+      return {
+        name: s.name,
+        slug: m?.slug ?? null,
+        installedVersion: s.marketVersion,
+        latestVersion: m?.latestVersion ?? null,
+        hasUpdate: !!m && m.latestVersion !== s.marketVersion,
+      };
     });
   }),
 });

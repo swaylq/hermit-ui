@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Boxes, Package, GitBranch, Plug, FileText, Trash2, Plus } from 'lucide-react';
+import { Boxes, Package, GitBranch, Plug, FileText, Trash2, Plus, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -12,6 +12,7 @@ import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { FileList, type FileItem } from '@/components/file-detail';
 import { PublishToMarketButton } from '@/components/publish-to-market-button';
+import { InstallSkillDialog } from '@/components/install-skill-dialog';
 
 // ── source badge ──────────────────────────────────────────────────────────────
 function SourceBadge({ source, isBundle }: { source: string; isBundle: boolean }) {
@@ -173,8 +174,16 @@ function SkillDetail({ name }: { name: string }) {
   const del = trpc.skills.requestDelete.useMutation({
     onSuccess: () => { utils.skills.list.invalidate(); window.location.href = '/skills'; },
   });
+  // Marketplace binding status for this machine skill + install/pull controls.
+  const status = trpc.market.globalSkillStatus.useQuery();
+  const pull = trpc.market.installToMachine.useMutation({
+    onSuccess: () => { utils.skills.get.invalidate({ name }); utils.skills.list.invalidate(); utils.market.globalSkillStatus.invalidate(); },
+  });
+  const [installOpen, setInstallOpen] = useState(false);
+  const machineSkillNames = (trpc.skills.list.useQuery().data ?? []).map((s) => s.name);
 
   const skill = q.data?.skill;
+  const mkt = status.data?.find((s) => s.name === name);
 
   if (q.isPending) return <div className="p-6"><div className="h-32 rounded-md bg-accent/40 animate-pulse" /></div>;
   if (!skill) {
@@ -219,12 +228,32 @@ function SkillDetail({ name }: { name: string }) {
             <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground truncate">
               <SourceBadge source={skill.source} isBundle={skill.isBundle} />
               <span>{skill.fileCount} file{skill.fileCount === 1 ? '' : 's'}</span>
+              {mkt && (
+                <span className="inline-flex items-center rounded border border-border/60 px-1 py-px text-[9px]" title={`linked to market · installed v${mkt.installedVersion}`}>
+                  🔗 v{mkt.installedVersion}
+                </span>
+              )}
             </div>
           </div>
         </div>
-        {!skill.isBundle && (
-          <div className="flex items-center gap-1 shrink-0">
-            <PublishToMarketButton source="global" skillName={skill.name} />
+        <div className="flex items-center gap-1 shrink-0">
+          <Button size="sm" variant="ghost" className="gap-1 text-muted-foreground" onClick={() => setInstallOpen(true)} title="install a skill from the market">
+            <Plus className="size-3.5" /> Install
+          </Button>
+          {mkt?.hasUpdate && mkt.slug && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="shrink-0 text-amber-500 hover:text-amber-600"
+              title={`pull update → v${mkt.latestVersion}`}
+              disabled={pull.isPending}
+              onClick={() => pull.mutate({ slug: mkt.slug! })}
+            >
+              <Download className="size-3.5" />
+            </Button>
+          )}
+          {!skill.isBundle && <PublishToMarketButton source="global" skillName={skill.name} />}
+          {!skill.isBundle && (
             <Button
               size="icon-sm"
               variant="ghost"
@@ -235,8 +264,8 @@ function SkillDetail({ name }: { name: string }) {
             >
               <Trash2 className="size-3.5" />
             </Button>
-          </div>
-        )}
+          )}
+        </div>
       </header>
 
       <ScrollArea className="flex-1 min-h-0 bg-background">
@@ -271,6 +300,7 @@ function SkillDetail({ name }: { name: string }) {
           )}
         </div>
       </ScrollArea>
+      {installOpen && <InstallSkillDialog installedNames={machineSkillNames} onClose={() => setInstallOpen(false)} />}
     </>
   );
 }

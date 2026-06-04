@@ -197,6 +197,20 @@ function editAgentFile(name: string, directory: string | null, target: string, c
   fs.writeFileSync(dst, content);
 }
 
+// Remove a single skill dir from an agent (.claude/skills/<name>/). Backs the
+// marketplace "uninstall" via the agent-request kind `delete-skill`.
+function deleteAgentSkill(name: string, directory: string | null, target: string) {
+  if (!directory) throw new Error('agent has no directory yet (still scaffolding?)');
+  const agentDir = path.resolve(directory);
+  if (!fs.existsSync(path.join(agentDir, 'CLAUDE.md'))) throw new Error('not an agent dir (no CLAUDE.md)');
+  const m = target.match(/^skill:([a-z0-9][a-z0-9-]{0,30})$/);
+  if (!m) throw new Error(`invalid delete-skill target: ${target}`);
+  const skillsRoot = path.join(agentDir, '.claude', 'skills');
+  const dst = path.resolve(skillsRoot, m[1]);
+  if (!dst.startsWith(skillsRoot + path.sep)) throw new Error('resolved path escapes skills dir');
+  fs.rmSync(dst, { recursive: true, force: true });
+}
+
 let busy = false;
 export async function agentRequestTick() {
   if (busy) return;
@@ -222,6 +236,10 @@ export async function agentRequestTick() {
         } else if (r.kind === 'edit') {
           if (!r.target || r.content == null) throw new Error('edit request missing target/content');
           editAgentFile(r.agentName, r.agentDirectory, r.target, r.content);
+          if (r.agentDirectory) refreshAfter.push({ name: r.agentName, directory: r.agentDirectory });
+        } else if (r.kind === 'delete-skill') {
+          if (!r.target) throw new Error('delete-skill request missing target');
+          deleteAgentSkill(r.agentName, r.agentDirectory, r.target);
           if (r.agentDirectory) refreshAfter.push({ name: r.agentName, directory: r.agentDirectory });
         } else {
           throw new Error(`unknown request kind: ${r.kind}`);

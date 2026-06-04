@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
-import { Pencil, Check, X, RotateCw, ChevronDown, Download } from 'lucide-react';
+import { Pencil, Check, X, RotateCw, ChevronDown, Download, Trash2 } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -504,6 +504,7 @@ function FileRow({ item, onClick, agentName }: { item: FileItem; onClick: () => 
         <button type="button" onClick={onClick} className={cn('min-w-0 flex-1', rowCls)}>{inner}</button>
         {mk?.hasUpdate && mk.slug && <UpdateSkillButton agentName={agentName} slug={mk.slug} latest={mk.latestVersion ?? '?'} />}
         <PublishToMarketButton source="agent" agentName={agentName} skillName={item.publishSkill} />
+        <UninstallSkillButton agentName={agentName} skillName={item.publishSkill} />
       </div>
     );
   }
@@ -534,6 +535,34 @@ function UpdateSkillButton({ agentName, slug, latest }: { agentName: string; slu
       onClick={(e) => { e.stopPropagation(); install.mutate({ slug, agentName }); }}
     >
       <Download className="size-3.5" />
+    </Button>
+  );
+}
+
+// Remove a skill from the agent (delete-skill request → gateway rm's the dir) +
+// drop any market binding. Works on any skill, not only market-installed ones.
+function UninstallSkillButton({ agentName, skillName }: { agentName: string; skillName: string }) {
+  const utils = trpc.useUtils();
+  const un = trpc.market.uninstallAgentSkill.useMutation({
+    onSuccess: () => {
+      utils.market.agentSkillStatus.invalidate({ agentName });
+      utils.agents.byName.invalidate({ name: agentName });
+    },
+  });
+  return (
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      className="shrink-0 text-muted-foreground hover:text-rose-500"
+      title="uninstall skill"
+      aria-label="uninstall skill"
+      disabled={un.isPending}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (confirm(`Uninstall "${skillName}" from ${agentName}? Removes .claude/skills/${skillName}/.`)) un.mutate({ agentName, skillName });
+      }}
+    >
+      <Trash2 className="size-3.5" />
     </Button>
   );
 }
