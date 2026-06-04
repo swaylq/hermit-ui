@@ -53,7 +53,6 @@ model MarketSkill {
   originUrl            String?            // canonical source URL, for re-pull
   category             String?            // industry / grouping for browse
   tags                 String[] @default([])
-  externalPaid         Boolean  @default(false) // skill calls a paid external backend (master.skill)
   latestVersion        String             // newest MarketSkillVersion.version
   publishedByMachineId String?            // provenance (nullable)
   publishedByAgent     String?
@@ -146,7 +145,7 @@ DASHBOARD MODE                       MARKET MODE  (routes: /market/skills, /mark
 └──────────────────┘                 └──────────────────┘
 ```
 
-**Skills list** (right pane of `/market/skills`): card grid — slug, displayName, latest version, source badge (`🐙 github` / `💲 master.skill` / `⬆ uploaded` / `manual`), `externalPaid` marker, search box, category filter, and (Phase C) an `➕ Import` button. Each card → a **skill detail** view: version history + changelog + SKILL.md preview + refs + source, plus the install actions (Phase B: `Install ▾` = to this machine / to an agent).
+**Skills list** (right pane of `/market/skills`): card grid — slug, displayName, latest version, source badge (`🐙 github` / `master.skill` / `⬆ uploaded` / `manual`), search box, category filter, and (Phase C) an `➕ Import` button. Each card → a **skill detail** view: version history + changelog + SKILL.md preview + refs + source, plus the install actions (Phase B: `Install ▾` = to this machine / to an agent).
 
 **Templates list** (`/market/templates`): cards — template, version, source, `Create agent from this` (Phase D).
 
@@ -160,7 +159,7 @@ master-skill.org ("Master.skill") is a live directory of ~50 industry-master ski
 - `GET …?format=markdown` → raw SKILL.md (`text/markdown`).
 - Human URLs: `/skill/<slug>`, `/install/<slug>`.
 
-Caveat: master.skill skills are **token-billed thin clients** that call master.skill's hosted backend (¥2.5/1K in). Importing one installs a client to a paid external service — different from a self-contained skill. The registry marks these `externalPaid = true` and the UI surfaces a `💲` badge so operators install them knowingly. (Their billing is out of our scope.)
+Note: master.skill skills are thin clients that call master.skill's hosted backend (token-billed on their side). This doesn't change the import mechanism — we fetch SKILL.md + scripts the same way as any other source. (Their billing is out of our scope.)
 
 ## Phase A — Foundation (implement first)
 
@@ -192,12 +191,12 @@ Dashboard-server-side fetch with a small **adapter** interface:
 type ImportResult = {
   slug: string; displayName: string; description?: string;
   content: string | null; refs: { path: string; content: string }[];
-  origin: 'github' | 'master-skill.org' | 'manual'; originUrl: string; externalPaid: boolean;
+  origin: 'github' | 'master-skill.org' | 'manual'; originUrl: string;
 };
 resolve(url: string): Promise<ImportResult>
 ```
 
-- **master-skill.org adapter:** parse slug from `/install/<slug>` or `/skill/<slug>` → `GET /api/skills/<slug>` → map `current.skill_md`→content, `current.cli_scripts` + `sub_skills`→refs, `sources`→description; `externalPaid = true`.
+- **master-skill.org adapter:** parse slug from `/install/<slug>` or `/skill/<slug>` → `GET /api/skills/<slug>` → map `current.skill_md`→content, `current.cli_scripts` + `sub_skills`→refs, `sources`→description.
 - **GitHub adapter:** a repo/dir/SKILL.md URL → fetch raw SKILL.md + sibling `references/`/`cli/` files (GitHub contents API or raw.githubusercontent).
 - **Raw adapter:** any URL returning `text/markdown` → SKILL.md only.
 
@@ -218,7 +217,7 @@ Flow: paste URL → server `resolve` → **preview** (SKILL.md + file tree + sou
 Installed/imported skills are auto-surfaced into the agent's system prompt and invocable via the Skill tool — a supply-chain / code-execution surface. Mitigations baked into the design:
 
 1. **Preview before install/import** — SKILL.md + full file tree shown; human confirms. No silent fetch-and-run.
-2. **Provenance + trust badges** — `uploaded` (you) vs `github`/`master-skill.org` (external); `externalPaid` for billed services.
+2. **Provenance + trust badges** — `uploaded` (you) vs `github`/`master-skill.org` (external).
 3. **No auto-update** — updates are manual, so installed content can't silently change under a running agent.
 4. **Allow-listed write path** — installs flow through the existing Request mechanism; the gateway writes only under `.claude/skills/`, never arbitrary paths (same containment guard as `AgentRequest(edit)`).
 5. **Template publish review** — the strip is best-effort; the operator reviews the condensed template (kept/stripped diff) before it leaves the machine.
@@ -230,5 +229,4 @@ Version history + update-detection + install-a-specific-version. **No** diff UI,
 ## Open / deferred
 
 - An install always targets a concrete machine (`~/.claude/skills/`) or an agent on a machine; **browse** is fleet-shared. Cross-machine "install everywhere" is deferred.
-- master.skill imported skills bill the operator's master.skill account when invoked — surfaced via `externalPaid`, otherwise out of scope.
 - Skill ratings / popularity / dependencies between skills — deferred; YAGNI for a single-operator fleet.
