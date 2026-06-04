@@ -96,6 +96,10 @@ model GlobalSkill {
   fileCount   Int      @default(0)
   metadataAt  DateTime @default(now())
 
+  // Provenance when this machine skill was installed from the marketplace.
+  marketSkillId String?
+  marketVersion String?
+
   @@unique([machineId, name])
 }
 
@@ -335,4 +339,83 @@ model UsageHourly {
 
   @@unique([machineId, agentName, hourBucket])
   @@index([machineId, hourBucket])
+}
+
+// ── Marketplace (fleet-global — NOT machineId-scoped) ────────────────────────
+// Shared registry of skills + agent templates across every machine connected to
+// this dashboard. See docs/marketplace-design.md.
+
+model MarketSkill {
+  id                   String   @id @default(cuid())
+  slug                 String   @unique // install handle == .claude/skills/<slug>
+  displayName          String
+  description          String?  @db.Text
+  origin               String   @default("uploaded") // uploaded | github | master-skill.org | manual
+  originUrl            String?
+  category             String?
+  tags                 String[] @default([])
+  latestVersion        String
+  publishedByMachineId String?
+  publishedByAgent     String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  versions             MarketSkillVersion[]
+}
+
+model MarketSkillVersion {
+  id                 String      @id @default(cuid())
+  marketSkillId      String
+  marketSkill        MarketSkill @relation(fields: [marketSkillId], references: [id], onDelete: Cascade)
+  version            String
+  changelog          String?     @db.Text
+  content            String?     @db.Text // SKILL.md (null for bundle-only)
+  refs               Json        @default("[]") // Array<{ path, content }> — references/, cli/, sub-skills/
+  fileCount          Int         @default(0)
+  contentHash        String
+  createdAt          DateTime    @default(now())
+  createdByMachineId String?
+
+  @@unique([marketSkillId, version])
+}
+
+model MarketTemplate {
+  id                   String   @id @default(cuid())
+  slug                 String   @unique
+  displayName          String
+  description          String?  @db.Text
+  basePersona          String?  @db.Text
+  origin               String   @default("uploaded") // uploaded(from-agent) | manual
+  publishedByMachineId String?
+  sourceAgent          String?
+  latestVersion        String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  versions             MarketTemplateVersion[]
+}
+
+model MarketTemplateVersion {
+  id               String         @id @default(cuid())
+  marketTemplateId String
+  marketTemplate   MarketTemplate @relation(fields: [marketTemplateId], references: [id], onDelete: Cascade)
+  version          String
+  changelog        String?        @db.Text
+  files            Json           @default("[]") // Array<{ path, content }> — stripped template tree
+  includedSkills   String[]       @default([])   // market skill slugs the template installs
+  createdAt        DateTime       @default(now())
+
+  @@unique([marketTemplateId, version])
+}
+
+// Provenance for agent-level installs (the gateway pushes Agent.skills from disk
+// and can't know origin, so the install flow records it dashboard-side).
+model AgentSkillInstall {
+  id            String   @id @default(cuid())
+  machineId     String
+  agentName     String
+  skillName     String
+  marketSkillId String
+  marketVersion String
+  installedAt   DateTime @default(now())
+
+  @@unique([machineId, agentName, skillName])
 }
