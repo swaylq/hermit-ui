@@ -17,6 +17,7 @@ import { relTime } from '@/lib/format';
 import { Markdown } from './markdown';
 import { CtxBar } from './ctx-bar';
 import { PublishToMarketButton } from './publish-to-market-button';
+import { InstallSkillDialog } from './install-skill-dialog';
 import { sessionStatusView } from '@/lib/session-status';
 import { useUnread } from '@/lib/session-read';
 
@@ -314,6 +315,7 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
   // Marketplace binding status — which skills are linked + have a newer version.
   const status = trpc.market.agentSkillStatus.useQuery({ agentName }, { refetchInterval: 30_000 });
   const statusMap = new Map((status.data ?? []).map((s) => [s.skillName, s]));
+  const [installOpen, setInstallOpen] = useState(false);
   const items: FileItem[] = agent.skillNames.map((name) => {
     const content = skills.find((s) => s.name === name)?.content ?? null;
     const st = statusMap.get(name);
@@ -330,9 +332,18 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
   });
   return (
     <section>
-      <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
-        skills · {agent.skillNames.length}
-      </h3>
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <h3 className="text-xs uppercase tracking-wide text-muted-foreground">
+          skills · {agent.skillNames.length}
+        </h3>
+        <button
+          type="button"
+          onClick={() => setInstallOpen(true)}
+          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer"
+        >
+          <Download className="h-3.5 w-3.5" /> Install skill
+        </button>
+      </div>
       {agent.skillNames.length === 0 ? (
         <p className="text-xs text-muted-foreground">no skills installed under <code className="font-mono">.claude/skills/</code>.</p>
       ) : hasContent ? (
@@ -345,6 +356,7 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
           ))}
         </div>
       )}
+      {installOpen && <InstallSkillDialog agentName={agentName} installedNames={agent.skillNames} onClose={() => setInstallOpen(false)} />}
     </section>
   );
 }

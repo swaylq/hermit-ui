@@ -236,7 +236,14 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
         {/* Header: workspace switcher + collapse toggle */}
         <div className={cn('flex items-center gap-1 h-12 px-2 shrink-0', collapsed && 'lg:justify-center')}>
           <div className={cn('flex-1 min-w-0', collapsed && 'lg:hidden')}>
-            <WorkspaceSwitcher collapsed={collapsed} />
+            {/* The market is fleet-global — no machine switcher there. */}
+            {onMarket ? (
+              <span className="flex items-center gap-1.5 px-2 text-sm font-semibold text-sidebar-foreground">
+                <Store className="h-4 w-4 shrink-0" /> Market
+              </span>
+            ) : (
+              <WorkspaceSwitcher collapsed={collapsed} />
+            )}
           </div>
           <button
             type="button"
