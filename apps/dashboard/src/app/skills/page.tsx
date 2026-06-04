@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { FileList, type FileItem } from '@/components/file-detail';
+import { PublishToMarketButton } from '@/components/publish-to-market-button';
 
 // ── source badge ──────────────────────────────────────────────────────────────
 function SourceBadge({ source, isBundle }: { source: string; isBundle: boolean }) {
@@ -222,16 +223,19 @@ function SkillDetail({ name }: { name: string }) {
           </div>
         </div>
         {!skill.isBundle && (
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="shrink-0 text-muted-foreground hover:text-rose-500"
-            disabled={del.isPending}
-            onClick={() => { if (confirm(`Delete the global skill "${skill.name}"? This removes ~/.claude/skills/${skill.name}/.`)) del.mutate({ name: skill.name }); }}
-            title="delete skill"
-          >
-            <Trash2 className="size-3.5" />
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            <PublishToMarketButton source="global" skillName={skill.name} />
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="shrink-0 text-muted-foreground hover:text-rose-500"
+              disabled={del.isPending}
+              onClick={() => { if (confirm(`Delete the global skill "${skill.name}"? This removes ~/.claude/skills/${skill.name}/.`)) del.mutate({ name: skill.name }); }}
+              title="delete skill"
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          </div>
         )}
       </header>
 

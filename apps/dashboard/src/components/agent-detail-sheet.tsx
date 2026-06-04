@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { Markdown } from './markdown';
 import { CtxBar } from './ctx-bar';
+import { PublishToMarketButton } from './publish-to-market-button';
 import { sessionStatusView } from '@/lib/session-status';
 import { useUnread } from '@/lib/session-read';
 
@@ -319,6 +320,7 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
       target: `skill:${name}`,
       monoLabel: true,
       evolved: isEvolvedSkill(content),
+      publishSkill: name,
     };
   });
   return (
@@ -416,6 +418,8 @@ type FileItem = {
   exists?: boolean;
   // Self-evolved skill (SKILL.md frontmatter `source: evolution`) — shows a 🧬 badge.
   evolved?: boolean;
+  // A market-publishable skill name → renders a trailing "upload to market" button.
+  publishSkill?: string;
 };
 
 function fmtSize(n: number): string {
@@ -431,7 +435,7 @@ function FileList({ items, agentName }: { items: FileItem[]; agentName: string }
     <>
       <div className="space-y-1.5">
         {items.map((it) => (
-          <FileRow key={it.key} item={it} onClick={() => setOpenKey(it.key)} />
+          <FileRow key={it.key} item={it} agentName={agentName} onClick={() => setOpenKey(it.key)} />
         ))}
       </div>
       <DetailModal item={openItem} agentName={agentName} onClose={() => setOpenKey(null)} />
@@ -439,7 +443,7 @@ function FileList({ items, agentName }: { items: FileItem[]; agentName: string }
   );
 }
 
-function FileRow({ item, onClick }: { item: FileItem; onClick: () => void }) {
+function FileRow({ item, onClick, agentName }: { item: FileItem; onClick: () => void; agentName: string }) {
   if (!item.body) {
     return (
       <div className="flex items-center gap-2 px-3 py-2 rounded border border-dashed text-xs text-muted-foreground/60">
@@ -448,12 +452,8 @@ function FileRow({ item, onClick }: { item: FileItem; onClick: () => void }) {
       </div>
     );
   }
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded border bg-card hover:bg-accent/40 hover:border-foreground/30 transition-colors cursor-pointer text-left"
-    >
+  const inner = (
+    <>
       <span className={cn('truncate text-sm text-foreground/90', item.monoLabel && 'font-mono text-[13px]')}>{item.label}</span>
       <span className="shrink-0 flex items-center gap-2">
         {item.evolved && (
@@ -466,7 +466,20 @@ function FileRow({ item, onClick }: { item: FileItem; onClick: () => void }) {
         )}
         <span className="text-[11px] font-mono text-muted-foreground/60 tabular-nums">{fmtSize(item.body.length)}</span>
       </span>
-    </button>
+    </>
+  );
+  const rowCls = 'flex items-center justify-between gap-2 px-3 py-2 rounded border bg-card hover:bg-accent/40 hover:border-foreground/30 transition-colors cursor-pointer text-left';
+  // Skill rows get a trailing "upload to market" button (sibling, never nested).
+  if (item.publishSkill) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <button type="button" onClick={onClick} className={cn('min-w-0 flex-1', rowCls)}>{inner}</button>
+        <PublishToMarketButton source="agent" agentName={agentName} skillName={item.publishSkill} />
+      </div>
+    );
+  }
+  return (
+    <button type="button" onClick={onClick} className={cn('w-full', rowCls)}>{inner}</button>
   );
 }
 
