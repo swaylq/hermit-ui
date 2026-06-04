@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
-import { Pencil, Check, X, RotateCw, ChevronDown } from 'lucide-react';
+import { Pencil, Check, X, RotateCw, ChevronDown, Download } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -311,8 +311,12 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
   // Falls back to a chip-only list if the gateway hasn't synced contents yet.
   const skills = ((agent as unknown as { skills?: Array<{ name: string; content: string }> }).skills) ?? [];
   const hasContent = skills.length > 0;
+  // Marketplace binding status — which skills are linked + have a newer version.
+  const status = trpc.market.agentSkillStatus.useQuery({ agentName }, { refetchInterval: 30_000 });
+  const statusMap = new Map((status.data ?? []).map((s) => [s.skillName, s]));
   const items: FileItem[] = agent.skillNames.map((name) => {
     const content = skills.find((s) => s.name === name)?.content ?? null;
+    const st = statusMap.get(name);
     return {
       key: `skill:${name}`,
       label: name,
@@ -321,6 +325,7 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
       monoLabel: true,
       evolved: isEvolvedSkill(content),
       publishSkill: name,
+      market: st ? { bound: true, hasUpdate: st.hasUpdate, installedVersion: st.installedVersion, latestVersion: st.latestVersion, slug: st.slug } : undefined,
     };
   });
   return (
@@ -420,6 +425,8 @@ type FileItem = {
   evolved?: boolean;
   // A market-publishable skill name → renders a trailing "upload to market" button.
   publishSkill?: string;
+  // Marketplace binding status (skill items only): linked + whether a newer version exists.
+  market?: { bound: boolean; hasUpdate: boolean; installedVersion: string; latestVersion: string | null; slug: string | null };
 };
 
 function fmtSize(n: number): string {
@@ -456,6 +463,14 @@ function FileRow({ item, onClick, agentName }: { item: FileItem; onClick: () => 
     <>
       <span className={cn('truncate text-sm text-foreground/90', item.monoLabel && 'font-mono text-[13px]')}>{item.label}</span>
       <span className="shrink-0 flex items-center gap-2">
+        {item.market?.bound && (
+          <span
+            className="inline-flex items-center rounded border border-border/60 px-1 py-px text-[9px] font-mono text-muted-foreground/60"
+            title={`linked to market · installed v${item.market.installedVersion}`}
+          >
+            🔗 v{item.market.installedVersion}
+          </span>
+        )}
         {item.evolved && (
           <span
             className="inline-flex items-center gap-0.5 rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-px text-[10px] text-emerald-600 dark:text-emerald-400"
@@ -469,17 +484,45 @@ function FileRow({ item, onClick, agentName }: { item: FileItem; onClick: () => 
     </>
   );
   const rowCls = 'flex items-center justify-between gap-2 px-3 py-2 rounded border bg-card hover:bg-accent/40 hover:border-foreground/30 transition-colors cursor-pointer text-left';
-  // Skill rows get a trailing "upload to market" button (sibling, never nested).
+  // Skill rows get trailing market actions (pull-if-newer + upload), siblings — never nested.
   if (item.publishSkill) {
+    const mk = item.market;
     return (
       <div className="flex items-center gap-1.5">
         <button type="button" onClick={onClick} className={cn('min-w-0 flex-1', rowCls)}>{inner}</button>
+        {mk?.hasUpdate && mk.slug && <UpdateSkillButton agentName={agentName} slug={mk.slug} latest={mk.latestVersion ?? '?'} />}
         <PublishToMarketButton source="agent" agentName={agentName} skillName={item.publishSkill} />
       </div>
     );
   }
   return (
     <button type="button" onClick={onClick} className={cn('w-full', rowCls)}>{inner}</button>
+  );
+}
+
+// Pull the latest market version of a bound skill into the agent (AgentRequest
+// edit → gateway overwrites SKILL.md). Clears the "update available" prompt
+// optimistically (the binding bumps now; the file content follows on next sync).
+function UpdateSkillButton({ agentName, slug, latest }: { agentName: string; slug: string; latest: string }) {
+  const utils = trpc.useUtils();
+  const install = trpc.market.installToAgent.useMutation({
+    onSuccess: () => {
+      utils.market.agentSkillStatus.invalidate({ agentName });
+      utils.agents.byName.invalidate({ name: agentName });
+    },
+  });
+  return (
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      className="shrink-0 text-amber-500 hover:text-amber-600"
+      title={`pull update → v${latest}`}
+      aria-label="pull update from market"
+      disabled={install.isPending}
+      onClick={(e) => { e.stopPropagation(); install.mutate({ slug, agentName }); }}
+    >
+      <Download className="size-3.5" />
+    </Button>
   );
 }
 
