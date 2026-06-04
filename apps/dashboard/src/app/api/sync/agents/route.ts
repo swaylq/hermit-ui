@@ -37,6 +37,8 @@ export async function POST(req: NextRequest) {
       evolutionLessons: a.evolutionLessons ?? null,
       skillNames: a.skillNames ?? [],
       skills: (a.skills ?? []) as object,
+      evolutionFiles: (a.evolutionFiles ?? []) as object,
+      memoryFiles: (a.memoryFiles ?? []) as object,
       memorySummary: a.memorySummary ?? null,
       metadataAt: now,
     };

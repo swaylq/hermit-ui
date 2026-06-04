@@ -14,6 +14,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { encodedProjectDir } from '@hermit-ui/tmux-driver';
 
 const MAX_TEXT_BYTES = 16 * 1024;       // 16 KB per markdown — anything bigger gets truncated
 const MEMORY_TOPN = 6;                  // top N memory files to mention by name
@@ -73,6 +74,55 @@ function memorySummary(agentDir: string): string | null {
   return `${entries.length} files in memory/: ${top}${tail}`;
 }
 
+// ── Folder collection: evolution/ (workspace) + memory/ (Claude Code auto-memory
+// at ~/.claude/projects/<encoded-cwd>/memory/) for the detail sheet's expandable
+// folder view. Walks recursively (newest-first), caps content so a big auto-memory
+// dir doesn't bloat the 5-min push; files past the cap — or non-text — are listed
+// with content:null so the tree is complete but the payload bounded.
+const EVOLUTION_MAX_CONTENT = 60;
+const MEMORY_MAX_CONTENT = 40;
+const TEXT_EXT = new Set([
+  'md', 'markdown', 'txt', 'json', 'yaml', 'yml', 'sh', 'ts', 'tsx', 'js', 'jsx',
+  'cjs', 'mjs', 'py', 'toml', 'csv', 'log', 'env', 'conf', 'ini', 'xml', 'html', 'css',
+]);
+function isTextFile(rel: string): boolean {
+  const base = path.basename(rel);
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0) return true; // no extension (README, LICENSE) — assume text
+  return TEXT_EXT.has(base.slice(dot + 1).toLowerCase());
+}
+
+export interface FileNode {
+  path: string; // relative to the folder, e.g. "soul.md" or "reflections/x.md"
+  content: string | null; // null = listed but not loaded (past cap or binary)
+}
+
+function walkFolder(baseDir: string, maxContent: number): FileNode[] {
+  if (!fs.existsSync(baseDir)) return [];
+  const found: Array<{ rel: string; mtime: number }> = [];
+  const walk = (dir: string, prefix: string, depth: number) => {
+    if (depth > 4 || found.length > 500) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue; // skip dotfiles / dotdirs
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(path.join(dir, e.name), rel, depth + 1);
+      else if (e.isFile()) {
+        let mtime = 0;
+        try { mtime = fs.statSync(path.join(dir, e.name)).mtimeMs; } catch {}
+        found.push({ rel, mtime });
+      }
+    }
+  };
+  walk(baseDir, '', 0);
+  found.sort((a, b) => b.mtime - a.mtime); // newest first → recent files keep content
+  return found.map((f, i) => ({
+    path: f.rel,
+    content: i < maxContent && isTextFile(f.rel) ? safeRead(path.join(baseDir, f.rel)) : null,
+  }));
+}
+
 export interface AgentRow {
   name: string;
   directory: string;
@@ -81,6 +131,8 @@ export interface AgentRow {
   agentsText: string | null;
   toolsText: string | null;
   evolutionLessons: string | null;
+  evolutionFiles: FileNode[];
+  memoryFiles: FileNode[];
   skillNames: string[];
   skills: Array<{ name: string; content: string }>;
   memorySummary: string | null;
@@ -97,6 +149,9 @@ function probe(agentDir: string, name: string): AgentRow | null {
     agentsText: safeRead(path.join(agentDir, 'AGENTS.md')),
     toolsText: safeRead(path.join(agentDir, 'TOOLS.md')),
     evolutionLessons: safeRead(path.join(agentDir, 'evolution', 'lessons.md')),
+    evolutionFiles: walkFolder(path.join(agentDir, 'evolution'), EVOLUTION_MAX_CONTENT),
+    // memory = Claude Code auto-memory, NOT a workspace folder.
+    memoryFiles: walkFolder(path.join(encodedProjectDir(agentDir), 'memory'), MEMORY_MAX_CONTENT),
     skillNames: skills.map((s) => s.name),
     skills,
     memorySummary: memorySummary(agentDir),

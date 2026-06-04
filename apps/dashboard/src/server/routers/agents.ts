@@ -217,7 +217,12 @@ export const agentsRouter = router({
   requestEdit: machineProcedure
     .input(z.object({
       name: z.string(),
-      target: z.string().regex(/^(identity|user|agents|tools|evolution|claude|skill:[a-z0-9][a-z0-9-]{0,30})$/, 'invalid target'),
+      // Flat targets, a skill's SKILL.md, OR any file under the workspace
+      // evolution/ folder (evolution/<relpath>). memory/ is NOT editable — it's
+      // Claude Code's auto-memory, read-only from the dashboard.
+      target: z.string()
+        .regex(/^(identity|user|agents|tools|evolution|claude|skill:[a-z0-9][a-z0-9-]{0,30}|evolution\/[A-Za-z0-9._/-]+)$/, 'invalid target')
+        .refine((t) => !t.includes('..'), 'invalid path'),
       content: z.string().max(64 * 1024, 'content too large (>64KB)'),
     }))
     .mutation(async ({ ctx, input }) => {

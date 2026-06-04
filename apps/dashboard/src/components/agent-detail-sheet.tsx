@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
-import { Pencil, Check, X, RotateCw } from 'lucide-react';
+import { Pencil, Check, X, RotateCw, ChevronDown } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -331,23 +331,54 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
 
 // ── Identity / User / Workspace / Tools / Evolution / Memory (list → modal) ──
 
+type FolderFile = { path: string; content: string | null };
+
 function MarkdownSections({ agent, agentName }: { agent: AgentByNameOutput['agent']; agentName: string }) {
-  const items: FileItem[] = [
+  const coreItems: FileItem[] = [
     { key: 'identity', label: 'Identity', body: agent.identityText, target: 'identity' },
     { key: 'user', label: 'User', body: agent.userText, target: 'user' },
     { key: 'agents', label: 'Workspace rules', body: agent.agentsText, target: 'agents' },
     { key: 'tools', label: 'Tools', body: agent.toolsText, target: 'tools' },
-    { key: 'evolution', label: 'Evolution', body: agent.evolutionLessons, target: 'evolution' },
-    // Memory is an auto-generated listing, not one file — read-only (no target).
-    ...(agent.memorySummary ? [{ key: 'memory', label: 'Memory', body: agent.memorySummary } as FileItem] : []),
   ];
+  const evolutionFiles = (agent as unknown as { evolutionFiles?: FolderFile[] }).evolutionFiles ?? [];
+  const memoryFiles = (agent as unknown as { memoryFiles?: FolderFile[] }).memoryFiles ?? [];
+  // evolution/ files are editable (workspace, target evolution/<path>); memory is
+  // Claude Code's auto-memory — read-only (no target). exists:true so a capped /
+  // unloaded file reads "未加载" rather than "not present".
+  const evolutionItems: FileItem[] = evolutionFiles.map((f) => ({
+    key: `evolution/${f.path}`, label: f.path, body: f.content, target: `evolution/${f.path}`, monoLabel: true, exists: true,
+  }));
+  const memoryItems: FileItem[] = memoryFiles.map((f) => ({
+    key: `memory/${f.path}`, label: f.path, body: f.content, monoLabel: true, exists: true,
+  }));
   return (
-    <section>
-      <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
-        files · {items.filter((i) => i.body).length}
-      </h3>
-      <FileList items={items} agentName={agentName} />
+    <section className="space-y-2">
+      <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-1">files</h3>
+      <FileList items={coreItems} agentName={agentName} />
+      <FolderGroup label="evolution" files={evolutionItems} agentName={agentName} />
+      <FolderGroup label="memory" files={memoryItems} agentName={agentName} note="Claude Code auto-memory · 只读" />
     </section>
+  );
+}
+
+// A collapsible folder (evolution/ or memory/) whose sub-files open the same
+// view/edit modal. Memory's items carry no edit target ⇒ read-only.
+function FolderGroup({ label, files, agentName, note }: { label: string; files: FileItem[]; agentName: string; note?: string }) {
+  if (files.length === 0) return null;
+  return (
+    <details className="group rounded-lg border border-border bg-card">
+      <summary className="cursor-pointer list-none flex items-center gap-2 px-3 h-9 text-[12px]">
+        <span className="font-mono text-foreground/85">{label}/</span>
+        <span className="ml-auto flex items-center gap-2 shrink-0 text-muted-foreground tabular-nums">
+          {files.length} file{files.length === 1 ? '' : 's'}
+          <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />
+        </span>
+      </summary>
+      <div className="border-t border-border px-2 py-2">
+        {note && <p className="mb-1.5 px-1 text-[10px] text-muted-foreground/60">{note}</p>}
+        <FileList items={files} agentName={agentName} />
+      </div>
+    </details>
   );
 }
 
@@ -363,10 +394,13 @@ type FileItem = {
   key: string;
   label: string;
   body: string | null;
-  // A write target (identity | user | agents | tools | evolution | skill:<name>)
-  // makes the modal editable. Omit for read-only (Memory).
+  // A write target (identity | user | … | evolution/<path> | skill:<name>) makes
+  // the modal editable. Omit for read-only (memory files).
   target?: string;
   monoLabel?: boolean;
+  // The file exists but its content wasn't loaded (past the folder cap). Distinct
+  // from an absent core file: shows "未加载" instead of "not present".
+  exists?: boolean;
 };
 
 function fmtSize(n: number): string {
@@ -395,7 +429,7 @@ function FileRow({ item, onClick }: { item: FileItem; onClick: () => void }) {
     return (
       <div className="flex items-center gap-2 px-3 py-2 rounded border border-dashed text-xs text-muted-foreground/60">
         <span className={cn('truncate', item.monoLabel ? 'font-mono' : 'uppercase tracking-wide')}>{item.label}</span>
-        <span className="text-muted-foreground/40">— not present</span>
+        <span className="text-muted-foreground/40">{item.exists ? '— 未加载（太旧/超出上限）' : '— not present'}</span>
       </div>
     );
   }

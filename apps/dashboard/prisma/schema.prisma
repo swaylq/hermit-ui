@@ -265,6 +265,8 @@ model Agent {
   // Per-skill SKILL.md contents pushed by the gateway alongside skillNames so
   // the detail sheet can render + edit them. Shape: Array<{name, content}>.
   skills           Json      @default("[]")
+  evolutionFiles   Json      @default("[]") // Array<{ path, content }> — evolution/ tree
+  memoryFiles      Json      @default("[]") // Array<{ path, content }> — Claude Code auto-memory
   memorySummary    String?   @db.Text
   metadataAt       DateTime?
 

@@ -172,6 +172,13 @@ function targetToRelPath(target: string): string {
     case 'evolution': return path.join('evolution', 'lessons.md');
     case 'claude':    return 'CLAUDE.md';
   }
+  // evolution/<relpath> — any file in the agent's workspace evolution/ folder.
+  // editAgentFile's containment guard blocks `..` traversal; reject obvious cases
+  // here too. (memory/ is NOT editable — it's Claude Code's auto-memory.)
+  const ev = target.match(/^evolution\/(.+)$/);
+  if (ev && !ev[1].includes('..') && !ev[1].startsWith('/')) {
+    return path.join('evolution', ev[1]);
+  }
   const m = target.match(/^skill:([a-z0-9][a-z0-9-]{0,30})$/);
   if (m) return path.join('.claude', 'skills', m[1], 'SKILL.md');
   throw new Error(`invalid target: ${target}`);
