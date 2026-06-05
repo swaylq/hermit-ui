@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Pencil, Check, X, RotateCw, ChevronDown, Download, Trash2, Package } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
@@ -19,6 +18,7 @@ import { CtxBar } from './ctx-bar';
 import { PublishToMarketButton } from './publish-to-market-button';
 import { InstallSkillDialog } from './install-skill-dialog';
 import { PublishTemplateDialog } from './publish-template-dialog';
+import { Overlay } from './overlay';
 import { sessionStatusView } from '@/lib/session-status';
 import { useUnread } from '@/lib/session-read';
 
@@ -624,41 +624,25 @@ function DetailModal({
     setDraft('');
   }, [item?.key]);
 
-  // Esc + scroll-lock while open. Esc backs out one level: cancel an in-progress
-  // edit first, otherwise close the modal.
-  useEffect(() => {
-    if (!item) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      if (editing) { setEditing(false); setDraft(''); } else onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prev;
-    };
-  }, [item, editing, onClose]);
+  // Esc / backdrop cancel an in-progress edit first, else close (scroll-lock +
+  // Esc/backdrop wiring live in <Overlay>).
+  const interceptClose = useCallback(() => {
+    if (editing) { setEditing(false); setDraft(''); return true; }
+    return false;
+  }, [editing]);
 
   if (!item || item.body == null) return null;
   const body = item.body;
 
-  // Backdrop / Esc: cancel an in-progress edit first, else close — don't silently
-  // drop a draft on an outside click.
-  const dismiss = () => {
-    if (editing) { setEditing(false); setDraft(''); } else onClose();
-  };
-
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60"
-      onClick={dismiss}
+  return (
+    <Overlay
+      onClose={onClose}
+      z={100}
+      interceptClose={interceptClose}
+      panelClassName="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-lg border border-border bg-background shadow-xl"
     >
-      <div
-        className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-lg border border-border bg-background shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+      {(close) => (
+        <>
         <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5 shrink-0">
           <span className={cn('text-sm font-medium truncate', item.monoLabel && 'font-mono')}>{item.label}</span>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -676,7 +660,7 @@ function DetailModal({
             )}
             <button
               type="button"
-              onClick={onClose}
+              onClick={close}
               aria-label="close"
               className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
             >
@@ -720,9 +704,9 @@ function DetailModal({
             <Markdown>{body}</Markdown>
           )}
         </div>
-      </div>
-    </div>,
-    document.body,
+        </>
+      )}
+    </Overlay>
   );
 }
 
