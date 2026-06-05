@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useState } from 'react';
 import { Pencil, Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Markdown } from './markdown';
+import { Overlay } from './overlay';
 
 // A file shown as a flat list row; clicking opens a portal modal to read the
 // rendered markdown and — when `onSave` is given — edit it. Mirrors the agent
@@ -81,29 +81,15 @@ function DetailModal({ item, onClose }: { item: FileItem | null; onClose: () => 
     setSavedHint(false);
   }, [item?.key]);
 
-  // Esc + scroll-lock while open. Esc backs out one level: cancel an in-progress
-  // edit first, otherwise close the modal.
-  useEffect(() => {
-    if (!item) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      if (editing) { setEditing(false); setDraft(''); } else onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prev;
-    };
-  }, [item, editing, onClose]);
+  // Esc / backdrop back out one level: cancel an in-progress edit first, else
+  // close. (Scroll-lock + Esc/backdrop wiring live in <Overlay>.)
+  const interceptClose = useCallback(() => {
+    if (editing) { setEditing(false); setDraft(''); return true; }
+    return false;
+  }, [editing]);
 
   if (!item || item.body == null) return null;
   const body = item.body;
-
-  const dismiss = () => {
-    if (editing) { setEditing(false); setDraft(''); } else onClose();
-  };
 
   const doSave = async () => {
     if (!item.onSave) return;
@@ -120,15 +106,15 @@ function DetailModal({ item, onClose }: { item: FileItem | null; onClose: () => 
     }
   };
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60"
-      onClick={dismiss}
+  return (
+    <Overlay
+      onClose={onClose}
+      z={100}
+      interceptClose={interceptClose}
+      panelClassName="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-lg border border-border bg-background shadow-xl"
     >
-      <div
-        className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-lg border border-border bg-background shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+      {(close) => (
+        <>
         <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5 shrink-0">
           <span className={cn('text-sm font-medium truncate', item.monoLabel && 'font-mono')}>{item.label}</span>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -146,7 +132,7 @@ function DetailModal({ item, onClose }: { item: FileItem | null; onClose: () => 
             )}
             <button
               type="button"
-              onClick={onClose}
+              onClick={close}
               aria-label="close"
               className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
             >
@@ -192,8 +178,8 @@ function DetailModal({ item, onClose }: { item: FileItem | null; onClose: () => 
             </>
           )}
         </div>
-      </div>
-    </div>,
-    document.body,
+        </>
+      )}
+    </Overlay>
   );
 }

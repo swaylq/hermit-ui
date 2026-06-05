@@ -18,11 +18,15 @@ export function Overlay({
   children,
   panelClassName,
   z = 110,
+  interceptClose,
 }: {
   onClose: () => void;
   children: (close: () => void) => ReactNode;
   panelClassName?: string;
   z?: number;
+  // Esc / backdrop call this first; return true to handle it yourself (e.g. cancel
+  // an in-progress edit) instead of closing. The X / explicit close use `close`.
+  interceptClose?: () => boolean;
 }) {
   const [show, setShow] = useState(false);
 
@@ -32,25 +36,31 @@ export function Overlay({
     return () => cancelAnimationFrame(r);
   }, []);
 
-  // Leave: hide, then unmount after the transition (matches duration-150).
+  // Force close with the leave animation, then unmount (matches duration-150).
   const close = useCallback(() => {
     setShow(false);
     window.setTimeout(onClose, 150);
   }, [onClose]);
 
+  // Soft dismiss (Esc / backdrop): let the child intercept first.
+  const softClose = useCallback(() => {
+    if (interceptClose?.()) return;
+    close();
+  }, [interceptClose, close]);
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') softClose(); };
     document.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
-  }, [close]);
+  }, [softClose]);
 
   return createPortal(
     <div
       className={cn('fixed inset-0 flex items-center justify-center p-4 bg-black/60 transition-opacity duration-150 ease-out', show ? 'opacity-100' : 'opacity-0')}
       style={{ zIndex: z }}
-      onClick={close}
+      onClick={softClose}
     >
       <div
         className={cn('transition-[opacity,transform] duration-150 ease-out', show ? 'opacity-100 scale-100' : 'opacity-0 scale-95', panelClassName)}
