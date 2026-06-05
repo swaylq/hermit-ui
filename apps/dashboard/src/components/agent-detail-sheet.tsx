@@ -393,8 +393,11 @@ function MarkdownSections({ agent, agentName }: { agent: AgentByNameOutput['agen
     { key: 'agents', label: 'Workspace rules', body: agent.agentsText, target: 'agents' },
     { key: 'tools', label: 'Tools', body: agent.toolsText, target: 'tools' },
   ];
-  const evolutionFiles = (agent as unknown as { evolutionFiles?: FolderFile[] }).evolutionFiles ?? [];
-  const memoryFiles = (agent as unknown as { memoryFiles?: FolderFile[] }).memoryFiles ?? [];
+  // Heavy folder trees come from a separate once-fetched query — NOT byName's 30s
+  // refetch (keeps ~200KB of auto-memory JSON off the recurring payload).
+  const folders = trpc.agents.folders.useQuery({ name: agentName });
+  const evolutionFiles = ((folders.data?.evolutionFiles ?? []) as unknown as FolderFile[]);
+  const memoryFiles = ((folders.data?.memoryFiles ?? []) as unknown as FolderFile[]);
   // evolution/ files are editable (workspace, target evolution/<path>); memory is
   // Claude Code's auto-memory — read-only (no target). exists:true so a capped /
   // unloaded file reads "未加载" rather than "not present".

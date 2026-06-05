@@ -61,11 +61,32 @@ export const agentsRouter = router({
     .query(async ({ ctx, input }) => {
       const agent = await prisma.agent.findUnique({
         where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        // Everything the detail sheet renders EXCEPT the heavy evolutionFiles /
+        // memoryFiles JSON — those load once via `folders`, not on the sheet's
+        // 30s refetch. For a big auto-memory this drops ~200KB per refetch.
+        select: {
+          id: true, name: true, directory: true, trashedAt: true, updatedAt: true,
+          identityText: true, userText: true, agentsText: true, toolsText: true,
+          evolutionLessons: true, skillNames: true, skills: true, memorySummary: true,
+          metadataAt: true,
+        },
       });
       if (!agent) return null;
       // Sessions are queried separately by the detail sheet via
       // chat.listSessions({ agentName }), so no need to join here.
       return { agent };
+    }),
+
+  // Heavy folder trees (evolution/ + Claude Code auto-memory) — fetched ONCE when
+  // the detail sheet opens, NOT on byName's 30s refetch (kept out of its payload).
+  folders: machineProcedure
+    .input(z.object({ name: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const a = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { evolutionFiles: true, memoryFiles: true },
+      });
+      return { evolutionFiles: a?.evolutionFiles ?? [], memoryFiles: a?.memoryFiles ?? [] };
     }),
 
   // ── Dashboard-driven agent lifecycle (round-trips through the gateway) ──────
