@@ -235,16 +235,37 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
       >
         {/* Header: workspace switcher + collapse toggle */}
         <div className={cn('flex items-center gap-1 h-12 px-2 shrink-0', collapsed && 'lg:justify-center')}>
-          <div className={cn('flex-1 min-w-0', collapsed && 'lg:hidden')}>
-            {/* The market is fleet-global — no machine switcher there. */}
-            {onMarket ? (
-              <span className="flex items-center gap-1.5 px-2 text-sm font-semibold text-sidebar-foreground">
-                <Store className="h-4 w-4 shrink-0" /> Market
-              </span>
-            ) : (
-              <WorkspaceSwitcher collapsed={collapsed} />
-            )}
-          </div>
+          {/* Same row: dashboard mode = [machine selector][🏪 market icon];
+              market mode = [← back icon][Market label]. Entry + back are icons. */}
+          {onMarket ? (
+            <>
+              <Link
+                href="/chat"
+                title="Back to dashboard"
+                aria-label="back to dashboard"
+                className="inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </Link>
+              <div className={cn('flex-1 min-w-0', collapsed && 'lg:hidden')}>
+                <span className="px-1 text-sm font-semibold text-sidebar-foreground">Market</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={cn('flex-1 min-w-0', collapsed && 'lg:hidden')}>
+                <WorkspaceSwitcher collapsed={collapsed} />
+              </div>
+              <Link
+                href="/market/skills"
+                title="Public marketplace"
+                aria-label="public marketplace"
+                className="inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0"
+              >
+                <Store className="h-4 w-4" />
+              </Link>
+            </>
+          )}
           <button
             type="button"
             onClick={() => setCollapsed(!collapsed)}
@@ -257,14 +278,8 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
         </div>
 
         {onMarket ? (
-          /* Market mode: back-to-dashboard + Skills/Templates nav. */
+          /* Market mode: Skills/Templates nav (back lives in the header). */
           <>
-            <div className="px-2">
-              <Link href="/chat" title="Back to dashboard" className={ctaCls}>
-                <ArrowLeft className="h-4 w-4 shrink-0" />
-                <span className={cn('truncate', collapsed && 'lg:hidden')}>Dashboard</span>
-              </Link>
-            </div>
             <nav className="px-2 pt-2 space-y-0.5">
               {MARKET_NAV.map((n) => {
                 const active = pathname.startsWith(n.href);
@@ -292,14 +307,6 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
           </>
         ) : (
           <>
-            {/* Market entry — CTA-styled, above the route-aware New-X CTA. */}
-            <div className="px-2 pb-1">
-              <Link href="/market/skills" title="Public marketplace" className={ctaCls}>
-                <Store className="h-4 w-4 shrink-0" />
-                <span className={cn('truncate', collapsed && 'lg:hidden')}>Market</span>
-              </Link>
-            </div>
-
             {/* Primary CTA — route-aware (New agent / New cron / New chat). */}
             <div className="px-2">
               <Link href={cta.href} title={cta.label} className={ctaCls}>
