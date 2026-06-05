@@ -49,7 +49,14 @@ function PublishDialog({
   const [done, setDone] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const publish = trpc.market.publishSkillFromLocal.useMutation({
-    onSuccess: (row) => { utils.market.listSkills.invalidate(); setDone(`${row.slug} · v${row.latestVersion}`); },
+    onSuccess: (row) => {
+      utils.market.listSkills.invalidate();
+      // Publishing also creates/updates the binding — refresh the linked-state
+      // queries so the 🔗 chip appears now, not after the next 30s status poll.
+      if (source === 'agent' && agentName) utils.market.agentSkillStatus.invalidate({ agentName });
+      else if (source === 'global') utils.market.globalSkillStatus.invalidate();
+      setDone(`${row.slug} · v${row.latestVersion}`);
+    },
     onError: (e) => setErr(e.message),
   });
 
