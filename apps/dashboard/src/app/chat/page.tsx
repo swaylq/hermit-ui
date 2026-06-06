@@ -372,33 +372,63 @@ function saveDraft(sid: string, v: string) {
 const HL_CTOR: any = typeof window !== 'undefined' ? (window as any).Highlight : undefined;
 const HL_REG: any = typeof CSS !== 'undefined' ? (CSS as any).highlights : undefined;
 const HL_OK = !!HL_CTOR && !!HL_REG;
+// Only realize Ranges for the current match ±HL_WINDOW. A 1-char query can match
+// thousands of nodes; building+registering a Range for every one janks the frame.
+// The index below stays lightweight ({node,start}), so count + navigation cover
+// all matches while paint cost is bounded to ~2·HL_WINDOW regardless of total.
+const HL_WINDOW = 100;
+function rangeFrom(node: Text, start: number, len: number): Range | null {
+  try {
+    const r = document.createRange();
+    r.setStart(node, start);
+    r.setEnd(node, start + len);
+    return r;
+  } catch {
+    return null; // node went stale between index build and paint — skip it
+  }
+}
 
 function ChatFind({ getViewport, onClose }: { getViewport: () => HTMLElement | null; onClose: () => void }) {
   const [query, setQuery] = useState('');
   const [count, setCount] = useState(0);
   const [pos, setPos] = useState(0); // 1-based current match (0 = none)
-  const rangesRef = useRef<Range[]>([]);
+  const matchesRef = useRef<Array<{ node: Text; start: number }>>([]);
+  const qLenRef = useRef(0);
   const posRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Realize Ranges only for the current match ±HL_WINDOW and re-center on every
+  // step, so the painted band follows wherever you are. For ≤2·HL_WINDOW matches
+  // the window covers them all — visually identical to highlighting everything.
   const paint = useCallback((idx0: number) => {
     if (!HL_OK) return;
-    const ranges = rangesRef.current;
-    HL_REG.set('chat-find', new HL_CTOR(...ranges));
-    const cur = ranges[idx0];
+    const ms = matchesRef.current;
+    if (ms.length === 0) { HL_REG.delete('chat-find'); HL_REG.delete('chat-find-current'); return; }
+    const lo = Math.max(0, idx0 - HL_WINDOW);
+    const hi = Math.min(ms.length - 1, idx0 + HL_WINDOW);
+    const ranges: Range[] = [];
+    for (let i = lo; i <= hi; i++) {
+      const r = rangeFrom(ms[i].node, ms[i].start, qLenRef.current);
+      if (r) ranges.push(r);
+    }
+    if (ranges.length) HL_REG.set('chat-find', new HL_CTOR(...ranges));
+    else HL_REG.delete('chat-find');
+    const cur = ms[idx0] ? rangeFrom(ms[idx0].node, ms[idx0].start, qLenRef.current) : null;
     if (cur) HL_REG.set('chat-find-current', new HL_CTOR(cur));
     else HL_REG.delete('chat-find-current');
   }, []);
 
   const clearHl = useCallback(() => {
     if (HL_OK) { HL_REG.delete('chat-find'); HL_REG.delete('chat-find-current'); }
-    rangesRef.current = [];
+    matchesRef.current = [];
   }, []);
 
   const scrollToCurrent = useCallback(() => {
     const root = getViewport();
-    const r = rangesRef.current[posRef.current - 1];
-    if (!root || !r) return;
+    const m = matchesRef.current[posRef.current - 1];
+    if (!root || !m) return;
+    const r = rangeFrom(m.node, m.start, qLenRef.current);
+    if (!r) return;
     const rect = r.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return; // detached / not laid out
     const vp = root.getBoundingClientRect();
@@ -409,7 +439,10 @@ function ChatFind({ getViewport, onClose }: { getViewport: () => HTMLElement | n
     const root = getViewport();
     const q = query.trim().toLowerCase();
     if (!root || !q) { clearHl(); setCount(0); setPos(0); posRef.current = 0; return; }
-    const ranges: Range[] = [];
+    // Cheap pass: record each match's location only — no Range/Highlight here.
+    // Thousands of {node,start} tuples cost microseconds; the heavy Range work is
+    // deferred to paint()'s bounded window, so a 1-char query no longer janks.
+    const matches: Array<{ node: Text; start: number }> = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: (n) => (n.nodeValue && n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
     });
@@ -418,20 +451,16 @@ function ChatFind({ getViewport, onClose }: { getViewport: () => HTMLElement | n
       const hay = node.nodeValue!.toLowerCase();
       let i = hay.indexOf(q);
       while (i !== -1) {
-        try {
-          const r = document.createRange();
-          r.setStart(node, i);
-          r.setEnd(node, i + q.length);
-          ranges.push(r);
-        } catch { /* node went stale mid-walk — skip */ }
+        matches.push({ node: node as Text, start: i });
         i = hay.indexOf(q, i + q.length);
       }
     }
-    rangesRef.current = ranges;
-    setCount(ranges.length);
-    if (ranges.length === 0) { clearHl(); rangesRef.current = []; setPos(0); posRef.current = 0; return; }
+    matchesRef.current = matches;
+    qLenRef.current = q.length;
+    setCount(matches.length);
+    if (matches.length === 0) { clearHl(); setPos(0); posRef.current = 0; return; }
     let next = posRef.current;
-    if (next < 1 || next > ranges.length) next = 1;
+    if (next < 1 || next > matches.length) next = 1;
     posRef.current = next;
     setPos(next);
     paint(next - 1);
@@ -464,7 +493,7 @@ function ChatFind({ getViewport, onClose }: { getViewport: () => HTMLElement | n
   useEffect(() => () => clearHl(), [clearHl]); // clear highlights on close
 
   const step = useCallback((delta: number) => {
-    const n = rangesRef.current.length;
+    const n = matchesRef.current.length;
     if (n === 0) return;
     let next = posRef.current + delta;
     if (next < 1) next = n;
