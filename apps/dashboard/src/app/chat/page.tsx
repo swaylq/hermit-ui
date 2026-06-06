@@ -1631,7 +1631,11 @@ function LoopCard({ loop, sessionId }: { loop: LoopEntry; sessionId: string }) {
           />
         </span>
       </summary>
-      <div className="border-t border-border px-3 py-2 text-[12px] space-y-1">
+      {/* Cap the whole expanded panel so a long lastResult / many rounds can't
+          grow the shrink-0 LoopBar and squeeze the conversation above it. One
+          bounded scroll region (not nested) avoids a scroll-trap on mobile;
+          overscroll-contain keeps the scroll from chaining into the chat. */}
+      <div className="border-t border-border px-3 py-2 text-[12px] space-y-1 max-h-[40vh] overflow-y-auto overscroll-contain">
         {loop.prompt && <LoopDetail k="任务" v={loop.prompt} />}
         <LoopDetail k="节奏" v={schedule} />
         {loop.kind && <LoopDetail k="类型" v={loop.kind} />}
@@ -1710,7 +1714,7 @@ function LoopRuns({
         <div className="text-muted-foreground/70 text-[11px] mb-0.5">
           上次结果{q.isFetching ? ' · 加载每轮…' : ''}
         </div>
-        <div className="text-foreground/90 whitespace-pre-wrap max-h-60 overflow-auto">{fallback}</div>
+        <div className="text-foreground/90 whitespace-pre-wrap">{fallback}</div>
       </div>
     );
   }
@@ -1720,7 +1724,8 @@ function LoopRuns({
         <span className="text-muted-foreground/70 text-[11px]">每轮结果 ({runs.length})</span>
         <span className="text-muted-foreground/40 text-[10px]">最新在上 · 点开看完整</span>
       </div>
-      <div className="max-h-[40vh] overflow-auto -mx-1 px-1 space-y-1">
+      {/* No inner max-h — the parent panel owns the single scroll region. */}
+      <div className="-mx-1 px-1 space-y-1">
         {runs.map((r) => (
           <LoopRunRow key={r.id} run={r} />
         ))}
