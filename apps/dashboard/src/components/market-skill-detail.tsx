@@ -6,6 +6,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { FileList, type FileItem } from '@/components/file-detail';
+import { SkillDiff } from '@/components/skill-diff';
 import { Overlay } from '@/components/overlay';
 
 type Ref = { path: string; content: string };
@@ -17,7 +18,12 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
   const skill = q.data;
   const versions = skill?.versions ?? [];
   const [selId, setSelId] = useState<string | null>(null);
+  const [view, setView] = useState<'content' | 'diff'>('content');
   const selected = versions.find((v) => v.id === selId) ?? versions[0] ?? null;
+  // The chronologically previous (older) version, for the diff. versions are
+  // newest-first, so the predecessor sits at the next index.
+  const curIdx = selected ? versions.findIndex((v) => v.id === selected.id) : -1;
+  const previous = curIdx >= 0 ? versions[curIdx + 1] ?? null : null;
 
   const files: FileItem[] = selected
     ? [
@@ -65,7 +71,35 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
                   </div>
                 </div>
                 {selected?.changelog && <p className="text-xs text-muted-foreground/80 border-l-2 border-border pl-2">{selected.changelog}</p>}
-                <FileList items={files} />
+                {versions.length > 1 && (
+                  <div className="flex items-center gap-1 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setView('content')}
+                      className={cn('px-2 py-0.5 rounded cursor-pointer transition-colors', view === 'content' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50')}
+                    >
+                      内容
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setView('diff')}
+                      disabled={!previous}
+                      title={previous ? undefined : '最早的版本，无可对比的上一版'}
+                      className={cn('px-2 py-0.5 rounded transition-colors', view === 'diff' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50', previous ? 'cursor-pointer' : 'opacity-40 cursor-not-allowed')}
+                    >
+                      改动{previous ? ` (vs v${previous.version})` : ''}
+                    </button>
+                  </div>
+                )}
+                {view === 'diff' ? (
+                  previous && selected ? (
+                    <SkillDiff oldText={previous.content ?? ''} newText={selected.content ?? ''} />
+                  ) : (
+                    <div className="text-xs text-muted-foreground px-1 py-2">v{selected?.version} 是最早的版本，没有可对比的上一版。</div>
+                  )
+                ) : (
+                  <FileList items={files} />
+                )}
               </>
             )}
           </div>

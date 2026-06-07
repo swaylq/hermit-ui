@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Upload, X, Check } from 'lucide-react';
+import { Upload, X, Check, Loader2 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,17 +19,34 @@ export function PublishToMarketButton({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  // Gate publishing while this skill has an un-synced local edit in flight. The
+  // publish reads the DB-cached skill body, which only refreshes after the
+  // gateway applies the edit and re-syncs; publishing mid-sync reads stale
+  // content → a silent no-op re-publish. The per-skill request queue is the
+  // signal: a pending edit means the new content hasn't landed yet. One shared
+  // poll per page (React Query dedupes the no-arg query across every button).
+  const agentPending = trpc.agents.pendingRequests.useQuery(undefined, {
+    enabled: source === 'agent', refetchInterval: 3000,
+  });
+  const globalPending = trpc.skills.pendingRequests.useQuery(undefined, {
+    enabled: source === 'global', refetchInterval: 3000,
+  });
+  const syncing = source === 'agent'
+    ? (agentPending.data ?? []).some((r) => r.kind === 'edit' && r.agentName === agentName && r.target === `skill:${skillName}`)
+    : (globalPending.data ?? []).some((r) => r.skillName === skillName);
+
   return (
     <>
       <Button
         size="icon-sm"
         variant="ghost"
         className={className ?? 'shrink-0 text-muted-foreground hover:text-foreground'}
-        title="Publish to market"
+        title={syncing ? '改动同步中…同步完成后即可发布' : 'Publish to market'}
         aria-label="publish to market"
-        onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+        disabled={syncing}
+        onClick={(e) => { e.stopPropagation(); if (!syncing) setOpen(true); }}
       >
-        <Upload className="size-3.5" />
+        {syncing ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
       </Button>
       {open && <PublishDialog source={source} skillName={skillName} agentName={agentName} onClose={() => setOpen(false)} />}
     </>
