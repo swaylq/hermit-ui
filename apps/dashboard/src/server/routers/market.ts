@@ -138,9 +138,11 @@ export const marketRouter = router({
       });
 
       let result: { id: string; slug: string; latestVersion: string };
+      let created = true; // did this publish actually append a new version?
       if (existing) {
         if (existing.versions[0]?.contentHash === hash) {
-          result = existing; // identical re-publish → no new version
+          result = existing; // identical content → no new version appended
+          created = false;
         } else {
           const nextVer = String((parseInt(existing.latestVersion, 10) || 0) + 1);
           await prisma.marketSkillVersion.create({
@@ -174,7 +176,11 @@ export const marketRouter = router({
           data: { marketSkillId: result.id, marketVersion: result.latestVersion },
         });
       }
-      return result;
+      // `created` lets the UI distinguish a real new version from a no-op
+      // re-publish of identical content (often: the edit hasn't synced to the
+      // DB cache yet — agent.skills refreshes a few seconds after the gateway
+      // applies the edit), instead of silently showing "published" either way.
+      return { id: result.id, slug: result.slug, latestVersion: result.latestVersion, created };
     }),
 
   // ── Update detection ────────────────────────────────────────────────────────

@@ -46,7 +46,7 @@ function PublishDialog({
 }) {
   const utils = trpc.useUtils();
   const [changelog, setChangelog] = useState('');
-  const [done, setDone] = useState<string | null>(null);
+  const [done, setDone] = useState<{ label: string; created: boolean } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const publish = trpc.market.publishSkillFromLocal.useMutation({
     onSuccess: (row) => {
@@ -55,7 +55,7 @@ function PublishDialog({
       // queries so the 🔗 chip appears now, not after the next 30s status poll.
       if (source === 'agent' && agentName) utils.market.agentSkillStatus.invalidate({ agentName });
       else if (source === 'global') utils.market.globalSkillStatus.invalidate();
-      setDone(`${row.slug} · v${row.latestVersion}`);
+      setDone({ label: `${row.slug} · v${row.latestVersion}`, created: row.created });
     },
     onError: (e) => setErr(e.message),
   });
@@ -76,28 +76,36 @@ function PublishDialog({
               {source === 'agent' && agentName ? <> （来自 agent <span className="font-mono text-foreground/90">{agentName}</span>）</> : <>（本机 skill）</>}
               {' '}到舰队公共市场。已存在则追加一个新版本。
             </p>
-            {done ? (
+            {done?.created ? (
               <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">
-                <Check className="h-3.5 w-3.5 shrink-0" /> 已发布 <span className="font-mono">{done}</span>
+                <Check className="h-3.5 w-3.5 shrink-0" /> 已发布 <span className="font-mono">{done.label}</span>
               </div>
             ) : (
-              <label className="block">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Changelog <span className="opacity-50">(optional)</span></span>
-                <Input value={changelog} onChange={(e) => setChangelog(e.target.value)} placeholder="what changed" className="mt-1.5 text-sm" />
-              </label>
+              <>
+                {done && !done.created && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                    内容与 <span className="font-mono">{done.label}</span> 相同，未创建新版本。
+                    <span className="mt-1 block opacity-80">刚改过这个 skill 的话，改动可能还没同步到面板（约几秒）——稍候再点一次「重新发布」。</span>
+                  </div>
+                )}
+                <label className="block">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Changelog <span className="opacity-50">(optional)</span></span>
+                  <Input value={changelog} onChange={(e) => setChangelog(e.target.value)} placeholder="what changed" className="mt-1.5 text-sm" />
+                </label>
+              </>
             )}
             {err && <p className="text-xs text-rose-500">{err}</p>}
             <div className="flex justify-end gap-2 pt-1">
               <button type="button" onClick={close} className="h-8 px-3 rounded-md text-sm text-muted-foreground hover:bg-accent cursor-pointer">
-                {done ? 'Close' : 'Cancel'}
+                {done?.created ? 'Close' : 'Cancel'}
               </button>
-              {!done && (
+              {!done?.created && (
                 <Button
                   size="sm"
                   disabled={publish.isPending}
                   onClick={() => publish.mutate({ source, skillName, agentName, changelog: changelog.trim() || undefined })}
                 >
-                  {publish.isPending ? 'publishing…' : 'Publish'}
+                  {publish.isPending ? 'publishing…' : (done ? '重新发布' : 'Publish')}
                 </Button>
               )}
             </div>
