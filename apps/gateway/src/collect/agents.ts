@@ -17,6 +17,9 @@ import path from 'node:path';
 import { encodedProjectDir } from '@hermit-ui/tmux-driver';
 
 const MAX_TEXT_BYTES = 16 * 1024;       // 16 KB per markdown — anything bigger gets truncated
+const SKILL_MAX_BYTES = 64 * 1024;      // SKILL.md gets 64 KB — matches global skills + the 64 KB
+                                        // requestEdit/publish ceiling, so a large skill isn't
+                                        // truncated before it reaches the detail sheet or the market
 const MEMORY_TOPN = 6;                  // top N memory files to mention by name
 
 function safeRead(p: string, maxBytes = MAX_TEXT_BYTES): string | null {
@@ -50,7 +53,7 @@ function listSkillDocs(agentDir: string): Array<{ name: string; content: string 
   const names = listSkills(agentDir);
   return names.map((name) => ({
     name,
-    content: safeRead(path.join(agentDir, '.claude', 'skills', name, 'SKILL.md')) ?? '',
+    content: safeRead(path.join(agentDir, '.claude', 'skills', name, 'SKILL.md'), SKILL_MAX_BYTES) ?? '',
   }));
 }
 

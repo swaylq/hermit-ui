@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { api } from './api';
 
 const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
@@ -173,8 +174,20 @@ export function collectGlobalSkills(): GlobalSkillRow[] {
   return rows.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Skip the push when nothing changed. collectGlobalSkills() reads the (OS-cached)
+// filesystem cheaply each tick, but the payload — every SKILL.md plus up to 20
+// reference files each — is order-1MB and changes rarely; re-POSTing it to the
+// dashboard every 60s, which then re-upserts every row, was pure churn. Hash the
+// collected set and only push on a real change. lastSig is set AFTER a successful
+// push, so a failed POST simply retries on the next tick. (No liveness display
+// depends on the periodic push — global-skill metadataAt isn't shown anywhere.)
+let lastSig: string | null = null;
 export async function pushGlobalSkills(): Promise<void> {
-  await api.syncGlobalSkills(collectGlobalSkills());
+  const rows = collectGlobalSkills();
+  const sig = crypto.createHash('sha1').update(JSON.stringify(rows)).digest('hex');
+  if (sig === lastSig) return;
+  await api.syncGlobalSkills(rows);
+  lastSig = sig;
 }
 
 // ── Lifecycle (apply dashboard-queued create/edit/delete on disk) ─────────────
