@@ -25,10 +25,26 @@ function slugify(s: string): string {
 export function parseFrontmatter(md: string): { name?: string; description?: string } {
   const m = md.match(/^---\n([\s\S]*?)\n---/);
   if (!m) return {};
+  const lines = m[1].split('\n');
   const out: { name?: string; description?: string } = {};
-  for (const line of m[1].split('\n')) {
-    const fm = line.match(/^(name|description):\s*(.*)$/);
-    if (fm) out[fm[1] as 'name' | 'description'] = fm[2].replace(/^["']|["']$/g, '').trim();
+  for (let i = 0; i < lines.length; i++) {
+    const fm = lines[i].match(/^(name|description):\s*(.*)$/);
+    if (!fm) continue;
+    const key = fm[1] as 'name' | 'description';
+    let val = fm[2];
+    // YAML block scalar (`|` / `>`, optional chomp indicator): gather the indented
+    // continuation lines. master.skill descriptions ship as `description: |`.
+    if (/^[|>][+-]?$/.test(val.trim())) {
+      const parts: string[] = [];
+      for (let j = i + 1; j < lines.length; j++) {
+        if (/^\s+\S/.test(lines[j])) parts.push(lines[j].trim());
+        else break;
+      }
+      val = parts.join(' ');
+    } else {
+      val = val.replace(/^["']|["']$/g, '');
+    }
+    out[key] = val.trim();
   }
   return out;
 }
@@ -83,12 +99,22 @@ async function importMaster(slug: string, originUrl: string): Promise<ImportResu
     const cur = json?.current ?? json;
     content = cur?.skill_md ?? cur?.content ?? json?.skill_md ?? null;
     displayName = json?.title ?? json?.name ?? json?.displayName ?? slug;
-    description = json?.description ?? json?.summary ?? null;
+    description = json?.description ?? json?.summary ?? json?.tagline
+      ?? (content ? parseFrontmatter(content).description : null)
+      ?? json?.name_cn ?? json?.name_en ?? null;
+    // Sub-files ship inline under current.cli_scripts as { path, content } (e.g.
+    // { path: 'workflow/3d.sh', … }). This previously looked for c.name — which
+    // doesn't exist on the payload — so every script was silently dropped and
+    // only SKILL.md imported. Keep each file at its own relative path; tolerate a
+    // name-keyed object shape as a fallback.
     const cs = cur?.cli_scripts;
     if (Array.isArray(cs)) {
-      for (const c of cs) if (c?.name && c?.content && refs.length < MAX_REFS) refs.push({ path: `cli/${c.name}`, content: String(c.content) });
+      for (const c of cs) {
+        const p = c?.path ?? c?.name;
+        if (p && c?.content != null && refs.length < MAX_REFS) refs.push({ path: String(p), content: String(c.content) });
+      }
     } else if (cs && typeof cs === 'object') {
-      for (const [k, v] of Object.entries(cs)) if (refs.length < MAX_REFS) refs.push({ path: `cli/${k}`, content: String(v) });
+      for (const [k, v] of Object.entries(cs)) if (refs.length < MAX_REFS) refs.push({ path: String(k), content: String(v) });
     }
     if (Array.isArray(json?.sub_skills)) {
       for (const s of json.sub_skills) {
