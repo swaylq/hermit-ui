@@ -102,7 +102,12 @@ export const marketRouter = router({
         });
         if (!g) throw new Error('global skill not found');
         content = g.content;
-        refs = (g.refs as Ref[]) ?? [];
+        // GlobalSkill.refs are { name, content } (from the skill's references/
+        // dir); the market detail + install both key on `path`. Normalize to a
+        // real relative path so files keep their names and install writes them.
+        refs = ((g.refs as Array<{ name?: string; path?: string; content?: string }>) ?? [])
+          .map((r) => ({ path: r.path ?? (r.name ? `references/${r.name}` : ''), content: String(r.content ?? '') }))
+          .filter((r) => !!r.path);
         desc = desc ?? g.description ?? null;
         if (g.marketSkillId) {
           boundSlug = (await prisma.marketSkill.findUnique({ where: { id: g.marketSkillId }, select: { slug: true } }))?.slug ?? null;

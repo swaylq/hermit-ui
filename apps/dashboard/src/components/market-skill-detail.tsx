@@ -9,7 +9,7 @@ import { FileList, type FileItem } from '@/components/file-detail';
 import { SkillDiff } from '@/components/skill-diff';
 import { Overlay } from '@/components/overlay';
 
-type Ref = { path: string; content: string };
+type Ref = { path?: string; name?: string; content: string };
 
 // Read-only detail for a marketplace skill: version history + the selected
 // version's SKILL.md + ref files.
@@ -28,7 +28,12 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
   const files: FileItem[] = selected
     ? [
         { key: 'SKILL.md', label: 'SKILL.md', body: selected.content ?? null, monoLabel: true },
-        ...(((selected.refs as Ref[]) ?? []).map((r) => ({ key: r.path, label: r.path, body: r.content, monoLabel: true }))),
+        ...(((selected.refs as Ref[]) ?? []).map((r, i) => {
+          // Older global-skill publishes stored refs as { name } not { path };
+          // fall back so every file shows a name (and a stable React key).
+          const label = r.path ?? r.name ?? `(file ${i + 1})`;
+          return { key: `${label}-${i}`, label, body: r.content, monoLabel: true };
+        })),
       ]
     : [];
 
