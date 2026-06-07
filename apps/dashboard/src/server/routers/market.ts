@@ -215,8 +215,9 @@ export const marketRouter = router({
 
   // ── Install / update a market skill into an agent ───────────────────────────
   // Writes the latest version's SKILL.md via AgentRequest(edit, skill:<slug>) —
-  // the gateway's editAgentFile mkdir+overwrites — then binds. "Pull update" and
-  // "install from market" are the same op. (v1: SKILL.md only; refs deferred.)
+  // the gateway's editAgentFile mkdir+overwrites — plus the version's sub-files
+  // (refs) so the whole skill tree lands on disk, then binds. "Pull update" and
+  // "install from market" are the same op.
   installToAgent: machineProcedure
     .input(z.object({ slug: z.string(), agentName: z.string() }))
     .mutation(async ({ ctx, input }) => {
@@ -235,7 +236,7 @@ export const marketRouter = router({
       if (!agent) throw new Error('agent not found');
 
       await prisma.agentRequest.create({
-        data: { machineId: ctx.machine.id, kind: 'edit', agentName: input.agentName, target: `skill:${input.slug}`, content: ver.content },
+        data: { machineId: ctx.machine.id, kind: 'edit', agentName: input.agentName, target: `skill:${input.slug}`, content: ver.content, refs: ver.refs ?? undefined },
       });
       await prisma.agentSkillInstall.upsert({
         where: { machineId_agentName_skillName: { machineId: ctx.machine.id, agentName: input.agentName, skillName: input.slug } },
@@ -274,7 +275,7 @@ export const marketRouter = router({
     });
     if (exists?.isBundle) throw new Error('a managed bundle with that name exists — refusing to overwrite');
     await prisma.globalSkillRequest.create({
-      data: { machineId: ctx.machine.id, kind: exists ? 'edit' : 'create', skillName: input.slug, content: ver.content },
+      data: { machineId: ctx.machine.id, kind: exists ? 'edit' : 'create', skillName: input.slug, content: ver.content, refs: ver.refs ?? undefined },
     });
     // Provenance — preserved across the gateway's filesystem push (its upsert
     // `update` clause never touches marketSkillId). Optimistic create so /skills

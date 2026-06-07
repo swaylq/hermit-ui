@@ -215,6 +215,28 @@ function editAgentFile(name: string, directory: string | null, target: string, c
   fs.writeFileSync(dst, content);
 }
 
+// Write a market skill's sub-files ([{ path, content }]) into its on-disk skill
+// dir. Paths come from the marketplace, so guard against `..` / absolute escapes —
+// skip anything resolving outside skillDir. Called on install (the edit request
+// carries `refs`); plain edits have none, so this is a no-op for them.
+function writeSkillRefs(skillDir: string, refs: Array<{ path: string; content: string }> | null | undefined): number {
+  if (!Array.isArray(refs)) return 0;
+  const root = path.resolve(skillDir);
+  let n = 0;
+  for (const r of refs) {
+    const rel = r?.path;
+    const content = r?.content;
+    if (typeof rel !== 'string' || typeof content !== 'string') continue;
+    if (rel.includes('..') || rel.startsWith('/')) continue;
+    const dst = path.resolve(root, rel);
+    if (dst !== root && !dst.startsWith(root + path.sep)) continue;
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.writeFileSync(dst, content);
+    n++;
+  }
+  return n;
+}
+
 // Remove a single skill dir from an agent (.claude/skills/<name>/). Backs the
 // marketplace "uninstall" via the agent-request kind `delete-skill`.
 function deleteAgentSkill(name: string, directory: string | null, target: string) {
@@ -256,6 +278,13 @@ export async function agentRequestTick() {
         } else if (r.kind === 'edit') {
           if (!r.target || r.content == null) throw new Error('edit request missing target/content');
           editAgentFile(r.agentName, r.agentDirectory, r.target, r.content);
+          // Install bundles carry the skill's sub-files in `refs`; write the whole
+          // tree into the skill dir, not just SKILL.md. (Plain edits have no refs.)
+          const sm = r.target.match(/^skill:([a-z0-9][a-z0-9-]{0,30})$/);
+          if (sm && r.agentDirectory && r.refs) {
+            const wrote = writeSkillRefs(path.join(path.resolve(r.agentDirectory), '.claude', 'skills', sm[1]), r.refs);
+            if (wrote) console.log(`[agent-lifecycle] ${r.agentName}: wrote ${wrote} sub-file(s) for skill ${sm[1]}`);
+          }
           if (r.agentDirectory) refreshAfter.push({ name: r.agentName, directory: r.agentDirectory });
         } else if (r.kind === 'delete-skill') {
           if (!r.target) throw new Error('delete-skill request missing target');

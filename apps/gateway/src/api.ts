@@ -120,7 +120,7 @@ export const api = {
   // requestCreate's transaction inserting Agent + AgentRequest, and us picking
   // both up, so in practice always set for delete/edit; null for fresh create
   // while gateway hasn't scaffolded yet).
-  pollAgentRequests: async (): Promise<Array<{ id: string; kind: string; agentName: string; persona: string | null; target: string | null; content: string | null; agentDirectory: string | null }>> => {
+  pollAgentRequests: async (): Promise<Array<{ id: string; kind: string; agentName: string; persona: string | null; target: string | null; content: string | null; refs: Array<{ path: string; content: string }> | null; agentDirectory: string | null }>> => {
     const r = await get<any>(
       '/api/trpc/agents.pollRequests?batch=1&input=' +
         encodeURIComponent(JSON.stringify({ '0': { json: null } })),
@@ -155,7 +155,7 @@ export const api = {
   // poll/ack mirror the agent lifecycle for dashboard-queued create/edit/delete.
   syncGlobalSkills: (skills: any[]) => post('/api/sync/global-skills', { skills }),
 
-  pollGlobalSkillRequests: async (): Promise<Array<{ id: string; kind: string; skillName: string; content: string | null }>> => {
+  pollGlobalSkillRequests: async (): Promise<Array<{ id: string; kind: string; skillName: string; content: string | null; refs: Array<{ path: string; content: string }> | null }>> => {
     const r = await get<any>(
       '/api/trpc/skills.pollRequests?batch=1&input=' +
         encodeURIComponent(JSON.stringify({ '0': { json: null } })),

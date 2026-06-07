@@ -69,6 +69,7 @@ model AgentRequest {
   // agent-lifecycle.ts); raw paths are never accepted from the dashboard.
   target      String?
   content     String?   @db.Text
+  refs        Json? // install bundle: sub-files [{ path, content }] written alongside SKILL.md
   status      String    @default("pending") // pending | done | error
   error       String?   @db.Text
   requestedAt DateTime  @default(now())
@@ -113,6 +114,7 @@ model GlobalSkillRequest {
   kind        String // "create" | "edit" | "delete"
   skillName   String
   content     String?   @db.Text // create / edit: full SKILL.md
+  refs        Json? // install bundle: sub-files [{ path, content }] written alongside SKILL.md
   status      String    @default("pending") // pending | done | error
   error       String?   @db.Text
   requestedAt DateTime  @default(now())

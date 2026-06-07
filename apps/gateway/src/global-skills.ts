@@ -192,7 +192,27 @@ export async function pushGlobalSkills(): Promise<void> {
 
 // ── Lifecycle (apply dashboard-queued create/edit/delete on disk) ─────────────
 
-function applyGlobalSkillRequest(req: { kind: string; skillName: string; content: string | null }): void {
+// Write an installed skill's sub-files ([{ path, content }]) into its dir. Paths
+// come from the marketplace, so guard against `..` / absolute escapes.
+function writeSkillRefs(skillDir: string, refs: Array<{ path: string; content: string }> | null | undefined): number {
+  if (!Array.isArray(refs)) return 0;
+  const root = path.resolve(skillDir);
+  let n = 0;
+  for (const r of refs) {
+    const rel = r?.path;
+    const content = r?.content;
+    if (typeof rel !== 'string' || typeof content !== 'string') continue;
+    if (rel.includes('..') || rel.startsWith('/')) continue;
+    const dst = path.resolve(root, rel);
+    if (dst !== root && !dst.startsWith(root + path.sep)) continue;
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.writeFileSync(dst, content);
+    n++;
+  }
+  return n;
+}
+
+function applyGlobalSkillRequest(req: { kind: string; skillName: string; content: string | null; refs?: Array<{ path: string; content: string }> | null }): void {
   const name = req.skillName;
   if (!NAME_RE.test(name)) throw new Error(`invalid skill name: ${name}`);
   const dir = path.join(SKILLS_DIR, name);
@@ -202,10 +222,12 @@ function applyGlobalSkillRequest(req: { kind: string; skillName: string; content
     if (fs.existsSync(dir)) throw new Error('skill already exists on disk');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'SKILL.md'), req.content ?? '');
+    writeSkillRefs(dir, req.refs);
   } else if (req.kind === 'edit') {
     if (!fs.existsSync(path.join(dir, 'SKILL.md'))) throw new Error('SKILL.md not found');
     if (isManagedBundle(dir)) throw new Error('managed bundle (git/plugin) — refusing to edit');
     fs.writeFileSync(path.join(dir, 'SKILL.md'), req.content ?? '');
+    writeSkillRefs(dir, req.refs);
   } else if (req.kind === 'delete') {
     if (!fs.existsSync(dir)) return; // already gone
     if (isManagedBundle(dir)) throw new Error('managed bundle (git/plugin) — refusing to delete');
