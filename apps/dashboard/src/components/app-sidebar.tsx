@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, LogOut, MenuIcon, Plus,
-  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, type LucideIcon,
+  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, Search, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -784,6 +784,10 @@ function RecentSessions() {
     } catch { /* private mode etc. — fine */ }
   };
 
+  // Ephemeral text search over recents — matches the displayed title (or preview
+  // fallback) + agent name. Not persisted: a quick find, not a scoping choice.
+  const [q, setQ] = useState('');
+
   // Prefetch message history for the top sessions so opening one is instant.
   // Key on the session-ID LIST (a value-stable string), NOT the row objects:
   // listSessions' rows get a fresh reference every ~8s snapshot tick (state /
@@ -813,10 +817,19 @@ function RecentSessions() {
     sessions.data?.forEach((s) => names.add(s.agentName));
     return Array.from(names).sort();
   }, [sessions.data]);
-  const visible = useMemo(
-    () => (filter ? (sessions.data ?? []).filter((s) => s.agentName === filter) : sessions.data ?? []),
-    [sessions.data, filter],
-  );
+  const visible = useMemo(() => {
+    let rows = sessions.data ?? [];
+    if (filter) rows = rows.filter((s) => s.agentName === filter);
+    const needle = q.trim().toLowerCase();
+    if (needle) {
+      rows = rows.filter(
+        (s) =>
+          (s.title || s.preview || '').toLowerCase().includes(needle) ||
+          s.agentName.toLowerCase().includes(needle),
+      );
+    }
+    return rows;
+  }, [sessions.data, filter, q]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">
@@ -824,34 +837,46 @@ function RecentSessions() {
         <span>Recents</span>
         <span className="tabular-nums text-muted-foreground/50">{visible.length}</span>
       </div>
-      {agentNames.length > 1 && (
-        <div className="px-2 pb-1">
-          {/* Custom (non-native) dropdown via base-ui Select — styled to match the
-              sidebar so trigger AND the option popup are fully themed. */}
-          {/* modal={false}: a filter dropdown must not lock the page — base-ui
-              Select defaults modal=true, whose backdrop/scroll-lock left the
-              sidebar session links unclickable after an open/close cycle. */}
-          <Select value={filter} onValueChange={(v) => onFilterChange(v ?? '')} modal={false}>
-            <SelectTrigger
-              aria-label="filter sessions by agent"
-              className="border-sidebar-border bg-sidebar/60 font-mono text-sidebar-foreground/90 hover:border-sidebar-foreground/20 hover:bg-sidebar-accent/60 focus-visible:border-sidebar-foreground/40 focus-visible:ring-sidebar-foreground/15"
-            >
-              <SelectValue>{(v: string | null) => (v ? v : 'All agents')}</SelectValue>
-            </SelectTrigger>
-            <SelectContent className="font-mono">
-              <SelectItem value="">
-                All agents <span className="text-muted-foreground">· {sessions.data?.length ?? 0}</span>
-              </SelectItem>
-              {agentNames.map((n) => {
-                const count = (sessions.data ?? []).filter((s) => s.agentName === n).length;
-                return (
-                  <SelectItem key={n} value={n}>
-                    {n} <span className="text-muted-foreground">· {count}</span>
-                  </SelectItem>
-                );
-              })}
-            </SelectContent>
-          </Select>
+      {(sessions.data?.length ?? 0) > 0 && (
+        <div className="px-2 pb-1 flex items-center gap-1.5">
+          {/* Left: a simple title/agent text search over the recents list. */}
+          <div className="relative flex-1 min-w-0">
+            <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" aria-hidden="true" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }}
+              placeholder="搜索标题 / agent"
+              aria-label="search recents by title or agent"
+              className="h-8 w-full rounded-lg border border-sidebar-border bg-sidebar/60 pl-7 pr-2 text-[12px] text-sidebar-foreground/90 placeholder:text-muted-foreground/50 outline-none transition-colors hover:border-sidebar-foreground/20 focus-visible:border-sidebar-foreground/40 focus-visible:ring-1 focus-visible:ring-sidebar-foreground/15"
+            />
+          </div>
+          {/* Right: the existing per-agent filter (only when >1 agent). Custom
+              base-ui Select; modal={false} so its backdrop can't lock the page —
+              the default scroll-lock left sidebar links unclickable after a cycle. */}
+          {agentNames.length > 1 && (
+            <Select value={filter} onValueChange={(v) => onFilterChange(v ?? '')} modal={false}>
+              <SelectTrigger
+                aria-label="filter sessions by agent"
+                className="w-auto shrink-0 border-sidebar-border bg-sidebar/60 font-mono text-sidebar-foreground/90 hover:border-sidebar-foreground/20 hover:bg-sidebar-accent/60 focus-visible:border-sidebar-foreground/40 focus-visible:ring-sidebar-foreground/15"
+              >
+                <SelectValue>{(v: string | null) => (v ? v : 'All agents')}</SelectValue>
+              </SelectTrigger>
+              <SelectContent className="font-mono">
+                <SelectItem value="">
+                  All agents <span className="text-muted-foreground">· {sessions.data?.length ?? 0}</span>
+                </SelectItem>
+                {agentNames.map((n) => {
+                  const count = (sessions.data ?? []).filter((s) => s.agentName === n).length;
+                  return (
+                    <SelectItem key={n} value={n}>
+                      {n} <span className="text-muted-foreground">· {count}</span>
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+          )}
         </div>
       )}
       <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
@@ -863,7 +888,7 @@ function RecentSessions() {
           </div>
         ) : visible.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">
-            {filter ? `no sessions for ${filter}.` : 'no chats yet — start a New chat.'}
+            {q.trim() ? `没有匹配 “${q.trim()}” 的会话。` : filter ? `no sessions for ${filter}.` : 'no chats yet — start a New chat.'}
           </p>
         ) : (
           <ul className="space-y-px">
