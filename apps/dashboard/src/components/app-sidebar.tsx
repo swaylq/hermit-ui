@@ -84,6 +84,14 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
   const onCron = pathname.startsWith('/cron');
   const onSkills = pathname.startsWith('/skills');
   const onMarket = pathname.startsWith('/market');
+  // When viewing a chat session, point the Agents nav at THAT session's agent, so
+  // entering Agents from a session lands on its agent instead of the default
+  // first-agent. Reuses RecentSessions' listSessions query (same key → deduped).
+  const currentSessionId = onChat ? search.get('session') : null;
+  const sidebarSessions = trpc.chat.listSessions.useQuery({}, { enabled: !!currentSessionId });
+  const currentSessionAgent = currentSessionId
+    ? sidebarSessions.data?.find((s) => s.id === currentSessionId)?.agentName ?? null
+    : null;
   // Route-aware primary CTA: New agent on /agents, New cron on /cron, New skill
   // on /skills, else New chat.
   const cta = onAgents
@@ -320,10 +328,14 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
               {NAV.map((n) => {
                 const active = n.href === '/chat' ? onChat : pathname.startsWith(n.href);
                 const Icon = n.icon;
+                // From a chat session, the Agents entry deep-links to that session's agent.
+                const href = n.href === '/agents' && currentSessionAgent
+                  ? `/agents?name=${encodeURIComponent(currentSessionAgent)}`
+                  : n.href;
                 return (
                   <Link
                     key={n.href}
-                    href={n.href}
+                    href={href}
                     title={n.label}
                     className={cn(
                       'flex items-center gap-2.5 rounded-lg h-8 text-sm transition-colors cursor-pointer',
