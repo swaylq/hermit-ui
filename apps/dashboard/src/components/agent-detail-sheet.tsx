@@ -21,7 +21,7 @@ import { PublishTemplateDialog } from './publish-template-dialog';
 import { Overlay } from './overlay';
 import { sessionStatusView } from '@/lib/session-status';
 import { useUnread } from '@/lib/session-read';
-import { pollInvalidate } from '@/lib/poll-invalidate';
+import { removeAgentSkill } from '@/lib/optimistic-skills';
 
 type SessionRow = inferRouterOutputs<AppRouter>['chat']['listSessions'][number];
 type AgentByNameOutput = NonNullable<inferRouterOutputs<AppRouter>['agents']['byName']>;
@@ -544,10 +544,12 @@ function FileRow({ item, onClick, agentName }: { item: FileItem; onClick: () => 
 function UpdateSkillButton({ agentName, slug, latest }: { agentName: string; slug: string; latest: string }) {
   const utils = trpc.useUtils();
   const install = trpc.market.installToAgent.useMutation({
-    onSuccess: () => pollInvalidate(() => {
+    onSuccess: () => {
+      // Already-installed skill; the "update available" chip clears now (the
+      // binding bump is synchronous), new content follows on the next sync.
       utils.market.agentSkillStatus.invalidate({ agentName });
       utils.agents.byName.invalidate({ name: agentName });
-    }),
+    },
   });
   return (
     <Button
@@ -569,10 +571,12 @@ function UpdateSkillButton({ agentName, slug, latest }: { agentName: string; slu
 function UninstallSkillButton({ agentName, skillName }: { agentName: string; skillName: string }) {
   const utils = trpc.useUtils();
   const un = trpc.market.uninstallAgentSkill.useMutation({
-    onSuccess: () => pollInvalidate(() => {
+    onSuccess: () => {
+      // Drop it from the view immediately; the gateway rm's the dir + re-syncs
+      // after. No polling — the cached agent reflects the removal now.
+      utils.agents.byName.setData({ name: agentName }, removeAgentSkill(skillName));
       utils.market.agentSkillStatus.invalidate({ agentName });
-      utils.agents.byName.invalidate({ name: agentName });
-    }),
+    },
   });
   return (
     <Button

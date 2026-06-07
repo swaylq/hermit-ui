@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Search, X, Check, Download } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
-import { pollInvalidate } from '@/lib/poll-invalidate';
+import { addAgentSkill } from '@/lib/optimistic-skills';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Overlay } from '@/components/overlay';
@@ -25,19 +25,16 @@ export function InstallSkillDialog({
   const [doneSlug, setDoneSlug] = useState<string | null>(null);
   const installA = trpc.market.installToAgent.useMutation({
     onSuccess: (_r, vars) => {
-      pollInvalidate(() => {
-        utils.market.agentSkillStatus.invalidate({ agentName: agentName! });
-        utils.agents.byName.invalidate({ name: agentName! });
-      });
+      // Show the skill in the agent's list now; content + chip follow.
+      utils.agents.byName.setData({ name: agentName! }, addAgentSkill(vars.slug));
+      utils.market.agentSkillStatus.invalidate({ agentName: agentName! });
       setDoneSlug(vars.slug);
     },
   });
   const installM = trpc.market.installToMachine.useMutation({
     onSuccess: (_r, vars) => {
-      pollInvalidate(() => {
-        utils.market.globalSkillStatus.invalidate();
-        utils.skills.list.invalidate();
-      });
+      utils.market.globalSkillStatus.invalidate();
+      utils.skills.list.invalidate();
       setDoneSlug(vars.slug);
     },
   });
