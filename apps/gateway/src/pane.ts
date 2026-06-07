@@ -9,9 +9,15 @@
 import { spawn } from 'node:child_process';
 import { tmuxPaneName } from '@hermit-ui/tmux-driver';
 
-// Scan only the last few rows (the mode line sits at the bottom) so a chat
-// message that happens to contain the words can't trigger a false "working".
-const WORK_MARKER_RE = /\besc(?:ape)?\s+to\s+(?:interrupt|cancel|stop)\b/i;
+// Claude Code's in-flight turn shows a spinner status line like
+//   "✶ Considering… (6m 44s · thinking)"  /  "✻ Cooking… (12s · esc to interrupt)"
+// The verb + spinner glyph rotate, and as of Claude Code 2.x the literal
+// "esc to interrupt" is GONE — the hint after the live elapsed timer is now
+// "· thinking" etc. The stable, low-false-positive signal is that elapsed-time
+// token "(<Ns> ·" / "(<Nm Ns> ·", which renders ONLY while a turn is running;
+// the legacy "esc to interrupt" stays as a fallback. (Keying solely on the
+// latter made every 2.x session read as idle — wedging the status + the queue.)
+export const WORK_MARKER_RE = /\((?:\d+m\s*)?\d+s\s*[·•∙]|\besc(?:ape)?\s+to\s+(?:interrupt|cancel|stop)\b/i;
 
 export function paneIsWorking(sessionId: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -27,7 +33,10 @@ export function paneIsWorking(sessionId: string): Promise<boolean> {
     child.on('error', () => resolve(false));
     child.on('close', () => {
       const lines = out.replace(/\x1b\[[0-9;]*m/g, '').split('\n').filter((l) => l.trim());
-      resolve(WORK_MARKER_RE.test(lines.slice(-6).join('\n')));
+      // Scan more rows than the bottom mode line alone — tool results, a periodic
+      // "How is Claude doing?" feedback nag, and the composer can push the spinner
+      // status line several rows up from the very bottom.
+      resolve(WORK_MARKER_RE.test(lines.slice(-12).join('\n')));
     });
   });
 }

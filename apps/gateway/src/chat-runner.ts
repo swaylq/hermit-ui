@@ -32,7 +32,7 @@ import {
   encodedProjectDir,
   tmuxSessionExists,
 } from '@hermit-ui/tmux-driver';
-import { paneIsWorking } from './pane';
+import { paneIsWorking, WORK_MARKER_RE } from './pane';
 
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
@@ -284,12 +284,13 @@ async function streamSlashOutput({
   const SETTLE_TICKS_DONE = 2;        // 2 ticks with the work footer gone = a long op finished
   const MAX_DURATION_MS = 180_000;    // 3-min backstop — /compact on a big transcript is slow
   const ESC_HINT_RE = /\besc(?:ape)?\s+to\s+(?:cancel|exit|close|dismiss|return|back|quit|leave)\b/i;
-  // claude's "turn in flight" footer ("esc to interrupt"). /compact shows this
-  // while it reads + summarises; its DISAPPEARANCE is how we know the command
-  // truly finished — far more reliable than "text stopped changing", which a
-  // live spinner/percentage never satisfies (the old 30s cap then truncated the
-  // panel mid-progress, e.g. a frozen "Compacting… 80%" that never hit 100%).
-  const WORK_RE = /\besc(?:ape)?\s+to\s+(?:interrupt|cancel|stop)\b/i;
+  // claude's "turn in flight" spinner footer ("(12s · thinking)", and pre-2.x
+  // "esc to interrupt"). /compact shows this while it reads + summarises; its
+  // DISAPPEARANCE is how we know the command truly finished — far more reliable
+  // than "text stopped changing", which a live spinner/percentage never satisfies
+  // (the old 30s cap then truncated the panel mid-progress). Shared with pane.ts
+  // so the Claude Code 2.x marker change is fixed in one place.
+  const WORK_RE = WORK_MARKER_RE;
   const externalId = `slash-out-${sessionId}-${Date.now()}`;
 
   const start = Date.now();
