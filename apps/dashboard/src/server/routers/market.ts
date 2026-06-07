@@ -2,7 +2,7 @@ import { z } from 'zod';
 import crypto from 'node:crypto';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
-import { resolveImport } from '../market-import';
+import { resolveImport, parseFrontmatter } from '../market-import';
 import { buildTemplate } from '../market-template';
 
 // Fleet-global marketplace registry — the Market* tables are NOT machineId-scoped
@@ -126,6 +126,12 @@ export const marketRouter = router({
           boundSlug = (await prisma.marketSkill.findUnique({ where: { id: bind.marketSkillId }, select: { slug: true } }))?.slug ?? null;
         }
       }
+
+      // Fall back to the SKILL.md frontmatter description so agent uploads — whose
+      // cached {name,content} carries no parsed description, and whose publish
+      // dialog has no description field — still land with a description in the
+      // market instead of a blank card. (Imports + global skills already have one.)
+      if (!desc && content) desc = parseFrontmatter(content).description ?? null;
 
       const slug = input.slug ?? boundSlug ?? input.skillName;
       if (!SLUG_RE.test(slug)) throw new Error('invalid slug (lowercase letter, then letters/digits/hyphens)');

@@ -22,7 +22,7 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/\.md$/i, '').replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'imported-skill';
 }
 
-function parseFrontmatter(md: string): { name?: string; description?: string } {
+export function parseFrontmatter(md: string): { name?: string; description?: string } {
   const m = md.match(/^---\n([\s\S]*?)\n---/);
   if (!m) return {};
   const out: { name?: string; description?: string } = {};
