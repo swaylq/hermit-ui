@@ -21,6 +21,7 @@ import { PublishTemplateDialog } from './publish-template-dialog';
 import { Overlay } from './overlay';
 import { sessionStatusView } from '@/lib/session-status';
 import { useUnread } from '@/lib/session-read';
+import { pollInvalidate } from '@/lib/poll-invalidate';
 
 type SessionRow = inferRouterOutputs<AppRouter>['chat']['listSessions'][number];
 type AgentByNameOutput = NonNullable<inferRouterOutputs<AppRouter>['agents']['byName']>;
@@ -543,10 +544,10 @@ function FileRow({ item, onClick, agentName }: { item: FileItem; onClick: () => 
 function UpdateSkillButton({ agentName, slug, latest }: { agentName: string; slug: string; latest: string }) {
   const utils = trpc.useUtils();
   const install = trpc.market.installToAgent.useMutation({
-    onSuccess: () => {
+    onSuccess: () => pollInvalidate(() => {
       utils.market.agentSkillStatus.invalidate({ agentName });
       utils.agents.byName.invalidate({ name: agentName });
-    },
+    }),
   });
   return (
     <Button
@@ -568,10 +569,10 @@ function UpdateSkillButton({ agentName, slug, latest }: { agentName: string; slu
 function UninstallSkillButton({ agentName, skillName }: { agentName: string; skillName: string }) {
   const utils = trpc.useUtils();
   const un = trpc.market.uninstallAgentSkill.useMutation({
-    onSuccess: () => {
+    onSuccess: () => pollInvalidate(() => {
       utils.market.agentSkillStatus.invalidate({ agentName });
       utils.agents.byName.invalidate({ name: agentName });
-    },
+    }),
   });
   return (
     <Button
