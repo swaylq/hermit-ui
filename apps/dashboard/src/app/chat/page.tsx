@@ -1590,7 +1590,19 @@ function LoopBar({
   // regression). Schedules (cron) stay agent-level and are intentionally NOT
   // filtered.
   const allLoops = (s && Array.isArray(s.loops) ? s.loops : []) as LoopEntry[];
-  const loops = allLoops.filter((l) => !l.ownerSessionId || l.ownerSessionId === sessionId);
+  const ownLoops = allLoops.filter((l) => !l.ownerSessionId || l.ownerSessionId === sessionId);
+
+  // Per-loop delete: the gateway removes a stopped loop from `.loop-state.json`
+  // (a few seconds via the agent-request tick), so hide it locally right away for
+  // instant feedback. Once the gateway's edit lands, the loop is gone from
+  // loopState and stays hidden even after this local set resets.
+  const deleteLoop = trpc.chat.deleteLoop.useMutation();
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => new Set());
+  const onDeleteLoop = (id: string) => {
+    setDeletedIds((prev) => new Set(prev).add(id));
+    deleteLoop.mutate({ sessionId, loopId: id });
+  };
+  const loops = ownLoops.filter((l) => !(typeof l.id === 'string' && deletedIds.has(l.id)));
   const schedules = (s && Array.isArray(s.schedules) ? s.schedules : []) as Array<{
     id?: string;
     cron?: string;
@@ -1603,7 +1615,7 @@ function LoopBar({
           the suggestion chip's left edge lines up with the composer box. */}
       <div className="mx-auto w-full max-w-3xl px-3 flex flex-col gap-1.5">
         {loops.map((l, i) => (
-          <LoopCard key={typeof l.id === 'string' ? l.id : `loop-${i}`} loop={l} sessionId={sessionId} />
+          <LoopCard key={typeof l.id === 'string' ? l.id : `loop-${i}`} loop={l} sessionId={sessionId} onDelete={onDeleteLoop} />
         ))}
         <div className="flex items-center gap-2 flex-wrap">
           {!disabled && (
@@ -1639,7 +1651,7 @@ function LoopBar({
 }
 
 // One active loop, collapsed to a status line; click toggles a detail panel.
-function LoopCard({ loop, sessionId }: { loop: LoopEntry; sessionId: string }) {
+function LoopCard({ loop, sessionId, onDelete }: { loop: LoopEntry; sessionId: string; onDelete?: (id: string) => void }) {
   const id = typeof loop.id === 'string' ? loop.id : 'loop';
   const status = typeof loop.status === 'string' ? loop.status : 'running';
   const runCount = typeof loop.runCount === 'number' ? loop.runCount : null;
@@ -1666,6 +1678,21 @@ function LoopCard({ loop, sessionId }: { loop: LoopEntry; sessionId: string }) {
         <span className="ml-auto flex items-center gap-2 shrink-0 text-muted-foreground">
           {runCount != null && <span className="tabular-nums">已跑 {runCount}</span>}
           <span className="text-[10px] uppercase tracking-wide">{status}</span>
+          {stopped && onDelete && (
+            <button
+              type="button"
+              aria-label="删除已停止的循环"
+              title="删除（从面板移除，不再显示）"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete(id);
+              }}
+              className="inline-flex items-center justify-center h-5 w-5 rounded hover:bg-destructive/10 hover:text-destructive transition-colors cursor-pointer"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          )}
           <ChevronDown
             className="h-3.5 w-3.5 transition-transform group-open:rotate-180"
             aria-hidden="true"

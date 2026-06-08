@@ -251,6 +251,39 @@ function deleteAgentSkill(name: string, directory: string | null, target: string
   fs.rmSync(dst, { recursive: true, force: true });
 }
 
+// Remove a STOPPED loop from <agentDir>/.loop-state.json by id — backs the
+// dashboard's per-loop delete (agent-request kind `loop-delete`). Read-merge-
+// write: preserves `schedules` and every other loop, drops only the one whose id
+// matches AND whose status is not "running" (so a stale request can never nuke an
+// active loop). The agent's own loop/cron skills also write this file, but a
+// one-shot user delete vs an occasional skill write rarely collide and the worst
+// case is a re-appearing entry, never corruption. Returns true if it removed one.
+function deleteLoopFromState(name: string, directory: string | null, loopId: string): boolean {
+  const agentDir = directory ?? path.join(AGENTS_ROOT, name);
+  const p = path.join(path.resolve(agentDir), '.loop-state.json');
+  let state: { loops?: unknown[]; [k: string]: unknown };
+  try {
+    state = JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return false; // no file / unparseable → nothing to delete
+  }
+  if (!state || !Array.isArray(state.loops)) return false;
+  const before = state.loops.length;
+  state.loops = state.loops.filter(
+    (l) =>
+      !(
+        l &&
+        typeof l === 'object' &&
+        (l as { id?: unknown }).id === loopId &&
+        (l as { status?: unknown }).status !== 'running'
+      ),
+  );
+  if (state.loops.length === before) return false;
+  state.updatedAt = new Date().toISOString();
+  fs.writeFileSync(p, JSON.stringify(state, null, 2) + '\n');
+  return true;
+}
+
 let busy = false;
 export async function agentRequestTick() {
   if (busy) return;
@@ -290,6 +323,12 @@ export async function agentRequestTick() {
           if (!r.target) throw new Error('delete-skill request missing target');
           deleteAgentSkill(r.agentName, r.agentDirectory, r.target);
           if (r.agentDirectory) refreshAfter.push({ name: r.agentName, directory: r.agentDirectory });
+        } else if (r.kind === 'loop-delete') {
+          // Drop one stopped loop from .loop-state.json. No refreshAfter — loopState
+          // is pushed by the session-snapshot tick (≤8s), not syncAgents.
+          if (!r.target) throw new Error('loop-delete request missing target (loopId)');
+          const removed = deleteLoopFromState(r.agentName, r.agentDirectory, r.target);
+          console.log(`[agent-lifecycle] loop-delete ${r.agentName} ${r.target}: ${removed ? 'removed' : 'not found'}`);
         } else {
           throw new Error(`unknown request kind: ${r.kind}`);
         }

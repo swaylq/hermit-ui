@@ -240,6 +240,31 @@ export const chatRouter = router({
       return rows;
     }),
 
+  // Per-loop delete from the dashboard: queue an agent-request the gateway
+  // applies (removes the loop from <agentDir>/.loop-state.json). The loop card is
+  // driven by that file, so this makes a stopped loop disappear everywhere for
+  // good — not just hide it locally. Only stopped loops are offered a delete in
+  // the UI, and the gateway additionally refuses to remove a running one.
+  // agentName is resolved from the session (the loop lives in that agent's file).
+  deleteLoop: machineProcedure
+    .input(z.object({ sessionId: z.string(), loopId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({
+        where: { id: input.sessionId },
+        select: { machineId: true, agentName: true },
+      });
+      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      await prisma.agentRequest.create({
+        data: {
+          machineId: ctx.machine.id,
+          kind: 'loop-delete',
+          agentName: s.agentName,
+          target: input.loopId,
+        },
+      });
+      return { ok: true };
+    }),
+
   send: machineProcedure
     .input(
       z.object({
