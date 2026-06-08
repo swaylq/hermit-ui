@@ -56,7 +56,8 @@ cp -R "$TPL/scripts/." scripts/ 2>/dev/null
 rm -f scripts/bun-watchdog.sh scripts/bun-death-*.sh scripts/patch-telegram-plugin.sh \
       scripts/hook-tg-strip-markdown.sh scripts/hook-tool-activity.sh scripts/hook-context-report.sh \
       scripts/idle-hibernator.sh scripts/wake-poller.sh scripts/wake-agent.sh scripts/hibernate-agent.sh \
-      scripts/pid-snapshot.sh scripts/multi-agent-status-report.sh* 2>/dev/null
+      scripts/pid-snapshot.sh scripts/multi-agent-status-report.sh* \
+      scripts/launchd-sync.sh scripts/systemd-sync.sh 2>/dev/null
 for s in scripts/*.sh scripts/hooks/*.sh; do [ -f "$s" ] && render "$s"; done
 chmod +x scripts/*.sh scripts/hooks/*.sh 2>/dev/null
 
@@ -70,7 +71,7 @@ echo "4) skills: refresh base, drop telegram/legacy, keep custom (untouched)"
 echo "5) settings.json = template (rendered); settings.local.json: strip telegram env + canonical hooks, keep secrets"
 cp "$TPL/.claude/settings.json" .claude/settings.json; render .claude/settings.json
 if [ -f .claude/settings.local.json ]; then
-  jq --arg dir "$AGENT_DIR" '{ env: ((.env // {}) | del(.TELEGRAM_BOT_TOKEN,.TELEGRAM_STATE_DIR,.TELEGRAM_CHAT_ID)),
+  jq --arg dir "$AGENT_DIR" '{ env: ((.env // {}) | with_entries(select(.key | startswith("TELEGRAM_") | not))),
     hooks: { UserPromptSubmit:[{hooks:[{type:"command",command:($dir+"/scripts/hook-session-state.sh")}]}],
       Stop:[{hooks:[{type:"command",command:($dir+"/scripts/hook-session-state.sh")}]}],
       PreToolUse:[{hooks:[{type:"command",command:($dir+"/scripts/hook-session-state.sh")}]},
@@ -83,7 +84,7 @@ rm -rf .claude/hooks .claude/state 2>/dev/null; rm -f agent.pid restart.log 2>/d
 
 echo ""; echo "===== RESHAPE DONE — now do SKILL.md steps 4-7 (re-author IDENTITY/USER, trust, import, verify) ====="
 echo "-- telegram sweep (want CLEAN) --"
-grep -ril telegram . --include="*.md" --include="*.json" --include="*.sh" 2>/dev/null | grep -vE "node_modules|evolution/reflections|\.bak" || echo "  CLEAN ✓"
+grep -ril telegram . --include="*.md" --include="*.json" --include="*.sh" 2>/dev/null | grep -vE "node_modules|evolution/reflections|\.bak|\.claude/skills/reshape-agent" || echo "  CLEAN ✓"
 echo "   ↑ any '.claude/skills/<name>' hit = a telegram-coupled CUSTOM skill the fixed"
 echo "     drop-list didn't catch — review and 'rm -rf' it yourself."
 echo "-- placeholders left (want none) --"; grep -rl "{{" . --include="*.md" --include="*.json" 2>/dev/null | grep -vE "node_modules|reflections" || echo "  none ✓"
