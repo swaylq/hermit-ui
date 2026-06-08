@@ -589,6 +589,14 @@ function SessionPane({ sessionId }: { sessionId: string }) {
       if (cancelled || document.hidden || ctrl) return; // hidden, or already streaming
       const myCtrl = new AbortController();
       ctrl = myCtrl;
+      // Optimistically mark connected the instant we START connecting, so the
+      // fallback poll (refetchInterval — 600ms during an active turn) does NOT
+      // hammer the server with redundant full-window listMessages refetches
+      // during the SSE handshake. A slow first connect otherwise fires several
+      // ~150KB fetches that pile up and inflate each other's TTFB (measured: 4
+      // fetches at open, server TTFB climbing 96→1059ms). Any failure/disconnect
+      // resets it in the finally/disconnect below, re-enabling the real fallback.
+      setStreamConnected(true);
       (async () => {
         try {
           const res = await fetch(`/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}`, {
