@@ -8,6 +8,7 @@ import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { QUEUE_LIMIT } from '../../lib/chat-queue';
 import { stripNulDeep } from '../sanitize';
+import { capMessageContent } from '../message-cap';
 
 const ContentBlock = z.union([
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -182,7 +183,7 @@ export const chatRouter = router({
         // multiplied across the window.
         select: { id: true, role: true, content: true, createdAt: true },
       });
-      return rows.reverse();
+      return rows.reverse().map((r) => ({ ...r, content: capMessageContent(r.content) }));
     }),
 
   // The pending dispatch queue for a session: user messages the gateway hasn't

@@ -16,6 +16,7 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/server/db';
 import { resolveMachine } from '../../sync/route';
+import { capMessageContent } from '@/server/message-cap';
 
 export const dynamic = 'force-dynamic';
 
@@ -88,7 +89,7 @@ export async function GET(req: NextRequest) {
               select: { id: true, role: true, content: true, createdAt: true },
             });
             rows.reverse(); // newest window, ascending for the timeline
-            sendMessages(rows);
+            sendMessages(rows.map((r) => ({ ...r, content: capMessageContent(r.content) })));
           } else if (Date.now() - lastEmit > PING_MS) {
             lastEmit = Date.now();
             sendPing(); // keep proxies (Caddy/Xray) from dropping an idle conn
