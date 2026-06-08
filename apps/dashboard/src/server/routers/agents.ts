@@ -107,6 +107,11 @@ export const agentsRouter = router({
       templateId: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      // The base template's default skills (apps/cli/template/.claude/skills/);
+      // a new agent's skills are auto-associated with the market on create. Keep
+      // in sync if the template's default skill set changes.
+      const DEFAULT_TEMPLATE_SKILLS = ['cron', 'loop', 'brave-search', 'browser-automation', 'reshape-agent', 'update-hermit'];
+      let includedSkills: string[] = [];
       const exists = await prisma.agent.findUnique({
         where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
         select: { id: true },
@@ -130,6 +135,7 @@ export const agentsRouter = router({
         if (!tpl || !ver) throw new Error('template not found');
         templateContent = JSON.stringify({ templateFiles: ver.files });
         templatePersona = tpl.basePersona;
+        includedSkills = ver.includedSkills ?? [];
       }
       const persona = input.persona?.trim() || templatePersona ||
         `An AI agent named ${input.name}. Infer your role and personality from your name and how the user interacts with you.`;
@@ -137,7 +143,7 @@ export const agentsRouter = router({
       // `directory` stays null until the gateway scaffolds it at AGENTS_ROOT/<name>
       // and pushes a syncAgents update with the resolved path + initial content.
       // The AgentRequest is only the gateway's todo-list of filesystem actions.
-      return prisma.$transaction(async (tx) => {
+      const created = await prisma.$transaction(async (tx) => {
         await tx.agent.create({
           data: { machineId: ctx.machine.id, name: input.name },
         });
@@ -145,6 +151,27 @@ export const agentsRouter = router({
           data: { machineId: ctx.machine.id, kind: 'create', agentName: input.name, persona, content: templateContent },
         });
       });
+      // Auto-associate the new agent's market skills (default template skills +
+      // a marketplace template's includedSkills) at the latest version — a
+      // freshly-scaffolded agent gets the current template = latest published.
+      // Best-effort; never blocks the create. (Existing agents were bound by the
+      // one-time backfill; we no longer scan on every sync.)
+      try {
+        const wantSlugs = [...new Set([...DEFAULT_TEMPLATE_SKILLS, ...includedSkills])];
+        const markets = await prisma.marketSkill.findMany({
+          where: { slug: { in: wantSlugs } },
+          select: { id: true, slug: true, latestVersion: true },
+        });
+        if (markets.length) {
+          await prisma.agentSkillInstall.createMany({
+            data: markets.map((m) => ({ machineId: ctx.machine.id, agentName: input.name, skillName: m.slug, marketSkillId: m.id, marketVersion: m.latestVersion })),
+            skipDuplicates: true,
+          });
+        }
+      } catch (e) {
+        console.error('[requestCreate] skill auto-bind failed:', e);
+      }
+      return created;
     }),
 
   // Import an existing agent dir into the dashboard. DB-leader model: we
