@@ -11,15 +11,16 @@ _Technical configs, API keys (by path, not value), tool settings, accounts._
 ## Skills
 
 - **restart** — restart this Claude Code session via tmux respawn.
-- **cron** — create session-scoped scheduled tasks. Reminder: CronCreate's `durable=true` is currently a no-op; for tasks that must survive restart, use macOS LaunchAgents or Linux systemd-user timers.
+- **cron** — create DURABLE scheduled tasks (registered on the dashboard `/cron` page; the gateway's cron-runner fires each as a fresh interactive Claude turn in your dir, surviving restarts). This is the ONLY way to schedule — **never** LaunchAgents / launchd / systemd-user timers / `crontab`.
+- **loop** — repeat a task each turn in THIS chat session (session-scoped; stops on restart). For anything that must survive restart, use `cron`.
 - **brave-search** _(optional; requires API key)_ — web/news/image/video search via Brave Search API.
 - **browser-automation** _(optional)_ — self-managed Chrome + Playwright CDP. Explore with `mcp__playwright-browser__*`, record to `scripts/browser/<verb>-<target>.js`, replay via `scripts/browser-lock.sh run <script>`.
 - **provision-agent** — scaffold a new sibling hermit agent via `npx create-hermit-agent`.
 
 ### Cron defaults
 
-- Long-running tasks should call `scripts/with-timeout.sh 7200` (2 h ceiling).
-- Cron tasks should report back to {{USER_NAME}} when done — push to the dashboard via `scripts/dashboard-push.sh "<message>" [type]`.
+- Schedule via the `cron` skill only — the gateway's cron-runner runs each fire as a fresh interactive Claude turn (no manual `with-timeout.sh` / launchd wrapping). Keep each cron strictly on-prompt (no human in the loop) and self-test every run before reporting.
+- Cron output lands on the dashboard `/cron` page (CronRun history) — review it there; there's no message-push side-channel.
 
 ## Browser _(optional)_
 
