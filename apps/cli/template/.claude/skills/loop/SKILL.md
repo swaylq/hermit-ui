@@ -66,6 +66,7 @@ The dashboard's loop card reads `<agent_dir>/.loop-state.json` every snapshot ti
   "loops": [
     {
       "id": "<job-id>",
+      "ownerSessionId": "<value of $HERMIT_SESSION_ID>",
       "kind": "interval | self-paced | until",
       "schedule": "每 30m | self-paced | until <cond>",
       "prompt": "<one-line task summary>",
@@ -83,11 +84,13 @@ The dashboard's loop card reads `<agent_dir>/.loop-state.json` every snapshot ti
 
 If the file is absent, create it with `schedules: []`. If it exists, merge (keep `schedules`).
 
+**`ownerSessionId`** binds a loop to the chat session that created it — set it to the value of the `HERMIT_SESSION_ID` env var (the gateway exports it into every agent's claude process). `.loop-state.json` lives at the agent dir and is shared by every chat session of the agent, so without this the dashboard would render the same loop card on *all* of the agent's open sessions. The dashboard shows a loop only on its owner session; loops with no `ownerSessionId` (legacy, pre-stamping) still show everywhere. Schedules stay agent-level and are NOT owner-bound.
+
 ## Creating a loop
 
 1. Confirm task + cadence + stop condition (ask once if unclear).
 2. Create the mechanism (above); capture the job id as the loop id.
-3. Read-merge-write `./.loop-state.json`: add the loop entry (`status: "running"`, `runCount: 0`, `lastRunAt`/`lastResult` null).
+3. Read-merge-write `./.loop-state.json`: add the loop entry (`status: "running"`, `runCount: 0`, `lastRunAt`/`lastResult` null, and **`ownerSessionId` = the `HERMIT_SESSION_ID` env var** — run `echo "$HERMIT_SESSION_ID"` to read it — so the dashboard shows this loop only on the session that created it, not on the agent's other open sessions).
 4. Reply (streams to chat) with: task, cadence, stop condition, loop id, and the honest note — "session-scoped — 重启即停。每轮结果会发到这个对话。要跨重启持久就用 cron skill / 系统 crontab。"
 
 ## Listing loops

@@ -1554,6 +1554,10 @@ interface LoopEntry {
   createdAt?: string;
   lastRunAt?: string;
   lastResult?: string;
+  // The ChatSession that created this loop (=== gateway's HERMIT_SESSION_ID). A
+  // loop is session-scoped, but `.loop-state.json` is agent-dir-level, so without
+  // this every sibling session of the agent would render the same loop card.
+  ownerSessionId?: string;
 }
 
 // Strip above the composer: each active loop as a status card (click to expand
@@ -1578,7 +1582,15 @@ function LoopBar({
     loopState && typeof loopState === 'object'
       ? (loopState as { loops?: unknown[]; schedules?: unknown[] })
       : null;
-  const loops = (s && Array.isArray(s.loops) ? s.loops : []) as LoopEntry[];
+  // Loops are session-scoped — a loop rides the one Claude session that created
+  // it. `.loop-state.json` is agent-dir-level, so the gateway attaches it to
+  // EVERY active session of the agent; filter to this session's own loops so a
+  // sibling session doesn't show a loop it doesn't own. Legacy loops written
+  // before ownership stamping have no ownerSessionId → still shown everywhere (no
+  // regression). Schedules (cron) stay agent-level and are intentionally NOT
+  // filtered.
+  const allLoops = (s && Array.isArray(s.loops) ? s.loops : []) as LoopEntry[];
+  const loops = allLoops.filter((l) => !l.ownerSessionId || l.ownerSessionId === sessionId);
   const schedules = (s && Array.isArray(s.schedules) ? s.schedules : []) as Array<{
     id?: string;
     cron?: string;
