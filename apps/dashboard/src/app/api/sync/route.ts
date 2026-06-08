@@ -36,7 +36,11 @@ const AgentInput = z.object({
   toolsText: z.string().nullable().optional(),
   evolutionLessons: z.string().nullable().optional(),
   skillNames: z.array(z.string()).optional(),
-  skills: z.array(z.object({ name: z.string(), content: z.string() })).optional(),
+  skills: z.array(z.object({
+    name: z.string(),
+    content: z.string(),
+    refs: z.array(z.object({ path: z.string(), content: z.string() })).optional(),
+  })).optional(),
   evolutionFiles: z.array(z.object({ path: z.string(), content: z.string().nullable() })).optional(),
   memoryFiles: z.array(z.object({ path: z.string(), content: z.string().nullable() })).optional(),
   memorySummary: z.string().nullable().optional(),

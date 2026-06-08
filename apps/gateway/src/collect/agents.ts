@@ -46,15 +46,45 @@ function listSkills(agentDir: string): string[] {
   }
 }
 
-// Per-skill SKILL.md contents pushed alongside skillNames so the detail sheet
-// can render + edit them without a per-skill round trip. Truncated like other
-// markdowns; missing SKILL.md => empty string.
-function listSkillDocs(agentDir: string): Array<{ name: string; content: string }> {
+// All non-SKILL.md files in a skill dir, as { path, content } relative to the
+// skill dir — so the dashboard/market can carry a FULL skill (e.g. reshape-agent's
+// reshape.sh), not just SKILL.md. Text-only, size-capped, sorted for a stable
+// content hash. Skips dotfiles + node_modules.
+const SKILL_REF_MAX_FILES = 50;
+function listSkillRefs(skillDir: string): Array<{ path: string; content: string }> {
+  const out: Array<{ path: string; content: string }> = [];
+  const walk = (dir: string, prefix: string, depth: number) => {
+    if (depth > 4 || out.length >= SKILL_REF_MAX_FILES) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(path.join(dir, e.name), rel, depth + 1);
+      else if (e.isFile() && rel !== 'SKILL.md' && isTextFile(rel)) {
+        const c = safeRead(path.join(dir, e.name), SKILL_MAX_BYTES);
+        if (c != null) out.push({ path: rel, content: c });
+      }
+    }
+  };
+  walk(skillDir, '', 0);
+  out.sort((a, b) => a.path.localeCompare(b.path)); // stable order → deterministic hash
+  return out;
+}
+
+// Per-skill SKILL.md content + the rest of the skill's file tree (refs), pushed
+// alongside skillNames so the detail sheet + market carry the FULL skill, not
+// just SKILL.md. Truncated like other markdowns; missing SKILL.md => empty string.
+function listSkillDocs(agentDir: string): Array<{ name: string; content: string; refs: Array<{ path: string; content: string }> }> {
   const names = listSkills(agentDir);
-  return names.map((name) => ({
-    name,
-    content: safeRead(path.join(agentDir, '.claude', 'skills', name, 'SKILL.md'), SKILL_MAX_BYTES) ?? '',
-  }));
+  return names.map((name) => {
+    const skillDir = path.join(agentDir, '.claude', 'skills', name);
+    return {
+      name,
+      content: safeRead(path.join(skillDir, 'SKILL.md'), SKILL_MAX_BYTES) ?? '',
+      refs: listSkillRefs(skillDir),
+    };
+  });
 }
 
 function memorySummary(agentDir: string): string | null {
@@ -137,7 +167,7 @@ export interface AgentRow {
   evolutionFiles: FileNode[];
   memoryFiles: FileNode[];
   skillNames: string[];
-  skills: Array<{ name: string; content: string }>;
+  skills: Array<{ name: string; content: string; refs: Array<{ path: string; content: string }> }>;
   memorySummary: string | null;
 }
 

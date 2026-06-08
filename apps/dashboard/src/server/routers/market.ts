@@ -115,11 +115,14 @@ export const marketRouter = router({
           select: { skills: true },
         });
         if (!a) throw new Error('agent not found');
-        const arr = (a.skills as Array<{ name: string; content: string }>) ?? [];
+        const arr = (a.skills as Array<{ name: string; content: string; refs?: Ref[] }>) ?? [];
         const s = arr.find((x) => x.name === input.skillName);
         if (!s) throw new Error('agent skill not found');
         content = s.content;
-        refs = []; // agent skills carry SKILL.md only today (spec note)
+        // Full skill tree: SKILL.md (content) + the rest of the files (refs), so
+        // skills like reshape-agent carry reshape.sh — not just SKILL.md. (Gateway
+        // syncs the tree into agent.skills[].refs; older syncs have no refs → [].)
+        refs = (s.refs ?? []).map((r) => ({ path: r.path, content: String(r.content ?? '') }));
         const bind = await prisma.agentSkillInstall.findUnique({
           where: { machineId_agentName_skillName: { machineId: ctx.machine.id, agentName: input.agentName, skillName: input.skillName } },
         });
