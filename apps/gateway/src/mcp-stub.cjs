@@ -185,7 +185,7 @@ const TOOLS = [
   {
     name: 'attach_file',
     description:
-      'Send a downloadable file to the user in the chat. Pass an absolute path to a text / code / markdown / PDF / CSV / JSON / YAML / HTML / SVG file (or similar) on the local filesystem — it appears as a download chip the user clicks to save, under its real filename. For images use attach_image instead (renders inline). Allowed types are the text/code/document allowlist (no archives or binaries), ≤25 MB. Optional caption renders above the file.',
+      'Send a downloadable file to the user in the chat. Pass an absolute path to a text / code / markdown / PDF / CSV / JSON / YAML / HTML / SVG file, OR an archive (zip / tar / gz / tgz / bz2 / xz / 7z / rar / zst), on the local filesystem — it appears as a download chip the user clicks to save, under its real filename. For images use attach_image instead (renders inline). Allowed: the text / code / document allowlist plus archives — ≤25 MB (not arbitrary binaries or executables). Optional caption renders above the file.',
     inputSchema: {
       type: 'object',
       properties: {
