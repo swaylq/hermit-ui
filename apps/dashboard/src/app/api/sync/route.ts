@@ -49,7 +49,9 @@ const GlobalSkillInput = z.object({
   name: z.string(),
   description: z.string().nullable().optional(),
   content: z.string().nullable().optional(),
-  refs: z.array(z.object({ name: z.string(), content: z.string() })).optional(),
+  // Gateway now sends the full skill tree as { path, content }; `name` kept
+  // optional for the legacy references/*.md shape during the rollout.
+  refs: z.array(z.object({ path: z.string().optional(), name: z.string().optional(), content: z.string() })).optional(),
   source: z.string().optional(),
   isBundle: z.boolean().optional(),
   subSkills: z.array(z.string()).optional(),

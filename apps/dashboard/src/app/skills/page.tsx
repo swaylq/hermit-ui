@@ -198,7 +198,7 @@ function SkillDetail({ name }: { name: string }) {
     );
   }
 
-  const refs = Array.isArray(skill.refs) ? (skill.refs as Array<{ name: string; content: string }>) : [];
+  const refs = Array.isArray(skill.refs) ? (skill.refs as Array<{ path?: string; name?: string; content: string }>) : [];
 
   // Every file in one list — click any to open the view/edit modal (mirrors the
   // agent detail). SKILL.md is editable on a manual skill; bundles (git/plugin)
@@ -214,9 +214,10 @@ function SkillDetail({ name }: { name: string }) {
       onSave: skill.isBundle ? undefined : (content) => update.mutateAsync({ name: skill.name, content }),
     });
   }
-  for (const r of refs) {
-    files.push({ key: `ref:${r.name}`, label: r.name, body: r.content, monoLabel: true });
-  }
+  refs.forEach((r, i) => {
+    const label = r.path ?? r.name ?? `(file ${i + 1})`;
+    files.push({ key: `ref:${label}-${i}`, label, body: r.content, monoLabel: true });
+  });
 
   return (
     <>

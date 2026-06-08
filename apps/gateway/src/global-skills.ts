@@ -20,7 +20,9 @@ import { api } from './api';
 
 const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
 const MAX_TEXT_BYTES = 64 * 1024; // SKILL.md can be large
-const MAX_REFS = 20;
+const MAX_SKILL_FILES = 200;             // file-count ceiling for a published skill tree
+const MAX_SKILL_BYTES = 2 * 1024 * 1024; // ~2MB total-tree budget (covers large skills like dws)
+const REF_FILE_BYTES = 256 * 1024;       // per-file cap for tree files (larger than SKILL.md's 64KB)
 const NAME_RE = /^[a-z][a-z0-9-]{0,40}$/;
 
 function safeRead(p: string, maxBytes = MAX_TEXT_BYTES): string | null {
@@ -87,16 +89,33 @@ function isManagedBundle(dir: string): boolean {
   return fs.existsSync(path.join(dir, '.git')) || fs.existsSync(path.join(dir, '.claude-plugin'));
 }
 
-function readReferences(dir: string): Array<{ name: string; content: string }> {
-  const refsDir = path.join(dir, 'references');
-  if (!fs.existsSync(refsDir)) return [];
-  let names: string[];
-  try {
-    names = fs.readdirSync(refsDir, { withFileTypes: true })
-      .filter((d) => d.isFile() && d.name.endsWith('.md'))
-      .map((d) => d.name).sort().slice(0, MAX_REFS);
-  } catch { return []; }
-  return names.map((n) => ({ name: n, content: safeRead(path.join(refsDir, n)) ?? '' }));
+// Capture the skill's WHOLE file tree (everything under <skill>/ except SKILL.md,
+// which is `content`) as { path, content }: scripts/, references/ + its subdirs,
+// LICENSE, etc. — so publishing a machine skill to the market ships the COMPLETE
+// skill, not just references/*.md. Skips VCS/dep dirs + binary files; safeRead
+// caps each file at 64KB; the whole tree is capped at MAX_SKILL_FILES.
+const BINARY_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|tgz|bz2|7z|rar|mp[34]|mov|avi|mkv|wav|ogg|woff2?|ttf|otf|eot|exe|dll|so|dylib|bin|dat|class|jar|wasm|node)$/i;
+
+function collectSkillFiles(skillDir: string): Array<{ path: string; content: string }> {
+  const out: Array<{ path: string; content: string }> = [];
+  let bytes = 0;
+  let capped = false;
+  const walk = (dir: string, rel: string): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (out.length >= MAX_SKILL_FILES || bytes >= MAX_SKILL_BYTES) { capped = true; return; }
+      if (e.name === '.git' || e.name === 'node_modules' || e.name === '.DS_Store') continue;
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) { walk(path.join(dir, e.name), childRel); continue; }
+      if (!e.isFile() || childRel === 'SKILL.md' || BINARY_EXT.test(e.name)) continue;
+      const content = safeRead(path.join(dir, e.name), REF_FILE_BYTES);
+      if (content != null) { out.push({ path: childRel, content }); bytes += content.length; }
+    }
+  };
+  walk(skillDir, '');
+  if (capped) console.warn(`[global-skills] ${path.basename(skillDir)}: tree capped (${out.length} files / ${Math.round(bytes / 1024)}KB)`);
+  return out;
 }
 
 function bundleSubSkills(dir: string): string[] {
@@ -113,7 +132,7 @@ export interface GlobalSkillRow {
   name: string;
   description: string | null;
   content: string | null;
-  refs: Array<{ name: string; content: string }>;
+  refs: Array<{ path: string; content: string }>;
   source: string;
   isBundle: boolean;
   subSkills: string[];
@@ -130,7 +149,7 @@ function probe(dir: string, name: string): GlobalSkillRow | null {
       name,
       description: fm.description ?? null,
       content,
-      refs: readReferences(dir),
+      refs: collectSkillFiles(dir),
       source,
       isBundle: false,
       subSkills: [],
