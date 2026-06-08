@@ -83,14 +83,12 @@ Credentials live at well-known paths documented in `TOOLS.md`. Reference by path
 4. **Never commit credentials.** `.gitignore` ships with `.env*` and secrets paths. Diff before `git add`.
 5. **Historical leaks** get redacted in place: `[REDACTED YYYY-MM-DD — <why>]`. Don't wait for rotation.
 
-## Cron Safety — HARD RULE
+## Cron / Scheduled Tasks — HARD RULE
 
-Cron tasks run via LaunchAgents (macOS) or systemd-user timers (Linux).
+**Every scheduled / recurring task MUST go through the `cron` skill** — it registers the task in the hermit-ui dashboard (`/cron` page), and the gateway's cron-runner fires each one as a fresh interactive Claude turn in your dir. For an in-conversation loop, use the `loop` skill. **NEVER** hand-roll an OS scheduler: no LaunchAgents, no launchd `.plist`s, no systemd-user timers, no system `crontab`, no `scripts/launchd-sync.sh`. Those are invisible to the dashboard, bypass quota routing, and are the old pre-hermit-ui model. If you catch yourself about to write a `.plist`, stop and use the `cron` skill.
 
-1. **Stay strictly on-prompt.** If `cron/<task>.md` says do X, do X — no ad-hoc exploration. Cron has no human in the loop.
-2. **Hard runtime ceiling.** Wrap every cron in `scripts/with-timeout.sh 7200` (2 h ceiling).
-3. **Default to `scripts/claude-tmux-run.sh`, not `claude -p`.** Starting 2026-06-15 Anthropic splits Claude Max quota into Interactive (`claude` in a TTY) vs Agent SDK (`-p` / SDK) buckets — SDK is the smaller one priced at full API rates. `claude-tmux-run.sh` runs claude interactively inside an ephemeral tmux pane and bills the Interactive bucket.
-4. **Legacy `-p` flags (if you must):** pass `--no-session-persistence` (the post-task JSONL flush has hung past 1200s). Never `--bare` on Claude Max OAuth (it demands `ANTHROPIC_API_KEY`).
+1. **Stay strictly on-prompt.** Cron has no human in the loop — do exactly what the task prompt says, no ad-hoc exploration.
+2. **Self-test every run** and report failures honestly; never claim success you didn't verify.
 
 ## Dashboard Chat
 
