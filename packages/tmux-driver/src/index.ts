@@ -155,7 +155,9 @@ export function sendKeys(sessionId: string, text: string): void {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line.length > 0) {
-      const r = tmux(['send-keys', '-t', `${name}.0`, '-l', line]);
+      // `--` terminates option parsing so a line starting with `-` (markdown
+      // bullets, LaTeX, diffs) is sent as literal text, not mistaken for a flag.
+      const r = tmux(['send-keys', '-t', `${name}.0`, '-l', '--', line]);
       if (!r.ok) throw new Error(`tmux send-keys (literal) failed: ${r.stderr || 'exit ' + r.status}`);
     }
     if (i < lines.length - 1) {
@@ -225,7 +227,7 @@ export async function kill(sessionId: string, graceMs = 2_000): Promise<void> {
   const name = paneName(sessionId);
   if (!hasSession(name)) return;
 
-  tmux(['send-keys', '-t', `${name}.0`, '-l', '/exit']);
+  tmux(['send-keys', '-t', `${name}.0`, '-l', '--', '/exit']);
   tmux(['send-keys', '-t', `${name}.0`, 'Enter']);
 
   const deadline = Date.now() + graceMs;
