@@ -800,29 +800,19 @@ function RecentSessions() {
   // fallback) + agent name. Not persisted: a quick find, not a scoping choice.
   const [q, setQ] = useState('');
 
-  // Prefetch message history for the top sessions so opening one is instant.
-  // Key on the session-ID LIST (a value-stable string), NOT the row objects:
-  // listSessions' rows get a fresh reference every ~8s snapshot tick (state /
-  // contextTokens / snapshotAt churn) — depending on `sessions.data` directly
-  // re-fired this whole loop every few seconds, re-fetching every OTHER session's
-  // 60-message window on a timer (heavy idle network). The joined-id string only
-  // changes when the set/order of sessions actually changes, so idle is quiet and
-  // re-prefetch happens only on real activity (a new message reorders the list).
-  const prefetchIds = useMemo(
-    () => (sessions.data ?? []).slice(0, 8).map((s) => s.id).join(','),
-    [sessions.data],
+  // Prefetch a session's message window on hover/focus (intent to open) so the
+  // click lands as a cache hit. This REPLACED an eager prefetch of the top-8
+  // sessions on every dashboard open, which fired 8 full 60-message fetches —
+  // for heavy sessions ~hundreds of KB (measured: 4 fetches ≈ 561KB) that
+  // competed with the CURRENT session's own load and inflated server TTFB to
+  // ~1s. react-query's staleTime dedupes repeat hovers; limit MUST equal
+  // chat/page.tsx INITIAL_WINDOW so the open query key matches (no skeleton flash).
+  const prefetchSession = useCallback(
+    (id: string) => {
+      void utils.chat.listMessages.prefetch({ sessionId: id, limit: 60 }, { staleTime: 60_000 });
+    },
+    [utils],
   );
-  useEffect(() => {
-    if (!prefetchIds) return;
-    const timers = prefetchIds.split(',').map((id, i) =>
-      setTimeout(() => {
-        // limit MUST equal chat/page.tsx INITIAL_WINDOW so the click-to-open
-        // query key matches and stays a cache hit (no skeleton flash).
-        void utils.chat.listMessages.prefetch({ sessionId: id, limit: 60 }, { staleTime: 60_000 });
-      }, i * 80),
-    );
-    return () => timers.forEach(clearTimeout);
-  }, [prefetchIds, utils]);
 
   const agentNames = useMemo(() => {
     const names = new Set<string>();
@@ -911,6 +901,8 @@ function RecentSessions() {
                 <li key={s.id}>
                   <Link
                     href={`/chat?session=${encodeURIComponent(s.id)}`}
+                    onMouseEnter={() => prefetchSession(s.id)}
+                    onFocus={() => prefetchSession(s.id)}
                     className={cn(
                       'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors',
                       active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
