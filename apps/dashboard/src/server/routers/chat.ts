@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { QUEUE_LIMIT } from '../../lib/chat-queue';
+import { stripNulDeep } from '../sanitize';
 
 const ContentBlock = z.union([
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -317,7 +318,7 @@ export const chatRouter = router({
       const msg = await prisma.chatMessage.create({
         // content is JSON in the DB; prisma wants Prisma.InputJsonValue, the
         // Record-shaped union confuses inference, hence the cast.
-        data: { sessionId: input.sessionId, role: 'user', content: content as unknown as Parameters<typeof prisma.chatMessage.create>[0]['data']['content'] },
+        data: { sessionId: input.sessionId, role: 'user', content: stripNulDeep(content) as unknown as Parameters<typeof prisma.chatMessage.create>[0]['data']['content'] },
       });
       // Clear any stale cancel signal from a previous turn so this new
       // turn isn't immediately killed by the gateway.

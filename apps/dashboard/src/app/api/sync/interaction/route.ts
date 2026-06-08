@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { resolveMachine } from '../route';
+import { stripNulDeep } from '@/server/sanitize';
 
 const CreateBody = z.object({
   sessionId: z.string().optional(),
@@ -47,8 +48,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'session not found' }, { status: 404 });
   }
 
+  // Strip NUL bytes (U+0000): Postgres jsonb/text reject them, aborting the
+  // insert. No-op (same ref) when the payload has none.
+  const payload = stripNulDeep(body.payload ?? {});
+
   const interaction = await prisma.interaction.create({
-    data: { sessionId: session.id, kind: body.kind, payload: (body.payload ?? {}) as object },
+    data: { sessionId: session.id, kind: body.kind, payload: payload as object },
   });
 
   await prisma.chatMessage.create({
@@ -61,7 +66,7 @@ export async function POST(req: NextRequest) {
           type: 'interaction',
           interactionId: interaction.id,
           kind: body.kind,
-          payload: body.payload ?? {},
+          payload,
           status: 'pending',
         },
       ] as object,

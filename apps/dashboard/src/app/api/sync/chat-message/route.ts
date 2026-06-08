@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { resolveMachine } from '../route';
+import { stripNulDeep } from '@/server/sanitize';
 
 const Item = z.object({
   sessionId: z.string(),
@@ -27,6 +28,10 @@ export async function POST(req: NextRequest) {
     const session = await prisma.chatSession.findUnique({ where: { id: m.sessionId } });
     if (!session || session.machineId !== machine.id) continue;
 
+    // Strip NUL bytes (U+0000): Postgres jsonb/text reject them, which aborts
+    // the insert and silently drops the message. No-op (same ref) otherwise.
+    const content = stripNulDeep(m.content);
+
     // Stamp claudeSessionId once.
     if (m.claudeSessionId && !session.claudeSessionId) {
       await prisma.chatSession.update({
@@ -45,7 +50,7 @@ export async function POST(req: NextRequest) {
       if (dup) {
         await prisma.chatMessage.update({
           where: { id: dup.id },
-          data: { role: m.role, content: m.content },
+          data: { role: m.role, content },
         });
         inserted++;
         continue;
@@ -56,7 +61,7 @@ export async function POST(req: NextRequest) {
       data: {
         sessionId: m.sessionId,
         role: m.role,
-        content: m.content,
+        content,
         externalId: m.externalId ?? null,
       },
     });
