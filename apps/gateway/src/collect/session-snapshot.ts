@@ -52,9 +52,19 @@ export interface SessionSnapshot {
 // Async exec → stdout, or null on non-zero exit / timeout / buffer overflow.
 function run(cmd: string, args: string[], timeoutMs = TAIL_TIMEOUT_MS): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: MAX_BUF }, (err, stdout) => {
-      resolve(err ? null : stdout ?? '');
-    });
+    try {
+      execFile(cmd, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: MAX_BUF }, (err, stdout) => {
+        resolve(err ? null : stdout ?? '');
+      });
+    } catch {
+      // execFile can throw SYNCHRONOUSLY under fd pressure (EBADF / EMFILE during
+      // spawn setup) — not only deliver the error to the callback. Without this
+      // guard that throw rejects the promise, propagates through the Promise.all
+      // in collectSessionSnapshots, and stales EVERY session's snapshot for the
+      // whole tick (status + queue blank fleet-wide). Treat it like any other
+      // probe failure: null.
+      resolve(null);
+    }
   });
 }
 
@@ -249,8 +259,18 @@ export async function collectSessionSnapshots(): Promise<SessionSnapshot[]> {
     return [];
   }
   // All session probes run concurrently — the collection is as fast as the
-  // slowest single probe, not the sum.
-  return Promise.all(
+  // slowest single probe, not the sum. allSettled, NOT all: a single probe that
+  // rejects (e.g. a transient spawn EBADF under fd pressure that escapes the
+  // guards) must not blank EVERY session's status for the tick — drop only the
+  // one that failed and push the rest, so the fleet's status degrades by one
+  // session instead of going dark.
+  const settled = await Promise.allSettled(
     pending.sessions.map((s) => probe(s.id, s.agentName, s.agentDirectory, s.claudeSessionId)),
   );
+  const out: SessionSnapshot[] = [];
+  for (const r of settled) {
+    if (r.status === 'fulfilled') out.push(r.value);
+    else console.error('[session-snapshots] probe failed:', r.reason);
+  }
+  return out;
 }
