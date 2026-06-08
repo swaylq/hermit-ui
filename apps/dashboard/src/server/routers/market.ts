@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import crypto from 'node:crypto';
+import { hashContent } from '../skill-hash';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { resolveImport, parseFrontmatter } from '../market-import';
@@ -15,10 +15,6 @@ const SLUG_RE = /^[a-z][a-z0-9-]{0,60}$/;
 // the gateway's stricter target regex (agent-lifecycle.ts / global-skills.ts).
 const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,30}$/;
 type Ref = { path: string; content: string };
-
-function hashContent(content: string | null, refs: Ref[]): string {
-  return crypto.createHash('sha256').update(JSON.stringify({ content, refs })).digest('hex').slice(0, 16);
-}
 
 export const marketRouter = router({
   // ── Browse (fleet-global) ──────────────────────────────────────────────────
