@@ -77,8 +77,12 @@ export const agentsRouter = router({
       return { agent };
     }),
 
-  // Heavy folder trees (evolution/ + Claude Code auto-memory) — fetched ONCE when
-  // the detail sheet opens, NOT on byName's 30s refetch (kept out of its payload).
+  // Just the file PATHS for each folder — NOT content. The detail sheet renders
+  // folders collapsed and only needs the names up front; full content (asst's
+  // memory corpus alone is ~600KB) is fetched per-folder by `folderContent` when
+  // the user actually expands a folder. This query used to ship the whole ~600KB
+  // on every detail open and, batched with cron.listForAgent, made the schedule
+  // list wait behind it too.
   folders: machineProcedure
     .input(z.object({ name: z.string() }))
     .query(async ({ ctx, input }) => {
@@ -86,7 +90,24 @@ export const agentsRouter = router({
         where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
         select: { evolutionFiles: true, memoryFiles: true },
       });
-      return { evolutionFiles: a?.evolutionFiles ?? [], memoryFiles: a?.memoryFiles ?? [] };
+      const paths = (files: unknown) =>
+        Array.isArray(files)
+          ? files.map((f) => ({ path: (f as { path?: string })?.path ?? '' })).filter((f) => f.path)
+          : [];
+      return { evolutionFiles: paths(a?.evolutionFiles), memoryFiles: paths(a?.memoryFiles) };
+    }),
+
+  // Full content for one folder (evolution | memory), fetched lazily when the
+  // user expands that folder in the detail sheet.
+  folderContent: machineProcedure
+    .input(z.object({ name: z.string(), scope: z.enum(['evolution', 'memory']) }))
+    .query(async ({ ctx, input }) => {
+      const a = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { evolutionFiles: true, memoryFiles: true },
+      });
+      const col = input.scope === 'evolution' ? a?.evolutionFiles : a?.memoryFiles;
+      return (Array.isArray(col) ? col : []) as Array<{ path: string; content: string }>;
     }),
 
   // ── Dashboard-driven agent lifecycle (round-trips through the gateway) ──────

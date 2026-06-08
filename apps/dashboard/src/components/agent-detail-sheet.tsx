@@ -396,44 +396,65 @@ function MarkdownSections({ agent, agentName }: { agent: AgentByNameOutput['agen
   ];
   // Heavy folder trees come from a separate once-fetched query — NOT byName's 30s
   // refetch (keeps ~200KB of auto-memory JSON off the recurring payload).
+  // Paths only — content is lazy-loaded per folder on expand (see FolderGroup),
+  // so the sheet opens fast even for agents with a large memory corpus.
   const folders = trpc.agents.folders.useQuery({ name: agentName });
-  const evolutionFiles = ((folders.data?.evolutionFiles ?? []) as unknown as FolderFile[]);
-  const memoryFiles = ((folders.data?.memoryFiles ?? []) as unknown as FolderFile[]);
-  // evolution/ files are editable (workspace, target evolution/<path>); memory is
-  // Claude Code's auto-memory — read-only (no target). exists:true so a capped /
-  // unloaded file reads "未加载" rather than "not present".
-  const evolutionItems: FileItem[] = evolutionFiles.map((f) => ({
-    key: `evolution/${f.path}`, label: f.path, body: f.content, target: `evolution/${f.path}`, monoLabel: true, exists: true,
-  }));
-  const memoryItems: FileItem[] = memoryFiles.map((f) => ({
-    key: `memory/${f.path}`, label: f.path, body: f.content, monoLabel: true, exists: true,
-  }));
+  const evolutionPaths = ((folders.data?.evolutionFiles ?? []) as Array<{ path: string }>).map((f) => f.path);
+  const memoryPaths = ((folders.data?.memoryFiles ?? []) as Array<{ path: string }>).map((f) => f.path);
   return (
     <section className="space-y-2">
       <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-1">files</h3>
       <FileList items={coreItems} agentName={agentName} />
-      <FolderGroup label="evolution" files={evolutionItems} agentName={agentName} />
-      <FolderGroup label="memory" files={memoryItems} agentName={agentName} note="Claude Code auto-memory · 只读" />
+      <FolderGroup label="evolution" scope="evolution" paths={evolutionPaths} agentName={agentName} editable />
+      <FolderGroup label="memory" scope="memory" paths={memoryPaths} agentName={agentName} editable={false} note="Claude Code auto-memory · 只读" />
     </section>
   );
 }
 
 // A collapsible folder (evolution/ or memory/) whose sub-files open the same
 // view/edit modal. Memory's items carry no edit target ⇒ read-only.
-function FolderGroup({ label, files, agentName, note }: { label: string; files: FileItem[]; agentName: string; note?: string }) {
-  if (files.length === 0) return null;
+function FolderGroup({ label, scope, paths, agentName, note, editable }: {
+  label: string; scope: 'evolution' | 'memory'; paths: string[]; agentName: string; note?: string; editable: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  // Fetch this folder's file content only once the user expands it — keeps the
+  // detail sheet's initial open cheap (the path list comes from agents.folders).
+  const content = trpc.agents.folderContent.useQuery(
+    { name: agentName, scope },
+    { enabled: open, staleTime: 60_000 },
+  );
+  if (paths.length === 0) return null;
+  const byPath = new Map((content.data ?? []).map((f) => [f.path, f.content] as const));
+  // evolution/ files are editable (target evolution/<path>); memory is Claude
+  // Code's read-only auto-memory. body is null until the lazy fetch lands; while
+  // it's in flight we show a "加载中…" line instead of the rows.
+  const items: FileItem[] = paths.map((p) => ({
+    key: `${scope}/${p}`,
+    label: p,
+    body: byPath.get(p) ?? null,
+    target: editable ? `${scope}/${p}` : undefined,
+    monoLabel: true,
+    exists: true,
+  }));
   return (
-    <details className="group rounded-lg border border-border bg-card">
+    <details
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+      className="group rounded-lg border border-border bg-card"
+    >
       <summary className="cursor-pointer list-none flex items-center gap-2 px-3 h-9 text-[12px]">
         <span className="font-mono text-foreground/85">{label}/</span>
         <span className="ml-auto flex items-center gap-2 shrink-0 text-muted-foreground tabular-nums">
-          {files.length} file{files.length === 1 ? '' : 's'}
+          {paths.length} file{paths.length === 1 ? '' : 's'}
           <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />
         </span>
       </summary>
       <div className="border-t border-border px-2 py-2">
         {note && <p className="mb-1.5 px-1 text-[10px] text-muted-foreground/60">{note}</p>}
-        <FileList items={files} agentName={agentName} />
+        {content.isFetching && !content.data ? (
+          <p className="px-1 py-2 text-[11px] text-muted-foreground/60">加载中…</p>
+        ) : (
+          <FileList items={items} agentName={agentName} />
+        )}
       </div>
     </details>
   );
