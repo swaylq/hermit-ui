@@ -396,17 +396,17 @@ function RecentAgents() {
   const pending = trpc.agents.pendingRequests.useQuery(undefined, { refetchInterval: 2_000 });
   const utils = trpc.useUtils();
 
-  // Prefetch byName so picking an agent feels instant (sub-200ms when cached).
-  useEffect(() => {
-    if (!agents.data) return;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    agents.data.slice(0, 20).forEach((a, i) => {
-      timers.push(setTimeout(() => {
-        void utils.agents.byName.prefetch({ name: a.name }, { staleTime: 30_000 });
-      }, i * 80));
-    });
-    return () => timers.forEach(clearTimeout);
-  }, [agents.data, utils]);
+  // Prefetch an agent's full detail on hover/focus (intent to open) so the click
+  // is instant. This REPLACED eagerly prefetching the top-20 agents' byName
+  // (~50-70KB each) on load AND re-firing every 30s — hundreds of KB up front for
+  // agents the user never opens (measured: 4 agents = 229KB at open, dominant
+  // cost once folders went lazy). staleTime dedupes repeat hovers.
+  const prefetchAgent = useCallback(
+    (name: string) => {
+      void utils.agents.byName.prefetch({ name }, { staleTime: 30_000 });
+    },
+    [utils],
+  );
 
   const pendingAdds = (pending.data ?? []).filter((p) => p.kind === 'create' || p.kind === 'import');
 
@@ -433,6 +433,8 @@ function RecentAgents() {
                 <li key={a.id}>
                   <Link
                     href={`/agents?name=${encodeURIComponent(a.name)}`}
+                    onMouseEnter={() => prefetchAgent(a.name)}
+                    onFocus={() => prefetchAgent(a.name)}
                     className={cn(
                       'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors',
                       active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
