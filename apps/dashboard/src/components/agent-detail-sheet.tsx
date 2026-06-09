@@ -19,6 +19,8 @@ import { PublishToMarketButton } from './publish-to-market-button';
 import { InstallSkillDialog } from './install-skill-dialog';
 import { PublishTemplateDialog } from './publish-template-dialog';
 import { Overlay } from './overlay';
+import { SkillFilesModal } from './skill-files-modal';
+import { type FileItem as SkillFileItem } from './file-detail';
 import { sessionStatusView } from '@/lib/session-status';
 import { useUnread } from '@/lib/session-read';
 import { removeAgentSkill } from '@/lib/optimistic-skills';
@@ -321,6 +323,7 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
   const status = trpc.market.agentSkillStatus.useQuery({ agentName }, { refetchInterval: 30_000 });
   const statusMap = new Map((status.data ?? []).map((s) => [s.skillName, s]));
   const [installOpen, setInstallOpen] = useState(false);
+  const [openSkill, setOpenSkill] = useState<string | null>(null);
   const items: FileItem[] = agent.skillNames.map((name) => {
     const content = skills.find((s) => s.name === name)?.content ?? null;
     const st = statusMap.get(name);
@@ -333,6 +336,7 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
       evolved: isEvolvedSkill(content),
       publishSkill: name,
       market: st ? { bound: true, hasUpdate: st.hasUpdate, installedVersion: st.installedVersion, latestVersion: st.latestVersion, slug: st.slug } : undefined,
+      onOpen: () => setOpenSkill(name),
     };
   });
   return (
@@ -362,7 +366,48 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
         </div>
       )}
       {installOpen && <InstallSkillDialog agentName={agentName} installedNames={agent.skillNames} onClose={() => setInstallOpen(false)} />}
+      {openSkill && (
+        <AgentSkillModal
+          agentName={agentName}
+          skill={openSkill}
+          content={skills.find((s) => s.name === openSkill)?.content ?? null}
+          onClose={() => setOpenSkill(null)}
+        />
+      )}
     </section>
+  );
+}
+
+// Unified skill popup for an agent skill: SKILL.md (editable) + the lazily-loaded
+// sub-file tree (refs), via the shared SkillFilesModal — the same component the
+// marketplace uses. Refs are fetched only when the skill opens (kept out of
+// byName's recurring payload).
+function AgentSkillModal({ agentName, skill, content, onClose }: { agentName: string; skill: string; content: string | null; onClose: () => void }) {
+  const refsQ = trpc.agents.skillRefs.useQuery({ name: agentName, skill });
+  const save = trpc.agents.requestEdit.useMutation();
+  const items: SkillFileItem[] = [
+    {
+      key: 'SKILL.md',
+      label: 'SKILL.md',
+      body: content,
+      monoLabel: true,
+      onSave: (c) => save.mutateAsync({ name: agentName, target: `skill:${skill}`, content: c }),
+    },
+    ...(refsQ.data ?? []).map((r, i) => ({
+      key: `ref-${i}-${r.path}`,
+      label: r.path,
+      body: r.content,
+      monoLabel: true,
+    })),
+  ];
+  return (
+    <SkillFilesModal
+      title={`${skill}/`}
+      subtitle={`${agentName} · .claude/skills/${skill}`}
+      items={items}
+      loading={refsQ.isFetching && !refsQ.data}
+      onClose={onClose}
+    />
   );
 }
 
@@ -485,6 +530,9 @@ type FileItem = {
   publishSkill?: string;
   // Marketplace binding status (skill items only): linked + whether a newer version exists.
   market?: { bound: boolean; hasUpdate: boolean; installedVersion: string; latestVersion: string | null; slug: string | null };
+  // When set, clicking the row calls this instead of opening the inline modal —
+  // routes skill rows to the unified SkillFilesModal (SKILL.md + full tree).
+  onOpen?: () => void;
 };
 
 function fmtSize(n: number): string {
@@ -500,7 +548,7 @@ function FileList({ items, agentName }: { items: FileItem[]; agentName: string }
     <>
       <div className="space-y-1.5">
         {items.map((it) => (
-          <FileRow key={it.key} item={it} agentName={agentName} onClick={() => setOpenKey(it.key)} />
+          <FileRow key={it.key} item={it} agentName={agentName} onClick={() => (it.onOpen ? it.onOpen() : setOpenKey(it.key))} />
         ))}
       </div>
       <DetailModal item={openItem} agentName={agentName} onClose={() => setOpenKey(null)} />

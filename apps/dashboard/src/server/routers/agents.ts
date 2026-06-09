@@ -72,9 +72,34 @@ export const agentsRouter = router({
         },
       });
       if (!agent) return null;
+      // Strip per-skill refs (the sub-file trees) from the response: they can be
+      // large (scripts/references) and byName is fetched on hover + every 30s.
+      // The detail sheet lazy-loads a skill's refs via `skillRefs` when opened.
+      // The DB column keeps refs, so publishSkillFromLocal still reads them.
+      if (Array.isArray(agent.skills)) {
+        for (const s of agent.skills as Array<Record<string, unknown>>) {
+          if (s && typeof s === 'object') delete s.refs;
+        }
+      }
       // Sessions are queried separately by the detail sheet via
       // chat.listSessions({ agentName }), so no need to join here.
       return { agent };
+    }),
+
+  // One skill's sub-file tree (everything besides SKILL.md), lazy-loaded when a
+  // skill is opened in the detail sheet — kept OUT of byName's recurring payload.
+  skillRefs: machineProcedure
+    .input(z.object({ name: z.string(), skill: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const agent = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { skills: true },
+      });
+      const skills = Array.isArray(agent?.skills)
+        ? (agent!.skills as Array<{ name?: string; refs?: Array<{ path: string; content: string }> }>)
+        : [];
+      const found = skills.find((x) => x?.name === input.skill);
+      return (found?.refs ?? []) as Array<{ path: string; content: string }>;
     }),
 
   // Just the file PATHS for each folder — NOT content. The detail sheet renders
