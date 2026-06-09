@@ -1,9 +1,12 @@
 'use client';
 
 import { useState } from 'react';
+import { Download } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
+import { Button } from '@/components/ui/button';
+import { getActiveKey } from '@/lib/keyring';
 import { type FileItem } from '@/components/file-detail';
 import { SkillDiff } from '@/components/skill-diff';
 import { SkillFilesModal } from '@/components/skill-files-modal';
@@ -25,6 +28,40 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
   const curIdx = selected ? versions.findIndex((v) => v.id === selected.id) : -1;
   const previous = curIdx >= 0 ? versions[curIdx + 1] ?? null : null;
 
+  const [downloading, setDownloading] = useState(false);
+  const [dlError, setDlError] = useState<string | null>(null);
+  // Download the selected version as a .zip. A plain <a download> can't carry
+  // the x-asst-key header, so fetch with the key → blob → synthetic anchor.
+  async function download() {
+    if (!selected) return;
+    setDownloading(true);
+    setDlError(null);
+    try {
+      const res = await fetch(
+        `/api/market/skills/${encodeURIComponent(slug)}/download?version=${encodeURIComponent(selected.version)}`,
+        { headers: { 'x-asst-key': getActiveKey() } },
+      );
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setDlError(j?.error || `download failed (${res.status})`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${slug}-v${selected.version}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setDlError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   const files: FileItem[] = selected
     ? [
         { key: 'SKILL.md', label: 'SKILL.md', body: selected.content ?? null, monoLabel: true },
@@ -43,6 +80,12 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
       {!q.isLoading && !skill && <div className="text-xs text-muted-foreground">skill not found.</div>}
       {skill && (
         <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button size="sm" variant="outline" disabled={!selected || downloading} onClick={download}>
+              <Download className="h-3.5 w-3.5 mr-1" /> {downloading ? '打包中…' : `Download v${selected?.version ?? ''} .zip`}
+            </Button>
+            {dlError && <span className="text-xs text-rose-500">{dlError}</span>}
+          </div>
           {skill.description && <p className="text-sm text-muted-foreground">{skill.description}</p>}
           <div className="space-y-1">
             <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">Versions</div>
