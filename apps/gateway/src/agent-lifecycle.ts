@@ -11,6 +11,7 @@
 // for filesystem effects + a content sync after create.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -80,6 +81,27 @@ function overlayTemplate(dir: string, files: unknown, subs: Record<string, strin
   }
 }
 
+// Mark an agent dir as trusted + onboarded in ~/.claude.json, so the
+// gateway-spawned `claude` boots straight to the REPL instead of hanging
+// (invisible, in a detached pane) on the "trust this folder?" / onboarding gates.
+// Without this a dashboard-created agent's first chat/cron sticks in "starting"
+// forever — claude never writes a transcript, so the runner times out. Idempotent;
+// atomic write (tmp + rename) so a concurrent reader never sees a partial file.
+function trustProject(dir: string): void {
+  try {
+    const cjPath = path.join(os.homedir(), '.claude.json');
+    const cj = JSON.parse(fs.readFileSync(cjPath, 'utf8'));
+    cj.projects = cj.projects ?? {};
+    cj.projects[dir] = { ...(cj.projects[dir] ?? {}), hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true };
+    const tmp = `${cjPath}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(cj, null, 2) + '\n');
+    fs.renameSync(tmp, cjPath);
+    console.log('[agent-lifecycle] trusted project', dir);
+  } catch (e) {
+    console.error('[agent-lifecycle] trustProject failed for', dir, e);
+  }
+}
+
 // Scaffold a new agent at AGENTS_ROOT/<name>. Returns the resolved directory
 // so the caller can push its initial content to the dashboard.
 function scaffold(name: string, persona: string, templateFiles?: unknown): string {
@@ -107,6 +129,7 @@ function scaffold(name: string, persona: string, templateFiles?: unknown): strin
   );
   fs.renameSync(tmp, targetDir);
   if (templateFiles) overlayTemplate(targetDir, templateFiles, subs);
+  trustProject(targetDir); // pre-trust so the first gateway-spawned claude doesn't hang on trust/onboarding
   return targetDir;
 }
 
