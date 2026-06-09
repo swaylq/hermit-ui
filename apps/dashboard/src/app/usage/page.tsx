@@ -2,8 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -70,16 +68,6 @@ export default function UsagePage() {
   const windows = trpc.usage.windows.useQuery(undefined, { refetchInterval: 5 * 60_000 });
   // The accurate one — real Claude Max plan % scraped from `claude /usage`.
   const plan = trpc.usage.planUsage.useQuery(undefined, { refetchInterval: 2 * 60_000 });
-  const utils = trpc.useUtils();
-  const [editing, setEditing] = useState(false);
-  const [draft5h, setDraft5h] = useState('');
-  const [draftWk, setDraftWk] = useState('');
-  const setLimits = trpc.machines.setLimits.useMutation({
-    onSuccess: () => {
-      utils.machines.me.invalidate();
-      setEditing(false);
-    },
-  });
 
   const fiveHour = windows.data?.find((w) => w.kind === 'fiveHour');
   const weekly = windows.data?.find((w) => w.kind === 'weekly');
@@ -92,23 +80,9 @@ export default function UsagePage() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="usage" />
-      <header className="h-12 px-3 flex items-center gap-2 border-b border-border shrink-0">
+      <div className="lg:hidden px-3 py-2 shrink-0">
         <SidebarMobileToggle />
-        <span className="text-sm font-semibold text-foreground">Usage</span>
-        <div className="flex-1" />
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8"
-          onClick={() => {
-            setDraft5h(limit5h?.toString() ?? '');
-            setDraftWk(limitWk?.toString() ?? '');
-            setEditing((v) => !v);
-          }}
-        >
-          {editing ? 'cancel' : 'edit limits'}
-        </Button>
-      </header>
+      </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
@@ -144,51 +118,6 @@ export default function UsagePage() {
             Below: <span className="text-foreground/70">estimated cost</span> from ccusage (token counts × API list price) — a rough
             activity gauge, <span className="text-foreground/70">not</span> your plan limit. Pushed by the Mac gateway ~every 30 min.
           </p>
-
-      {editing && (
-        <Card className="p-4 space-y-3">
-          <p className="text-xs text-muted-foreground">
-            Plain dollar amounts for the Anthropic quotas. Leave blank to clear (no pct bar).
-          </p>
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="space-y-1 flex-1 min-w-[200px]">
-              <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">5h limit USD</span>
-              <Input
-                type="number"
-                step="0.01"
-                value={draft5h}
-                onChange={(e) => setDraft5h(e.target.value)}
-                placeholder="e.g. 35"
-                className="font-mono"
-              />
-            </label>
-            <label className="space-y-1 flex-1 min-w-[200px]">
-              <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">weekly limit USD</span>
-              <Input
-                type="number"
-                step="0.01"
-                value={draftWk}
-                onChange={(e) => setDraftWk(e.target.value)}
-                placeholder="e.g. 280"
-                className="font-mono"
-              />
-            </label>
-            <Button
-              size="sm"
-              disabled={setLimits.isPending}
-              onClick={() =>
-                setLimits.mutate({
-                  fiveHourLimitUsd: draft5h === '' ? null : Number(draft5h),
-                  weeklyLimitUsd: draftWk === '' ? null : Number(draftWk),
-                })
-              }
-            >
-              {setLimits.isPending ? 'saving…' : 'save'}
-            </Button>
-          </div>
-          {setLimits.error && <p className="text-xs text-rose-400">{setLimits.error.message}</p>}
-        </Card>
-      )}
 
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <WindowCard

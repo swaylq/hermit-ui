@@ -62,16 +62,12 @@ function SkillsListView({ skills, loading }: {
   const [installOpen, setInstallOpen] = useState(false);
   return (
     <>
-      <header className="border-b border-border px-4 h-12 flex items-center justify-between gap-2 shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <SidebarMobileToggle />
-          <span className="text-sm font-semibold text-foreground">Global skills</span>
-          <span className="text-xs text-muted-foreground tabular-nums">{skills.length}</span>
-        </div>
-        <Button size="sm" variant="ghost" className="gap-1 text-muted-foreground shrink-0" onClick={() => setInstallOpen(true)} title="install a skill from the market">
+      <div className="px-4 py-2.5 flex items-center gap-2 shrink-0">
+        <SidebarMobileToggle />
+        <Button size="sm" variant="ghost" className="ml-auto gap-1 text-muted-foreground shrink-0" onClick={() => setInstallOpen(true)} title="install a skill from the market">
           <Download className="size-3.5" /> Install
         </Button>
-      </header>
+      </div>
       <ScrollArea className="flex-1 min-h-0 bg-background">
         <div className="px-4 py-4 max-w-3xl mx-auto">
           {loading ? (
