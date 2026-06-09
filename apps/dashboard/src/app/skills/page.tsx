@@ -10,6 +10,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
+import { SettingsTabs } from '@/components/settings-tabs';
 import { FileList, type FileItem } from '@/components/file-detail';
 import { PublishToMarketButton } from '@/components/publish-to-market-button';
 import { InstallSkillDialog } from '@/components/install-skill-dialog';
@@ -33,6 +34,7 @@ function SourceBadge({ source, isBundle }: { source: string; isBundle: boolean }
 export default function SkillsPage() {
   return (
     <Suspense fallback={null}>
+      <SettingsTabs active="skills" />
       <SkillsPageInner />
     </Suspense>
   );

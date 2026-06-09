@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, LogOut, MenuIcon, Plus,
-  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, Search, type LucideIcon,
+  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, Search, Settings, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -65,8 +65,9 @@ const NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/chat', label: 'Chat', icon: MessageSquare },
   { href: '/agents', label: 'Agents', icon: Bot },
   { href: '/cron', label: 'Cron', icon: Clock },
-  { href: '/skills', label: 'Skills', icon: Boxes },
-  { href: '/usage', label: 'Usage', icon: BarChart3 },
+  // Skills + Usage live under one "Settings" entry → /skills (Skills tab); the
+  // SettingsTabs strip on those pages switches between the two.
+  { href: '/skills', label: 'Settings', icon: Settings },
 ];
 
 // Market mode replaces the dashboard nav when the route is under /market.
@@ -83,6 +84,7 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
   const onAgents = pathname.startsWith('/agents');
   const onCron = pathname.startsWith('/cron');
   const onSkills = pathname.startsWith('/skills');
+  const onUsage = pathname.startsWith('/usage');
   const onMarket = pathname.startsWith('/market');
   // When viewing a chat session, point the Agents nav at THAT session's agent, so
   // entering Agents from a session lands on its agent instead of the default
@@ -326,7 +328,7 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
             {/* Primary nav */}
             <nav className="px-2 pt-2 space-y-0.5">
               {NAV.map((n) => {
-                const active = n.href === '/chat' ? onChat : pathname.startsWith(n.href);
+                const active = n.href === '/chat' ? onChat : n.href === '/skills' ? (onSkills || onUsage) : pathname.startsWith(n.href);
                 const Icon = n.icon;
                 // From a chat session, the Agents entry deep-links to that session's agent.
                 const href = n.href === '/agents' && currentSessionAgent
@@ -389,6 +391,28 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
 
 // Agent list shown in the sidebar on /agents. Mirrors RecentSessions visually
 // so the two routes feel like the same chrome with a different payload.
+// Shared sidebar search box — a quick title/name filter over a list (Agents /
+// Crons), mirroring the Recents search on /chat. Esc clears.
+function SidebarFindInput({ value, onChange, placeholder, label }: {
+  value: string; onChange: (v: string) => void; placeholder: string; label: string;
+}) {
+  return (
+    <div className="px-2 pb-1">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" aria-hidden="true" />
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Escape') onChange(''); }}
+          placeholder={placeholder}
+          aria-label={label}
+          className="h-8 w-full rounded-lg border border-sidebar-border bg-sidebar/60 pl-7 pr-2 text-[12px] text-sidebar-foreground/90 placeholder:text-muted-foreground/50 outline-none transition-colors hover:border-sidebar-foreground/20 focus-visible:border-sidebar-foreground/40 focus-visible:ring-1 focus-visible:ring-sidebar-foreground/15"
+        />
+      </div>
+    </div>
+  );
+}
+
 function RecentAgents() {
   const search = useSearchParams();
   const activeName = search.get('name');
@@ -409,13 +433,19 @@ function RecentAgents() {
   );
 
   const pendingAdds = (pending.data ?? []).filter((p) => p.kind === 'create' || p.kind === 'import');
+  const [q, setQ] = useState('');
+  const needle = q.trim().toLowerCase();
+  const visible = needle ? (agents.data ?? []).filter((a) => a.name.toLowerCase().includes(needle)) : (agents.data ?? []);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">
       <div className="px-3 pb-1 flex items-baseline gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
         <span>Agents</span>
-        <span className="tabular-nums text-muted-foreground/50">{agents.data?.length ?? 0}</span>
+        <span className="tabular-nums text-muted-foreground/50">{visible.length}</span>
       </div>
+      {(agents.data?.length ?? 0) > 0 && (
+        <SidebarFindInput value={q} onChange={setQ} placeholder="搜索 agent" label="search agents by name" />
+      )}
       <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
         {agents.isPending ? (
           <div className="space-y-1 px-1 pt-1">
@@ -425,9 +455,11 @@ function RecentAgents() {
           </div>
         ) : (agents.data?.length ?? 0) === 0 && pendingAdds.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">no agents yet — start with “New agent”.</p>
+        ) : visible.length === 0 && pendingAdds.length === 0 ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">没有匹配 “{q.trim()}” 的 agent。</p>
         ) : (
           <ul className="space-y-px">
-            {agents.data?.map((a) => {
+            {visible.map((a) => {
               const active = activeName === a.name;
               return (
                 <li key={a.id}>
@@ -623,13 +655,21 @@ function RecentCrons() {
   const search = useSearchParams();
   const activeId = search.get('id');
   const crons = trpc.cron.list.useQuery(undefined, { refetchInterval: 5_000 });
+  const [q, setQ] = useState('');
+  const needle = q.trim().toLowerCase();
+  const visible = needle
+    ? (crons.data ?? []).filter((c) => (c.title || c.prompt || '').toLowerCase().includes(needle) || c.agentName.toLowerCase().includes(needle))
+    : (crons.data ?? []);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">
       <div className="px-3 pb-1 flex items-baseline gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
         <span>Crons</span>
-        <span className="tabular-nums text-muted-foreground/50">{crons.data?.length ?? 0}</span>
+        <span className="tabular-nums text-muted-foreground/50">{visible.length}</span>
       </div>
+      {(crons.data?.length ?? 0) > 0 && (
+        <SidebarFindInput value={q} onChange={setQ} placeholder="搜索 cron / agent" label="search crons by title or agent" />
+      )}
       <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
         {crons.isPending ? (
           <div className="space-y-1 px-1 pt-1">
@@ -639,9 +679,11 @@ function RecentCrons() {
           </div>
         ) : (crons.data?.length ?? 0) === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">no crons yet — start with “New cron”.</p>
+        ) : visible.length === 0 ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">没有匹配 “{q.trim()}” 的 cron。</p>
         ) : (
           <ul className="space-y-px">
-            {crons.data?.map((c) => {
+            {visible.map((c) => {
               const active = activeId === c.id;
               const dot = !c.enabled
                 ? 'border border-muted-foreground/40'

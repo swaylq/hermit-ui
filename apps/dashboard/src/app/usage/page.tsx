@@ -11,6 +11,7 @@ import { relTime } from '@/lib/format';
 import { UsageSection } from '@/components/usage-section';
 import { UsageSparkline } from '@/components/usage-sparkline';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
+import { SettingsTabs } from '@/components/settings-tabs';
 
 function fmtUSD(n: number | null | undefined): string {
   if (n == null) return '-';
@@ -90,6 +91,7 @@ export default function UsagePage() {
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
+      <SettingsTabs active="usage" />
       <header className="h-12 px-3 flex items-center gap-2 border-b border-border shrink-0">
         <SidebarMobileToggle />
         <span className="text-sm font-semibold text-foreground">Usage</span>
