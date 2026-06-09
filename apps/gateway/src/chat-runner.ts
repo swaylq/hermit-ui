@@ -490,13 +490,45 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // actually usable. Everything else flows through the normal `Read <path>`.
   const ARCHIVE_EXTS = new Set(['zip', 'tar', 'gz', 'tgz', 'bz2', 'tbz2', 'xz', 'txz', '7z', 'rar', 'zst']);
   const isArchive = (p: string) => ARCHIVE_EXTS.has((p.split('.').pop() || '').toLowerCase());
+  // Office docs are binary too (zip+XML for the modern formats) — Read'ing them
+  // is gibberish. Hand claude a per-type "convert via Bash" instruction so an
+  // uploaded .docx/.xlsx/.pptx is actually usable. Tools confirmed on the macOS
+  // agent host: textutil (Word, native) · python3 + pandas/openpyxl (Excel) · unzip.
+  const officeHint = (p: string): string | null => {
+    const e = (p.split('.').pop() || '').toLowerCase();
+    if (e === 'doc' || e === 'docx' || e === 'odt') {
+      return (
+        `An uploaded Word document is at ${p} — it is binary, so do NOT Read it directly. ` +
+        `Get its plain text with \`textutil -convert txt -stdout ${p}\` (macOS built-in).`
+      );
+    }
+    if (e === 'xls' || e === 'xlsx' || e === 'ods') {
+      return (
+        `An uploaded spreadsheet is at ${p} — it is binary, so do NOT Read it directly. ` +
+        `Convert it in Python (pandas + openpyxl are installed): ` +
+        `\`pd.read_excel('${p}', sheet_name=None)\` returns {sheet: DataFrame}; print or write each sheet's \`.to_csv()\`. ` +
+        `Fallback: it is a zip — \`unzip -o ${p} -d /tmp/xlsx\` then read xl/worksheets/*.xml + xl/sharedStrings.xml.`
+      );
+    }
+    if (e === 'ppt' || e === 'pptx' || e === 'odp') {
+      return (
+        `An uploaded presentation is at ${p} — it is binary, so do NOT Read it directly. ` +
+        `Pull the slide text with \`unzip -p ${p} 'ppt/slides/slide*.xml' | sed -E 's/<[^>]+>/ /g'\` ` +
+        `(text lives in <a:t> elements), or use python-pptx if available.`
+      );
+    }
+    return null;
+  };
   for (const p of relay.paths) {
+    const office = officeHint(p);
     if (isArchive(p)) {
       promptParts.push(
         `An uploaded archive is at ${p} — it is binary, so do NOT Read it directly. ` +
           `Run \`file ${p}\` to confirm the type, then extract it into a fresh temp directory ` +
           `(unzip / tar -xf / gunzip / 7z as appropriate) and inspect the extracted files.`,
       );
+    } else if (office) {
+      promptParts.push(office);
     } else {
       promptParts.push(`Read ${p}`);
     }

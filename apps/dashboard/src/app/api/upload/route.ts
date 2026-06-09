@@ -55,6 +55,9 @@ const SAFE_FILE_EXT_SET = new Set<string>([
   'sh','bash','zsh','fish','ps1','dart','lua','r',
   // archives — extracted by the agent via Bash (see image-relay / chat-runner)
   'zip','tar','gz','tgz','bz2','tbz2','xz','txz','7z','rar','zst',
+  // office docs — binary; the gateway relay hands the agent a "convert via Bash"
+  // instruction (textutil / python+pandas / unzip), never a raw Read.
+  'docx','xlsx','pptx','doc','xls','ppt','odt','ods','odp',
 ]);
 
 function uploadRoot(): string {

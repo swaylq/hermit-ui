@@ -32,6 +32,16 @@ const MIME_BY_EXT = {
   jpeg: 'image/jpeg',
   gif: 'image/gif',
   webp: 'image/webp',
+  // office docs (so the download chip carries a correct content-type)
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  doc: 'application/msword',
+  xls: 'application/vnd.ms-excel',
+  ppt: 'application/vnd.ms-powerpoint',
+  odt: 'application/vnd.oasis.opendocument.text',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  odp: 'application/vnd.oasis.opendocument.presentation',
 };
 
 function sendJson(obj) {
@@ -185,7 +195,7 @@ const TOOLS = [
   {
     name: 'attach_file',
     description:
-      'Send a downloadable file to the user in the chat. Pass an absolute path to a text / code / markdown / PDF / CSV / JSON / YAML / HTML / SVG file, OR an archive (zip / tar / gz / tgz / bz2 / xz / 7z / rar / zst), on the local filesystem — it appears as a download chip the user clicks to save, under its real filename. For images use attach_image instead (renders inline). Allowed: the text / code / document allowlist plus archives — ≤25 MB (not arbitrary binaries or executables). Optional caption renders above the file.',
+      'Send a downloadable file to the user in the chat. Pass an absolute path to a text / code / markdown / PDF / CSV / JSON / YAML / HTML / SVG file, an office document (docx / xlsx / pptx / doc / xls / ppt / odt / ods / odp), OR an archive (zip / tar / gz / tgz / bz2 / xz / 7z / rar / zst), on the local filesystem — it appears as a download chip the user clicks to save, under its real filename. For images use attach_image instead (renders inline). Allowed: the text / code / document / office allowlist plus archives — ≤25 MB (not arbitrary binaries or executables). Optional caption renders above the file.',
     inputSchema: {
       type: 'object',
       properties: {
