@@ -1,8 +1,9 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
-import { Boxes, Package, GitBranch, Plug, FileText, Trash2, Plus, Download } from 'lucide-react';
+import { Suspense, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import { Boxes, Package, GitBranch, Plug, FileText, Trash2, Plus, Download, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -42,37 +43,76 @@ export default function SkillsPage() {
 
 function SkillsPageInner() {
   const search = useSearchParams();
-  const router = useRouter();
   const name = search.get('name');
   const showNew = !!search.get('new');
   const skills = trpc.skills.list.useQuery(undefined, { refetchInterval: 10_000 });
 
-  // Default landing: jump to the first skill so the pane isn't blank. Skip while
-  // the "New skill" form is open.
-  useEffect(() => {
-    if (name || showNew) return;
-    const first = skills.data?.[0];
-    if (first) router.replace(`/skills?name=${encodeURIComponent(first.name)}`);
-  }, [name, showNew, skills.data, router]);
-
   if (showNew) return <NewSkillPane />;
-
-  if (!name) {
-    return (
-      <>
-        <header className="border-b border-border px-4 h-12 flex items-center gap-2 shrink-0">
-          <SidebarMobileToggle />
-          <span className="text-sm font-semibold text-foreground">Skills</span>
-        </header>
-        <div className="flex-1 flex flex-col items-center justify-center text-center px-4 text-muted-foreground">
-          <Boxes className="h-10 w-10 mb-3 opacity-30" aria-hidden="true" />
-          <p className="text-sm">{(skills.data?.length ?? 0) === 0 ? 'No global skills yet.' : 'Pick a skill from the sidebar.'}</p>
-          <p className="mt-1 text-xs">These live in <code className="font-mono">~/.claude/skills/</code> and are shared by every agent on this machine.</p>
-        </div>
-      </>
-    );
-  }
+  // Default (no skill selected): the global-skill LIST in the page (it used to
+  // live in the sidebar). Clicking a row opens /skills?name=<name> → detail.
+  if (!name) return <SkillsListView skills={skills.data ?? []} loading={skills.isPending} />;
   return <SkillDetail key={name} name={name} />;
+}
+
+// ── Skills list (default view) ────────────────────────────────────────────────
+function SkillsListView({ skills, loading }: {
+  skills: Array<{ id: string; name: string; description: string | null; source: string; isBundle: boolean; fileCount: number }>;
+  loading: boolean;
+}) {
+  const [installOpen, setInstallOpen] = useState(false);
+  return (
+    <>
+      <header className="border-b border-border px-4 h-12 flex items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <SidebarMobileToggle />
+          <span className="text-sm font-semibold text-foreground">Global skills</span>
+          <span className="text-xs text-muted-foreground tabular-nums">{skills.length}</span>
+        </div>
+        <Button size="sm" variant="ghost" className="gap-1 text-muted-foreground shrink-0" onClick={() => setInstallOpen(true)} title="install a skill from the market">
+          <Download className="size-3.5" /> Install
+        </Button>
+      </header>
+      <ScrollArea className="flex-1 min-h-0 bg-background">
+        <div className="px-4 py-4 max-w-3xl mx-auto">
+          {loading ? (
+            <div className="space-y-1.5">
+              {Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-14 rounded-lg bg-accent/40 animate-pulse" />)}
+            </div>
+          ) : skills.length === 0 ? (
+            <div className="flex flex-col items-center justify-center text-center py-16 text-muted-foreground">
+              <Boxes className="h-10 w-10 mb-3 opacity-30" aria-hidden="true" />
+              <p className="text-sm">No global skills yet — start with “New skill”.</p>
+              <p className="mt-1 text-xs">They live in <code className="font-mono">~/.claude/skills/</code> and are shared by every agent on this machine.</p>
+            </div>
+          ) : (
+            <ul className="space-y-1.5">
+              {skills.map((s) => (
+                <li key={s.id}>
+                  <Link
+                    href={`/skills?name=${encodeURIComponent(s.name)}`}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2.5 hover:bg-accent/40 hover:border-foreground/30 transition-colors cursor-pointer"
+                    title={s.description || s.name}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono text-sm text-foreground/90 truncate">{s.name}</span>
+                        <SourceBadge source={s.source} isBundle={s.isBundle} />
+                      </div>
+                      {s.description && <p className="mt-0.5 text-xs text-muted-foreground truncate">{s.description}</p>}
+                    </div>
+                    <span className="shrink-0 text-[11px] font-mono text-muted-foreground/60 tabular-nums">
+                      {s.fileCount} file{s.fileCount === 1 ? '' : 's'}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </ScrollArea>
+      {installOpen && <InstallSkillDialog installedNames={skills.map((s) => s.name)} onClose={() => setInstallOpen(false)} />}
+    </>
+  );
 }
 
 // ── New skill ─────────────────────────────────────────────────────────────────
@@ -226,6 +266,9 @@ function SkillDetail({ name }: { name: string }) {
       <header className="border-b border-border px-4 h-12 flex items-center justify-between gap-3 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <SidebarMobileToggle />
+          <Link href="/skills" title="back to skills" aria-label="back to skills" className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer shrink-0">
+            <ArrowLeft className="h-4 w-4" />
+          </Link>
           <div className="min-w-0">
             <div className="text-sm font-semibold text-foreground font-mono truncate">{skill.name}</div>
             <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground truncate">

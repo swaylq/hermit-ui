@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
 // Settings nav entry highlights for both. Rendered as a thin strip above each
 // page's own header.
 const TABS = [
-  { key: 'skills', label: 'Skills', href: '/skills', Icon: Boxes },
+  { key: 'skills', label: 'Global Skills', href: '/skills', Icon: Boxes },
   { key: 'usage', label: 'Usage', href: '/usage', Icon: BarChart3 },
 ] as const;
 

@@ -358,8 +358,9 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
             {!collapsed && onChat && <RecentSessions />}
             {!collapsed && onAgents && <RecentAgents />}
             {!collapsed && onCron && <RecentCrons />}
-            {!collapsed && onSkills && <RecentSkills />}
-            {(collapsed || (!onChat && !onAgents && !onCron && !onSkills)) && <div className="flex-1" />}
+            {/* The global-skill list now lives in the page (Settings → Global Skills),
+                not the sidebar — so /skills falls through to the spacer below. */}
+            {(collapsed || (!onChat && !onAgents && !onCron)) && <div className="flex-1" />}
           </>
         )}
 
