@@ -14,6 +14,7 @@ import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { sessionStatusView } from '@/lib/session-status';
 import { useUnread } from '@/lib/session-read';
+import { useLiveWorking } from '@/lib/session-live';
 
 // ── Sidebar open/collapse state, shared so a page header can drop a hamburger ──
 type SidebarCtx = {
@@ -826,6 +827,7 @@ function RecentSessions() {
   const sessions = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
   const utils = trpc.useUtils();
   const isUnread = useUnread();
+  const liveWorkingSince = useLiveWorking();
 
   // Local agent filter — persisted in sessionStorage so it survives reloads
   // but doesn't pollute the URL. "" means "all agents".
@@ -942,7 +944,19 @@ function RecentSessions() {
           <ul className="space-y-px">
             {visible.map((s) => {
               const active = activeId === s.id;
-              const status = sessionStatusView(s, { unread: isUnread(s.id, s.lastMessageAt) });
+              // Optimistic working: the moment the user sends, the session is
+              // marked live (markSessionWorking) so this dot turns yellow
+              // instantly — no waiting ~13s for the gateway snapshot + 5s poll.
+              // Reconcile with the gateway's truth: once it snapshots the pane
+              // AFTER the send (snapshotAt > stamp), drop the optimism and let
+              // the real `state` drive the dot.
+              const liveAt = liveWorkingSince(s.id);
+              const optimisticWorking =
+                liveAt != null && (!s.snapshotAt || new Date(s.snapshotAt).getTime() < liveAt);
+              const status = sessionStatusView(s, {
+                unread: isUnread(s.id, s.lastMessageAt),
+                liveWorking: optimisticWorking,
+              });
               return (
                 <li key={s.id}>
                   <Link

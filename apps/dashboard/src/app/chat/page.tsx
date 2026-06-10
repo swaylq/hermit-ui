@@ -18,6 +18,8 @@ import { ImageLightbox } from '@/components/ui/image-lightbox';
 import { CtxBar } from '@/components/ctx-bar';
 import { sessionStatusView } from '@/lib/session-status';
 import { markSessionRead } from '@/lib/session-read';
+import { markSessionWorking } from '@/lib/session-live';
+import { TimeAgo } from '@/components/time-ago';
 import { getActiveKey } from '@/app/providers';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 
@@ -1300,6 +1302,11 @@ function SessionPane({ sessionId }: { sessionId: string }) {
               // IS the active turn (not a queue item) — remember it so the QueueBar
               // doesn't flash it while the gateway picks it up (see activeStarterId).
               const wasIdle = !isInFlight;
+              // Optimistically flip this session's sidebar dot to "working" the
+              // instant we send — the gateway snapshot that sets the real `state`
+              // is ~8s behind. The sidebar reconciles it against snapshotAt and it
+              // auto-expires; the header already shows working via isInFlight.
+              markSessionWorking(sessionId);
               // Optimistic: show the user's bubble + clear the composer instantly
               // instead of waiting for the round-trip + SSE echo. The overlay row
               // drops itself when the real row lands (see `pending` / `view`);
@@ -2468,7 +2475,7 @@ const MessageRow = memo(function MessageRow({ role, content, ts, streamingTail =
             'text-[10px] font-mono tabular-nums',
             isHumanUser ? 'text-background/60' : 'text-muted-foreground/60',
           )}>
-            {relTime(ts)}
+            <TimeAgo date={ts} />
           </div>
           {/* Hidden until row hover (or focus inside), to keep the rest text. */}
           {plainText && !streamingTail && !isSystem && (
