@@ -29,6 +29,7 @@ import { tick as cronTick } from './cron-runner';
 import { chatTick, chatCancelTick, chatRestartTick, shutdownChatRunner } from './chat-runner';
 import { agentRequestTick } from './agent-lifecycle';
 import { machineRequestTick, loginCancelTick } from './machine-requests';
+import { startLoginBridge } from './login-bridge';
 import { pushGlobalSkills, globalSkillRequestTick } from './global-skills';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 
@@ -147,6 +148,10 @@ function loop(fn: () => Promise<void>, ms: number) {
 // Persistent outbound control WebSocket to the dashboard for the browser
 // terminal feature. Fires-and-reconnects-forever; no loop needed.
 startControlChannel();
+
+// Localhost WS server the Chrome login extension connects to (real-browser
+// driver for the account-login flow). No-op until the extension connects.
+startLoginBridge();
 
 loop(pushAgents, 5 * 60_000);
 loop(pushSessionSnapshots, 8_000);

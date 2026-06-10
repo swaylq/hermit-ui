@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 13px -apple-system, system-ui, sans-serif; width: 300px; padding: 12px; color: #1a1a1a; }
+      h1 { font-size: 13px; margin: 0 0 8px; }
+      label { display: block; font-size: 11px; color: #666; margin: 8px 0 2px; }
+      input { width: 100%; box-sizing: border-box; padding: 5px 7px; font: 12px ui-monospace, monospace; border: 1px solid #ccc; border-radius: 5px; }
+      button { margin-top: 10px; padding: 6px 12px; border: 0; border-radius: 6px; background: #111; color: #fff; cursor: pointer; font-size: 12px; }
+      .status { margin-top: 10px; font-size: 12px; }
+      .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+      .ok { background: #16a34a; } .wait { background: #d97706; } .off { background: #9ca3af; }
+      .hint { font-size: 10px; color: #888; margin-top: 6px; line-height: 1.4; }
+    </style>
+  </head>
+  <body>
+    <h1>Hermit Login Bridge</h1>
+    <label>Gateway WS URL</label>
+    <input id="url" placeholder="ws://127.0.0.1:47615" />
+    <label>Token</label>
+    <input id="token" placeholder="from ~/.hermit/login-bridge.json" />
+    <button id="save">Save & Connect</button>
+    <div class="status"><span id="dot" class="dot off"></span><span id="state">…</span></div>
+    <div class="hint">Token: run <code>cat ~/.hermit/login-bridge.json</code> on this Mac and paste the token. Load this folder via chrome://extensions → Developer mode → Load unpacked.</div>
+    <script src="options.js"></script>
+  </body>
+</html>

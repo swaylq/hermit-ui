@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Hermit Login Bridge",
+  "version": "0.1.0",
+  "description": "Lets the hermit gateway drive THIS Chrome (real profile, no automation flags) to log Claude Code into an account.",
+  "permissions": ["scripting", "tabs", "storage", "alarms"],
+  "host_permissions": [
+    "https://claude.ai/*",
+    "https://*.claude.ai/*",
+    "https://*.171mail.com/*",
+    "https://*.anthropic.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "options.html", "default_title": "Hermit Login Bridge" }
+}
