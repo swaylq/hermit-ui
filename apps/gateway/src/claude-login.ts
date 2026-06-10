@@ -15,7 +15,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
-import type { BrowserContext, Page } from 'playwright';
+import type { BrowserContext, Page } from 'playwright-core';
 import { execCapture } from './exec';
 
 type IPty = ReturnType<typeof pty.spawn>;
@@ -403,16 +403,23 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
   const claudeBin = input.claudeBin ?? 'claude';
   fs.mkdirSync(PROFILE_DIR, { recursive: true });
 
-  const { chromium } = await import('playwright');
+  const { chromium } = await import('playwright-core');
   let ctx: BrowserContext | null = null;
   try {
     await report({ status: 'running', line: '启动 Chrome（有头）…' });
-    ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
-      channel: 'chrome',
-      headless: false,
-      viewport: null,
-      args: ['--no-first-run', '--no-default-browser-check'],
-    });
+    try {
+      ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
+        channel: 'chrome',
+        headless: false,
+        viewport: null,
+        args: ['--no-first-run', '--no-default-browser-check'],
+      });
+    } catch (e) {
+      throw new Error(
+        '启动 Chrome 失败——这台机器可能没装 Google Chrome（登录用系统 Chrome 过 Cloudflare，请先装 Chrome 再试）。' +
+          `原始错误：${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
     ctx.setDefaultTimeout(STEP_TIMEOUT);
     ctx.setDefaultNavigationTimeout(NAV_TIMEOUT);
     const page = ctx.pages()[0] ?? (await ctx.newPage());
