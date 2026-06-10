@@ -11,6 +11,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
+import { Markdown } from '@/components/markdown';
 
 // ── format helpers ───────────────────────────────────────────────────────────
 function fmtDur(sec: number): string {
@@ -434,7 +435,9 @@ function CronRunRow({
         </summary>
         <div className="border-t border-border px-3 py-2">
           {run.output ? (
-            <pre className="whitespace-pre-wrap break-words text-[11px] font-mono text-foreground/85 max-h-72 overflow-auto">{run.output}</pre>
+            <div className="max-h-72 overflow-auto text-[12px] text-foreground/85">
+              <Markdown>{run.output}</Markdown>
+            </div>
           ) : (
             <p className="text-xs text-muted-foreground">{run.status === 'running' ? 'running…' : 'no output captured'}</p>
           )}
