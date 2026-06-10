@@ -15,6 +15,13 @@ module.exports = {
       // — keep ecosystem.env minimal so VPS deploys can override via .env.
       env: {
         NODE_ENV: 'production',
+        // pm2's daemon PATH often lacks ~/.local/bin (where the native `claude`
+        // symlink lives). The gateway spawns each chat pane as bare `claude …`,
+        // and tmux execs it with the CLIENT's PATH — so without ~/.local/bin
+        // here, every NEW pane fails "claude: command not found" and dies
+        // instantly ("tmux session not found" on send-keys; new-agent chats
+        // never start). Prepend it. (2026-06-10)
+        PATH: `${require('os').homedir()}/.local/bin:${process.env.PATH || '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin'}`,
       },
       autorestart: true,
       max_restarts: 50,
