@@ -213,6 +213,12 @@ model ChatMessage {
   // window each 250ms tick — see api/chat/stream/route.ts.
   updatedAt   DateTime    @default(now()) @updatedAt
 
+  // Dedup key for gateway-synced rows (assistant/tool/system blocks carry a
+  // stable externalId): lets the chat-message sync route upsert by point-lookup
+  // instead of a per-item findFirst heap scan, keeping SDK retries + streaming
+  // partials idempotent. externalId is NULL for user-composed rows (created via
+  // chat.send), and Postgres treats NULLs as distinct, so those never collide.
+  @@unique([sessionId, externalId])
   @@index([sessionId, createdAt])
   @@index([sessionId, deliveredAt])
   @@index([sessionId, updatedAt])
