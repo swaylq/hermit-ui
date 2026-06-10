@@ -85,6 +85,7 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
   const onCron = pathname.startsWith('/cron');
   const onSkills = pathname.startsWith('/skills');
   const onUsage = pathname.startsWith('/usage');
+  const onOps = pathname.startsWith('/ops');
   const onMarket = pathname.startsWith('/market');
   // When viewing a chat session, point the Agents nav at THAT session's agent, so
   // entering Agents from a session lands on its agent instead of the default
@@ -328,7 +329,7 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
             {/* Primary nav */}
             <nav className="px-2 pt-2 space-y-0.5">
               {NAV.map((n) => {
-                const active = n.href === '/chat' ? onChat : n.href === '/skills' ? (onSkills || onUsage) : pathname.startsWith(n.href);
+                const active = n.href === '/chat' ? onChat : n.href === '/skills' ? (onSkills || onUsage || onOps) : pathname.startsWith(n.href);
                 const Icon = n.icon;
                 // From a chat session, the Agents entry deep-links to that session's agent.
                 const href = n.href === '/agents' && currentSessionAgent

@@ -89,10 +89,52 @@ const restartingSessions = new Set<string>();
 
 // ── Cancellation tick ────────────────────────────────────────────────────────
 
-// Per-session restart: poll for `restartRequestedAt` rows, kill each pane,
-// ack. The next user message into that session will respawn claude with
-// --resume <claudeSessionId> (history preserved). Used when a single session
-// is wedged but other sessions on the same agent are fine.
+// Restart a single session: tear down in-memory state, kill the pane, post the
+// "[session restarted]" system row. The next deliverMessages call sees
+// paneAlive=false and respawns claude with --resume <claudeSessionId> (history
+// preserved). Shared by chatRestartTick (the per-session restart button) and the
+// machine-level "restart all sessions" op. Returns false if the session was
+// already mid-restart (in-flight guard), so callers can skip acking it.
+export async function restartOneSession(sessionId: string, stampMs: number): Promise<boolean> {
+  // The kill can take up to 2s and ticks don't await each other — guard so
+  // overlapping ticks don't re-process the same session.
+  if (restartingSessions.has(sessionId)) return false;
+  restartingSessions.add(sessionId);
+  try {
+    // Tear down in-memory state first so the next deliverMessages call hits
+    // setupSession fresh (paneAlive=false → respawn with --resume).
+    const state = sessionStates.get(sessionId);
+    if (state) {
+      try { state.stopWatcher(); } catch {}
+      sessionStates.delete(sessionId);
+    }
+    await killTmuxSession(sessionId, 2_000);
+    console.log(`[chat-restart] killed session=${sessionId.slice(0, 8)}`);
+
+    // Post a system row so the chat UI stops thinking it's mid-turn. externalId
+    // is STABLE per restart (sessionId + stamp), so any overlapping tick or retry
+    // collapses to a single banner via the sync route's (sessionId, externalId)
+    // upsert — instead of spamming a fresh row every tick.
+    await api
+      .syncChatMessages([
+        {
+          sessionId,
+          role: 'system',
+          content: [{ type: 'text', text: '[session restarted — send a message to continue]' }],
+          externalId: `restart-${sessionId}-${stampMs}`,
+        },
+      ])
+      .catch((e) => console.error('[chat-restart] post system row failed:', e));
+  } catch (e) {
+    console.error('[chat-restart] kill failed:', e);
+  } finally {
+    restartingSessions.delete(sessionId);
+  }
+  return true;
+}
+
+// Per-session restart: poll for `restartRequestedAt` rows, restart each, ack.
+// Used when a single session is wedged but others on the same agent are fine.
 export async function chatRestartTick() {
   let rows: Awaited<ReturnType<typeof api.pollSessionRestarts>>;
   try {
@@ -105,49 +147,8 @@ export async function chatRestartTick() {
 
   const ackIds: string[] = [];
   for (const row of rows) {
-    // The kill below can take up to 2s, but this tick re-fires every 2s and
-    // setInterval doesn't await — so overlapping ticks would each re-process
-    // the same not-yet-acked row. Skip rows already in flight here.
-    if (restartingSessions.has(row.id)) continue;
-    restartingSessions.add(row.id);
-    try {
-      // Tear down in-memory state first so the next deliverMessages call
-      // hits setupSession fresh (which will see paneAlive=false and respawn
-      // with --resume).
-      const state = sessionStates.get(row.id);
-      if (state) {
-        try { state.stopWatcher(); } catch {}
-        sessionStates.delete(row.id);
-      }
-      await killTmuxSession(row.id, 2_000);
-      console.log(`[chat-restart] killed session=${row.id.slice(0, 8)}`);
-
-      // Post a system row so the chat UI stops thinking it's mid-turn. If
-      // the user clicked restart while waiting on a reply, the DB's last
-      // message is still role=user → the page would show "assistant is
-      // working…" forever. The system row breaks that, AND it doubles as
-      // an "OK, ready for the next prompt" affordance.
-      //
-      // externalId is STABLE per restart request (sessionId + requestedAt), so
-      // any overlapping tick or retry collapses to a single banner via the
-      // sync route's (sessionId, externalId) upsert — instead of spamming a
-      // fresh row every tick (the old Date.now()+random id never deduped).
-      await api
-        .syncChatMessages([
-          {
-            sessionId: row.id,
-            role: 'system',
-            content: [{ type: 'text', text: '[session restarted — send a message to continue]' }],
-            externalId: `restart-${row.id}-${new Date(row.restartRequestedAt).getTime()}`,
-          },
-        ])
-        .catch((e) => console.error('[chat-restart] post system row failed:', e));
-    } catch (e) {
-      console.error('[chat-restart] kill failed:', e);
-    } finally {
-      restartingSessions.delete(row.id);
-    }
-    ackIds.push(row.id);
+    const did = await restartOneSession(row.id, new Date(row.restartRequestedAt).getTime());
+    if (did) ackIds.push(row.id);
   }
   try {
     await api.ackSessionRestart(ackIds);

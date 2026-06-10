@@ -150,6 +150,26 @@ export const api = {
     if (!r.ok) throw new Error(`ackAgentRequest → ${r.status}`);
   },
 
+  // ── Machine-level ops (upgrade claude / restart all sessions) round-trip ─────
+  pollMachineRequests: async (): Promise<Array<{ id: string; kind: string }>> => {
+    const r = await get<any>(
+      '/api/trpc/machines.pollRequests?batch=1&input=' +
+        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+
+  ackMachineRequest: async (body: { id: string; status: 'running' | 'done' | 'error'; output?: string; error?: string }) => {
+    const url = `${DASHBOARD_URL}/api/trpc/machines.ackRequest?batch=1`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
+      body: JSON.stringify({ '0': { json: body } }),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+    if (!r.ok) throw new Error(`ackMachineRequest → ${r.status}`);
+  },
+
   // ── Machine-global skills (~/.claude/skills/) round-trip ────────────────────
   // syncGlobalSkills pushes the full scanned set (filesystem is leader);
   // poll/ack mirror the agent lifecycle for dashboard-queued create/edit/delete.

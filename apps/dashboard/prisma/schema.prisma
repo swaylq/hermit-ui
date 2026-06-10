@@ -36,6 +36,7 @@ model Machine {
   agentRequests       AgentRequest[]
   globalSkills        GlobalSkill[]
   globalSkillRequests GlobalSkillRequest[]
+  machineRequests     MachineRequest[]
   planUsage           PlanUsage?
 }
 
@@ -116,6 +117,24 @@ model GlobalSkillRequest {
   content     String?   @db.Text // create / edit: full SKILL.md
   refs        Json? // install bundle: sub-files [{ path, content }] written alongside SKILL.md
   status      String    @default("pending") // pending | done | error
+  error       String?   @db.Text
+  requestedAt DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  @@index([machineId, status])
+}
+
+// Machine-level ops the dashboard queues for the gateway to run on its host:
+// "upgrade-claude" (runs `claude upgrade`) and "restart-all-sessions" (drives
+// the existing per-session restart across every live session, staggered). These
+// touch no agent files — the gateway polls, executes, writes `output` back, acks.
+model MachineRequest {
+  id          String    @id @default(cuid())
+  machineId   String
+  machine     Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  kind        String // "upgrade-claude" | "restart-all-sessions"
+  status      String    @default("pending") // pending | running | done | error
+  output      String?   @db.Text // stdout / summary surfaced in the ops panel
   error       String?   @db.Text
   requestedAt DateTime  @default(now())
   resolvedAt  DateTime?
