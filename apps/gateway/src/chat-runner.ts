@@ -409,7 +409,19 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // new session (no pane yet) must fall through to setupSession. (capture-pane on
   // a missing pane returns false anyway; the explicit exists-check just avoids a
   // pointless 2s spawn against never-started sessions.)
-  if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id))) return;
+  //
+  // Debounce the gate against a single mis-read: a pane that's *settling* (the
+  // previous turn's spinner still painted for a frame, or a transient capture
+  // glitch) can read "working" once and then immediately go idle. Only hold the
+  // batch if two reads ~400ms apart BOTH say working; a settling pane fails the
+  // second read and we deliver. deliverMessages is fire-and-forget, so the extra
+  // 400ms on the hold path costs no user-visible latency — the batch would stay
+  // queued either way. (This kills the "sent to an idle agent, briefly queued"
+  // case that survives the tightened WORK_MARKER_RE in pane.ts.)
+  if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id))) {
+    await new Promise((r) => setTimeout(r, 400));
+    if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id))) return;
+  }
 
   // Ensure tmux pane + watcher are up.
   let state = sessionStates.get(session.id);

@@ -538,7 +538,13 @@ function ChatFind({ getViewport, onClose }: { getViewport: () => HTMLElement | n
 
 function SessionPane({ sessionId }: { sessionId: string }) {
   const utils = trpc.useUtils();
-  const sessionMeta = trpc.chat.listSessions.useQuery({});
+  // Poll on our own heartbeat instead of free-riding the sidebar's listSessions
+  // query: the sidebar's RecentSessions only mounts when the sidebar is expanded
+  // AND on /chat, so on mobile (off-canvas drawer, unmounted) or a collapsed
+  // sidebar nothing refetched this — the header status chip / context counter
+  // froze at page-load value until you touched the sidebar. Same query key as the
+  // sidebar, so React Query shares the cache (no double payload when both mount).
+  const sessionMeta = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
   const session = sessionMeta.data?.find((s) => s.id === sessionId);
   // Live updates arrive via SSE (/api/chat/stream), written straight into this
   // query's cache. The poll below is only a fallback for when the stream isn't
