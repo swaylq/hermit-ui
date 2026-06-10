@@ -156,7 +156,7 @@ export const agentsRouter = router({
       // The base template's default skills (apps/cli/template/.claude/skills/);
       // a new agent's skills are auto-associated with the market on create. Keep
       // in sync if the template's default skill set changes.
-      const DEFAULT_TEMPLATE_SKILLS = ['cron', 'loop', 'brave-search', 'browser-automation', 'reshape-agent', 'update-hermit'];
+      const DEFAULT_TEMPLATE_SKILLS = ['cron', 'loop', 'brave-search', 'browser-automation'];
       let includedSkills: string[] = [];
       const exists = await prisma.agent.findUnique({
         where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
