@@ -80,6 +80,7 @@ interface LoginDriver {
   bodyText(tab?: Tab): Promise<string>;
   inputValues(tab?: Tab): Promise<string[]>;
   fill(selector: string, value: string, tab?: Tab): Promise<boolean>;
+  pressEnter(selector: string, tab?: Tab): Promise<boolean>;
   clickByText(pattern: string, tab?: Tab): Promise<boolean>;
   openUserMenu(tab?: Tab): Promise<boolean>; // claude.ai bottom-left avatar (no text → can't clickByText)
   closeTab(tab: Tab): Promise<void>;
@@ -108,6 +109,9 @@ class ExtensionDriver implements LoginDriver {
   }
   async fill(selector: string, value: string, tab: Tab = 'login') {
     return !!(await sendCommand('fill', { selector, value, tab }));
+  }
+  async pressEnter(selector: string, tab: Tab = 'login') {
+    return !!(await sendCommand('pressEnter', { selector, tab }));
   }
   async clickByText(pattern: string, tab: Tab = 'login') {
     return !!(await sendCommand('clickByText', { pattern, tab }));
@@ -167,6 +171,14 @@ class PlaywrightDriver implements LoginDriver {
   async fill(selector: string, value: string, tab: Tab = 'login') {
     try {
       await (await this.page(tab)).locator(selector).first().fill(value, { timeout: STEP_TIMEOUT });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  async pressEnter(selector: string, tab: Tab = 'login') {
+    try {
+      await (await this.page(tab)).locator(selector).first().press('Enter');
       return true;
     } catch {
       return false;
@@ -495,11 +507,17 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
     if (await loggedIntoClaude(d)) await logoutClaudeWeb(d, report);
     await until(d, report, () => emailFieldVisible(d), { humanMsg: '请在 Chrome 里停在 claude.ai 的邮箱登录界面。' });
 
-    // 2. enter email → triggers the login email
-    await report({ line: '输入邮箱并继续…' });
+    // 2. enter email → triggers the login email. Click "Continue with email"
+    // SPECIFICALLY — a bare "continue" match grabs the "Continue with Google" SSO
+    // button. Fall back to pressing Enter in the email field.
+    await report({ line: '输入邮箱并继续（走邮箱，不走 Google）…' });
     await d.fill(EMAIL_SEL, email);
-    await d.clickByText('continue with email|continue|继续');
-    await until(d, report, () => codeEntryReady(d), { humanMsg: '请在 Chrome 里进入「输入验证码」界面。' });
+    if (!(await d.clickByText('continue with email|continue with e-?mail|用邮箱|使用邮箱'))) {
+      await d.pressEnter(EMAIL_SEL);
+    }
+    await until(d, report, () => codeEntryReady(d), {
+      humanMsg: '请在 Chrome 里用邮箱登录、进入「输入验证码」界面（别选 Google）。',
+    });
 
     // 3. fetch the code / magic-link from 171mail
     const got = await fetchLoginCode(d, mailToken, report);

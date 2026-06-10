@@ -132,6 +132,8 @@ async function handle(op, args) {
       return await runInTab(which, domInputValues, []);
     case 'fill':
       return await runInTab(which, domFill, [args.selector, args.value]);
+    case 'pressEnter':
+      return await runInTab(which, domPressEnter, [args.selector]);
     case 'click':
       return await runInTab(which, domClick, [args.selector]);
     case 'clickByText':
@@ -190,6 +192,22 @@ function domClick(selector) {
   const el = document.querySelector(selector);
   if (!el) return false;
   el.click();
+  return true;
+}
+function domPressEnter(selector) {
+  const el = document.querySelector(selector);
+  if (!el) return false;
+  el.focus();
+  for (const type of ['keydown', 'keypress', 'keyup']) {
+    el.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+  }
+  const form = el.closest('form');
+  if (form) {
+    try {
+      if (form.requestSubmit) form.requestSubmit();
+      else form.submit();
+    } catch {}
+  }
   return true;
 }
 function domClickByText(pattern) {
