@@ -4,17 +4,25 @@ import { prisma } from '../db';
 import { invalidateMachineCache } from '../auth';
 
 export const machinesRouter = router({
-  me: machineProcedure.query(async ({ ctx }) => ({
-    id: ctx.machine.id,
-    name: ctx.machine.name,
-    alias: ctx.machine.alias,
-    hostname: ctx.machine.hostname,
-    keyPrefix: ctx.machine.keyPrefix,
-    createdAt: ctx.machine.createdAt,
-    lastSeen: ctx.machine.lastSeen,
-    fiveHourLimitUsd: ctx.machine.fiveHourLimitUsd,
-    weeklyLimitUsd: ctx.machine.weeklyLimitUsd,
-  })),
+  me: machineProcedure.query(async ({ ctx }) => {
+    // Read fresh, NOT the cached auth snapshot — so alias / limits reflect the
+    // latest write immediately, even across pm2 cluster workers (each warms its
+    // own auth cache, so a setAlias on one worker won't bust another's). me is
+    // not the hot path (the chat poll is), so this extra PK lookup is cheap; the
+    // expensive bcrypt auth stays cached upstream in resolveMachineByKey.
+    const m = (await prisma.machine.findUnique({ where: { id: ctx.machine.id } })) ?? ctx.machine;
+    return {
+      id: m.id,
+      name: m.name,
+      alias: m.alias,
+      hostname: m.hostname,
+      keyPrefix: m.keyPrefix,
+      createdAt: m.createdAt,
+      lastSeen: m.lastSeen,
+      fiveHourLimitUsd: m.fiveHourLimitUsd,
+      weeklyLimitUsd: m.weeklyLimitUsd,
+    };
+  }),
 
   setLimits: machineProcedure
     .input(
