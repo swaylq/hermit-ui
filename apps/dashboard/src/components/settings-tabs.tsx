@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { Boxes, BarChart3, Wrench, KeyRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -16,8 +17,15 @@ const TABS = [
 ] as const;
 
 export function SettingsTabs({ active }: { active: 'skills' | 'usage' | 'ops' | 'login' }) {
+  const activeRef = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    // On a phone the four tabs don't fit, so the strip scrolls horizontally —
+    // bring the active tab into view (it'd otherwise sit off the right edge).
+    // block:'nearest' keeps the page from jumping vertically.
+    activeRef.current?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  }, []);
   return (
-    <div className="shrink-0 border-b border-border px-2.5 h-10 flex items-center gap-1">
+    <div className="shrink-0 border-b border-border px-2.5 h-10 flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       <span className="px-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 hidden sm:inline">
         Settings
       </span>
@@ -25,8 +33,9 @@ export function SettingsTabs({ active }: { active: 'skills' | 'usage' | 'ops' | 
         <Link
           key={t.key}
           href={t.href}
+          ref={active === t.key ? activeRef : undefined}
           className={cn(
-            'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[13px] transition-colors',
+            'inline-flex shrink-0 items-center gap-1.5 h-7 px-2.5 rounded-md text-[13px] whitespace-nowrap transition-colors',
             active === t.key
               ? 'bg-accent text-foreground font-medium'
               : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
