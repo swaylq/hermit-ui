@@ -4,7 +4,7 @@
 // X-Asst-Key. The ACTIVE entry's key is sent on every request; the backend
 // scopes all data by that key → machine. Switching = set active + full reload.
 
-export type KeyringEntry = { id: string; name: string; key: string; hostname?: string | null };
+export type KeyringEntry = { id: string; name: string; key: string; hostname?: string | null; alias?: string | null };
 
 const KEYRING = 'asst-dashboard-keyring';
 const ACTIVE = 'asst-dashboard-active';
@@ -76,11 +76,12 @@ export async function migrateLegacyKey(): Promise<void> {
     name: me?.name ?? 'machine',
     key: legacy,
     hostname: me?.hostname ?? null,
+    alias: me?.alias ?? null,
   });
   localStorage.removeItem(LEGACY);
 }
 
-export type MachineInfo = { id: string; name: string; hostname?: string | null; lastSeen?: string | null };
+export type MachineInfo = { id: string; name: string; alias?: string | null; hostname?: string | null; lastSeen?: string | null };
 
 // Raw machines.me with an ARBITRARY key (not the shared tRPC client, which only
 // carries the active key). Used for add-validation and per-machine status dots.
@@ -93,10 +94,33 @@ export async function fetchMachineByKey(key: string): Promise<MachineInfo | null
   if (!r.ok) return null;
   const j = await r.json();
   const m = j?.[0]?.result?.data?.json;
-  return m ? { id: m.id, name: m.name, hostname: m.hostname, lastSeen: m.lastSeen } : null;
+  return m ? { id: m.id, name: m.name, alias: m.alias, hostname: m.hostname, lastSeen: m.lastSeen } : null;
 }
 
 export function isOnline(lastSeen?: string | null): boolean {
   if (!lastSeen) return false;
   return Date.now() - new Date(lastSeen).getTime() < 90_000;
+}
+
+// Display label for a machine: the user-set alias, else the machine name.
+export function displayName(e: { alias?: string | null; name: string }): string {
+  return (e.alias && e.alias.trim()) || e.name;
+}
+
+// Update an entry's cached alias in the keyring (after the server save succeeds).
+export function renameEntry(id: string, alias: string | null) {
+  write(read().map((e) => (e.id === id ? { ...e, alias } : e)));
+}
+
+// Set a machine's server-side alias using an ARBITRARY key, so the switcher can
+// rename any machine (not just the active one). Returns the saved alias.
+export async function setMachineAlias(key: string, alias: string | null): Promise<string | null> {
+  const r = await fetch('/api/trpc/machines.setAlias?batch=1', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-asst-key': key },
+    body: JSON.stringify({ '0': { json: { alias } } }),
+  });
+  if (!r.ok) throw new Error(`setAlias → ${r.status}`);
+  const j = await r.json();
+  return j?.[0]?.result?.data?.json?.alias ?? null;
 }

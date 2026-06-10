@@ -18,6 +18,7 @@ model Machine {
   id        String    @id @default(cuid())
   name      String    @unique
   hostname  String?
+  alias     String?   // user-set display name shown in the dashboard (workspace switcher); falls back to name
   keyHash   String
   keyPrefix String
   createdAt DateTime  @default(now())

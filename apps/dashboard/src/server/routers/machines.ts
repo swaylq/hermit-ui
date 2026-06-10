@@ -6,6 +6,7 @@ export const machinesRouter = router({
   me: machineProcedure.query(async ({ ctx }) => ({
     id: ctx.machine.id,
     name: ctx.machine.name,
+    alias: ctx.machine.alias,
     hostname: ctx.machine.hostname,
     keyPrefix: ctx.machine.keyPrefix,
     createdAt: ctx.machine.createdAt,
@@ -30,6 +31,16 @@ export const machinesRouter = router({
         },
         select: { fiveHourLimitUsd: true, weeklyLimitUsd: true },
       });
+    }),
+
+  // Server-side display alias for this machine — shown in the dashboard's
+  // workspace switcher (falls back to `name` when null). Blank clears it.
+  setAlias: machineProcedure
+    .input(z.object({ alias: z.string().trim().max(40).nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      const alias = input.alias && input.alias.length > 0 ? input.alias : null;
+      await prisma.machine.update({ where: { id: ctx.machine.id }, data: { alias } });
+      return { alias };
     }),
 
   // ── Operations panel ────────────────────────────────────────────────────────
