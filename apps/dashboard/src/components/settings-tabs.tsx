@@ -1,20 +1,21 @@
 'use client';
 
 import Link from 'next/link';
-import { Boxes, BarChart3, Wrench } from 'lucide-react';
+import { Boxes, BarChart3, Wrench, KeyRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// Settings sub-nav: Skills + Usage + Operations as tabs. Each tab is its own
-// route (/skills, /usage, /ops) but they read as one "Settings" area — the
-// sidebar's single Settings nav entry highlights for all. Rendered as a thin
-// strip above each page's own header.
+// Settings sub-nav: Skills + Usage + Operations + Account login as tabs. Each tab
+// is its own route (/skills, /usage, /ops, /login-claude) but they read as one
+// "Settings" area — the sidebar's single Settings nav entry highlights for all.
+// Rendered as a thin strip above each page's own header.
 const TABS = [
   { key: 'skills', label: 'Global Skills', href: '/skills', Icon: Boxes },
   { key: 'usage', label: 'Usage', href: '/usage', Icon: BarChart3 },
   { key: 'ops', label: 'Operations', href: '/ops', Icon: Wrench },
+  { key: 'login', label: '登录账号', href: '/login-claude', Icon: KeyRound },
 ] as const;
 
-export function SettingsTabs({ active }: { active: 'skills' | 'usage' | 'ops' }) {
+export function SettingsTabs({ active }: { active: 'skills' | 'usage' | 'ops' | 'login' }) {
   return (
     <div className="shrink-0 border-b border-border px-2.5 h-10 flex items-center gap-1">
       <span className="px-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 hidden sm:inline">

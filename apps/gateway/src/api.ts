@@ -159,7 +159,7 @@ export const api = {
     return r[0]?.result?.data?.json ?? [];
   },
 
-  ackMachineRequest: async (body: { id: string; status: 'running' | 'done' | 'error'; output?: string; error?: string }) => {
+  ackMachineRequest: async (body: { id: string; status: 'running' | 'needs-human' | 'done' | 'error'; output?: string; error?: string }) => {
     const url = `${DASHBOARD_URL}/api/trpc/machines.ackRequest?batch=1`;
     const r = await fetch(url, {
       method: 'POST',
@@ -168,6 +168,24 @@ export const api = {
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
     });
     if (!r.ok) throw new Error(`ackMachineRequest → ${r.status}`);
+  },
+
+  // Read-once claim of a login request's sanitized account payload. The dashboard
+  // NULLs it server-side in the same call, so this returns the secrets exactly
+  // once. null ⇒ nothing to claim (already wiped / not a login request).
+  claimLoginPayload: async (
+    id: string,
+  ): Promise<{ email: string; mailToken: string; emailPassword: string | null } | null> => {
+    const url = `${DASHBOARD_URL}/api/trpc/machines.claimLoginPayload?batch=1`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
+      body: JSON.stringify({ '0': { json: { id } } }),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+    if (!r.ok) throw new Error(`claimLoginPayload → ${r.status}`);
+    const j = (await r.json()) as any;
+    return j[0]?.result?.data?.json ?? null;
   },
 
   // ── Machine-global skills (~/.claude/skills/) round-trip ────────────────────

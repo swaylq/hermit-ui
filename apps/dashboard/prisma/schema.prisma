@@ -133,10 +133,15 @@ model MachineRequest {
   id          String    @id @default(cuid())
   machineId   String
   machine     Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  kind        String // "upgrade-claude" | "restart-all-sessions"
-  status      String    @default("pending") // pending | running | done | error
+  kind        String // "upgrade-claude" | "restart-all-sessions" | "login-claude-account"
+  status      String    @default("pending") // pending | running | needs-human | done | error
   output      String?   @db.Text // stdout / summary surfaced in the ops panel
   error       String?   @db.Text
+  // Short-lived secret input for login-claude-account (sanitized account JSON:
+  // email + mailToken + optional emailPassword; the `sk` is dropped client-side).
+  // The gateway NULLs this the instant it claims the request — it rests in the
+  // DB only for the seconds between enqueue and claim. Never logged/redacted out.
+  payload     String?   @db.Text
   requestedAt DateTime  @default(now())
   resolvedAt  DateTime?
 
