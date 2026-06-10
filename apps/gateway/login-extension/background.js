@@ -136,6 +136,8 @@ async function handle(op, args) {
       return await runInTab(which, domClick, [args.selector]);
     case 'clickByText':
       return await runInTab(which, domClickByText, [args.pattern]);
+    case 'openUserMenu':
+      return await runInTab(which, domOpenUserMenu, []);
     case 'closeTab': {
       if (tabs[which] != null) {
         try {
@@ -199,6 +201,41 @@ function domClickByText(pattern) {
   if (!hit) return false;
   hit.click();
   return true;
+}
+// Open the claude.ai account menu — the bottom-left avatar (no useful text, so
+// clickByText can't find it). Try known handles, then a heuristic: a button in
+// the bottom-left corner that pops a menu / holds an avatar.
+function domOpenUserMenu() {
+  const known = [
+    '[data-testid="user-menu-button"]',
+    'button[aria-label*="profile" i]',
+    'button[aria-label*="account" i]',
+    'button[aria-label*="user menu" i]',
+    'button[aria-haspopup="menu"][aria-label*="settings" i]',
+  ];
+  for (const sel of known) {
+    const el = document.querySelector(sel);
+    if (el) {
+      el.click();
+      return true;
+    }
+  }
+  const vh = window.innerHeight;
+  const vw = window.innerWidth;
+  const cands = Array.from(document.querySelectorAll('button')).filter((b) => {
+    const r = b.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.bottom > vh * 0.6 && r.left < vw * 0.3;
+  });
+  cands.sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom); // lowest first
+  const pick =
+    cands.find((b) => b.getAttribute('aria-haspopup')) ||
+    cands.find((b) => b.querySelector('img, [class*="avatar" i], [style*="background-image" i]')) ||
+    cands[0];
+  if (pick) {
+    pick.click();
+    return true;
+  }
+  return false;
 }
 
 // ── lifecycle ─────────────────────────────────────────────────────────────────

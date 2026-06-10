@@ -81,6 +81,7 @@ interface LoginDriver {
   inputValues(tab?: Tab): Promise<string[]>;
   fill(selector: string, value: string, tab?: Tab): Promise<boolean>;
   clickByText(pattern: string, tab?: Tab): Promise<boolean>;
+  openUserMenu(tab?: Tab): Promise<boolean>; // claude.ai bottom-left avatar (no text → can't clickByText)
   closeTab(tab: Tab): Promise<void>;
   dispose(): Promise<void>;
 }
@@ -110,6 +111,9 @@ class ExtensionDriver implements LoginDriver {
   }
   async clickByText(pattern: string, tab: Tab = 'login') {
     return !!(await sendCommand('clickByText', { pattern, tab }));
+  }
+  async openUserMenu(tab: Tab = 'login') {
+    return !!(await sendCommand('openUserMenu', { tab }));
   }
   async closeTab(tab: Tab) {
     await sendCommand('closeTab', { tab }).catch(() => {});
@@ -183,6 +187,22 @@ class PlaywrightDriver implements LoginDriver {
       return false;
     }
   }
+  async openUserMenu(tab: Tab = 'login') {
+    const p = await this.page(tab);
+    for (const sel of [
+      '[data-testid="user-menu-button"]',
+      'button[aria-label*="profile" i]',
+      'button[aria-label*="account" i]',
+      'button[aria-haspopup="menu"]',
+    ]) {
+      const loc = p.locator(sel).first();
+      if (await loc.isVisible({ timeout: 400 }).catch(() => false)) {
+        await loc.click().catch(() => {});
+        return true;
+      }
+    }
+    return false;
+  }
   async closeTab(tab: Tab) {
     await this.pages[tab]?.close().catch(() => {});
     this.pages[tab] = undefined;
@@ -243,15 +263,17 @@ async function clearCloudflare(d: LoginDriver, report: LoginReport, where: strin
 }
 
 async function logoutClaudeWeb(d: LoginDriver, report: LoginReport): Promise<void> {
-  await report({ line: '检测到已登录，先退出当前账号…' });
-  if (await d.clickByText('account|profile|settings|账户|设置')) {
-    await sleep(800);
-    await d.clickByText('log ?out|sign ?out|退出|登出');
-  } else {
-    await d.navigate('https://claude.ai/logout').catch(() => {});
+  await report({ line: '检测到已登录，先退出当前账号（左下角头像 → Log out）…' });
+  // Open the bottom-left avatar menu, then click Log out. Retry — the menu
+  // animates in, and the first open may miss.
+  for (let i = 0; i < 3; i++) {
+    checkAbort();
+    await d.openUserMenu();
+    await sleep(1_000);
+    if (await d.clickByText('log ?out|sign ?out|退出|登出')) break;
   }
   await until(d, report, () => emailFieldVisible(d), {
-    humanMsg: '请在 Chrome 里退出当前 claude.ai 账号（回到邮箱登录页）。',
+    humanMsg: '请在 Chrome 里点左下角头像 → Log out 退出当前账号（之后自动继续）。',
   });
 }
 
