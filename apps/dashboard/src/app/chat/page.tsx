@@ -1532,7 +1532,7 @@ const SLASH_COMMANDS: Array<{ name: string; hint: string; needsArgs?: boolean }>
   { name: '/compact',  hint: '压缩上下文' },
   { name: '/clear',    hint: '清空对话' },
   { name: '/status',   hint: '当前会话状态' },
-  { name: '/model',    hint: '切换模型（如 opus / sonnet）', needsArgs: true },
+  { name: '/model',    hint: '切换模型（如 opus / sonnet / fable）', needsArgs: true },
   { name: '/goal',     hint: '设置 / 查看目标' },
   { name: '/exit',     hint: '退出会话' },
   { name: '/logout',   hint: '退出登录' },
