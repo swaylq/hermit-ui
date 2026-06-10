@@ -27,6 +27,7 @@ import {
   sendInterrupt,
   kill as killTmuxSession,
   getClaudeSessionUuid,
+  acceptResumePromptAsFull,
   awaitTranscript,
   watchTranscript,
   encodedProjectDir,
@@ -674,7 +675,15 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
   });
 
   if (waitForResumeUuid) {
-    claudeUuid = await getClaudeSessionUuid({ cwd, preExistingUuids });
+    // `claude --resume` on a big session blocks on an in-pane "resume from
+    // summary / full / don't ask" prompt the web can't answer — auto-accept
+    // "full session" (keep history) in the background so the await below isn't
+    // waiting on a hung pane. Longer timeout: answering the prompt + loading the
+    // full history can exceed the 30s default.
+    void acceptResumePromptAsFull(session.id).catch((e) =>
+      console.error(`[resume-prompt] ${session.id.slice(0, 8)}:`, e),
+    );
+    claudeUuid = await getClaudeSessionUuid({ cwd, preExistingUuids, timeoutMs: 90_000 });
   } else if (created) {
     // Pre-assigned uuid; just wait for claude to materialize the file.
     await awaitTranscript(path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`)).catch((e) => {

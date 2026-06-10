@@ -212,6 +212,54 @@ export async function confirmSubmitted(sessionId: string, tries = 24, gapMs = 50
   return !composerHasText(name);
 }
 
+/**
+ * `claude --resume` on a LARGE session blocks on an in-pane prompt before the
+ * REPL loads:
+ *     This session is Xh old and Nk tokens. … We recommend resuming from a summary.
+ *      ❯ 1. Resume from summary (recommended)
+ *        2. Resume full session as-is
+ *        3. Don't ask me again
+ * It's painted in the tmux pane and never reaches the web chat, so the session
+ * hangs forever (the caller's getClaudeSessionUuid waits on a transcript that
+ * never appears). Watch the pane and auto-pick option 2 — "Resume full session
+ * as-is" — to keep the COMPLETE history. `Up Up` returns ❯ to the top from
+ * wherever it sits, `Down` moves to option 2, `Enter` confirms; the sequence is
+ * idempotent, so re-issuing it each tick the prompt is still up (tmux drops keys
+ * — the same hazard confirmSubmitted handles) never lands on the wrong option.
+ * No-op if the prompt never appears (small sessions resume straight to the REPL).
+ * Fire-and-forget: runs in the background alongside the resume.
+ */
+export async function acceptResumePromptAsFull(sessionId: string, tries = 40, gapMs = 500): Promise<boolean> {
+  const name = paneName(sessionId);
+  let answered = false;
+  for (let i = 0; i < tries; i++) {
+    await sleep(gapMs);
+    if (!hasSession(name)) return answered; // pane gone — nothing to answer
+    const cap = tmux(['capture-pane', '-t', `${name}.0`, '-p'], { timeoutMs: 2_000 });
+    if (!cap.ok) continue;
+    const pane = cap.stdout.replace(/\x1b\[[0-9;]*m/g, '');
+    if (!(pane.includes('Resume full session as-is') && pane.includes('Resume from summary'))) {
+      if (answered) return true; // we answered and the prompt has cleared
+      continue; // not up yet — keep watching
+    }
+    // Prompt is up. Read which option the ❯ cursor sits on and take ONE step
+    // toward option 2 ("Resume full session as-is"), re-reading each tick — robust
+    // to tmux dropping a key and to whatever the menu's wrap behavior is (never
+    // assumes a fixed start). Confirm with Enter only once the cursor is on 2.
+    const cursorLine = pane.split('\n').find((l) => l.includes('❯')) ?? '';
+    if (cursorLine.includes('Resume full session as-is')) {
+      tmux(['send-keys', '-t', `${name}.0`, 'Enter']); // on option 2 → confirm
+      answered = true;
+    } else if (cursorLine.includes('Resume from summary')) {
+      tmux(['send-keys', '-t', `${name}.0`, 'Down']); // on option 1 → step down to 2
+    } else if (cursorLine.includes("Don't ask me again")) {
+      tmux(['send-keys', '-t', `${name}.0`, 'Up']); // on option 3 → step up to 2
+    }
+    // cursor not located yet → wait and re-read next tick
+  }
+  return answered;
+}
+
 /** Send Escape to interrupt the in-flight turn (claude's cancel key). */
 export function sendInterrupt(sessionId: string): void {
   const name = paneName(sessionId);
