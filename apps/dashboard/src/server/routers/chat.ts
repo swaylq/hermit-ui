@@ -435,6 +435,10 @@ export const chatRouter = router({
       // deliveredAt:null too, but carry an externalId). Without this the gateway
       // would try to "deliver" the agent's own attachments back into the pane.
       where: { sessionId: { in: sessionIds }, ...USER_QUEUE_FILTER },
+      // Narrow to what the gateway's deliverMessages actually reads — without a
+      // select this hauls the full content JSON (text + any image blocks) for
+      // every queued row on the 2s chatTick AND the 8s snapshot poll.
+      select: { id: true, sessionId: true, content: true, createdAt: true },
       orderBy: { createdAt: 'asc' },
     });
     return { sessions: sessionsWithDir, messages };

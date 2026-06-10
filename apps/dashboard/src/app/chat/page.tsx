@@ -2766,8 +2766,15 @@ function GroupView({ group, dark, inline = false, typing = false }: { group: Gro
 // rewrites this block to its resolved state on the next SSE refetch.
 function InteractionCard({ block }: { block: any }) {
   const utils = trpc.useUtils();
+  // The card always lives in the open session's timeline — scope the refetch to
+  // THIS session instead of invalidating every cached session's message window.
+  // (interaction.resolve also rewrites the row, which the SSE stream re-pushes,
+  // so this invalidate is belt-and-braces.)
+  const activeSessionId = useSearchParams().get('session');
   const resolve = trpc.interaction.resolve.useMutation({
-    onSuccess: () => { utils.chat.listMessages.invalidate(); },
+    onSuccess: () => {
+      utils.chat.listMessages.invalidate(activeSessionId ? { sessionId: activeSessionId } : undefined);
+    },
   });
   const kind: string = block?.kind ?? 'question';
   const payload = block?.payload ?? {};
