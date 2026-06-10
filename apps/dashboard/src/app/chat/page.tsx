@@ -979,7 +979,6 @@ function SessionPane({ sessionId }: { sessionId: string }) {
     { sessionId },
     { refetchInterval: (q) => (isInFlight || (q.state.data?.length ?? 0) > 0 ? 2_000 : false) },
   );
-  const queueLen = queue.data?.length ?? 0;
   // A message sent to an IDLE session is the imminent ACTIVE turn, not a queued
   // item — yet it lingers in queue.data (deliveredAt=null) for the ~2s until the
   // gateway picks it up, so it would flash in the QueueBar. Capture its id at send
@@ -988,7 +987,30 @@ function SessionPane({ sessionId }: { sessionId: string }) {
   // cleanup needed: each idle send overwrites the id, and filtering an id that's
   // no longer in queue.data is a harmless no-op.
   const [activeStarterId, setActiveStarterId] = useState<string | null>(null);
-  const displayQueue = (queue.data ?? []).filter((m) => m.id !== activeStarterId);
+  // Optimistic queue overlay: a message sent while a turn is running IS a queue
+  // item, but the real row only surfaces after the ~2s queue poll. Stubs pushed
+  // here on send (see onSend) show instantly; pruned when the real queued row
+  // lands (effect below, keyed on queue.data) or on send error. Deduped by text
+  // against the real queue so the hand-off doesn't double-count.
+  const [optimisticQueue, setOptimisticQueue] = useState<Array<{ id: string; content: { type: 'text'; text: string }[] }>>([]);
+  const realQueue = (queue.data ?? []).filter((m) => m.id !== activeStarterId);
+  const realQueueTexts = new Set(realQueue.map((m) => msgText(m.content)));
+  const displayQueue = [
+    ...realQueue,
+    ...optimisticQueue.filter((p) => !realQueueTexts.has(msgText(p.content))),
+  ];
+  const queueLen = displayQueue.length;
+  // Drop an optimistic queue stub once the real queued row lands in queue.data, so
+  // it can't reappear after the message is delivered (and leaves queue.data).
+  useEffect(() => {
+    if (optimisticQueue.length === 0) return;
+    const queued = new Set((queue.data ?? []).map((m) => msgText(m.content)));
+    setOptimisticQueue((q) => {
+      const next = q.filter((x) => !queued.has(msgText(x.content)));
+      return next.length === q.length ? q : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue.data]);
   // Status badge: gateway's pane-derived state, flipped to "working" instantly
   // off our own in-flight signal. unread=false — we're looking at this session,
   // so it's read by definition (never the red "unread" dot in its own header).
@@ -1281,8 +1303,13 @@ function SessionPane({ sessionId }: { sessionId: string }) {
           />
           <QueueBar
             items={displayQueue}
-            onCancel={(id) => dequeue.mutate({ messageId: id })}
-            onClear={() => clearQueue.mutate({ sessionId })}
+            onCancel={(id) => {
+              // A still-optimistic stub isn't a real DB row yet — drop it locally;
+              // a real queued row goes through the dequeue mutation.
+              if (id.startsWith('pending-')) setOptimisticQueue((q) => q.filter((x) => x.id !== id));
+              else dequeue.mutate({ messageId: id });
+            }}
+            onClear={() => { setOptimisticQueue([]); clearQueue.mutate({ sessionId }); }}
             clearing={clearQueue.isPending}
           />
           <ComposeBar
@@ -1319,6 +1346,11 @@ function SessionPane({ sessionId }: { sessionId: string }) {
                   ...p,
                   { id: optimisticId, role: 'user', content: [{ type: 'text', text }], createdAt: new Date().toISOString() },
                 ]);
+                // A send while a turn is already running IS a queue item — show it
+                // in the QueueBar instantly instead of waiting for the ~2s poll.
+                if (!wasIdle) {
+                  setOptimisticQueue((q) => [...q, { id: optimisticId, content: [{ type: 'text', text }] }]);
+                }
               }
               setDraft('');
               setAttachments([]);
@@ -1330,6 +1362,7 @@ function SessionPane({ sessionId }: { sessionId: string }) {
                   },
                   onError: () => {
                     setPending((p) => p.filter((x) => x.id !== optimisticId));
+                    setOptimisticQueue((q) => q.filter((x) => x.id !== optimisticId));
                     setDraft(prevDraft);
                     setAttachments(prevAttachments);
                   },
