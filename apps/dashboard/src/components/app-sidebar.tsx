@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, LogOut, MenuIcon, Plus,
-  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, Search, Settings, type LucideIcon,
+  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, Search, Settings, Pin, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -15,6 +15,8 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { sessionStatusView } from '@/lib/session-status';
 import { useUnread } from '@/lib/session-read';
 import { useLiveWorking } from '@/lib/session-live';
+import { usePins, togglePin } from '@/lib/session-pins';
+import { ContextMenu } from '@/components/ui/context-menu';
 
 // ── Sidebar open/collapse state, shared so a page header can drop a hamburger ──
 type SidebarCtx = {
@@ -828,6 +830,9 @@ function RecentSessions() {
   const utils = trpc.useUtils();
   const isUnread = useUnread();
   const liveWorkingSince = useLiveWorking();
+  const pins = usePins();
+  // Custom right-click menu: viewport coords + the session it targets, or null.
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
 
   // Local agent filter — persisted in sessionStorage so it survives reloads
   // but doesn't pollute the URL. "" means "all agents".
@@ -878,8 +883,11 @@ function RecentSessions() {
           s.agentName.toLowerCase().includes(needle),
       );
     }
+    // Pinned sessions float to the top — a stable sort keeps the lastMessageAt
+    // order within the pinned and unpinned groups.
+    if (pins.size) rows = [...rows].sort((a, b) => (pins.has(b.id) ? 1 : 0) - (pins.has(a.id) ? 1 : 0));
     return rows;
-  }, [sessions.data, filter, q]);
+  }, [sessions.data, filter, q, pins]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">
@@ -887,6 +895,20 @@ function RecentSessions() {
         <span>Recents</span>
         <span className="tabular-nums text-muted-foreground/50">{visible.length}</span>
       </div>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={[
+            {
+              label: pins.has(menu.id) ? '取消置顶' : '置顶',
+              icon: <Pin className="h-3.5 w-3.5 -rotate-45 fill-current" />,
+              onClick: () => togglePin(menu.id),
+            },
+          ]}
+        />
+      )}
       {(sessions.data?.length ?? 0) > 0 && (
         <div className="px-2 pb-1 flex items-center gap-1.5">
           {/* Left: a simple title/agent text search over the recents list. */}
@@ -963,6 +985,10 @@ function RecentSessions() {
                     href={`/chat?session=${encodeURIComponent(s.id)}`}
                     onMouseEnter={() => prefetchSession(s.id)}
                     onFocus={() => prefetchSession(s.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenu({ x: e.clientX, y: e.clientY, id: s.id });
+                    }}
                     className={cn(
                       'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors',
                       active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
@@ -980,6 +1006,9 @@ function RecentSessions() {
                           <span className={cn('flex-1 truncate text-[13px]', active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85')}>
                             {s.title || s.preview || s.agentName}
                           </span>
+                          {pins.has(s.id) && (
+                            <Pin className="h-3 w-3 shrink-0 self-center -rotate-45 fill-current text-muted-foreground/70" aria-label="pinned" />
+                          )}
                           <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
                             {relTime(s.lastMessageAt ?? s.startedAt)}
                           </span>
