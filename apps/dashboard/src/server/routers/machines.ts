@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
+import { invalidateMachineCache } from '../auth';
 
 export const machinesRouter = router({
   me: machineProcedure.query(async ({ ctx }) => ({
@@ -40,6 +41,7 @@ export const machinesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const alias = input.alias && input.alias.length > 0 ? input.alias : null;
       await prisma.machine.update({ where: { id: ctx.machine.id }, data: { alias } });
+      invalidateMachineCache(ctx.machine.id); // else machines.me serves the stale cached alias for ≤5 min
       return { alias };
     }),
 

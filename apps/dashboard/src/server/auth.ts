@@ -65,3 +65,12 @@ export async function resolveMachineByKey(keyPlain: string): Promise<MachineRow 
 
   return hit.machine;
 }
+
+// Drop cached auth entries for a machine so the next request re-resolves fresh.
+// Call after mutating cached machine fields (e.g. alias) — otherwise reads like
+// machines.me serve a stale snapshot for up to AUTH_TTL_MS.
+export function invalidateMachineCache(machineId: string): void {
+  for (const [k, v] of authCache) {
+    if (v.machine.id === machineId) authCache.delete(k);
+  }
+}
