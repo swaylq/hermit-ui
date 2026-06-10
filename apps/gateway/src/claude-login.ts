@@ -15,7 +15,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
-import type { BrowserContext, Page } from 'playwright-core';
+// rebrowser-playwright-core: a stealth-patched drop-in for playwright-core. Its
+// Runtime.enable fix (on unless REBROWSER_PATCHES_RUNTIME_FIX_MODE="0") closes the
+// main CDP tell Cloudflare Turnstile uses; combined with stripping the automation
+// launch flags below, navigator.webdriver is false and the browser reads as human.
+import type { BrowserContext, Page } from 'rebrowser-playwright-core';
 import { execCapture } from './exec';
 
 type IPty = ReturnType<typeof pty.spawn>;
@@ -403,7 +407,7 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
   const claudeBin = input.claudeBin ?? 'claude';
   fs.mkdirSync(PROFILE_DIR, { recursive: true });
 
-  const { chromium } = await import('playwright-core');
+  const { chromium } = await import('rebrowser-playwright-core');
   let ctx: BrowserContext | null = null;
   try {
     await report({ status: 'running', line: '启动 Chrome（有头）…' });
@@ -412,7 +416,11 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
         channel: 'chrome',
         headless: false,
         viewport: null,
-        args: ['--no-first-run', '--no-default-browser-check'],
+        // Stealth: drop --enable-automation (kills the "controlled by automated
+        // software" infobar) and force navigator.webdriver=false, so Cloudflare
+        // doesn't re-challenge on every navigation.
+        ignoreDefaultArgs: ['--enable-automation'],
+        args: ['--no-first-run', '--no-default-browser-check', '--disable-blink-features=AutomationControlled'],
       });
     } catch (e) {
       throw new Error(
