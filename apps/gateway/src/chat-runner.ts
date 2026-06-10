@@ -68,6 +68,15 @@ function buildMcpConfigArg(chatSessionId: string): string {
 type PendingMsg = { id: string; sessionId: string; role: string; content: any; createdAt: string };
 type PendingSession = { id: string; agentName: string; claudeSessionId: string | null; agentDirectory: string | null };
 
+// One outbound chat-message sync (the shape /api/sync/chat-message accepts).
+type SyncItem = {
+  sessionId: string;
+  role: string;
+  content: unknown;
+  externalId: string;
+  claudeSessionId: string | null;
+};
+
 interface SessionState {
   claudeUuid: string;
   jsonlPath: string;
@@ -76,6 +85,13 @@ interface SessionState {
   // Has the gateway already pushed claudeSessionId back to the DB for this row?
   // The dashboard's /api/sync/chat-message stamps it on first non-null arrival.
   uuidStamped: boolean;
+  // Outbound sync coalescing (see queueSync/flushSync): transcript events buffer
+  // here and flush in batches instead of one POST per event. Critical on a gateway
+  // restart — watchTranscript replays the WHOLE transcript from line 1 and
+  // seenUuids starts empty, so every session would otherwise re-POST its entire
+  // history one request at a time and saturate the dashboard's event loop.
+  syncBuf: SyncItem[];
+  syncTimer: ReturnType<typeof setTimeout> | null;
 }
 
 // Per-session runtime state. Cleared on gateway restart; rebuilt lazily on
@@ -712,6 +728,8 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     stopWatcher: () => {},
     seenUuids: new Set<string>(),
     uuidStamped: !!session.claudeSessionId && session.claudeSessionId === claudeUuid,
+    syncBuf: [],
+    syncTimer: null,
   };
   state.stopWatcher = watchTranscript(jsonlPath, (ev) => onTranscriptEvent(session.id, ev, state));
 
@@ -725,6 +743,42 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
 
 // ── Transcript event → ChatMessage row ───────────────────────────────────────
 
+// Coalesce outbound syncs so a full-transcript replay drains in a few batch POSTs
+// instead of one per event. Flush when the buffer hits SYNC_BATCH_MAX (a replay
+// burst fills synchronously within one tail chunk) or SYNC_DEBOUNCE_MS after the
+// first buffered event (a live turn trickles one block at a time, so this stays
+// prompt). The pending timer's closure keeps `state` alive until it fires, so a
+// torn-down session's tail still flushes; anything lost to a hard process kill is
+// re-synced by the next attach's replay (upserts are idempotent).
+const SYNC_BATCH_MAX = 25;
+const SYNC_DEBOUNCE_MS = 120;
+
+function flushSync(state: SessionState) {
+  if (state.syncTimer) {
+    clearTimeout(state.syncTimer);
+    state.syncTimer = null;
+  }
+  if (state.syncBuf.length === 0) return;
+  const batch = state.syncBuf;
+  state.syncBuf = [];
+  const stamping = batch.some((b) => b.claudeSessionId != null);
+  api
+    .syncChatMessages(batch)
+    .then(() => {
+      if (stamping) state.uuidStamped = true;
+    })
+    .catch((e) => console.error('[chat] sync batch failed:', e));
+}
+
+function queueSync(state: SessionState, item: SyncItem) {
+  state.syncBuf.push(item);
+  if (state.syncBuf.length >= SYNC_BATCH_MAX) {
+    flushSync(state);
+  } else if (!state.syncTimer) {
+    state.syncTimer = setTimeout(() => flushSync(state), SYNC_DEBOUNCE_MS);
+  }
+}
+
 function onTranscriptEvent(chatSessionId: string, ev: any, state: SessionState) {
   if (!ev || typeof ev !== 'object') return;
   if (!ev.uuid) return; // skip events without a stable id (queue-ops, etc.)
@@ -737,20 +791,13 @@ function onTranscriptEvent(chatSessionId: string, ev: any, state: SessionState) 
     // Assistant turn — text, tool_use, thinking blocks.
     const content = normalizeContent(ev.message.content);
     if (content.length === 0) return;
-    api
-      .syncChatMessages([
-        {
-          sessionId: chatSessionId,
-          role: 'assistant',
-          content,
-          externalId: ev.uuid,
-          claudeSessionId: stampUuid,
-        },
-      ])
-      .then(() => {
-        if (stampUuid) state.uuidStamped = true;
-      })
-      .catch((e) => console.error('[chat] sync assistant failed:', e));
+    queueSync(state, {
+      sessionId: chatSessionId,
+      role: 'assistant',
+      content,
+      externalId: ev.uuid,
+      claudeSessionId: stampUuid,
+    });
     return;
   }
 
@@ -762,20 +809,13 @@ function onTranscriptEvent(chatSessionId: string, ev: any, state: SessionState) 
     const blocks = ev.message.content;
     const hasToolResult = blocks.some((b: any) => b?.type === 'tool_result');
     if (!hasToolResult) return;
-    api
-      .syncChatMessages([
-        {
-          sessionId: chatSessionId,
-          role: 'user',
-          content: blocks,
-          externalId: ev.uuid,
-          claudeSessionId: stampUuid,
-        },
-      ])
-      .then(() => {
-        if (stampUuid) state.uuidStamped = true;
-      })
-      .catch((e) => console.error('[chat] sync tool_result failed:', e));
+    queueSync(state, {
+      sessionId: chatSessionId,
+      role: 'user',
+      content: blocks,
+      externalId: ev.uuid,
+      claudeSessionId: stampUuid,
+    });
     return;
   }
 
