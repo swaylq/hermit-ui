@@ -54,6 +54,19 @@ export interface ClaudeLoginResult {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// ── manual reset / abort ──────────────────────────────────────────────────────
+// Only one login runs at a time (the machine-request `busy` guard serializes
+// them), so a module-level controller is safe. The dashboard's "reset" marks the
+// request resolved; the gateway's login-cancel tick then calls abortActiveLogin(),
+// and these checks bail the flow at the next loop tick (closing Chrome on the way).
+let activeAbort: AbortController | null = null;
+export function abortActiveLogin(): void {
+  activeAbort?.abort();
+}
+function checkAbort(): void {
+  if (activeAbort?.signal.aborted) throw new Error('已手动重置');
+}
+
 // ── tolerant DOM probes (role/text based — claude.ai markup churns) ────────────
 async function visible(page: Page, selector: string): Promise<boolean> {
   try {
@@ -94,6 +107,7 @@ async function until(
 ): Promise<void> {
   const soft = Date.now() + (opts.softMs ?? STEP_TIMEOUT);
   while (Date.now() < soft) {
+    checkAbort();
     if (await check()) return;
     if (await cloudflareChallenged(page)) break; // don't burn the soft window behind a CF wall
     await sleep(POLL_MS);
@@ -102,6 +116,7 @@ async function until(
   await report({ status: 'needs-human', line: opts.humanMsg });
   const hard = Date.now() + HUMAN_WAIT_MS;
   while (Date.now() < hard) {
+    checkAbort();
     await sleep(POLL_MS);
     if (await check()) {
       await report({ status: 'running', line: '✓ 已就绪，继续…' });
@@ -203,6 +218,7 @@ async function fetchLoginCode(
   const deadline = Date.now() + CODE_WAIT_MS;
   let lastClick = Date.now();
   while (Date.now() < deadline) {
+    checkAbort();
     const links: string[] = await mailPage
       .$$eval('input, a', (els: any[]) => els.map((e: any) => e.value || e.href || '').filter(Boolean))
       .catch(() => [] as string[]);
@@ -285,6 +301,7 @@ async function driveOAuth(
     // CLI finishes itself. Poll briefly for a code; if none, assume loopback.
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
+      checkAbort();
       const cs = await codeStateOnPage(page);
       if (cs) {
         await report({ line: '回填授权码…' });
@@ -343,6 +360,7 @@ async function cliLogin(
     let settled = false;
     let urlHandled = false;
     let raw = '';
+    const sig = activeAbort?.signal;
     const finish = (err?: Error) => {
       if (settled) return;
       settled = true;
@@ -354,6 +372,9 @@ async function cliLogin(
       }
       err ? reject(err) : resolve();
     };
+    const onAbort = () => finish(new Error('已手动重置'));
+    if (sig?.aborted) onAbort();
+    else sig?.addEventListener('abort', onAbort);
 
     term.onData((d: string) => {
       raw += d;
@@ -406,6 +427,9 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
   const { email, mailToken, report } = input;
   const claudeBin = input.claudeBin ?? 'claude';
   fs.mkdirSync(PROFILE_DIR, { recursive: true });
+
+  const abort = new AbortController();
+  activeAbort = abort;
 
   const { chromium } = await import('rebrowser-playwright-core');
   let ctx: BrowserContext | null = null;
@@ -485,6 +509,7 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
   } catch (e) {
     return { ok: false, summary: '登录失败', error: e instanceof Error ? e.message : String(e) };
   } finally {
+    if (activeAbort === abort) activeAbort = null;
     await ctx?.close().catch(() => {});
   }
 }

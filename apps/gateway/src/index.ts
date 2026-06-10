@@ -28,7 +28,7 @@ import { api } from './api';
 import { tick as cronTick } from './cron-runner';
 import { chatTick, chatCancelTick, chatRestartTick, shutdownChatRunner } from './chat-runner';
 import { agentRequestTick } from './agent-lifecycle';
-import { machineRequestTick } from './machine-requests';
+import { machineRequestTick, loginCancelTick } from './machine-requests';
 import { pushGlobalSkills, globalSkillRequestTick } from './global-skills';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 
@@ -156,6 +156,7 @@ loop(pushChatCancelTick, 1_500);
 loop(pushChatRestartTick, 2_000);
 loop(() => safe('agent-requests', agentRequestTick), 3_000);
 loop(() => safe('machine-requests', machineRequestTick), 3_000);
+loop(() => safe('login-cancel', loginCancelTick), 3_000);
 loop(pushGlobalSkillsTick, 60_000);
 loop(globalSkillReqTick, 3_000);
 // Real plan % via `claude /usage` scrape — every 12 min (initial run is the last

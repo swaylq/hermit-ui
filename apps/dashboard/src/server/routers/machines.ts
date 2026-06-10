@@ -147,6 +147,27 @@ export const machinesRouter = router({
     });
   }),
 
+  // Manual reset for a stuck login: mark the in-flight attempt resolved so the UI
+  // unblocks right away. The gateway's login-cancel tick notices this and aborts
+  // the running orchestrator (closes Chrome, frees it for a fresh attempt).
+  resetLogin: machineProcedure.mutation(async ({ ctx }) => {
+    const row = await prisma.machineRequest.findFirst({
+      where: {
+        machineId: ctx.machine.id,
+        kind: 'login-claude-account',
+        status: { in: ['pending', 'running', 'needs-human'] },
+      },
+      orderBy: { requestedAt: 'desc' },
+      select: { id: true },
+    });
+    if (!row) return { ok: true, reset: false };
+    await prisma.machineRequest.update({
+      where: { id: row.id },
+      data: { status: 'error', error: '已手动重置', payload: null, resolvedAt: new Date() },
+    });
+    return { ok: true, reset: true };
+  }),
+
   // ── Gateway endpoints ───────────────────────────────────────────────────────
   pollRequests: machineProcedure.query(async ({ ctx }) => {
     return prisma.machineRequest.findMany({

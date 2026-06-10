@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { KeyRound, Loader2, CheckCircle2, XCircle, AlertTriangle, Hand } from 'lucide-react';
+import { KeyRound, Loader2, CheckCircle2, XCircle, AlertTriangle, Hand, RotateCcw } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
@@ -88,6 +88,9 @@ export default function LoginClaudePage() {
       utils.machines.loginStatus.invalidate();
     },
   });
+  const reset = trpc.machines.resetLogin.useMutation({
+    onSuccess: () => utils.machines.loginStatus.invalidate(),
+  });
   const [line, setLine] = useState('');
   const [err, setErr] = useState('');
 
@@ -148,6 +151,22 @@ export default function LoginClaudePage() {
                       '开始登录'
                     )}
                   </Button>
+                  {busy && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={reset.isPending}
+                      onClick={() => reset.mutate()}
+                      className="border-rose-500/40 text-rose-500 hover:bg-rose-500/10"
+                    >
+                      {reset.isPending ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                      ) : (
+                        <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                      )}
+                      卡住了？重置
+                    </Button>
+                  )}
                   <span className="text-[11px] text-muted-foreground">
                     需要那台 Mac 处于桌面登录态（会弹有头 Chrome；蹦验证码时要人工点一下）。
                   </span>

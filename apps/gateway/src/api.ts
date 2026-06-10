@@ -188,6 +188,16 @@ export const api = {
     return j[0]?.result?.data?.json ?? null;
   },
 
+  // Latest login row for this machine — the cancel tick reads it to notice a
+  // dashboard-side manual reset (status flipped to error/done out from under us).
+  loginStatus: async (): Promise<{ id: string; status: string } | null> => {
+    const r = await get<any>(
+      '/api/trpc/machines.loginStatus?batch=1&input=' +
+        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? null;
+  },
+
   // ── Machine-global skills (~/.claude/skills/) round-trip ────────────────────
   // syncGlobalSkills pushes the full scanned set (filesystem is leader);
   // poll/ack mirror the agent lifecycle for dashboard-queued create/edit/delete.

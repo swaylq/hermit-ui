@@ -12,7 +12,7 @@ const TABS = [
   { key: 'skills', label: 'Global Skills', href: '/skills', Icon: Boxes },
   { key: 'usage', label: 'Usage', href: '/usage', Icon: BarChart3 },
   { key: 'ops', label: 'Operations', href: '/ops', Icon: Wrench },
-  { key: 'login', label: '登录账号', href: '/login-claude', Icon: KeyRound },
+  { key: 'login', label: 'Account Login', href: '/login-claude', Icon: KeyRound },
 ] as const;
 
 export function SettingsTabs({ active }: { active: 'skills' | 'usage' | 'ops' | 'login' }) {
