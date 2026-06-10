@@ -17,6 +17,7 @@ import { useUnread } from '@/lib/session-read';
 import { useLiveWorking } from '@/lib/session-live';
 import { usePins, togglePin } from '@/lib/session-pins';
 import { ContextMenu } from '@/components/ui/context-menu';
+import { useLongPress } from '@/lib/use-long-press';
 
 // ── Sidebar open/collapse state, shared so a page header can drop a hamburger ──
 type SidebarCtx = {
@@ -833,6 +834,9 @@ function RecentSessions() {
   const pins = usePins();
   // Custom right-click menu: viewport coords + the session it targets, or null.
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  // Touch long-press opens the SAME menu — phones have no right-click.
+  const openMenuAt = useCallback((id: string, x: number, y: number) => setMenu({ x, y, id }), []);
+  const longPress = useLongPress(openMenuAt);
 
   // Local agent filter — persisted in sessionStorage so it survives reloads
   // but doesn't pollute the URL. "" means "all agents".
@@ -989,8 +993,9 @@ function RecentSessions() {
                       e.preventDefault();
                       setMenu({ x: e.clientX, y: e.clientY, id: s.id });
                     }}
+                    {...longPress(s.id)}
                     className={cn(
-                      'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors',
+                      'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors select-none [-webkit-touch-callout:none]',
                       active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
                       s.closedAt && 'opacity-60',
                     )}
