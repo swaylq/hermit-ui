@@ -302,19 +302,10 @@ async function logoutClaudeWeb(d: LoginDriver, report: LoginReport): Promise<voi
   });
 }
 
-async function codeEntryReady(d: LoginDriver): Promise<boolean> {
-  if (await d.exists(CODE_SEL)) return true;
-  if (await d.clickByText('enter verification code|use a (login )?code|输入验证码')) {
-    await sleep(600);
-    return d.exists(CODE_SEL);
-  }
-  return false;
-}
-
 // ── 171mail code / magic-link retrieval (in the 'mail' tab) ────────────────────
 async function fetchLoginCode(d: LoginDriver, token: string, report: LoginReport): Promise<{ code?: string; magicLink?: string }> {
   await d.navigate(`https://b.171mail.com/#/home/code?type=claude&token=${encodeURIComponent(token)}`, 'mail');
-  await report({ line: '打开 171mail 接码页，等待验证码…' });
+  await report({ line: '打开 171mail，等待登录链接…' });
   await d.clickByText('获取验证码|获取|get code', 'mail').catch(() => false);
 
   const deadline = Date.now() + CODE_WAIT_MS;
@@ -322,12 +313,14 @@ async function fetchLoginCode(d: LoginDriver, token: string, report: LoginReport
   while (Date.now() < deadline) {
     checkAbort();
     const links = await d.inputValues('mail').catch(() => [] as string[]);
-    const magic = links.find((v) => /https:\/\/claude\.ai\/magic-link/i.test(v));
+    const body = await d.bodyText('mail').catch(() => '');
+    const magic =
+      links.find((v) => /claude\.ai\/magic-link/i.test(v)) ||
+      body.match(/https:\/\/claude\.ai\/magic-link[^\s"'<>]*/i)?.[0];
     if (magic) {
-      await report({ line: '收到 magic-link。' });
+      await report({ line: '收到登录链接。' });
       return { magicLink: magic };
     }
-    const body = await d.bodyText('mail').catch(() => '');
     const m = body.match(/(?<!\d)(\d{6})(?!\d)/);
     if (m) {
       await report({ line: '收到 6 位验证码。' });
@@ -528,11 +521,9 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
     if (!(await d.click(CONTINUE_SEL)) && !(await d.clickByText('continue with email|用邮箱|使用邮箱'))) {
       await d.pressEnter(EMAIL_SEL);
     }
-    await until(d, report, () => codeEntryReady(d), {
-      humanMsg: '请在 Chrome 里用邮箱登录、进入「输入验证码」界面（别选 Google）。',
-    });
+    // Nothing else on claude.ai now — login finishes by opening the link from 171mail.
 
-    // 3. fetch the code / magic-link from 171mail
+    // 3. 171mail → wait for the login link (or 6-digit code)
     const got = await fetchLoginCode(d, mailToken, report);
     await d.closeTab('mail');
     if (got.magicLink) {
