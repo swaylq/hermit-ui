@@ -6,6 +6,7 @@
 // The gateway is the brain (sequencing/regex); this is just the hands.
 
 let ws = null;
+let lastClose = null; // { code, reason } of the last drop — drives a useful status
 let tabs = { login: null, mail: null }; // 171mail runs in its own tab so the live claude.ai page survives
 let cfg = { url: 'ws://127.0.0.1:47615', token: '' };
 
@@ -18,6 +19,8 @@ async function loadCfg() {
 function wsState() {
   if (ws && ws.readyState === WebSocket.OPEN) return 'connected';
   if (!cfg.token) return 'unconfigured';
+  if (lastClose && lastClose.code === 4001) return 'bad-token'; // gateway rejected the token
+  if (lastClose && lastClose.code) return 'unreachable'; // closed/refused → gateway not listening
   return 'connecting';
 }
 
@@ -25,22 +28,42 @@ function connect() {
   if (!cfg.token) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   const u = cfg.url + (cfg.url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(cfg.token);
+  let sock;
   try {
-    ws = new WebSocket(u);
+    sock = new WebSocket(u);
   } catch {
+    lastClose = { code: 1006, reason: 'ctor' };
     ws = null;
     return;
   }
-  ws.onclose = () => {
-    ws = null;
+  ws = sock;
+  // Don't let a half-open socket sit in CONNECTING forever.
+  const t = setTimeout(() => {
+    if (sock.readyState === WebSocket.CONNECTING) {
+      try {
+        sock.close();
+      } catch {}
+      if (ws === sock) ws = null;
+      lastClose = { code: 1006, reason: 'timeout' };
+    }
+  }, 6000);
+  sock.onopen = () => {
+    clearTimeout(t);
+    lastClose = null;
   };
-  ws.onerror = () => {
+  sock.onclose = (ev) => {
+    clearTimeout(t);
+    lastClose = { code: ev.code, reason: ev.reason || '' };
+    if (ws === sock) ws = null;
+  };
+  sock.onerror = () => {
+    clearTimeout(t);
     try {
-      ws.close();
+      sock.close();
     } catch {}
-    ws = null;
+    if (ws === sock) ws = null;
   };
-  ws.onmessage = async (ev) => {
+  sock.onmessage = async (ev) => {
     let msg;
     try {
       msg = JSON.parse(ev.data);

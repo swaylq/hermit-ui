@@ -11,8 +11,16 @@ function refresh() {
   chrome.runtime.sendMessage('status', (st) => {
     const dot = $('dot');
     const state = $('state');
-    dot.className = 'dot ' + (st === 'connected' ? 'ok' : st === 'connecting' ? 'wait' : 'off');
-    state.textContent = st === 'connected' ? 'connected to gateway' : st === 'connecting' ? 'connecting…' : 'not configured';
+    const map = {
+      connected: ['ok', 'connected to gateway'],
+      connecting: ['wait', 'connecting…'],
+      unreachable: ['wait', 'gateway unreachable — is it running on :47615?'],
+      'bad-token': ['off', 'token rejected — re-copy ~/.hermit/login-bridge.json'],
+      unconfigured: ['off', 'not configured'],
+    };
+    const [cls, text] = map[st] || ['off', st || '…'];
+    dot.className = 'dot ' + cls;
+    state.textContent = text;
   });
 }
 

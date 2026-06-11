@@ -37,7 +37,8 @@ const CODE_WAIT_MS = 4 * 60_000;
 const POLL_MS = 2_500;
 
 // claude.ai / 171mail selectors (querySelector-compatible; role/text fallbacks live in clickByText)
-const EMAIL_SEL = 'input[type="email"], input[name="email"]';
+const EMAIL_SEL = 'input[data-testid="email"], input[type="email"], input[name="email"]';
+const CONTINUE_SEL = 'button[data-testid="continue"]'; // claude.ai "Continue with email" + code-submit
 const CODE_SEL = 'input[autocomplete="one-time-code"], input[name="code"], input[inputmode="numeric"]';
 const COMPOSER_SEL = 'div[contenteditable="true"], nav a[href*="/chat"], [data-testid*="composer"]';
 const CF_SEL =
@@ -81,6 +82,7 @@ interface LoginDriver {
   inputValues(tab?: Tab): Promise<string[]>;
   fill(selector: string, value: string, tab?: Tab): Promise<boolean>;
   pressEnter(selector: string, tab?: Tab): Promise<boolean>;
+  click(selector: string, tab?: Tab): Promise<boolean>;
   clickByText(pattern: string, tab?: Tab): Promise<boolean>;
   openUserMenu(tab?: Tab): Promise<boolean>; // claude.ai bottom-left avatar (no text → can't clickByText)
   closeTab(tab: Tab): Promise<void>;
@@ -112,6 +114,9 @@ class ExtensionDriver implements LoginDriver {
   }
   async pressEnter(selector: string, tab: Tab = 'login') {
     return !!(await sendCommand('pressEnter', { selector, tab }));
+  }
+  async click(selector: string, tab: Tab = 'login') {
+    return !!(await sendCommand('click', { selector, tab }));
   }
   async clickByText(pattern: string, tab: Tab = 'login') {
     return !!(await sendCommand('clickByText', { pattern, tab }));
@@ -179,6 +184,14 @@ class PlaywrightDriver implements LoginDriver {
   async pressEnter(selector: string, tab: Tab = 'login') {
     try {
       await (await this.page(tab)).locator(selector).first().press('Enter');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  async click(selector: string, tab: Tab = 'login') {
+    try {
+      await (await this.page(tab)).locator(selector).first().click({ timeout: 5_000 });
       return true;
     } catch {
       return false;
@@ -512,7 +525,7 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
     // button. Fall back to pressing Enter in the email field.
     await report({ line: '输入邮箱并继续（走邮箱，不走 Google）…' });
     await d.fill(EMAIL_SEL, email);
-    if (!(await d.clickByText('continue with email|continue with e-?mail|用邮箱|使用邮箱'))) {
+    if (!(await d.click(CONTINUE_SEL)) && !(await d.clickByText('continue with email|用邮箱|使用邮箱'))) {
       await d.pressEnter(EMAIL_SEL);
     }
     await until(d, report, () => codeEntryReady(d), {
@@ -528,7 +541,9 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
     } else if (got.code) {
       await report({ line: '填入验证码并验证…' });
       await d.fill(CODE_SEL, got.code);
-      await d.clickByText('verify( email address)?|submit|continue|验证|继续');
+      if (!(await d.click(CONTINUE_SEL)) && !(await d.clickByText('verify( email address)?|submit|continue|验证|继续'))) {
+        await d.pressEnter(CODE_SEL);
+      }
     }
     await until(d, report, () => loggedIntoClaude(d), {
       humanMsg: '请在 Chrome 里完成 claude.ai 登录（到达对话界面）。',

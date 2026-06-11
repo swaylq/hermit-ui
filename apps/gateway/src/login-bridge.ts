@@ -74,6 +74,7 @@ export function startLoginBridge(): void {
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     if (url.searchParams.get('token') !== token) {
+      console.log('[login-bridge] rejected connection — bad token');
       ws.close(4001, 'bad token');
       return;
     }
