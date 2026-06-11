@@ -7,6 +7,7 @@ import { usageRouter } from './usage';
 import { chatRouter } from './chat';
 import { interactionRouter } from './interaction';
 import { marketRouter } from './market';
+import { fileStationRouter } from './fileStation';
 
 export const appRouter = router({
   machines: machinesRouter,
@@ -17,6 +18,7 @@ export const appRouter = router({
   chat: chatRouter,
   interaction: interactionRouter,
   market: marketRouter,
+  fileStation: fileStationRouter,
 });
 
 export type AppRouter = typeof appRouter;

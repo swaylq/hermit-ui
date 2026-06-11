@@ -198,6 +198,34 @@ export const api = {
     return r[0]?.result?.data?.json ?? null;
   },
 
+  // ── File Station (large-file delivery) round-trip ───────────────────────────
+  pollFileTransfers: async (): Promise<
+    Array<{ id: string; filename: string; destPath: string; size: number; unzip: boolean }>
+  > => {
+    const r = await get<any>(
+      '/api/trpc/fileStation.pollPending?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+  ackFileTransfer: async (body: { id: string; status: 'running' | 'done' | 'error'; error?: string }) => {
+    const r = await fetch(`${DASHBOARD_URL}/api/trpc/fileStation.ack?batch=1`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
+      body: JSON.stringify({ '0': { json: body } }),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+    if (!r.ok) throw new Error(`ackFileTransfer → ${r.status}`);
+  },
+  // Raw download — caller streams `.body` to disk. 10-min ceiling for big files.
+  downloadFileTransfer: async (id: string): Promise<Response> => {
+    const r = await fetch(`${DASHBOARD_URL}/api/file-station/download/${id}`, {
+      headers: { 'x-asst-key': ASST_KEY },
+      signal: AbortSignal.timeout(10 * 60_000),
+    });
+    if (!r.ok) throw new Error(`downloadFileTransfer → ${r.status}: ${(await r.text()).slice(0, 120)}`);
+    return r;
+  },
+
   // ── Machine-global skills (~/.claude/skills/) round-trip ────────────────────
   // syncGlobalSkills pushes the full scanned set (filesystem is leader);
   // poll/ack mirror the agent lifecycle for dashboard-queued create/edit/delete.

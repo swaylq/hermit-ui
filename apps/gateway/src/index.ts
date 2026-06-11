@@ -30,6 +30,7 @@ import { chatTick, chatCancelTick, chatRestartTick, shutdownChatRunner } from '.
 import { agentRequestTick } from './agent-lifecycle';
 import { machineRequestTick, loginCancelTick } from './machine-requests';
 import { startLoginBridge } from './login-bridge';
+import { fileTransferTick } from './file-station';
 import { pushGlobalSkills, globalSkillRequestTick } from './global-skills';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 
@@ -162,6 +163,7 @@ loop(pushChatRestartTick, 2_000);
 loop(() => safe('agent-requests', agentRequestTick), 3_000);
 loop(() => safe('machine-requests', machineRequestTick), 3_000);
 loop(() => safe('login-cancel', loginCancelTick), 3_000);
+loop(() => safe('file-transfers', fileTransferTick), 4_000);
 loop(pushGlobalSkillsTick, 60_000);
 loop(globalSkillReqTick, 3_000);
 // Real plan % via `claude /usage` scrape — every 12 min (initial run is the last

@@ -38,7 +38,29 @@ model Machine {
   globalSkills        GlobalSkill[]
   globalSkillRequests GlobalSkillRequest[]
   machineRequests     MachineRequest[]
+  fileTransfers       FileTransfer[]
   planUsage           PlanUsage?
+}
+
+// File Station: a large file the dashboard uploaded for delivery to a machine at
+// `destPath`. The dashboard can't reach the gateway host's FS, so the bytes land
+// on the dashboard's disk (UPLOAD_DIR/file-station/<id>.bin); the gateway polls,
+// downloads them, writes to destPath (optionally unzipping), then acks — and the
+// dashboard deletes the temp file. Up to 300 MB; archives allowed.
+model FileTransfer {
+  id          String    @id @default(cuid())
+  machineId   String
+  machine     Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  filename    String
+  destPath    String    @db.Text // where on the machine to write it
+  size        Int // bytes
+  unzip       Boolean   @default(false) // extract into destPath (zip only)
+  status      String    @default("pending") // pending | running | done | error
+  error       String?   @db.Text
+  requestedAt DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  @@index([machineId, status])
 }
 
 // Real Claude Max plan consumption, scraped from `claude /usage` by the gateway
