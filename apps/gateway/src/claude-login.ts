@@ -25,7 +25,6 @@ import { isExtensionConnected, sendCommand } from './login-bridge';
 
 type IPty = ReturnType<typeof pty.spawn>;
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
-const URL_RE = /https:\/\/[^\s"'<>]*(?:claude\.ai|anthropic\.com)\/[^\s"'<>]*/;
 
 const PROFILE_DIR = path.join(os.homedir(), '.hermit', 'claude-login', 'chrome-profile');
 const LOCAL_BIN = path.join(os.homedir(), '.local', 'bin');
@@ -373,6 +372,21 @@ async function driveOAuth(d: LoginDriver, url: string, report: LoginReport, send
   await report({ line: '未见 code#state，按本地回调模式等待 CLI 完成…' });
 }
 
+// Pull the OAuth authorize URL out of `claude auth login` output. The PATH/$BROWSER
+// shim echoes "OPENURL <url>", and the CLI also usually prints it for copy-paste.
+function findOAuthUrl(raw: string): string | null {
+  const urls = (raw.replace(ANSI_RE, '').match(/https:\/\/[^\s"'<>]+/g) || []).map((u) => u.replace(/[.,;:)\]}'"]+$/, ''));
+  return urls.find((u) => /oauth|authoriz|claude\.(ai|com)|anthropic/i.test(u)) || urls[0] || null;
+}
+// Redact secrets before showing CLI output in the progress log.
+function redactTerm(s: string): string {
+  return s
+    .replace(ANSI_RE, '')
+    .replace(/[A-Za-z0-9_-]{20,}#[A-Za-z0-9_-]{20,}/g, '<code#state>')
+    .replace(/sk-[A-Za-z0-9_-]{10,}/g, 'sk-***')
+    .replace(/[A-Za-z0-9_-]{40,}/g, '<token>');
+}
+
 async function cliLogin(d: LoginDriver, email: string, claudeBin: string, report: LoginReport): Promise<void> {
   await report({ line: '切换 Claude Code CLI 账号（claude auth login）…' });
   await execCapture('bash', ['-lc', `export PATH="${LOCAL_BIN}:$PATH"; claude auth logout`], { timeoutMs: 20_000 }).catch(
@@ -397,9 +411,13 @@ async function cliLogin(d: LoginDriver, email: string, claudeBin: string, report
 
   const term: IPty = pty.spawn(claudeAbs, ['auth', 'login', '--claudeai', '--email', email], {
     name: 'xterm-color',
-    cols: 100,
-    rows: 30,
-    env: { ...process.env, PATH: `${shimDir}:${LOCAL_BIN}:${process.env.PATH ?? ''}`, BROWSER: 'true' },
+    cols: 1000, // wide so a long OAuth URL never soft-wraps in the pty
+    rows: 40,
+    env: {
+      ...process.env,
+      PATH: `${shimDir}:${LOCAL_BIN}:${process.env.PATH ?? ''}`,
+      BROWSER: path.join(shimDir, 'open'), // tools honoring $BROWSER hit our URL-capturing shim too
+    },
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -422,20 +440,35 @@ async function cliLogin(d: LoginDriver, email: string, claudeBin: string, report
     if (sig?.aborted) onAbort();
     else sig?.addEventListener('abort', onAbort);
 
+    let lastStream = 0;
     term.onData((chunk: string) => {
       raw += chunk;
-      if (!urlHandled) {
-        const m = raw.replace(ANSI_RE, '').match(URL_RE);
-        if (m) {
-          urlHandled = true;
-          driveOAuth(d, m[0], report, (cs) => {
-            try {
-              term.write(cs + '\r');
-            } catch {
-              /* term may have exited (loopback already finished) */
-            }
-          }).catch((e) => finish(e instanceof Error ? e : new Error(String(e))));
-        }
+      if (urlHandled) return;
+      const url = findOAuthUrl(raw);
+      if (url) {
+        urlHandled = true;
+        driveOAuth(d, url, report, (cs) => {
+          try {
+            term.write(cs + '\r');
+          } catch {
+            /* term may have exited (loopback already finished) */
+          }
+        }).catch((e) => finish(e instanceof Error ? e : new Error(String(e))));
+        return;
+      }
+      // Diagnostic: surface what `claude auth login` is showing while we wait for
+      // the URL (throttled, secrets redacted) — so a stuck prompt is visible.
+      const now = Date.now();
+      if (now - lastStream > 2_000) {
+        lastStream = now;
+        const tail = redactTerm(raw)
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .slice(-2)
+          .join(' ⏎ ')
+          .slice(-180);
+        if (tail) void report({ line: `claude: ${tail}` });
       }
     });
     term.onExit(({ exitCode }: { exitCode: number }) => {
