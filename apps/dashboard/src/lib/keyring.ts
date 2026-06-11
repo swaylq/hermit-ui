@@ -3,6 +3,12 @@
 // Browser keyring: the dashboard can hold several machines, each with its own
 // X-Asst-Key. The ACTIVE entry's key is sent on every request; the backend
 // scopes all data by that key → machine. Switching = set active + full reload.
+//
+// The keyring LIST lives in localStorage (shared across tabs — you don't re-add
+// machines per tab). The ACTIVE selection lives in sessionStorage, so it's
+// PER-TAB: two tabs can view different machines, and each tab keeps its pick
+// across a refresh. The localStorage copy is only the "default" a freshly-opened
+// tab inherits (the last machine picked in any tab) — see activeId().
 
 export type KeyringEntry = { id: string; name: string; key: string; hostname?: string | null; alias?: string | null };
 
@@ -27,11 +33,24 @@ export function getKeyring(): KeyringEntry[] {
   return read();
 }
 
+// This tab's active machine id. sessionStorage wins (per-tab, survives refresh);
+// a fresh tab snapshots the localStorage default into its own sessionStorage on
+// first read, so a later switch in ANOTHER tab can't change what THIS tab shows
+// after its next refresh.
+function activeId(): string | null {
+  if (typeof window === 'undefined') return null;
+  let id = sessionStorage.getItem(ACTIVE);
+  if (id == null) {
+    id = localStorage.getItem(ACTIVE);
+    if (id != null) sessionStorage.setItem(ACTIVE, id);
+  }
+  return id;
+}
+
 export function getActiveEntry(): KeyringEntry | null {
   const list = read();
   if (list.length === 0) return null;
-  const id = typeof window === 'undefined' ? null : localStorage.getItem(ACTIVE);
-  return list.find((e) => e.id === id) ?? list[0];
+  return list.find((e) => e.id === activeId()) ?? list[0];
 }
 
 export function getActiveKey(): string {
@@ -39,6 +58,10 @@ export function getActiveKey(): string {
 }
 
 export function setActiveMachine(id: string) {
+  if (typeof window === 'undefined') return;
+  // This tab's pick → sessionStorage (per-tab, survives refresh). Mirror it to
+  // localStorage so the NEXT freshly-opened tab inherits your latest machine.
+  sessionStorage.setItem(ACTIVE, id);
   localStorage.setItem(ACTIVE, id);
 }
 
@@ -53,9 +76,12 @@ export function addMachine(entry: KeyringEntry) {
 export function removeMachine(id: string): KeyringEntry | null {
   const next = read().filter((e) => e.id !== id);
   write(next);
-  if (typeof window !== 'undefined' && localStorage.getItem(ACTIVE) === id) {
+  if (typeof window !== 'undefined' && activeId() === id) {
     if (next[0]) setActiveMachine(next[0].id);
-    else localStorage.removeItem(ACTIVE);
+    else {
+      sessionStorage.removeItem(ACTIVE);
+      localStorage.removeItem(ACTIVE);
+    }
   }
   return next[0] ?? null;
 }
