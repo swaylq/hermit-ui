@@ -288,14 +288,17 @@ async function clearCloudflare(d: LoginDriver, report: LoginReport, where: strin
 
 async function logoutClaudeWeb(d: LoginDriver, report: LoginReport): Promise<void> {
   await report({ line: '检测到已登录，先退出当前账号（左下角头像 → Log out）…' });
-  // Open the bottom-left avatar menu, then click Log out. Retry — the menu
-  // animates in, and the first open may miss.
-  for (let i = 0; i < 3; i++) {
+  // Open the bottom-left avatar menu ONCE (re-clicking the trigger toggles it
+  // shut), then poll for the "Log out" item — the base-ui menu animates in.
+  await d.openUserMenu();
+  let out = false;
+  for (let i = 0; i < 8 && !out; i++) {
     checkAbort();
-    await d.openUserMenu();
-    await sleep(1_000);
-    if (await d.clickByText('log ?out|sign ?out|退出|登出')) break;
+    await sleep(600);
+    out = await d.clickByText('log ?out|sign ?out|退出|登出');
   }
+  // Fallback: the Log out item is <a href="/logout"> — hit the route directly.
+  if (!out) await d.navigate('https://claude.ai/logout').catch(() => {});
   await until(d, report, () => emailFieldVisible(d), {
     humanMsg: '请在 Chrome 里点左下角头像 → Log out 退出当前账号（之后自动继续）。',
   });

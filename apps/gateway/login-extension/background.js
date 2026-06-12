@@ -211,10 +211,18 @@ function domFill(selector, value) {
   el.dispatchEvent(new Event('change', { bubbles: true }));
   return true;
 }
+// Real click = full pointer/mouse sequence. base-ui (claude.ai) triggers open on
+// pointerdown, so a bare .click() doesn't open the account menu. Inlined per
+// function because chrome.scripting.executeScript injects one self-contained fn.
 function domClick(selector) {
   const el = document.querySelector(selector);
   if (!el) return false;
-  el.click();
+  const o = { bubbles: true, cancelable: true, view: window };
+  for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+    try {
+      el.dispatchEvent(new (t.startsWith('pointer') ? PointerEvent : MouseEvent)(t, o));
+    } catch {}
+  }
   return true;
 }
 function domPressEnter(selector) {
@@ -240,24 +248,37 @@ function domClickByText(pattern) {
   );
   const hit = els.find((e) => re.test(((e.innerText || e.textContent || e.value || '') + '').trim()));
   if (!hit) return false;
-  hit.click();
+  const o = { bubbles: true, cancelable: true, view: window };
+  for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+    try {
+      hit.dispatchEvent(new (t.startsWith('pointer') ? PointerEvent : MouseEvent)(t, o));
+    } catch {}
+  }
   return true;
 }
 // Open the claude.ai account menu — the bottom-left avatar (no useful text, so
 // clickByText can't find it). Try known handles, then a heuristic: a button in
 // the bottom-left corner that pops a menu / holds an avatar.
 function domOpenUserMenu() {
+  const o = { bubbles: true, cancelable: true, view: window };
+  const rc = (el) => {
+    for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      try {
+        el.dispatchEvent(new (t.startsWith('pointer') ? PointerEvent : MouseEvent)(t, o));
+      } catch {}
+    }
+  };
   const known = [
     '[data-testid="user-menu-button"]',
     'button[aria-label*="profile" i]',
     'button[aria-label*="account" i]',
     'button[aria-label*="user menu" i]',
-    'button[aria-haspopup="menu"][aria-label*="settings" i]',
+    'button[aria-haspopup="menu"]',
   ];
   for (const sel of known) {
     const el = document.querySelector(sel);
     if (el) {
-      el.click();
+      rc(el);
       return true;
     }
   }
@@ -273,7 +294,7 @@ function domOpenUserMenu() {
     cands.find((b) => b.querySelector('img, [class*="avatar" i], [style*="background-image" i]')) ||
     cands[0];
   if (pick) {
-    pick.click();
+    rc(pick);
     return true;
   }
   return false;
