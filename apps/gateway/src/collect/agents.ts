@@ -25,8 +25,14 @@ const MEMORY_TOPN = 6;                  // top N memory files to mention by name
 function safeRead(p: string, maxBytes = MAX_TEXT_BYTES): string | null {
   try {
     const buf = fs.readFileSync(p);
-    if (buf.length <= maxBytes) return buf.toString('utf8');
-    return buf.subarray(0, maxBytes).toString('utf8') + `\n\n…[truncated ${buf.length - maxBytes} bytes]`;
+    // Binary sniff: NUL in the first 8KB = not text. isTextFile() is an
+    // extension allowlist, but extensionless files are assumed text and a
+    // NUL reaching postgres 500s the whole agents sync (22P05).
+    if (buf.subarray(0, 8192).includes(0)) return null;
+    const text = buf.length <= maxBytes
+      ? buf.toString('utf8')
+      : buf.subarray(0, maxBytes).toString('utf8') + `\n\n…[truncated ${buf.length - maxBytes} bytes]`;
+    return text.includes('\u0000') ? text.replaceAll('\u0000', '') : text;
   } catch {
     return null;
   }

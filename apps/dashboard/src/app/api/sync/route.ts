@@ -23,6 +23,22 @@ async function resolveMachine(req: NextRequest) {
   return resolveMachineByKey(req.headers.get('x-asst-key') ?? '');
 }
 
+// Postgres rejects NUL (\u0000) in TEXT/JSONB outright (error 22P05), so one
+// binary file slipping past the gateway's text filters (e.g. a .pptx read as
+// UTF-8) used to 500 the whole sync - retried every tick, forever. Scrub
+// strings at the boundary; gateways also binary-sniff now, but old gateways
+// keep pushing unsanitized payloads until they're upgraded.
+function deepStripNul<T>(v: T): T {
+  if (typeof v === 'string') return (v.includes('\u0000') ? v.replaceAll('\u0000', '') : v) as T;
+  if (Array.isArray(v)) return v.map(deepStripNul) as unknown as T;
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v)) out[k] = deepStripNul(val);
+    return out as T;
+  }
+  return v;
+}
+
 // Agent is now PURELY static (no runtime fields). The gateway pushes the
 // folder's IDENTITY/USER/AGENTS/TOOLS markdowns + skill names + memory
 // summary. Runtime (pid/alive/ctx/etc.) lives on ChatSession; pushed via
@@ -88,4 +104,4 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ slu
   return NextResponse.json({ error: 'use /api/sync/<thing>' }, { status: 404 });
 }
 
-export { resolveMachine, AgentInput, GlobalSkillInput, PlanUsageInput, UsageInput };
+export { resolveMachine, deepStripNul, AgentInput, GlobalSkillInput, PlanUsageInput, UsageInput };

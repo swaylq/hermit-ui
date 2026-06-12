@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
-import { resolveMachine, AgentInput } from '../route';
+import { resolveMachine, deepStripNul, AgentInput } from '../route';
 
 const Body = z.object({ agents: z.array(AgentInput) });
 
@@ -19,7 +19,9 @@ export async function POST(req: NextRequest) {
 
   let body: z.infer<typeof Body>;
   try {
-    body = Body.parse(await req.json());
+    // deepStripNul: agent skills/refs carry raw file contents — same NUL
+    // hazard as global-skills (postgres 22P05). See ../route.ts.
+    body = Body.parse(deepStripNul(await req.json()));
   } catch (e) {
     return NextResponse.json({ error: 'bad body', detail: String(e) }, { status: 400 });
   }

@@ -28,8 +28,15 @@ const NAME_RE = /^[a-z][a-z0-9-]{0,40}$/;
 function safeRead(p: string, maxBytes = MAX_TEXT_BYTES): string | null {
   try {
     const buf = fs.readFileSync(p);
-    if (buf.length <= maxBytes) return buf.toString('utf8');
-    return buf.subarray(0, maxBytes).toString('utf8') + `\n\n…[truncated ${buf.length - maxBytes} bytes]`;
+    // Binary sniff: a NUL byte in the first 8KB means this isn't text. The
+    // extension denylist misses formats like .pptx (a zip container), and
+    // postgres rejects NUL in TEXT/JSONB wholesale (22P05) — one such file
+    // used to 500 the machine's entire global-skills sync, every tick.
+    if (buf.subarray(0, 8192).includes(0)) return null;
+    const text = buf.length <= maxBytes
+      ? buf.toString('utf8')
+      : buf.subarray(0, maxBytes).toString('utf8') + `\n\n…[truncated ${buf.length - maxBytes} bytes]`;
+    return text.includes('\u0000') ? text.replaceAll('\u0000', '') : text;
   } catch {
     return null;
   }
@@ -94,7 +101,7 @@ function isManagedBundle(dir: string): boolean {
 // LICENSE, etc. — so publishing a machine skill to the market ships the COMPLETE
 // skill, not just references/*.md. Skips VCS/dep dirs + binary files; safeRead
 // caps each file at 64KB; the whole tree is capped at MAX_SKILL_FILES.
-const BINARY_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|tgz|bz2|7z|rar|mp[34]|mov|avi|mkv|wav|ogg|woff2?|ttf|otf|eot|exe|dll|so|dylib|bin|dat|class|jar|wasm|node)$/i;
+const BINARY_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|tgz|bz2|7z|rar|mp[34]|mov|avi|mkv|wav|ogg|woff2?|ttf|otf|eot|exe|dll|so|dylib|bin|dat|class|jar|wasm|node|pptx?|docx?|xlsx?|odp|odt|ods|key|numbers|pages|psd|heic|avif|webm|flac|sqlite3?|pyc|xz|zst)$/i;
 
 function collectSkillFiles(skillDir: string): Array<{ path: string; content: string }> {
   const out: Array<{ path: string; content: string }> = [];

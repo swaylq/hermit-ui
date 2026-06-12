@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
-import { resolveMachine, GlobalSkillInput } from '../route';
+import { resolveMachine, deepStripNul, GlobalSkillInput } from '../route';
 
 const Body = z.object({ skills: z.array(GlobalSkillInput) });
 
@@ -17,13 +17,18 @@ export async function POST(req: NextRequest) {
 
   let body: z.infer<typeof Body>;
   try {
-    body = Body.parse(await req.json());
+    // deepStripNul: postgres can't store NUL bytes in TEXT/JSONB (22P05) — a
+    // binary file read as text by an old gateway used to 500 every sync.
+    body = Body.parse(deepStripNul(await req.json()));
   } catch (e) {
     return NextResponse.json({ error: 'bad body', detail: String(e) }, { status: 400 });
   }
 
   const now = new Date();
   const names = body.skills.map((s) => s.name);
+  // Isolate per-skill failures: one rejected row must not wedge the machine's
+  // whole skill sync (the gateway retries the same payload every tick).
+  const failed: string[] = [];
   for (const s of body.skills) {
     const data = {
       description: s.description ?? null,
@@ -35,11 +40,16 @@ export async function POST(req: NextRequest) {
       fileCount: s.fileCount ?? 0,
       metadataAt: now,
     };
-    await prisma.globalSkill.upsert({
-      where: { machineId_name: { machineId: machine.id, name: s.name } },
-      create: { machineId: machine.id, name: s.name, ...data },
-      update: data,
-    });
+    try {
+      await prisma.globalSkill.upsert({
+        where: { machineId_name: { machineId: machine.id, name: s.name } },
+        create: { machineId: machine.id, name: s.name, ...data },
+        update: data,
+      });
+    } catch (e) {
+      failed.push(s.name);
+      console.error(`[sync/global-skills] upsert ${s.name} failed:`, e instanceof Error ? e.message : e);
+    }
   }
   // Filesystem-led: drop rows for skills that no longer exist on disk. The ''
   // sentinel makes an empty push (no skills on disk) delete everything, since no
@@ -47,5 +57,10 @@ export async function POST(req: NextRequest) {
   const del = await prisma.globalSkill.deleteMany({
     where: { machineId: machine.id, name: { notIn: names.length ? names : [''] } },
   });
-  return NextResponse.json({ ok: true, upserted: body.skills.length, deleted: del.count });
+  return NextResponse.json({
+    ok: true,
+    upserted: body.skills.length - failed.length,
+    deleted: del.count,
+    ...(failed.length ? { failed } : {}),
+  });
 }
