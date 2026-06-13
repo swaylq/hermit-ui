@@ -1000,6 +1000,13 @@ function SessionPane({ sessionId }: { sessionId: string }) {
     ...optimisticQueue.filter((p) => !realQueueTexts.has(msgText(p.content))),
   ];
   const queueLen = displayQueue.length;
+  // Messages you've typed this session, oldest→newest — the ↑/↓ recall history in
+  // the composer. msgText is empty for tool_result rows (gateway-synced role:user),
+  // so this captures only your own text sends.
+  const sentHistory = useMemo(
+    () => (messages.data ?? []).filter((m) => m.role === 'user').map((m) => msgText(m.content)).filter(Boolean),
+    [messages.data],
+  );
   // Drop an optimistic queue stub once the real queued row lands in queue.data, so
   // it can't reappear after the message is delivered (and leaves queue.data).
   useEffect(() => {
@@ -1374,6 +1381,7 @@ function SessionPane({ sessionId }: { sessionId: string }) {
             attachments={attachments}
             setAttachments={setAttachments}
             taRef={taRef}
+            history={sentHistory}
           />
         </>
       )}
@@ -1947,6 +1955,7 @@ function ComposeBar({
   setAttachments,
   onSend,
   taRef,
+  history,
 }: {
   sessionId: string;
   disabled: boolean;
@@ -1966,12 +1975,32 @@ function ComposeBar({
     files: Array<{ url: string; mimeType: string; name: string }>,
   ) => void;
   taRef: React.RefObject<HTMLTextAreaElement | null>;
+  history: string[];
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Shell-style sent-message recall: histIdxRef walks `history` (newest last;
+  // -1 = the live draft). liveDraftRef stashes what you were typing before you
+  // started browsing, so ↓ past the newest restores it.
+  const histIdxRef = useRef(-1);
+  const liveDraftRef = useRef('');
+  const recall = useCallback((text: string) => {
+    setDraft(text);
+    // setDraft is programmatic here (no onChange fires) — move the caret to the
+    // end and re-fit the height ourselves, after the new value paints.
+    requestAnimationFrame(() => {
+      const el = taRef.current;
+      if (!el) return;
+      el.selectionStart = el.selectionEnd = el.value.length;
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
+    });
+  }, [setDraft, taRef]);
 
   // Auto-resize textarea: clamp height between 1 and 12 rows.
   const onChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
     setDraft(e.target.value);
+    histIdxRef.current = -1; // typing detaches from history browsing
     const el = e.target;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
@@ -2097,6 +2126,7 @@ function ComposeBar({
       .filter((a) => !a.isImage)
       .map((a) => ({ url: a.data.url, mimeType: a.data.mimeType, name: a.name }));
     onSend(text, images, files);
+    histIdxRef.current = -1;
     noteSlashCommand(text);
   };
 
@@ -2213,6 +2243,28 @@ function ComposeBar({
                   const cmd = slashFiltered[slashIdx];
                   if (cmd.needsArgs) pickCommand(cmd);
                   else if (!sending && !disabled && !inFlight && !awaitingInput) { onSend(cmd.name, [], []); noteSlashCommand(cmd.name); }
+                  return;
+                }
+              }
+              // Shell-style history recall: ↑ on the first line walks back through
+              // the messages you've sent this session; ↓ on the last line walks
+              // forward, then restores the draft you were typing. (The slash picker
+              // claims ↑/↓ above when open; skip during IME composition.)
+              if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.nativeEvent.isComposing && history.length > 0) {
+                const ta = e.currentTarget;
+                const onFirstLine = !draft.slice(0, ta.selectionStart ?? 0).includes('\n');
+                const onLastLine = !draft.slice(ta.selectionEnd ?? draft.length).includes('\n');
+                if (e.key === 'ArrowUp' && onFirstLine) {
+                  e.preventDefault();
+                  if (histIdxRef.current === -1) liveDraftRef.current = draft;
+                  histIdxRef.current = Math.min(histIdxRef.current + 1, history.length - 1);
+                  recall(history[history.length - 1 - histIdxRef.current]);
+                  return;
+                }
+                if (e.key === 'ArrowDown' && onLastLine && histIdxRef.current >= 0) {
+                  e.preventDefault();
+                  histIdxRef.current -= 1;
+                  recall(histIdxRef.current < 0 ? liveDraftRef.current : history[history.length - 1 - histIdxRef.current]);
                   return;
                 }
               }
