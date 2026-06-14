@@ -63,6 +63,11 @@ function PublishDialog({
 }) {
   const utils = trpc.useUtils();
   const [changelog, setChangelog] = useState('');
+  const [category, setCategory] = useState('');
+  // Existing groups for the datalist, so a publisher reuses a group name instead
+  // of inventing near-duplicates.
+  const allGroups = trpc.market.listSkills.useQuery({});
+  const groupOptions = [...new Set((allGroups.data ?? []).map((s) => s.category).filter((c): c is string => !!c))].sort();
   const [done, setDone] = useState<{ label: string; created: boolean } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const publish = trpc.market.publishSkillFromLocal.useMutation({
@@ -106,6 +111,13 @@ function PublishDialog({
                   </div>
                 )}
                 <label className="block">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">分组 Group <span className="opacity-50">(optional)</span></span>
+                  <Input value={category} onChange={(e) => setCategory(e.target.value)} list="market-skill-groups" placeholder="例如 dev / writing / ops" className="mt-1.5 text-sm" />
+                  <datalist id="market-skill-groups">
+                    {groupOptions.map((g) => <option key={g} value={g} />)}
+                  </datalist>
+                </label>
+                <label className="block">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Changelog <span className="opacity-50">(optional)</span></span>
                   <Input value={changelog} onChange={(e) => setChangelog(e.target.value)} placeholder="what changed" className="mt-1.5 text-sm" />
                 </label>
@@ -120,7 +132,7 @@ function PublishDialog({
                 <Button
                   size="sm"
                   disabled={publish.isPending}
-                  onClick={() => publish.mutate({ source, skillName, agentName, changelog: changelog.trim() || undefined })}
+                  onClick={() => publish.mutate({ source, skillName, agentName, category: category.trim() || undefined, changelog: changelog.trim() || undefined })}
                 >
                   {publish.isPending ? 'publishing…' : (done ? '重新发布' : 'Publish')}
                 </Button>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Boxes, Search, Plus, Upload } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { MarketSkillDetail } from '@/components/market-skill-detail';
+import { CategoryChips } from '@/components/category-chips';
 import { ImportSkillDialog } from '@/components/import-skill-dialog';
 import { UploadSkillDialog } from '@/components/upload-skill-dialog';
 
@@ -29,7 +30,16 @@ export default function MarketSkillsPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [cat, setCat] = useState('');
   const skills = trpc.market.listSkills.useQuery({ q: q.trim() || undefined }, { refetchInterval: 15_000 });
+  // Group filter is client-side over the search result so the chip row always
+  // shows every group present in the current search (a server-side category param
+  // would collapse the chips down to the one you picked).
+  const cats = useMemo(
+    () => [...new Set((skills.data ?? []).map((s) => s.category).filter((c): c is string => !!c))].sort(),
+    [skills.data],
+  );
+  const shown = (skills.data ?? []).filter((s) => !cat || s.category === cat);
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
@@ -50,17 +60,29 @@ export default function MarketSkillsPage() {
         </div>
       </header>
 
+      {cats.length > 0 && (
+        <div className="border-b border-border px-4 py-2 shrink-0">
+          <CategoryChips cats={cats} value={cat} onChange={setCat} />
+        </div>
+      )}
+
       <ScrollArea className="flex-1 min-h-0 bg-background">
         <div className="p-4">
-          {(skills.data?.length ?? 0) === 0 ? (
+          {shown.length === 0 ? (
             <div className="flex flex-col items-center justify-center text-center py-20 text-muted-foreground">
               <Boxes className="h-10 w-10 mb-3 opacity-30" aria-hidden="true" />
-              <p className="text-sm">市场还没有 skill。</p>
-              <p className="mt-1 text-xs">点上方 <b>Import</b> 从 URL(master.skill / GitHub)导入、<b>Upload .zip</b> 上传压缩包,或在 Skills 页 / agent 详情点 skill 的「上传」发布到这里。</p>
+              {(skills.data?.length ?? 0) === 0 ? (
+                <>
+                  <p className="text-sm">市场还没有 skill。</p>
+                  <p className="mt-1 text-xs">点上方 <b>Import</b> 从 URL(master.skill / GitHub)导入、<b>Upload .zip</b> 上传压缩包,或在 Skills 页 / agent 详情点 skill 的「上传」发布到这里。</p>
+                </>
+              ) : (
+                <p className="text-sm">「{cat}」分组下还没有 skill。</p>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {skills.data!.map((s) => (
+              {shown.map((s) => (
                 <button
                   key={s.id}
                   type="button"
@@ -74,6 +96,7 @@ export default function MarketSkillsPage() {
                   <div className="flex items-center gap-1.5 min-w-0">
                     <span className="text-[11px] font-mono text-muted-foreground/60 truncate">{s.slug}</span>
                     <OriginBadge origin={s.origin} />
+                    {s.category && <span className="shrink-0 inline-flex items-center rounded border border-border px-1.5 py-px text-[10px] text-muted-foreground">{s.category}</span>}
                   </div>
                   {s.description && <p className="text-xs text-muted-foreground line-clamp-2">{s.description}</p>}
                   <span className="text-[10px] text-muted-foreground/50 mt-auto pt-1">updated {relTime(s.updatedAt)}</span>

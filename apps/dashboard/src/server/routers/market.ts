@@ -27,6 +27,7 @@ export const marketRouter = router({
           { slug: { contains: input.q, mode: 'insensitive' } },
           { displayName: { contains: input.q, mode: 'insensitive' } },
           { description: { contains: input.q, mode: 'insensitive' } },
+          { category: { contains: input.q, mode: 'insensitive' } },
         ];
       }
       if (input?.category) where.category = input.category;
@@ -84,6 +85,7 @@ export const marketRouter = router({
       slug: z.string().trim().toLowerCase().regex(SLUG_RE).optional(),
       displayName: z.string().trim().optional(),
       description: z.string().trim().optional(),
+      category: z.string().trim().optional(), // the skill's group in the market
       changelog: z.string().trim().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
@@ -151,7 +153,12 @@ export const marketRouter = router({
       let created = true; // did this publish actually append a new version?
       if (existing) {
         if (existing.versions[0]?.contentHash === hash) {
-          result = existing; // identical content → no new version appended
+          // identical content → no new version, but a re-publish can still set or
+          // change the group.
+          if (input.category && input.category !== existing.category) {
+            await prisma.marketSkill.update({ where: { id: existing.id }, data: { category: input.category } });
+          }
+          result = existing; // no new version appended
           created = false;
         } else {
           const nextVer = String((parseInt(existing.latestVersion, 10) || 0) + 1);
@@ -159,13 +166,13 @@ export const marketRouter = router({
             data: { marketSkillId: existing.id, version: nextVer, content, refs, fileCount, contentHash: hash, changelog: input.changelog ?? null, createdByMachineId: ctx.machine.id },
           });
           result = await prisma.marketSkill.update({
-            where: { id: existing.id }, data: { latestVersion: nextVer, description: desc, displayName },
+            where: { id: existing.id }, data: { latestVersion: nextVer, description: desc, displayName, category: input.category || undefined },
           });
         }
       } else {
         result = await prisma.marketSkill.create({
           data: {
-            slug, displayName, description: desc, origin: 'uploaded', latestVersion: '1',
+            slug, displayName, description: desc, category: input.category || null, origin: 'uploaded', latestVersion: '1',
             publishedByMachineId: ctx.machine.id,
             publishedByAgent: input.source === 'agent' ? input.agentName : null,
             versions: { create: { version: '1', content, refs, fileCount, contentHash: hash, changelog: input.changelog ?? null, createdByMachineId: ctx.machine.id } },
