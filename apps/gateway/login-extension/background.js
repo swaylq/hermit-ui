@@ -272,8 +272,14 @@ function domClickByText(pattern) {
     document.querySelectorAll('button, a, [role="button"], [role="menuitem"], input[type="submit"], input[type="button"]'),
   );
   // Skip disabled matches (e.g. claude.ai's Authorize starts disabled until a
-  // pointer move) so the caller keeps retrying instead of "clicking" a dead button.
-  const hit = els.find((e) => !e.disabled && re.test(((e.innerText || e.textContent || e.value || '') + '').trim()));
+  // pointer move) so the caller keeps retrying instead of "clicking" a dead
+  // button; and prefer a VISIBLE match over hidden duplicates.
+  const ok = (e) => !e.disabled && re.test(((e.innerText || e.textContent || e.value || '') + '').trim());
+  const visEl = (e) => {
+    const r = e.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && e.offsetParent !== null;
+  };
+  const hit = els.find((e) => ok(e) && visEl(e)) || els.find(ok);
   if (!hit) return false;
   const o = { bubbles: true, cancelable: true, view: window };
   for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
@@ -295,6 +301,13 @@ function domOpenUserMenu() {
       } catch {}
     }
   };
+  // Prefer the VISIBLE match — when the sidebar is collapsed there are two
+  // user-menu-buttons in the DOM (the expanded one hidden), and querySelector
+  // would grab the hidden one so the click no-ops.
+  const vis = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && el.offsetParent !== null;
+  };
   const known = [
     '[data-testid="user-menu-button"]',
     'button[aria-label*="profile" i]',
@@ -303,7 +316,8 @@ function domOpenUserMenu() {
     'button[aria-haspopup="menu"]',
   ];
   for (const sel of known) {
-    const el = document.querySelector(sel);
+    const els = Array.from(document.querySelectorAll(sel));
+    const el = els.find(vis) || els[0];
     if (el) {
       rc(el);
       return true;
