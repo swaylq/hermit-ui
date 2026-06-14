@@ -181,11 +181,14 @@ async function handle(op, args) {
 
 // ── injected DOM functions (run in the page; isolated world, DOM only) ────────
 function domExists(selector) {
-  const el = document.querySelector(selector);
-  if (!el) return false;
-  const r = el.getBoundingClientRect();
-  const s = getComputedStyle(el);
-  return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+  // ANY visible match — querySelector's first hit may be a hidden duplicate
+  // (e.g. the expanded-sidebar user-menu-button when the sidebar is collapsed).
+  for (const el of document.querySelectorAll(selector)) {
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    if (r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none') return true;
+  }
+  return false;
 }
 function domText(selector) {
   const el = document.querySelector(selector);

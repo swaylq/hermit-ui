@@ -255,8 +255,11 @@ async function emailFieldVisible(d: LoginDriver): Promise<boolean> {
   return d.exists(EMAIL_SEL);
 }
 async function loggedIntoClaude(d: LoginDriver): Promise<boolean> {
+  if (await emailFieldVisible(d)) return false; // login page → signed out
+  // The account menu only exists when signed in — the most reliable signal,
+  // independent of URL or whether the sidebar is collapsed.
+  if (await d.exists('[data-testid="user-menu-button"]')) return true;
   if (/\/(new|chats?|projects)\b/.test(await d.currentUrl())) return true;
-  if (await emailFieldVisible(d)) return false;
   return d.exists(COMPOSER_SEL);
 }
 async function cloudflareChallenged(d: LoginDriver): Promise<boolean> {
@@ -583,6 +586,12 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
     await report({ line: '打开 claude.ai…' });
     await d.navigate('https://claude.ai/login');
     await clearCloudflare(d, report, 'claude.ai');
+    // Let the SPA settle (a signed-in session redirects /login → /new), then
+    // decide: signed in (→ log out) or already at the email login form.
+    for (let i = 0; i < 6; i++) {
+      if ((await emailFieldVisible(d)) || (await loggedIntoClaude(d))) break;
+      await sleep(1_000);
+    }
     if (await loggedIntoClaude(d)) await logoutClaudeWeb(d, report);
     await until(d, report, () => emailFieldVisible(d), { humanMsg: '请在 Chrome 里停在 claude.ai 的邮箱登录界面。' });
 
