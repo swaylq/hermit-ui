@@ -79,6 +79,7 @@ interface LoginDriver {
   exists(selector: string, tab?: Tab): Promise<boolean>;
   bodyText(tab?: Tab): Promise<string>;
   inputValues(tab?: Tab): Promise<string[]>;
+  findCodeState(tab?: Tab): Promise<string>; // scrape the OAuth code#state in-page (pre/code first)
   fill(selector: string, value: string, tab?: Tab): Promise<boolean>;
   pressEnter(selector: string, tab?: Tab): Promise<boolean>;
   click(selector: string, tab?: Tab): Promise<boolean>;
@@ -108,6 +109,9 @@ class ExtensionDriver implements LoginDriver {
   }
   async inputValues(tab: Tab = 'login') {
     return (await sendCommand<string[]>('inputValues', { tab })) || [];
+  }
+  async findCodeState(tab: Tab = 'login') {
+    return (await sendCommand<string>('findCodeState', { tab })) || '';
   }
   async fill(selector: string, value: string, tab: Tab = 'login') {
     return !!(await sendCommand('fill', { selector, value, tab }));
@@ -175,6 +179,9 @@ class PlaywrightDriver implements LoginDriver {
     return (await this.page(tab))
       .$$eval('input, a, textarea', (els: any[]) => els.map((e: any) => e.value || e.href || '').filter(Boolean))
       .catch(() => [] as string[]);
+  }
+  async findCodeState() {
+    return ''; // Playwright path resolves code#state via bodyText/inputValues below
   }
   async fill(selector: string, value: string, tab: Tab = 'login') {
     try {
@@ -355,8 +362,13 @@ async function fetchLoginCode(d: LoginDriver, token: string, report: LoginReport
 }
 
 // ── CLI OAuth ──────────────────────────────────────────────────────────────────
-const CODE_STATE_RE = /\b[A-Za-z0-9_-]{20,}#[A-Za-z0-9_-]{20,}\b/;
+const CODE_STATE_RE = /[A-Za-z0-9_-]{20,}#[A-Za-z0-9_-]{20,}/;
 async function codeStateOnPage(d: LoginDriver): Promise<string | null> {
+  const direct = await d.findCodeState().catch(() => '');
+  if (direct) {
+    const dm = direct.match(CODE_STATE_RE);
+    if (dm) return dm[0];
+  }
   const body = await d.bodyText().catch(() => '');
   let m = body.match(CODE_STATE_RE);
   if (m) return m[0];

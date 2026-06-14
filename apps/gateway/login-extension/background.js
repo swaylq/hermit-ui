@@ -151,6 +151,8 @@ async function handle(op, args) {
       return await runInTab(which, domText, [args.selector]);
     case 'bodyText':
       return await runInTab(which, domBodyText, []);
+    case 'findCodeState':
+      return await runInTab(which, domFindCodeState, []);
     case 'inputValues':
       return await runInTab(which, domInputValues, []);
     case 'fill':
@@ -197,6 +199,18 @@ function domText(selector) {
 function domBodyText() {
   return document.body ? document.body.innerText : '';
 }
+// Extract the OAuth code#state. Scan pre/code/textarea/input (the paste page puts
+// it in a <pre>) first, then the whole body — innerText alone can miss a <pre>.
+function domFindCodeState() {
+  const re = /[A-Za-z0-9_-]{20,}#[A-Za-z0-9_-]{20,}/;
+  for (const el of document.querySelectorAll('pre, code, textarea, input')) {
+    const v = el.value || el.innerText || el.textContent || '';
+    const m = v.match(re);
+    if (m) return m[0];
+  }
+  const m = (document.body ? document.body.innerText : '').match(re);
+  return m ? m[0] : '';
+}
 function domInputValues() {
   const out = [];
   document.querySelectorAll('input, a, textarea').forEach((e) => {
@@ -230,25 +244,65 @@ function domClick(selector) {
   }
   return true;
 }
-// Dispatch synthetic pointer/mouse movement across the page — some pages (the
-// claude.ai OAuth Authorize button) stay disabled until the first pointer move.
+// Human-like pointer movement — some pages (claude.ai's OAuth Authorize) keep the
+// button disabled until they see pointer movement. We dispatch a moving PATH (with
+// movementX/Y + screen coords), and specifically hover the Authorize button.
+// (These are synthetic so isTrusted=false; if the page demands trusted input the
+// human still has to wiggle the real mouse — but this clears the common cases.)
 function domNudge() {
   const w = window.innerWidth || 1200;
   const h = window.innerHeight || 800;
-  const pts = [
-    [w * 0.4, h * 0.4],
-    [w * 0.55, h * 0.5],
-    [w * 0.5, h * 0.62],
+  let btn = null;
+  for (const b of document.querySelectorAll('button')) {
+    if (/^\s*(authorize|allow|授权|允许)\s*$/i.test((b.innerText || b.textContent || '').trim())) {
+      btn = b;
+      break;
+    }
+  }
+  const path = [
+    [w * 0.25, h * 0.3],
+    [w * 0.4, h * 0.42],
+    [w * 0.5, h * 0.5],
+    [w * 0.55, h * 0.6],
   ];
-  const targets = [document, document.body || document.documentElement, window];
-  for (const [clientX, clientY] of pts) {
-    for (const type of ['pointermove', 'mousemove']) {
-      const Ev = type.startsWith('pointer') ? PointerEvent : MouseEvent;
-      for (const tgt of targets) {
-        try {
-          tgt.dispatchEvent(new Ev(type, { bubbles: true, cancelable: true, view: window, clientX, clientY }));
-        } catch {}
-      }
+  if (btn) {
+    const r = btn.getBoundingClientRect();
+    path.push([r.left + r.width / 2, r.top + r.height / 2]);
+  }
+  let px = w * 0.2;
+  let py = h * 0.2;
+  for (const [clientX, clientY] of path) {
+    const base = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX,
+      clientY,
+      screenX: clientX,
+      screenY: clientY,
+      movementX: clientX - px,
+      movementY: clientY - py,
+    };
+    px = clientX;
+    py = clientY;
+    const tgts = [document, document.body || document.documentElement];
+    if (btn) tgts.push(btn);
+    for (const tgt of tgts) {
+      try {
+        tgt.dispatchEvent(new PointerEvent('pointermove', { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+      } catch {}
+      try {
+        tgt.dispatchEvent(new MouseEvent('mousemove', base));
+      } catch {}
+    }
+  }
+  if (btn) {
+    const r = btn.getBoundingClientRect();
+    const c = { bubbles: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    for (const type of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter']) {
+      try {
+        btn.dispatchEvent(new (type.startsWith('pointer') ? PointerEvent : MouseEvent)(type, { ...c, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+      } catch {}
     }
   }
   return true;
