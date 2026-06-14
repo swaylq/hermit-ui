@@ -48,6 +48,19 @@ export const marketRouter = router({
     });
   }),
 
+  // Set/clear a skill's group directly, so existing skills can be grouped without
+  // re-publishing. The market is a shared fleet registry — any authed machine can
+  // tidy a skill's group, same as anyone can publish/update it.
+  setSkillCategory: machineProcedure
+    .input(z.object({ slug: z.string(), category: z.string().trim().nullable() }))
+    .mutation(async ({ input }) => {
+      return prisma.marketSkill.update({
+        where: { slug: input.slug },
+        data: { category: input.category || null },
+        select: { slug: true, category: true },
+      });
+    }),
+
   listTemplates: machineProcedure.query(async () => {
     return prisma.marketTemplate.findMany({
       orderBy: { updatedAt: 'desc' },

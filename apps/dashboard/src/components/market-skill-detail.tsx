@@ -30,6 +30,20 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
 
   const [downloading, setDownloading] = useState(false);
   const [dlError, setDlError] = useState<string | null>(null);
+  // Inline group editor — set/clear a skill's group right here so existing skills
+  // can be grouped without re-publishing. groupDraft null = not editing (show the
+  // saved category); saves on blur / Enter.
+  const utils = trpc.useUtils();
+  const [groupDraft, setGroupDraft] = useState<string | null>(null);
+  const allSkills = trpc.market.listSkills.useQuery({});
+  const groupOptions = [...new Set((allSkills.data ?? []).map((s) => s.category).filter((c): c is string => !!c))].sort();
+  const setCat = trpc.market.setSkillCategory.useMutation({
+    onSuccess: () => {
+      utils.market.getSkill.invalidate({ slug });
+      utils.market.listSkills.invalidate();
+      setGroupDraft(null);
+    },
+  });
   // Download the selected version as a .zip. A plain <a download> can't carry
   // the x-asst-key header, so fetch with the key → blob → synthetic anchor.
   async function download() {
@@ -87,6 +101,25 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
             {dlError && <span className="text-xs text-rose-500">{dlError}</span>}
           </div>
           {skill.description && <p className="text-sm text-muted-foreground">{skill.description}</p>}
+          <div className="flex items-center gap-2 text-xs">
+            <span className="shrink-0 text-muted-foreground/70">分组 Group</span>
+            <input
+              value={groupDraft ?? skill.category ?? ''}
+              onChange={(e) => setGroupDraft(e.target.value)}
+              onBlur={() => {
+                const next = (groupDraft ?? '').trim();
+                if (groupDraft != null && next !== (skill.category ?? '')) setCat.mutate({ slug, category: next || null });
+                else setGroupDraft(null);
+              }}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+              list="market-skill-group-edit"
+              placeholder="未分组 — 输入组名后回车保存"
+              className="h-7 min-w-0 flex-1 rounded border border-border bg-background px-2 outline-none transition-colors focus:border-foreground/30"
+            />
+            <datalist id="market-skill-group-edit">{groupOptions.map((g) => <option key={g} value={g} />)}</datalist>
+            {setCat.isPending && <span className="shrink-0 text-muted-foreground">保存中…</span>}
+            {setCat.isError && <span className="shrink-0 text-rose-500">{setCat.error.message}</span>}
+          </div>
           <div className="space-y-1">
             <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">Versions</div>
             <div className="flex flex-wrap gap-1.5">
