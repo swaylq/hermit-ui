@@ -172,16 +172,21 @@ export function sendKeys(sessionId: string, text: string): void {
   if (!r.ok) throw new Error(`tmux send-keys (Enter) failed: ${r.stderr || 'exit ' + r.status}`);
 }
 
-// True if the composer's input line (`❯ …`) still holds unsent text.
-function composerHasText(name: string): boolean {
+// Read the composer's input line (`❯ …`). Tri-state so a FAILED capture is never
+// mistaken for "empty": 'text' = still holds buffered (unsent) text, 'clear' =
+// positively empty (submitted), 'unknown' = capture failed OR no composer line was
+// visible this frame (a transient render). confirmSubmitted only concludes
+// "submitted" on 'clear' — returning false here on a capture timeout used to
+// silently strand a multi-line / image paste whose submit Enter got swallowed.
+function composerStatus(name: string): 'text' | 'clear' | 'unknown' {
   const r = tmux(['capture-pane', '-t', `${name}.0`, '-p'], { timeoutMs: 2000 });
-  if (!r.ok) return false;
+  if (!r.ok) return 'unknown';
   const lines = r.stdout.replace(/\x1b\[[0-9;]*m/g, '').split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
     const idx = lines[i].indexOf('❯');
-    if (idx >= 0) return lines[i].slice(idx + 1).trim().length > 0;
+    if (idx >= 0) return lines[i].slice(idx + 1).trim().length > 0 ? 'text' : 'clear';
   }
-  return false;
+  return 'unknown';
 }
 
 /**
@@ -201,15 +206,20 @@ function composerHasText(name: string): boolean {
  * that so a stuck message is never silent. (Past incident 2026-06-03: a follow-up
  * sent right after an 8m turn sat in the composer, unsent.)
  */
-export async function confirmSubmitted(sessionId: string, tries = 24, gapMs = 500): Promise<boolean> {
+export async function confirmSubmitted(sessionId: string, tries = 40, gapMs = 500): Promise<boolean> {
   const name = paneName(sessionId);
   if (!hasSession(name)) return true;
   for (let i = 0; i < tries; i++) {
     await sleep(gapMs);
-    if (!composerHasText(name)) return true; // cleared → submitted
+    if (composerStatus(name) === 'clear') return true; // POSITIVELY empty → submitted
+    // 'text' (still buffered) or 'unknown' (capture failed / composer not seen this
+    // frame) → re-send Enter and keep polling. We must NOT treat a failed capture as
+    // "cleared": that's exactly what stranded image / multi-line pastes — the
+    // settle-render capture timed out, we reported success, and the message sat
+    // unsent with no warning (the user had to press Enter in the pane themselves).
     tmux(['send-keys', '-t', `${name}.0`, 'Enter']);
   }
-  return !composerHasText(name);
+  return composerStatus(name) === 'clear';
 }
 
 /**

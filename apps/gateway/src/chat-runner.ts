@@ -609,7 +609,7 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
       // stranded. deliverMessages is fire-and-forget (chatTick never awaits it),
       // so the longer wait blocks nothing; confirmSubmitted returns the instant
       // the composer clears, so a fast spawn pays no penalty.
-      const submitted = await confirmSubmitted(session.id, freshSpawn ? 120 : 24);
+      const submitted = await confirmSubmitted(session.id, freshSpawn ? 120 : 40);
       if (!submitted) {
         console.warn(`[chat] ${session.id.slice(0, 8)}: composer still holds text after confirm — message may be unsent`);
         await api
