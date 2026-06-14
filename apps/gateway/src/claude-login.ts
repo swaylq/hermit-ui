@@ -80,11 +80,14 @@ type Diag = {
   preCount?: number;
   bodyLen?: number;
   hasCodeState?: boolean;
+  tabs?: string[];
 };
+type AuthorizeResult = { ok: boolean; clicked?: boolean; gone?: boolean; wasDisabled?: boolean; reason?: string };
 function diagLine(di: Diag): string {
   const u = (di.url || '').replace(/^https?:\/\//, '').slice(0, 56);
   const a = di.authorizeFound ? (di.authorizeDisabled ? 'authorize:灰' : 'authorize:可点') : 'authorize:无';
-  return `🔎 ${u} | ${a} | pre=${di.preCount ?? '?'} | code=${di.hasCodeState ? '有' : '无'} | body=${di.bodyLen ?? '?'}`;
+  const tabs = di.tabs && di.tabs.length ? ` | tabs=[${di.tabs.join(' , ')}]` : '';
+  return `🔎 ${u} | ${a} | pre=${di.preCount ?? '?'} | code=${di.hasCodeState ? '有' : '无'} | body=${di.bodyLen ?? '?'}${tabs}`;
 }
 interface LoginDriver {
   navigate(url: string, tab?: Tab): Promise<void>;
@@ -100,6 +103,7 @@ interface LoginDriver {
   click(selector: string, tab?: Tab): Promise<boolean>;
   clickByText(pattern: string, tab?: Tab): Promise<boolean>;
   nudge(tab?: Tab): Promise<boolean>; // synthetic pointer move — wakes anti-bot-disabled buttons
+  authorize(tab?: Tab): Promise<AuthorizeResult>; // trusted CDP move+click on the Authorize button
   openUserMenu(tab?: Tab): Promise<boolean>; // claude.ai bottom-left avatar (no text → can't clickByText)
   closeTab(tab: Tab): Promise<void>;
   dispose(): Promise<void>;
@@ -145,6 +149,9 @@ class ExtensionDriver implements LoginDriver {
   }
   async nudge(tab: Tab = 'login') {
     return !!(await sendCommand('nudge', { tab }));
+  }
+  async authorize(tab: Tab = 'login') {
+    return ((await sendCommand('authorize', { tab })) || { ok: false }) as AuthorizeResult;
   }
   async openUserMenu(tab: Tab = 'login') {
     return !!(await sendCommand('openUserMenu', { tab }));
@@ -251,6 +258,20 @@ class PlaywrightDriver implements LoginDriver {
       return true;
     } catch {
       return false;
+    }
+  }
+  async authorize(tab: Tab = 'login'): Promise<AuthorizeResult> {
+    try {
+      const p = await this.page(tab);
+      await p.mouse.move(300, 300);
+      await p.mouse.move(520, 420);
+      await p
+        .getByRole('button', { name: /authorize|allow|授权|允许/i })
+        .first()
+        .click({ timeout: 5_000 });
+      return { ok: true, clicked: true };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : String(e) };
     }
   }
   async openUserMenu(tab: Tab = 'login') {
@@ -423,28 +444,42 @@ async function driveOAuth(d: LoginDriver, url: string, report: LoginReport, send
   // live (clickByText skips disabled matches, so it only fires when real). If it
   // stays stuck past the soft window, ask the human to wiggle the mouse / click —
   // and keep trying so a human mouse-move + our click still lands it.
-  await report({ line: '在授权页点 Authorize（按钮要先「醒」过来）…' });
+  await report({ line: '在授权页点 Authorize（trusted 鼠标）…' });
   let clicked = false;
-  let askedHuman = false;
-  const soft = Date.now() + 12_000;
-  const hard = Date.now() + HUMAN_WAIT_MS;
-  while (Date.now() < hard) {
+  // Trusted CDP move+click a few times — it moves a human path to the button
+  // (which also clears the "move first" gate), then presses for real.
+  for (let i = 0; i < 3 && !clicked; i++) {
     checkAbort();
     await pumpDiag();
-    if ((await codeStateOnPage(d)) !== null) break; // already authorized
-    await d.nudge();
-    if (await d.clickByText('authorize|allow|授权|允许')) {
+    if ((await codeStateOnPage(d)) !== null) {
       clicked = true;
-      await report({ line: '已点 Authorize…' });
       break;
     }
-    if (!askedHuman && Date.now() > soft) {
-      askedHuman = true;
-      await report({ status: 'needs-human', line: '请在授权页移动一下鼠标让 Authorize 变黑、点它（之后自动继续）。' });
+    const res = await d.authorize().catch((e) => ({ ok: false, reason: String(e) }) as AuthorizeResult);
+    console.log('[login][oauth] authorize →', JSON.stringify(res));
+    await report({
+      line: `Authorize 尝试：${res.clicked ? '已点' : '未点'}${res.wasDisabled ? '(按钮仍灰)' : ''}${res.reason ? ' ' + res.reason : ''}`,
+    });
+    if (res.clicked || res.gone) {
+      clicked = true;
+      break;
     }
-    await sleep(1_200);
+    await sleep(2_000);
   }
-  if (askedHuman && clicked) await report({ status: 'running', line: '✓ 已授权，继续…' });
+  if (!clicked) {
+    // Trusted CDP didn't land it — hand off to the human; keep polling for the code.
+    await report({ status: 'needs-human', line: '请在那台 Mac 上手动点一下 Authorize（按钮变黑后），之后自动继续。' });
+    const humanEnd = Date.now() + HUMAN_WAIT_MS;
+    while (Date.now() < humanEnd) {
+      checkAbort();
+      await pumpDiag();
+      if ((await codeStateOnPage(d)) !== null) {
+        await report({ status: 'running', line: '✓ 已授权，继续…' });
+        break;
+      }
+      await sleep(2_500);
+    }
+  }
 
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
