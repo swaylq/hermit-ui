@@ -83,6 +83,7 @@ interface LoginDriver {
   pressEnter(selector: string, tab?: Tab): Promise<boolean>;
   click(selector: string, tab?: Tab): Promise<boolean>;
   clickByText(pattern: string, tab?: Tab): Promise<boolean>;
+  nudge(tab?: Tab): Promise<boolean>; // synthetic pointer move — wakes anti-bot-disabled buttons
   openUserMenu(tab?: Tab): Promise<boolean>; // claude.ai bottom-left avatar (no text → can't clickByText)
   closeTab(tab: Tab): Promise<void>;
   dispose(): Promise<void>;
@@ -119,6 +120,9 @@ class ExtensionDriver implements LoginDriver {
   }
   async clickByText(pattern: string, tab: Tab = 'login') {
     return !!(await sendCommand('clickByText', { pattern, tab }));
+  }
+  async nudge(tab: Tab = 'login') {
+    return !!(await sendCommand('nudge', { tab }));
   }
   async openUserMenu(tab: Tab = 'login') {
     return !!(await sendCommand('openUserMenu', { tab }));
@@ -206,6 +210,16 @@ class PlaywrightDriver implements LoginDriver {
         .or(p.getByRole('menuitem', { name: re }))
         .first()
         .click({ timeout: 5_000 });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  async nudge(tab: Tab = 'login') {
+    try {
+      const p = await this.page(tab);
+      await p.mouse.move(300, 300);
+      await p.mouse.move(520, 420);
       return true;
     } catch {
       return false;
@@ -356,10 +370,33 @@ async function driveOAuth(d: LoginDriver, url: string, report: LoginReport, send
   await report({ line: '在浏览器里打开授权页…' });
   await d.navigate(url);
   await clearCloudflare(d, report, '授权页');
-  await until(d, report, async () => (await codeStateOnPage(d)) !== null || (await d.exists('button')), {
-    humanMsg: '请在 Chrome 的授权页点击 Authorize。',
-  });
-  await d.clickByText('authorize|allow|授权|允许').catch(() => false);
+
+  // claude.ai's Authorize button starts disabled until a pointer move (anti-bot),
+  // and a disabled button ignores clicks. Nudge the page, then click once it's
+  // live (clickByText skips disabled matches, so it only fires when real). If it
+  // stays stuck past the soft window, ask the human to wiggle the mouse / click —
+  // and keep trying so a human mouse-move + our click still lands it.
+  await report({ line: '在授权页点 Authorize（按钮要先「醒」过来）…' });
+  let clicked = false;
+  let askedHuman = false;
+  const soft = Date.now() + 12_000;
+  const hard = Date.now() + HUMAN_WAIT_MS;
+  while (Date.now() < hard) {
+    checkAbort();
+    if ((await codeStateOnPage(d)) !== null) break; // already authorized
+    await d.nudge();
+    if (await d.clickByText('authorize|allow|授权|允许')) {
+      clicked = true;
+      await report({ line: '已点 Authorize…' });
+      break;
+    }
+    if (!askedHuman && Date.now() > soft) {
+      askedHuman = true;
+      await report({ status: 'needs-human', line: '请在授权页移动一下鼠标让 Authorize 变黑、点它（之后自动继续）。' });
+    }
+    await sleep(1_200);
+  }
+  if (askedHuman && clicked) await report({ status: 'running', line: '✓ 已授权，继续…' });
 
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {

@@ -161,6 +161,8 @@ async function handle(op, args) {
       return await runInTab(which, domClick, [args.selector]);
     case 'clickByText':
       return await runInTab(which, domClickByText, [args.pattern]);
+    case 'nudge':
+      return await runInTab(which, domNudge, []);
     case 'openUserMenu':
       return await runInTab(which, domOpenUserMenu, []);
     case 'closeTab': {
@@ -225,6 +227,29 @@ function domClick(selector) {
   }
   return true;
 }
+// Dispatch synthetic pointer/mouse movement across the page — some pages (the
+// claude.ai OAuth Authorize button) stay disabled until the first pointer move.
+function domNudge() {
+  const w = window.innerWidth || 1200;
+  const h = window.innerHeight || 800;
+  const pts = [
+    [w * 0.4, h * 0.4],
+    [w * 0.55, h * 0.5],
+    [w * 0.5, h * 0.62],
+  ];
+  const targets = [document, document.body || document.documentElement, window];
+  for (const [clientX, clientY] of pts) {
+    for (const type of ['pointermove', 'mousemove']) {
+      const Ev = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+      for (const tgt of targets) {
+        try {
+          tgt.dispatchEvent(new Ev(type, { bubbles: true, cancelable: true, view: window, clientX, clientY }));
+        } catch {}
+      }
+    }
+  }
+  return true;
+}
 function domPressEnter(selector) {
   const el = document.querySelector(selector);
   if (!el) return false;
@@ -246,7 +271,9 @@ function domClickByText(pattern) {
   const els = Array.from(
     document.querySelectorAll('button, a, [role="button"], [role="menuitem"], input[type="submit"], input[type="button"]'),
   );
-  const hit = els.find((e) => re.test(((e.innerText || e.textContent || e.value || '') + '').trim()));
+  // Skip disabled matches (e.g. claude.ai's Authorize starts disabled until a
+  // pointer move) so the caller keeps retrying instead of "clicking" a dead button.
+  const hit = els.find((e) => !e.disabled && re.test(((e.innerText || e.textContent || e.value || '') + '').trim()));
   if (!hit) return false;
   const o = { bubbles: true, cancelable: true, view: window };
   for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
