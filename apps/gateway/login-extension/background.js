@@ -153,6 +153,8 @@ async function handle(op, args) {
       return await runInTab(which, domBodyText, []);
     case 'findCodeState':
       return await runInTab(which, domFindCodeState, []);
+    case 'diag':
+      return await runInTab(which, domDiag, []);
     case 'inputValues':
       return await runInTab(which, domInputValues, []);
     case 'fill':
@@ -210,6 +212,26 @@ function domFindCodeState() {
   }
   const m = (document.body ? document.body.innerText : '').match(re);
   return m ? m[0] : '';
+}
+// Snapshot of the current page for diagnostics (no secrets — code presence only).
+function domDiag() {
+  let authorize = null;
+  for (const b of document.querySelectorAll('button')) {
+    if (/^\s*(authorize|allow|授权|允许)\s*$/i.test((b.innerText || b.textContent || '').trim())) {
+      authorize = b;
+      break;
+    }
+  }
+  const body = document.body ? document.body.innerText : '';
+  return {
+    url: location.href,
+    title: document.title,
+    authorizeFound: !!authorize,
+    authorizeDisabled: authorize ? !!authorize.disabled : null,
+    preCount: document.querySelectorAll('pre, code').length,
+    bodyLen: body.length,
+    hasCodeState: /[A-Za-z0-9_-]{20,}#[A-Za-z0-9_-]{20,}/.test(body),
+  };
 }
 function domInputValues() {
   const out = [];

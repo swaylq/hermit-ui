@@ -72,6 +72,20 @@ function checkAbort(): void {
 
 // ── browser abstraction ────────────────────────────────────────────────────────
 type Tab = 'login' | 'mail';
+type Diag = {
+  url?: string;
+  title?: string;
+  authorizeFound?: boolean;
+  authorizeDisabled?: boolean | null;
+  preCount?: number;
+  bodyLen?: number;
+  hasCodeState?: boolean;
+};
+function diagLine(di: Diag): string {
+  const u = (di.url || '').replace(/^https?:\/\//, '').slice(0, 56);
+  const a = di.authorizeFound ? (di.authorizeDisabled ? 'authorize:灰' : 'authorize:可点') : 'authorize:无';
+  return `🔎 ${u} | ${a} | pre=${di.preCount ?? '?'} | code=${di.hasCodeState ? '有' : '无'} | body=${di.bodyLen ?? '?'}`;
+}
 interface LoginDriver {
   navigate(url: string, tab?: Tab): Promise<void>;
   currentUrl(tab?: Tab): Promise<string>;
@@ -80,6 +94,7 @@ interface LoginDriver {
   bodyText(tab?: Tab): Promise<string>;
   inputValues(tab?: Tab): Promise<string[]>;
   findCodeState(tab?: Tab): Promise<string>; // scrape the OAuth code#state in-page (pre/code first)
+  diag(tab?: Tab): Promise<Diag>; // page snapshot for logging (no secrets)
   fill(selector: string, value: string, tab?: Tab): Promise<boolean>;
   pressEnter(selector: string, tab?: Tab): Promise<boolean>;
   click(selector: string, tab?: Tab): Promise<boolean>;
@@ -112,6 +127,9 @@ class ExtensionDriver implements LoginDriver {
   }
   async findCodeState(tab: Tab = 'login') {
     return (await sendCommand<string>('findCodeState', { tab })) || '';
+  }
+  async diag(tab: Tab = 'login') {
+    return ((await sendCommand<Diag>('diag', { tab })) || {}) as Diag;
   }
   async fill(selector: string, value: string, tab: Tab = 'login') {
     return !!(await sendCommand('fill', { selector, value, tab }));
@@ -182,6 +200,9 @@ class PlaywrightDriver implements LoginDriver {
   }
   async findCodeState() {
     return ''; // Playwright path resolves code#state via bodyText/inputValues below
+  }
+  async diag(tab: Tab = 'login') {
+    return { url: await this.currentUrl(tab).catch(() => ''), title: await this.title(tab).catch(() => '') } as Diag;
   }
   async fill(selector: string, value: string, tab: Tab = 'login') {
     try {
@@ -386,6 +407,17 @@ async function driveOAuth(d: LoginDriver, url: string, report: LoginReport, send
   await d.navigate(url);
   await clearCloudflare(d, report, '授权页');
 
+  // Throttled page diagnostic → dashboard log + pm2 logs, so we can see exactly
+  // what the authorize/code page looks like at each poll.
+  let lastDiag = 0;
+  const pumpDiag = async () => {
+    if (Date.now() - lastDiag < 3_000) return;
+    lastDiag = Date.now();
+    const di = await d.diag().catch(() => ({}) as Diag);
+    console.log('[login][oauth]', diagLine(di));
+    await report({ line: diagLine(di) });
+  };
+
   // claude.ai's Authorize button starts disabled until a pointer move (anti-bot),
   // and a disabled button ignores clicks. Nudge the page, then click once it's
   // live (clickByText skips disabled matches, so it only fires when real). If it
@@ -398,6 +430,7 @@ async function driveOAuth(d: LoginDriver, url: string, report: LoginReport, send
   const hard = Date.now() + HUMAN_WAIT_MS;
   while (Date.now() < hard) {
     checkAbort();
+    await pumpDiag();
     if ((await codeStateOnPage(d)) !== null) break; // already authorized
     await d.nudge();
     if (await d.clickByText('authorize|allow|授权|允许')) {
@@ -413,12 +446,13 @@ async function driveOAuth(d: LoginDriver, url: string, report: LoginReport, send
   }
   if (askedHuman && clicked) await report({ status: 'running', line: '✓ 已授权，继续…' });
 
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     checkAbort();
+    await pumpDiag();
     const cs = await codeStateOnPage(d);
     if (cs) {
-      await report({ line: '回填授权码…' });
+      await report({ line: `回填授权码（已抓到 code#state, 长度 ${cs.length}）…` });
       sendCode(cs);
       return;
     }
