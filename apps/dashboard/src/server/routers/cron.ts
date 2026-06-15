@@ -77,11 +77,15 @@ export const cronRouter = router({
     return { ok: true };
   }),
 
-  // Manual fire — set nextFire to the far past so the next gateway tick runs it.
+  // Manual fire — set nextFire to NOW so the next gateway cron tick (≤15s) runs
+  // it. (Was new Date(0): that epoch sentinel rendered as "1970/1/1" in the UI's
+  // "下次" line for the ≤15s window before the gateway fires and recomputes
+  // nextFire = now + interval. "now" is ≤ now so it still fires next tick, but
+  // reads sensibly if shown — and the UI now labels a due nextFire "即将运行…".)
   runNow: machineProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
     const existing = await prisma.cron.findUnique({ where: { id: input.id } });
     if (!existing || existing.machineId !== ctx.machine.id) throw new Error('not found');
-    await prisma.cron.update({ where: { id: input.id }, data: { nextFire: new Date(0) } });
+    await prisma.cron.update({ where: { id: input.id }, data: { nextFire: new Date() } });
     return { ok: true };
   }),
 

@@ -269,6 +269,12 @@ function CronDetail({ id }: { id: string }) {
 
   const cron = q.data?.cron;
   const runs = q.data?.runs ?? [];
+  // A run is "due" when nextFire is at/just-before now — true for the ≤15s window
+  // after Run now (runNow sets nextFire=now) and for any overdue job. Drives the
+  // "下次" label + a queued hint so the UI never shows a stale/past timestamp or
+  // the old 1970 epoch sentinel there.
+  const nextMs = cron?.nextFire ? new Date(cron.nextFire).getTime() : null;
+  const queued = nextMs !== null && nextMs <= Date.now();
 
   function startEdit() {
     if (!cron) return;
@@ -388,7 +394,7 @@ function CronDetail({ id }: { id: string }) {
                   </div>
                   <div className="flex gap-2">
                     <span className="text-muted-foreground w-14 shrink-0">下次</span>
-                    <span className="tabular-nums">{cron.nextFire ? new Date(cron.nextFire).toLocaleString() : '—'}</span>
+                    <span className="tabular-nums">{queued ? '即将运行…' : cron.nextFire ? new Date(cron.nextFire).toLocaleString() : '—'}</span>
                   </div>
                   <div>
                     <div className="text-muted-foreground mb-1">prompt</div>
@@ -403,6 +409,9 @@ function CronDetail({ id }: { id: string }) {
             <div className="px-1 pb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
               Runs · {runs.length}
             </div>
+            {queued && (
+              <p className="px-1 pb-1.5 text-xs text-amber-600">▶ 已触发，将在 ≤15s 内开始并出现在下方</p>
+            )}
             {runs.length === 0 ? (
               <p className="px-1 text-xs text-muted-foreground">No runs yet — fires on schedule, or hit “Run now”.</p>
             ) : (
