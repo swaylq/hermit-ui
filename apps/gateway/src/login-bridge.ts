@@ -24,6 +24,25 @@ let ext: WebSocket | null = null; // the one connected extension (last wins)
 let seq = 0;
 const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
 
+// Extension-initiated login: the popup can paste an account string and trigger
+// the flow right here (no dashboard round-trip; the `sk` is dropped in the popup).
+// The gateway registers a handler; progress streams back to the popup.
+export type ExtLoginCreds = { email: string; mailToken: string; emailPassword?: string };
+export type ExtLoginReport = (u: { status?: string; line?: string }) => void;
+let loginHandler: ((creds: ExtLoginCreds, report: ExtLoginReport) => Promise<void>) | null = null;
+export function onExtensionLogin(h: (creds: ExtLoginCreds, report: ExtLoginReport) => Promise<void>): void {
+  loginHandler = h;
+}
+function sendToExtension(obj: unknown): void {
+  if (ext?.readyState === WebSocket.OPEN) {
+    try {
+      ext.send(JSON.stringify(obj));
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 function ensureToken(): { port: number; token: string } {
   try {
     const j = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
@@ -95,6 +114,22 @@ export function startLoginBridge(): void {
       } catch {
         return;
       }
+      // Extension-initiated login (paste-in-popup).
+      if (msg?.kind === 'login') {
+        const report: ExtLoginReport = (u) => sendToExtension({ kind: 'progress', status: u.status, line: u.line });
+        if (!loginHandler) {
+          report({ status: 'error', line: '网关未就绪（loginHandler 未注册）' });
+          return;
+        }
+        const creds: ExtLoginCreds = {
+          email: String(msg.email || ''),
+          mailToken: String(msg.mailToken || ''),
+          emailPassword: msg.emailPassword ? String(msg.emailPassword) : undefined,
+        };
+        loginHandler(creds, report).catch((e) => report({ status: 'error', line: String(e?.message || e) }));
+        return;
+      }
+      // Otherwise: a reply to a command we sent.
       const p = pending.get(msg?.id);
       if (!p) return;
       pending.delete(msg.id);

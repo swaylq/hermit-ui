@@ -30,6 +30,7 @@ import { chatTick, chatCancelTick, chatRestartTick, shutdownChatRunner } from '.
 import { agentRequestTick } from './agent-lifecycle';
 import { machineRequestTick, loginCancelTick } from './machine-requests';
 import { startLoginBridge } from './login-bridge';
+import { startExtensionLoginListener } from './claude-login';
 import { fileTransferTick } from './file-station';
 import { pushGlobalSkills, globalSkillRequestTick } from './global-skills';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
@@ -153,6 +154,8 @@ startControlChannel();
 // Localhost WS server the Chrome login extension connects to (real-browser
 // driver for the account-login flow). No-op until the extension connects.
 startLoginBridge();
+// Let the extension popup paste an account string and self-drive the login.
+startExtensionLoginListener();
 
 loop(pushAgents, 5 * 60_000);
 loop(pushSessionSnapshots, 8_000);

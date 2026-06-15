@@ -9,6 +9,7 @@ let ws = null;
 let lastClose = null; // { code, reason } of the last drop — drives a useful status
 let tabs = { login: null, mail: null }; // 171mail runs in its own tab so the live claude.ai page survives
 let cfg = { url: 'ws://127.0.0.1:47615', token: '' };
+let loginState = { status: 'idle', lines: [] }; // popup-triggered login progress
 
 async function loadCfg() {
   const s = await chrome.storage.local.get(['url', 'token']);
@@ -68,6 +69,15 @@ function connect() {
     try {
       msg = JSON.parse(ev.data);
     } catch {
+      return;
+    }
+    // Progress from a popup-triggered login.
+    if (msg && msg.kind === 'progress') {
+      if (msg.status) loginState.status = msg.status;
+      if (msg.line) {
+        loginState.lines.push(msg.line);
+        if (loginState.lines.length > 16) loginState.lines.shift();
+      }
       return;
     }
     const { id, op, args } = msg || {};
@@ -576,6 +586,12 @@ chrome.runtime.onMessage.addListener((m, _sender, reply) => {
     }
     loadCfg().then(connect);
     reply('ok');
+  } else if (m === 'getLoginState') {
+    reply(loginState);
+  } else if (m && m.type === 'login') {
+    loginState = { status: 'running', lines: ['提交账号到网关…'] };
+    send({ kind: 'login', email: m.email, mailToken: m.mailToken, emailPassword: m.emailPassword });
+    reply(wsState() === 'connected' ? 'ok' : 'not-connected');
   }
   return true;
 });

@@ -21,7 +21,7 @@ import * as fs from 'node:fs';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 import type { BrowserContext, Page } from 'rebrowser-playwright-core';
 import { execCapture } from './exec';
-import { isExtensionConnected, sendCommand } from './login-bridge';
+import { isExtensionConnected, sendCommand, onExtensionLogin } from './login-bridge';
 
 type IPty = ReturnType<typeof pty.spawn>;
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
@@ -63,6 +63,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // ── manual reset / abort ──────────────────────────────────────────────────────
 let activeAbort: AbortController | null = null;
+let running = false; // one login at a time (dashboard- or extension-triggered)
 export function abortActiveLogin(): void {
   activeAbort?.abort();
 }
@@ -652,6 +653,8 @@ async function buildDriver(report: LoginReport): Promise<LoginDriver> {
 }
 
 export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLoginResult> {
+  if (running) return { ok: false, summary: '已有登录在进行', error: '已有一个登录流程在进行中，请稍候再试' };
+  running = true;
   const { email, mailToken, report } = input;
   const claudeBin = input.claudeBin ?? 'claude';
 
@@ -721,7 +724,27 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
   } catch (e) {
     return { ok: false, summary: '登录失败', error: e instanceof Error ? e.message : String(e) };
   } finally {
+    running = false;
     if (activeAbort === abort) activeAbort = null;
     await driver?.dispose().catch(() => {});
   }
+}
+
+// Let the extension popup paste an account string and self-drive the login —
+// progress streams straight back to the popup. (The `sk` is dropped in the popup.)
+export function startExtensionLoginListener(): void {
+  onExtensionLogin(async (creds, report) => {
+    if (!creds.email || !creds.mailToken) {
+      report({ status: 'error', line: '账号格式不对（需要 邮箱 + 接码令牌）' });
+      return;
+    }
+    report({ status: 'running', line: '收到账号，开始登录…' });
+    const res = await runClaudeLogin({
+      email: creds.email,
+      mailToken: creds.mailToken,
+      emailPassword: creds.emailPassword,
+      report,
+    });
+    report({ status: res.ok ? 'done' : 'error', line: res.ok ? `✓ ${res.summary}` : `登录失败：${res.error || res.summary}` });
+  });
 }
