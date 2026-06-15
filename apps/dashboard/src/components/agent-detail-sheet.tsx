@@ -22,7 +22,7 @@ import { Overlay } from './overlay';
 import { SkillFilesModal } from './skill-files-modal';
 import { type FileItem as SkillFileItem } from './file-detail';
 import { sessionStatusView } from '@/lib/session-status';
-import { useUnread } from '@/lib/session-read';
+import { isSessionUnread } from '@/lib/session-read';
 import { removeAgentSkill } from '@/lib/optimistic-skills';
 
 type SessionRow = inferRouterOutputs<AppRouter>['chat']['listSessions'][number];
@@ -152,7 +152,6 @@ function SessionsSection({
       utils.chat.listSessions.invalidate({ agentName });
     },
   });
-  const isUnread = useUnread();
 
   return (
     <section>
@@ -171,7 +170,7 @@ function SessionsSection({
           {sessions.map((s) => {
             const pending = !!s.restartRequestedAt;
             const disabled = !!s.closedAt || pending || requestRestart.isPending;
-            const status = sessionStatusView(s, { unread: isUnread(s.id, s.lastMessageAt) });
+            const status = sessionStatusView(s, { unread: isSessionUnread(s) });
             return (
               <li key={s.id}>
                 <Link
@@ -282,6 +281,14 @@ function CronsSection({ agentName }: { agentName: string }) {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 text-sm">
                         <span className="truncate text-foreground/90">{c.title || c.prompt}</span>
+                        {c.unreadCount > 0 && (
+                          <span
+                            className="shrink-0 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-mono tabular-nums leading-none"
+                            title={`${c.unreadCount} 条未读执行`}
+                          >
+                            {c.unreadCount}
+                          </span>
+                        )}
                         {!c.enabled && (
                           <Badge variant="outline" className="text-[9px] py-0 h-4">off</Badge>
                         )}

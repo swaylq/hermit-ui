@@ -60,6 +60,7 @@ export const chatRouter = router({
           claudeSessionId: true,
           startedAt: true,
           lastMessageAt: true,
+          lastReadAt: true,
           closedAt: true,
           restartRequestedAt: true,
           pid: true,
@@ -89,6 +90,21 @@ export const chatRouter = router({
         const { messages: _drop, ...rest } = s;
         return { ...rest, preview };
       });
+    }),
+
+  // Mark a session read = now. Was browser localStorage (per-device); now a DB
+  // stamp so the red "unread" dot clears on every device (the chat pane fires
+  // this on open + on each new message while open; other devices reconcile on
+  // their next listSessions poll). Idempotent; silently no-ops for other
+  // machines' sessions so a stale tab can't 500.
+  markRead: machineProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const res = await prisma.chatSession.updateMany({
+        where: { id: input.sessionId, machineId: ctx.machine.id },
+        data: { lastReadAt: new Date() },
+      });
+      return { ok: res.count > 0 };
     }),
 
   createSession: machineProcedure

@@ -7,6 +7,19 @@ import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 
+// Unread finished runs per cron (status not 'running', readAt null) → the red
+// roll-up dot on the sidebar / agent-detail cron rows. One grouped query for the
+// whole list; empty in → empty map (groupBy on an empty `in` is wasteful).
+async function unreadCountByCron(cronIds: string[]): Promise<Map<string, number>> {
+  if (cronIds.length === 0) return new Map();
+  const grouped = await prisma.cronRun.groupBy({
+    by: ['cronId'],
+    where: { cronId: { in: cronIds }, readAt: null, status: { not: 'running' } },
+    _count: { _all: true },
+  });
+  return new Map(grouped.map((g) => [g.cronId, g._count._all]));
+}
+
 const CronInput = z.object({
   agentName: z.string().min(1).max(64),
   directory: z.string().max(1024).optional(),
@@ -18,12 +31,15 @@ const CronInput = z.object({
 });
 
 export const cronRouter = router({
-  // All crons for the machine — the /cron page sidebar.
+  // All crons for the machine — the /cron page sidebar. `unreadCount` = finished
+  // runs the user hasn't read yet (drives the red roll-up dot on the sidebar row).
   list: machineProcedure.query(async ({ ctx }) => {
-    return prisma.cron.findMany({
+    const crons = await prisma.cron.findMany({
       where: { machineId: ctx.machine.id },
       orderBy: [{ agentName: 'asc' }, { createdAt: 'asc' }],
     });
+    const unread = await unreadCountByCron(crons.map((c) => c.id));
+    return crons.map((c) => ({ ...c, unreadCount: unread.get(c.id) ?? 0 }));
   }),
 
   // All crons for one agent — the agent-detail panel's scheduled-tasks list.
@@ -32,7 +48,7 @@ export const cronRouter = router({
   listForAgent: machineProcedure
     .input(z.object({ agentName: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
-      return prisma.cron.findMany({
+      const crons = await prisma.cron.findMany({
         where: { machineId: ctx.machine.id, agentName: input.agentName },
         orderBy: { createdAt: 'asc' },
         select: {
@@ -40,6 +56,8 @@ export const cronRouter = router({
           jitterSec: true, enabled: true, lastStatus: true, lastFire: true, nextFire: true,
         },
       });
+      const unread = await unreadCountByCron(crons.map((c) => c.id));
+      return crons.map((c) => ({ ...c, unreadCount: unread.get(c.id) ?? 0 }));
     }),
 
   // One cron + its recent runs — the detail view (read-only run log).
@@ -53,6 +71,33 @@ export const cronRouter = router({
     });
     return { cron, runs };
   }),
+
+  // Mark one run read = now (clears its red dot). Reading = expanding the run row
+  // on the detail page. Guarded: the run's cron must belong to this machine.
+  markRunRead: machineProcedure
+    .input(z.object({ runId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const run = await prisma.cronRun.findUnique({
+        where: { id: input.runId },
+        select: { cron: { select: { machineId: true } } },
+      });
+      if (!run || run.cron.machineId !== ctx.machine.id) throw new Error('not found');
+      await prisma.cronRun.update({ where: { id: input.runId }, data: { readAt: new Date() } });
+      return { ok: true };
+    }),
+
+  // Mark every unread run of a cron read — the detail page's "全部已读" button.
+  markAllRead: machineProcedure
+    .input(z.object({ cronId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const cron = await prisma.cron.findUnique({ where: { id: input.cronId }, select: { machineId: true } });
+      if (!cron || cron.machineId !== ctx.machine.id) throw new Error('not found');
+      const res = await prisma.cronRun.updateMany({
+        where: { cronId: input.cronId, readAt: null },
+        data: { readAt: new Date() },
+      });
+      return { ok: true, count: res.count };
+    }),
 
   create: machineProcedure.input(CronInput).mutation(async ({ ctx, input }) => {
     // nextFire = now ⇒ first run on the next gateway tick.

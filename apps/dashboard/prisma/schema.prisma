@@ -182,6 +182,11 @@ model ChatSession {
   claudeSessionId   String? // populated by gateway once SDK boots
   startedAt         DateTime  @default(now())
   lastMessageAt     DateTime?
+  // Per-session "last read" stamp — when the user last viewed this session in
+  // chat. Drives the red "unread" dot (unread = lastMessageAt > lastReadAt).
+  // Server-side (was client-only localStorage) so read-state syncs across every
+  // device. Stamped by chat.markRead from the open chat pane.
+  lastReadAt        DateTime?
   closedAt          DateTime? // null = active, gateway listens; non-null = archived
   // User-requested stop signal for the in-flight turn. Set by chat.cancelTurn,
   // cleared by gateway via chat.ackCancel once the child process is killed.
@@ -370,6 +375,10 @@ model CronRun {
   status     String // running | ok | fail
   output     String?   @db.Text // tail of the run's claude output
   durationMs Int?
+  // null = unread → red dot once the run is finished (status ok|fail). A running
+  // run is never "unread" (it's amber). Set by cron.markRunRead when the user
+  // expands the run, or cron.markAllRead. DB-backed so it syncs across devices.
+  readAt     DateTime?
 
   @@index([cronId, firedAt])
 }

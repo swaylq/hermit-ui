@@ -17,7 +17,7 @@ import { Markdown } from '@/components/markdown';
 import { ImageLightbox } from '@/components/ui/image-lightbox';
 import { CtxBar } from '@/components/ctx-bar';
 import { sessionStatusView } from '@/lib/session-status';
-import { markSessionRead } from '@/lib/session-read';
+import { useMarkSessionRead } from '@/lib/session-read';
 import { markSessionWorking } from '@/lib/session-live';
 import { TimeAgo } from '@/components/time-ago';
 import { getActiveKey } from '@/app/providers';
@@ -1036,10 +1036,11 @@ function SessionPane({ sessionId }: { sessionId: string }) {
 
   // Viewing a session = reading it. Stamp it read on open and on every new
   // message that lands while open, so it never shows the red "unread" dot to the
-  // sidebar / agent-detail views once we've seen the latest.
+  // sidebar / agent-detail views (on any device) once we've seen the latest.
+  const markRead = useMarkSessionRead();
   useEffect(() => {
-    markSessionRead(sessionId);
-  }, [sessionId, messages.data?.length, isInFlight]);
+    markRead(sessionId);
+  }, [markRead, sessionId, messages.data?.length, isInFlight]);
 
   // Exited sessions stay usable: sending `--resume`s the dead pane (the gateway
   // respawns on delivery; the backend `send` only blocks closed sessions), so we

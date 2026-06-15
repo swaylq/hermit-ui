@@ -13,7 +13,7 @@ import { relTime } from '@/lib/format';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { sessionStatusView } from '@/lib/session-status';
-import { useUnread } from '@/lib/session-read';
+import { isSessionUnread } from '@/lib/session-read';
 import { useLiveWorking } from '@/lib/session-live';
 import { usePins, togglePin } from '@/lib/session-pins';
 import { ContextMenu } from '@/components/ui/context-menu';
@@ -719,6 +719,14 @@ function RecentCrons() {
                           <span className={cn('flex-1 truncate text-[13px]', active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85')}>
                             {c.title || c.prompt}
                           </span>
+                          {c.unreadCount > 0 && (
+                            <span
+                              className="shrink-0 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-mono tabular-nums leading-none"
+                              title={`${c.unreadCount} 条未读执行`}
+                            >
+                              {c.unreadCount}
+                            </span>
+                          )}
                           <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
                             {relTime(c.lastFire ?? c.createdAt)}
                           </span>
@@ -829,7 +837,6 @@ function RecentSessions() {
   const activeId = search.get('session');
   const sessions = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
   const utils = trpc.useUtils();
-  const isUnread = useUnread();
   const liveWorkingSince = useLiveWorking();
   const pins = usePins();
   // Custom right-click menu: viewport coords + the session it targets, or null.
@@ -980,7 +987,7 @@ function RecentSessions() {
               const optimisticWorking =
                 liveAt != null && (!s.snapshotAt || new Date(s.snapshotAt).getTime() < liveAt);
               const status = sessionStatusView(s, {
-                unread: isUnread(s.id, s.lastMessageAt),
+                unread: isSessionUnread(s),
                 liveWorking: optimisticWorking,
               });
               return (

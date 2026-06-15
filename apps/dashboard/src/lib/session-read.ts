@@ -1,54 +1,68 @@
 'use client';
 
-// Per-session "last read" tracking, client-side only (localStorage) — no DB
-// column, no gateway round-trip. A session counts as "read" while the user has
-// it open in the chat view; everything else compares the session's
-// `lastMessageAt` against the stored read stamp to decide if there's finished
-// work the user hasn't seen yet (the red "unread" dot — see session-status.ts).
+// Per-session read-state → the red "unread" dot. Read-state lives in the DB
+// (ChatSession.lastReadAt), NOT browser localStorage, so the dot is identical on
+// every device: marking a session read here clears it everywhere. The open chat
+// pane stamps read via useMarkSessionRead(); the sidebar / agent-detail compute
+// `unread = lastMessageAt > lastReadAt` from the same listSessions payload and
+// reconcile on their 5s poll. See session-status.ts for how it renders.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useRef } from 'react';
+import { trpc } from '@/lib/trpc';
 
-const key = (id: string) => `hermit:read:${id}`;
+type ReadLike = { lastMessageAt?: Date | string | null; lastReadAt?: Date | string | null };
 
-// Stamp a session read = now. Called by the open chat pane on view + on each new
-// message, so the session it's showing never lingers as "unread". Fires a
-// `hermit:read` event so other mounted views (sidebar / detail sheet) drop the
-// red dot immediately instead of waiting for their next refetch.
-export function markSessionRead(sessionId: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(key(sessionId), String(Date.now()));
-    window.dispatchEvent(new Event('hermit:read'));
-  } catch {
-    // private mode / quota — non-fatal; the dot just won't clear.
-  }
+// A session is unread when its newest message is newer than the last time the
+// user read it. No message → never unread. Never read (null) but has a message →
+// unread.
+export function isSessionUnread(s: ReadLike | null | undefined): boolean {
+  if (!s?.lastMessageAt) return false;
+  const msg = new Date(s.lastMessageAt).getTime();
+  const read = s.lastReadAt ? new Date(s.lastReadAt).getTime() : 0;
+  return msg > read;
 }
 
-/**
- * Returns `isUnread(sessionId, lastMessageAt)`. Re-renders the caller when any
- * session is marked read (same tab via `hermit:read`, other tabs via `storage`).
- * Returns false until mounted so the dot's colour can't cause an SSR/hydration
- * mismatch.
- */
-export function useUnread(): (sessionId: string, lastMessageAt: Date | string | null | undefined) => boolean {
-  const [mounted, setMounted] = useState(false);
-  const [, force] = useState(0);
-  useEffect(() => {
-    setMounted(true);
-    const bump = () => force((n) => n + 1);
-    window.addEventListener('hermit:read', bump);
-    window.addEventListener('storage', bump);
-    return () => {
-      window.removeEventListener('hermit:read', bump);
-      window.removeEventListener('storage', bump);
-    };
-  }, []);
-  return useCallback(
-    (sessionId, lastMessageAt) => {
-      if (!mounted || !lastMessageAt) return false;
-      const read = Number(localStorage.getItem(key(sessionId)) || 0);
-      return new Date(lastMessageAt).getTime() > read;
+// Returns a stable `markRead(sessionId)`. Optimistically stamps `lastReadAt` in
+// the sidebar's listSessions cache so the dot drops this frame on this device,
+// then debounces the DB write (a streaming turn fires one call per content block;
+// collapse them into one write while still persisting the final read-state for
+// other devices, which reconcile on their next poll).
+export function useMarkSessionRead(): (sessionId: string) => void {
+  const utils = trpc.useUtils();
+  const patch = useCallback(
+    (sessionId: string) => {
+      utils.chat.listSessions.setData({}, (old) =>
+        old?.map((s) => (s.id === sessionId ? { ...s, lastReadAt: new Date() } : s)),
+      );
     },
-    [mounted],
+    [utils],
+  );
+  // `mutate` is referentially stable across renders (react-query memoizes it), so
+  // the returned `markRead` stays stable too — safe to list in an effect's deps.
+  const { mutate } = trpc.chat.markRead.useMutation({
+    // Re-apply after cancelling any in-flight poll so a refetch landing during the
+    // debounce window can't momentarily flash the dot back on.
+    onMutate: async ({ sessionId }) => {
+      await utils.chat.listSessions.cancel();
+      patch(sessionId);
+    },
+  });
+  const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  return useCallback(
+    (sessionId: string) => {
+      if (!sessionId) return;
+      patch(sessionId); // instant — don't wait for the debounce
+      const existing = timers.current.get(sessionId);
+      if (existing) clearTimeout(existing);
+      timers.current.set(
+        sessionId,
+        setTimeout(() => {
+          timers.current.delete(sessionId);
+          mutate({ sessionId });
+        }, 500),
+      );
+    },
+    [patch, mutate],
   );
 }

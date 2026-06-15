@@ -261,6 +261,27 @@ function CronDetail({ id }: { id: string }) {
     onSuccess: () => { utils.cron.list.invalidate(); router.replace('/cron'); },
   });
   const runNow = trpc.cron.runNow.useMutation({ onSuccess: () => utils.cron.get.invalidate({ id }) });
+  // Reading a run = expanding it. Optimistically clear its readAt in the detail
+  // cache so the red dot drops this frame; invalidate the sidebar list so its
+  // roll-up dot updates. Other devices reconcile on their 5s poll.
+  const markRunRead = trpc.cron.markRunRead.useMutation({
+    onMutate: async ({ runId }) => {
+      await utils.cron.get.cancel({ id });
+      utils.cron.get.setData({ id }, (old) =>
+        old ? { ...old, runs: old.runs.map((r) => (r.id === runId ? { ...r, readAt: new Date() } : r)) } : old,
+      );
+    },
+    onSettled: () => utils.cron.list.invalidate(),
+  });
+  const markAllRead = trpc.cron.markAllRead.useMutation({
+    onMutate: async () => {
+      await utils.cron.get.cancel({ id });
+      utils.cron.get.setData({ id }, (old) =>
+        old ? { ...old, runs: old.runs.map((r) => ({ ...r, readAt: r.readAt ?? new Date() })) } : old,
+      );
+    },
+    onSettled: () => utils.cron.list.invalidate(),
+  });
 
   const [editing, setEditing] = useState(false);
   const [draftPrompt, setDraftPrompt] = useState('');
@@ -269,6 +290,9 @@ function CronDetail({ id }: { id: string }) {
 
   const cron = q.data?.cron;
   const runs = q.data?.runs ?? [];
+  // Unread = a finished run (ok|fail) the user hasn't expanded yet. Running runs
+  // are never "unread" — they're still amber.
+  const unreadRuns = runs.filter((r) => !r.readAt && r.status !== 'running').length;
   // A run is "due" when nextFire is at/just-before now — true for the ≤15s window
   // after Run now (runNow sets nextFire=now) and for any overdue job. Drives the
   // "下次" label + a queued hint so the UI never shows a stale/past timestamp or
@@ -406,8 +430,21 @@ function CronDetail({ id }: { id: string }) {
           </section>
 
           <section>
-            <div className="px-1 pb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Runs · {runs.length}
+            <div className="px-1 pb-1.5 flex items-center justify-between gap-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Runs · {runs.length}
+                {unreadRuns > 0 && <span className="ml-1.5 normal-case text-rose-500">· {unreadRuns} 未读</span>}
+              </span>
+              {unreadRuns > 0 && (
+                <button
+                  type="button"
+                  onClick={() => markAllRead.mutate({ cronId: id })}
+                  disabled={markAllRead.isPending}
+                  className="text-[11px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                >
+                  全部已读
+                </button>
+              )}
             </div>
             {queued && (
               <p className="px-1 pb-1.5 text-xs text-amber-600">▶ 已触发，将在 ≤15s 内开始并出现在下方</p>
@@ -417,7 +454,7 @@ function CronDetail({ id }: { id: string }) {
             ) : (
               <ul className="space-y-1">
                 {runs.map((r) => (
-                  <CronRunRow key={r.id} run={r} />
+                  <CronRunRow key={r.id} run={r} onRead={() => markRunRead.mutate({ runId: r.id })} />
                 ))}
               </ul>
             )}
@@ -430,13 +467,26 @@ function CronDetail({ id }: { id: string }) {
 
 function CronRunRow({
   run,
+  onRead,
 }: {
-  run: { id: string; firedAt: Date | string; status: string; output: string | null; durationMs: number | null };
+  run: { id: string; firedAt: Date | string; status: string; output: string | null; durationMs: number | null; readAt: Date | string | null };
+  onRead: () => void;
 }) {
+  // Unread = finished run not yet expanded. A transparent dot keeps the row
+  // height/alignment identical whether read or unread.
+  const unread = !run.readAt && run.status !== 'running';
   return (
     <li>
-      <details className="group rounded-md border border-border">
+      <details
+        className="group rounded-md border border-border"
+        onToggle={(e) => { if (e.currentTarget.open && unread) onRead(); }}
+      >
         <summary className="cursor-pointer list-none flex items-center gap-2 px-2.5 h-9 text-[12px]">
+          <span
+            className={cn('h-1.5 w-1.5 rounded-full shrink-0', unread ? 'bg-rose-500' : 'bg-transparent')}
+            aria-hidden="true"
+            title={unread ? '未读' : undefined}
+          />
           <CronStatusBadge status={run.status} enabled />
           <span className="tabular-nums text-muted-foreground">{relTime(run.firedAt)}</span>
           {run.durationMs != null && <span className="tabular-nums text-muted-foreground/60">{fmtMs(run.durationMs)}</span>}
