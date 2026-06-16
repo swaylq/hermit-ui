@@ -10,7 +10,6 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
-import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { SettingsTabs } from '@/components/settings-tabs';
 import { FileList, type FileItem } from '@/components/file-detail';
 import { PublishToMarketButton } from '@/components/publish-to-market-button';
@@ -63,7 +62,6 @@ function SkillsListView({ skills, loading }: {
   return (
     <>
       <div className="px-4 py-2.5 flex items-center gap-2 shrink-0">
-        <SidebarMobileToggle />
         <Button size="sm" variant="ghost" className="ml-auto gap-1 text-muted-foreground shrink-0" onClick={() => setInstallOpen(true)} title="install a skill from the market">
           <Download className="size-3.5" /> Install
         </Button>
@@ -116,7 +114,6 @@ function NewSkillPane() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <header className="border-b border-border px-4 h-12 flex items-center gap-2 shrink-0">
-        <SidebarMobileToggle />
         <span className="text-sm font-semibold text-foreground">New skill</span>
       </header>
       <ScrollArea className="flex-1 min-h-0 bg-background">
@@ -228,7 +225,6 @@ function SkillDetail({ name }: { name: string }) {
     return (
       <>
         <header className="border-b border-border px-4 h-12 flex items-center gap-2 shrink-0">
-          <SidebarMobileToggle />
           <span className="text-sm font-semibold">Skills</span>
         </header>
         <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">Skill not found.</div>
@@ -261,7 +257,6 @@ function SkillDetail({ name }: { name: string }) {
     <>
       <header className="border-b border-border px-4 h-12 flex items-center justify-between gap-3 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          <SidebarMobileToggle />
           <Link href="/skills" title="back to skills" aria-label="back to skills" className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer shrink-0">
             <ArrowLeft className="h-4 w-4" />
           </Link>

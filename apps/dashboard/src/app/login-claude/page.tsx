@@ -7,7 +7,6 @@ import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { SettingsTabs } from '@/components/settings-tabs';
 
 // Statuses that mean "still working" — poll while in one of them, idle otherwise.
@@ -110,9 +109,6 @@ export default function LoginClaudePage() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="login" />
-      <div className="lg:hidden px-3 py-2 shrink-0">
-        <SidebarMobileToggle />
-      </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 space-y-4">
