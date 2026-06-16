@@ -6,6 +6,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { Button } from '@/components/ui/button';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { getActiveKey } from '@/lib/keyring';
 import { type FileItem } from '@/components/file-detail';
 import { SkillDiff } from '@/components/skill-diff';
@@ -30,18 +31,19 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
 
   const [downloading, setDownloading] = useState(false);
   const [dlError, setDlError] = useState<string | null>(null);
-  // Inline group editor — set/clear a skill's group right here so existing skills
-  // can be grouped without re-publishing. groupDraft null = not editing (show the
-  // saved category); saves on blur / Enter.
+  // Inline group editor — set/clear/create a skill's group right here so existing
+  // skills can be grouped without re-publishing. A Select dropdown (matches the
+  // market filter) lists existing groups + 未分组 (clear) + ＋ 新建分组…; picking
+  // "new" flips `newGroup` to a string and shows a text input to name it.
   const utils = trpc.useUtils();
-  const [groupDraft, setGroupDraft] = useState<string | null>(null);
+  const [newGroup, setNewGroup] = useState<string | null>(null);
   const allSkills = trpc.market.listSkills.useQuery({});
   const groupOptions = [...new Set((allSkills.data ?? []).map((s) => s.category).filter((c): c is string => !!c))].sort();
   const setCat = trpc.market.setSkillCategory.useMutation({
     onSuccess: () => {
       utils.market.getSkill.invalidate({ slug });
       utils.market.listSkills.invalidate();
-      setGroupDraft(null);
+      setNewGroup(null);
     },
   });
   // Download the selected version as a .zip. A plain <a download> can't carry
@@ -103,20 +105,41 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
           {skill.description && <p className="text-sm text-muted-foreground">{skill.description}</p>}
           <div className="flex items-center gap-2 text-xs">
             <span className="shrink-0 text-muted-foreground/70">分组 Group</span>
-            <input
-              value={groupDraft ?? skill.category ?? ''}
-              onChange={(e) => setGroupDraft(e.target.value)}
-              onBlur={() => {
-                const next = (groupDraft ?? '').trim();
-                if (groupDraft != null && next !== (skill.category ?? '')) setCat.mutate({ slug, category: next || null });
-                else setGroupDraft(null);
-              }}
-              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-              list="market-skill-group-edit"
-              placeholder="未分组 — 输入组名后回车保存"
-              className="h-7 min-w-0 flex-1 rounded border border-border bg-background px-2 outline-none transition-colors focus:border-foreground/30"
-            />
-            <datalist id="market-skill-group-edit">{groupOptions.map((g) => <option key={g} value={g} />)}</datalist>
+            {newGroup === null ? (
+              <Select
+                value={skill.category ?? ''}
+                onValueChange={(v) => {
+                  if (v == null) return;
+                  if (v === '__new__') { setNewGroup(''); return; }
+                  if ((v || null) !== (skill.category ?? null)) setCat.mutate({ slug, category: v || null });
+                }}
+                modal={false}
+              >
+                <SelectTrigger aria-label="设置分组" className="h-7 w-auto min-w-[8rem] font-mono">
+                  <SelectValue>{(v: string | null) => (v ? v : '未分组')}</SelectValue>
+                </SelectTrigger>
+                <SelectContent className="font-mono">
+                  <SelectItem value="">未分组</SelectItem>
+                  {groupOptions.map((g) => (
+                    <SelectItem key={g} value={g}>{g}</SelectItem>
+                  ))}
+                  <SelectItem value="__new__">＋ 新建分组…</SelectItem>
+                </SelectContent>
+              </Select>
+            ) : (
+              <input
+                autoFocus
+                value={newGroup}
+                onChange={(e) => setNewGroup(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { const n = newGroup.trim(); if (n) setCat.mutate({ slug, category: n }); else setNewGroup(null); }
+                  if (e.key === 'Escape') setNewGroup(null);
+                }}
+                onBlur={() => { const n = newGroup.trim(); if (n && n !== (skill.category ?? '')) setCat.mutate({ slug, category: n }); else setNewGroup(null); }}
+                placeholder="新分组名，回车保存（Esc 取消）"
+                className="h-7 min-w-0 flex-1 rounded border border-border bg-background px-2 outline-none transition-colors focus:border-foreground/30"
+              />
+            )}
             {setCat.isPending && <span className="shrink-0 text-muted-foreground">保存中…</span>}
             {setCat.isError && <span className="shrink-0 text-rose-500">{setCat.error.message}</span>}
           </div>
