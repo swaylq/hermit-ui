@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Pencil, Check, X, ChevronDown, Download, Trash2, Package } from 'lucide-react';
+import { Pencil, Check, X, ChevronDown, Download, Trash2, Package, Info, Folder } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -24,7 +24,6 @@ import { type FileItem as SkillFileItem } from './file-detail';
 import { sessionStatusView } from '@/lib/session-status';
 import { isSessionUnread } from '@/lib/session-read';
 import { removeAgentSkill } from '@/lib/optimistic-skills';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { AgentFiles } from './agent-files';
 
 type SessionRow = inferRouterOutputs<AppRouter>['chat']['listSessions'][number];
@@ -74,23 +73,38 @@ function AgentDetailContent({
   sessions: SessionRow[] | null;
   sessionsLoading: boolean;
 }) {
+  const [tab, setTab] = useState<'detail' | 'files'>('detail');
+  // Settings-strip styling: a thin bottom-bordered row of icon+label pills,
+  // matching components/settings-tabs.tsx so the chrome reads the same.
+  const pill = (active: boolean) =>
+    cn(
+      'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[13px] whitespace-nowrap transition-colors cursor-pointer',
+      active ? 'bg-accent text-foreground font-medium' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+    );
   return (
-    <Tabs defaultValue="detail" className="w-full">
-      <TabsList className="w-full">
-        <TabsTrigger value="detail">详情</TabsTrigger>
-        <TabsTrigger value="files">文件</TabsTrigger>
-      </TabsList>
-      <TabsContent value="detail" className="space-y-5">
-        <SessionsSection agentName={name} sessions={sessions} loading={sessionsLoading} />
-        <CronsSection agentName={name} />
-        <SkillsAndTasks agent={agent} agentName={name} />
-        <MarkdownSections agent={agent} agentName={name} />
-        <TemplatePublishSection agentName={name} />
-      </TabsContent>
-      <TabsContent value="files">
-        <AgentFiles agentName={name} directory={agent.directory} />
-      </TabsContent>
-    </Tabs>
+    <div>
+      <div className="border-b border-border flex items-center gap-1 h-10">
+        <button type="button" onClick={() => setTab('detail')} className={pill(tab === 'detail')}>
+          <Info className="h-3.5 w-3.5" /> 详情
+        </button>
+        <button type="button" onClick={() => setTab('files')} className={pill(tab === 'files')}>
+          <Folder className="h-3.5 w-3.5" /> 文件
+        </button>
+      </div>
+      {tab === 'detail' ? (
+        <div className="space-y-5 pt-4">
+          <SessionsSection agentName={name} sessions={sessions} loading={sessionsLoading} />
+          <CronsSection agentName={name} />
+          <SkillsAndTasks agent={agent} agentName={name} />
+          <MarkdownSections agent={agent} agentName={name} />
+          <TemplatePublishSection agentName={name} />
+        </div>
+      ) : (
+        <div className="pt-4">
+          <AgentFiles agentName={name} directory={agent.directory} />
+        </div>
+      )}
+    </div>
   );
 }
 
