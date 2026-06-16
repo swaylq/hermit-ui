@@ -1,22 +1,24 @@
 'use client';
 
-// Global Memory — a single shared note every agent loads. Saved to the DB here;
-// each machine's gateway mirrors it into that host's ~/.claude/CLAUDE.md (a
-// managed block) so Claude Code injects it into every session.
+// Global Memory — a per-machine note + a folder, both loaded by every agent on
+// this machine. The inline note and the folder's text files are mirrored into
+// this host's ~/.claude/CLAUDE.md by its gateway (the note as a managed block,
+// each file as an `@import`), so Claude Code injects them into every session.
 
 import { useState } from 'react';
-import { Loader2, Save, Brain } from 'lucide-react';
+import { Loader2, Save } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { SettingsTabs } from '@/components/settings-tabs';
+import { GlobalMemoryFiles } from '@/components/global-memory-files';
 import { relTime } from '@/lib/format';
 
 export default function GlobalMemoryPage() {
   const utils = trpc.useUtils();
   const q = trpc.globalMemory.get.useQuery();
   const me = trpc.machines.me.useQuery();
-  const machineName = me.data?.alias || me.data?.name || '当前机器';
+  const machineName = me.data?.alias || me.data?.name || 'this machine';
   // null = untouched (mirror the server value); a string = local edits.
   const [draft, setDraft] = useState<string | null>(null);
   const save = trpc.globalMemory.set.useMutation({
@@ -34,24 +36,22 @@ export default function GlobalMemoryPage() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="memory" />
-      <div className="flex-1 min-h-0 flex flex-col">
-        <div className="max-w-3xl w-full mx-auto flex-1 min-h-0 flex flex-col p-4 sm:p-6 gap-3">
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-4">
+          {/* Intro + on/off */}
           <div className="flex items-start justify-between gap-3">
-            <div className="flex items-start gap-2 text-xs text-muted-foreground min-w-0">
-              <Brain className="h-4 w-4 mt-0.5 shrink-0" />
-              <p>
-                <span className="font-medium text-foreground/80">每台机器单独一份</span>。当前编辑的是机器{' '}
-                <span className="font-mono text-foreground/80">{machineName}</span>——它会被该机上<span className="font-medium text-foreground/80">所有 agent</span>加载（网关写进这台机器的{' '}
-                <code className="font-mono">~/.claude/CLAUDE.md</code> 受管段落，Claude Code 每会话自动注入）。改完点保存，约 30 秒内同步，对之后启动的会话生效。切换机器（左上角工作区）即编辑那台的。
-              </p>
-            </div>
+            <p className="text-xs text-muted-foreground min-w-0">
+              Loaded by every agent on <span className="font-mono text-foreground/80">{machineName}</span>. Edit the note below, or
+              add files to the folder — both are imported into this machine&apos;s <code className="font-mono">~/.claude/CLAUDE.md</code>.
+              Per-machine; switch machines (top-left) to edit another.
+            </p>
             <label className="flex shrink-0 items-center gap-2 pt-0.5 text-xs cursor-pointer select-none">
-              <span className={enabled ? 'font-medium text-foreground/80' : 'text-muted-foreground'}>载入到 agent</span>
+              <span className={enabled ? 'font-medium text-emerald-600' : 'text-muted-foreground'}>{enabled ? 'on' : 'off'}</span>
               <button
                 type="button"
                 role="switch"
                 aria-checked={enabled}
-                aria-label="开启或关闭载入 global memory"
+                aria-label="load global memory into agents"
                 disabled={setEnabled.isPending || q.isPending}
                 onClick={() => setEnabled.mutate({ enabled: !enabled })}
                 className={cn(
@@ -66,40 +66,52 @@ export default function GlobalMemoryPage() {
 
           {!enabled && (
             <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-600">
-              已关闭——agent 不会载入这个文件（各机网关会把它从 <code className="font-mono">~/.claude/CLAUDE.md</code> 移除）。内容已保留，开启后恢复。
+              Off — agents won&apos;t load this. The note and files are kept; turn on to restore.
             </div>
           )}
 
-          <textarea
-            value={value}
-            onChange={(e) => setDraft(e.target.value)}
-            disabled={q.isPending}
-            spellCheck={false}
-            placeholder="所有 agent 共享的全局记忆（Markdown）。例如：通用偏好、命名约定、当前重点……"
-            className="flex-1 min-h-[300px] w-full rounded-md border border-border bg-background p-3 font-mono text-[13px] leading-relaxed outline-none focus:border-foreground/30 resize-none"
-          />
+          {/* Inline note (the managed block in CLAUDE.md) */}
+          <section className="flex flex-col gap-2">
+            <h3 className="text-xs font-semibold text-foreground/70 uppercase tracking-wide">Inline note</h3>
+            <textarea
+              value={value}
+              onChange={(e) => setDraft(e.target.value)}
+              disabled={q.isPending}
+              spellCheck={false}
+              placeholder="A global note every agent loads (Markdown). e.g. shared preferences, naming conventions, current focus…"
+              className="min-h-[180px] w-full rounded-md border border-border bg-background p-3 font-mono text-[13px] leading-relaxed outline-none focus:border-foreground/30 resize-y"
+            />
+            <div className="flex items-center gap-3">
+              <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate({ content: value })}>
+                {save.isPending ? (
+                  <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> 保存中…</>
+                ) : (
+                  <><Save className="h-3.5 w-3.5 mr-1" /> 保存</>
+                )}
+              </Button>
+              <span className="text-[11px] text-muted-foreground">
+                {save.isError ? (
+                  <span className="text-rose-500">{save.error.message}</span>
+                ) : dirty ? (
+                  '有未保存的修改'
+                ) : q.data?.updatedAt ? (
+                  `已保存 · ${relTime(q.data.updatedAt)}`
+                ) : (
+                  '尚未设置'
+                )}
+              </span>
+              <span className="ml-auto text-[11px] tabular-nums text-muted-foreground/60">{value.length} 字符</span>
+            </div>
+          </section>
 
-          <div className="flex items-center gap-3">
-            <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate({ content: value })}>
-              {save.isPending ? (
-                <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> 保存中…</>
-              ) : (
-                <><Save className="h-3.5 w-3.5 mr-1" /> 保存</>
-              )}
-            </Button>
-            <span className="text-[11px] text-muted-foreground">
-              {save.isError ? (
-                <span className="text-rose-500">{save.error.message}</span>
-              ) : dirty ? (
-                '有未保存的修改'
-              ) : q.data?.updatedAt ? (
-                `已保存 · ${relTime(q.data.updatedAt)}`
-              ) : (
-                '尚未设置'
-              )}
-            </span>
-            <span className="ml-auto text-[11px] tabular-nums text-muted-foreground/60">{value.length} 字符</span>
-          </div>
+          {/* Memory files (the ~/.claude/global-memory folder, @imported into CLAUDE.md) */}
+          <section className="flex flex-col gap-2 min-h-[400px]">
+            <h3 className="text-xs font-semibold text-foreground/70 uppercase tracking-wide">Memory files</h3>
+            <p className="text-[11px] text-muted-foreground -mt-1">
+              Text files here (<code className="font-mono">.md</code>, <code className="font-mono">.txt</code>) are referenced into <code className="font-mono">~/.claude/CLAUDE.md</code> as <code className="font-mono">@imports</code>.
+            </p>
+            <GlobalMemoryFiles />
+          </section>
         </div>
       </div>
     </div>

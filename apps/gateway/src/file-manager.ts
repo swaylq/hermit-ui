@@ -1,14 +1,18 @@
-// Per-agent file manager — serves the dashboard's file browser over the
-// control-channel (fs.req → fs.res). Interactive metadata ops (list / stat /
-// readText / mkdir / remove / rename) run inline and reply on the same WS frame,
-// so the browser feels instant. Bulk DOWNLOAD (a file, or a folder zipped with
-// `zip -r`) is prepared asynchronously and streamed UP to the dashboard's ingest
-// endpoint; the browser then pulls it from the dashboard stash. Uploads reuse the
-// existing File Station path (dashboard stash → fileTransferTick writes to disk).
+// File manager — serves the dashboard's file browser over the control-channel
+// (fs.req → fs.res). Interactive metadata ops (list / stat / readText / writeText
+// / mkdir / remove / rename) run inline and reply on the same WS frame, so the
+// browser feels instant. Bulk DOWNLOAD (a file, or a folder zipped with `zip -r`)
+// is prepared asynchronously and streamed UP to the dashboard's ingest endpoint;
+// the browser then pulls it from the dashboard stash. Uploads reuse the existing
+// File Station path (dashboard stash → fileTransferTick writes to disk).
 //
-// Path safety: every op resolves the requested relPath under the agent's own
-// directory and rejects anything that escapes it (lexical containment — the
-// agent dir is the user's own workspace, same trust model as File Station).
+// Two roots: an agent's own directory (resolved dashboard-side, sent as agentDir)
+// or this host's ~/.claude/global-memory (root:'global-memory' — resolved HERE
+// because the dashboard doesn't know each machine's home dir).
+//
+// Path safety: every op resolves the requested relPath under the chosen base
+// directory and rejects anything that escapes it (lexical containment — both
+// roots are the user's own workspace, same trust model as File Station).
 
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -20,6 +24,7 @@ import { execCapture } from './exec';
 
 const LIST_CAP = 2000; // max entries returned per directory (node_modules guard)
 const TEXT_PREVIEW_MAX = 256 * 1024; // 256 KB cap for in-browser text preview
+const TEXT_WRITE_MAX = 1024 * 1024; // 1 MB cap for in-browser text authoring
 
 type Entry = { name: string; type: 'dir' | 'file' | 'other'; size: number; mtimeMs: number };
 
@@ -67,17 +72,29 @@ export type FsResult = { ok: true; data: unknown } | { ok: false; error: string 
 export async function handleFsRequest(msg: {
   op?: string;
   agentDir?: string;
+  root?: string;
   relPath?: string;
   toRelPath?: string;
   downloadId?: string;
   isFolder?: boolean;
+  text?: string;
 }): Promise<FsResult> {
   try {
     const op = String(msg.op || '');
-    const agentDir = String(msg.agentDir || '');
-    if (!agentDir) return { ok: false, error: 'no agentDir' };
-    const abs = resolveUnder(agentDir, String(msg.relPath ?? ''));
-    if (abs === null) return { ok: false, error: 'path escapes agent directory' };
+    // Base directory: an agent's own dir (resolved dashboard-side) or, for the
+    // global-memory file manager, this host's ~/.claude/global-memory (resolved
+    // HERE — the dashboard doesn't know each machine's home). The folder is
+    // created on demand so the user always has somewhere to write.
+    let baseDir: string;
+    if (msg.root === 'global-memory') {
+      baseDir = path.join(os.homedir(), '.claude', 'global-memory');
+      try { fs.mkdirSync(baseDir, { recursive: true }); } catch { /* best effort */ }
+    } else {
+      baseDir = String(msg.agentDir || '');
+      if (!baseDir) return { ok: false, error: 'no agentDir' };
+    }
+    const abs = resolveUnder(baseDir, String(msg.relPath ?? ''));
+    if (abs === null) return { ok: false, error: 'path escapes base directory' };
 
     switch (op) {
       case 'list': {
@@ -101,20 +118,30 @@ export async function handleFsRequest(msg: {
         if (buf.includes(0)) return { ok: false, error: '二进制文件，无法预览' };
         return { ok: true, data: { text: buf.toString('utf8'), size: st.size } };
       }
+      case 'writeText': {
+        const text = String(msg.text ?? '');
+        if (Buffer.byteLength(text, 'utf8') > TEXT_WRITE_MAX)
+          return { ok: false, error: `文件过大（>${(TEXT_WRITE_MAX / 1024 / 1024).toFixed(0)}MB）` };
+        if (fs.existsSync(abs) && fs.statSync(abs).isDirectory())
+          return { ok: false, error: '同名文件夹已存在' };
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, text, 'utf8');
+        return { ok: true, data: {} };
+      }
       case 'mkdir': {
         if (fs.existsSync(abs)) return { ok: false, error: '已存在同名文件/文件夹' };
         fs.mkdirSync(abs, { recursive: true });
         return { ok: true, data: {} };
       }
       case 'remove': {
-        const root = path.resolve(agentDir);
-        if (abs === root) return { ok: false, error: '不能删除 agent 根目录' };
+        const root = path.resolve(baseDir);
+        if (abs === root) return { ok: false, error: '不能删除根目录' };
         fs.rmSync(abs, { recursive: true, force: true });
         return { ok: true, data: {} };
       }
       case 'rename': {
-        const target = resolveUnder(agentDir, String(msg.toRelPath ?? ''));
-        if (target === null) return { ok: false, error: 'target escapes agent directory' };
+        const target = resolveUnder(baseDir, String(msg.toRelPath ?? ''));
+        if (target === null) return { ok: false, error: 'target escapes base directory' };
         if (fs.existsSync(target)) return { ok: false, error: '目标已存在' };
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.renameSync(abs, target);
