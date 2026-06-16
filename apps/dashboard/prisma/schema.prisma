@@ -147,6 +147,16 @@ model GlobalSkillRequest {
   @@index([machineId, status])
 }
 
+// Global memory — a single shared note loaded by every agent. Edited in the
+// dashboard (Settings → Global Memory); each machine's gateway pulls it and
+// keeps a managed section in that host's ~/.claude/CLAUDE.md, which Claude Code
+// auto-injects into every session. Singleton: always the row id "global".
+model GlobalMemory {
+  id        String   @id @default("global")
+  content   String   @default("") @db.Text
+  updatedAt DateTime  @updatedAt
+}
+
 // Machine-level ops the dashboard queues for the gateway to run on its host:
 // "upgrade-claude" (runs `claude upgrade`) and "restart-all-sessions" (drives
 // the existing per-session restart across every live session, staggered). These

@@ -9,6 +9,7 @@ import { interactionRouter } from './interaction';
 import { marketRouter } from './market';
 import { fileStationRouter } from './fileStation';
 import { fileManagerRouter } from './fileManager';
+import { globalMemoryRouter } from './globalMemory';
 
 export const appRouter = router({
   machines: machinesRouter,
@@ -21,6 +22,7 @@ export const appRouter = router({
   market: marketRouter,
   fileStation: fileStationRouter,
   fileManager: fileManagerRouter,
+  globalMemory: globalMemoryRouter,
 });
 
 export type AppRouter = typeof appRouter;

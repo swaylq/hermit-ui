@@ -51,6 +51,15 @@ export const api = {
   // nextFire and returns { runId }; phase:'finish' closes it with the result.
   cronRun: (body: any) => post('/api/sync/cron-run', body),
 
+  // Global memory — the single shared note the gateway mirrors into this host's
+  // ~/.claude/CLAUDE.md so every agent session loads it.
+  getGlobalMemory: async (): Promise<{ content: string; updatedAt: string | null }> => {
+    const r = await get<any>(
+      '/api/trpc/globalMemory.get?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? { content: '', updatedAt: null };
+  },
+
   pollChatPending: async (): Promise<{
     sessions: Array<{ id: string; agentName: string; claudeSessionId: string | null; agentDirectory: string | null }>;
     messages: Array<{ id: string; sessionId: string; role: string; content: any; createdAt: string }>;

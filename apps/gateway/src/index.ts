@@ -33,6 +33,7 @@ import { startLoginBridge } from './login-bridge';
 import { startExtensionLoginListener } from './claude-login';
 import { fileTransferTick } from './file-station';
 import { pushGlobalSkills, globalSkillRequestTick } from './global-skills';
+import { globalMemoryTick } from './global-memory';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 
 console.log('[gateway] starting');
@@ -140,6 +141,7 @@ function loop(fn: () => Promise<void>, ms: number) {
 (async () => {
   await pushAgents();
   await pushGlobalSkillsTick();
+  await safe('global-memory', globalMemoryTick);
   await pushSessionSnapshots();
   await pushUsage();
   await pushUsageWindows();
@@ -169,6 +171,7 @@ loop(() => safe('login-cancel', loginCancelTick), 3_000);
 loop(() => safe('file-transfers', fileTransferTick), 4_000);
 loop(pushGlobalSkillsTick, 60_000);
 loop(globalSkillReqTick, 3_000);
+loop(() => safe('global-memory', globalMemoryTick), 30_000);
 // Real plan % via `claude /usage` scrape — every 12 min (initial run is the last
 // step of the startup IIFE above, so it isn't starved by the ccusage block).
 loop(pushPlanUsage, 12 * 60_000);

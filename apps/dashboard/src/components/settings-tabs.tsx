@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Boxes, BarChart3, Wrench, KeyRound, HardDriveUpload } from 'lucide-react';
+import { Boxes, BarChart3, Wrench, KeyRound, HardDriveUpload, Brain } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 
@@ -12,13 +12,14 @@ import { SidebarMobileToggle } from '@/components/app-sidebar';
 // strip above each page's own header.
 const TABS = [
   { key: 'skills', label: 'Global Skills', href: '/skills', Icon: Boxes },
+  { key: 'memory', label: 'Global Memory', href: '/global-memory', Icon: Brain },
   { key: 'usage', label: 'Usage', href: '/usage', Icon: BarChart3 },
   { key: 'ops', label: 'Operations', href: '/ops', Icon: Wrench },
   { key: 'login', label: 'Account Login', href: '/login-claude', Icon: KeyRound },
   { key: 'files', label: 'File Station', href: '/file-station', Icon: HardDriveUpload },
 ] as const;
 
-export function SettingsTabs({ active }: { active: 'skills' | 'usage' | 'ops' | 'login' | 'files' }) {
+export function SettingsTabs({ active }: { active: 'skills' | 'memory' | 'usage' | 'ops' | 'login' | 'files' }) {
   const activeRef = useRef<HTMLAnchorElement>(null);
   useEffect(() => {
     // On a phone the four tabs don't fit, so the strip scrolls horizontally —
