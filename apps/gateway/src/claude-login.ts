@@ -374,11 +374,15 @@ async function logoutClaudeWeb(d: LoginDriver, report: LoginReport): Promise<voi
 // ── 171mail code / magic-link retrieval (in the 'mail' tab) ────────────────────
 async function fetchLoginCode(d: LoginDriver, token: string, report: LoginReport): Promise<{ code?: string; magicLink?: string }> {
   await d.navigate(`https://b.171mail.com/#/home/code?type=claude&token=${encodeURIComponent(token)}`, 'mail');
-  await report({ line: '打开 171mail，等待登录链接…' });
-  await d.clickByText('获取验证码|获取|get code', 'mail').catch(() => false);
+  await report({ line: '打开 171mail，点「获取」等登录链接…' });
+  // ONLY ever click the "获取" button on this page — nothing else. On a failure
+  // notice, re-click it (repeatedly) until the link shows up.
+  const clickGet = () => d.clickByText('获取验证码|获取|get ?code', 'mail').catch(() => false);
+  await clickGet();
 
   const deadline = Date.now() + CODE_WAIT_MS;
   let lastClick = Date.now();
+  let lastNote = 0;
   while (Date.now() < deadline) {
     checkAbort();
     const links = await d.inputValues('mail').catch(() => [] as string[]);
@@ -395,13 +399,19 @@ async function fetchLoginCode(d: LoginDriver, token: string, report: LoginReport
       await report({ line: '收到 6 位验证码。' });
       return { code: m[1] };
     }
-    if (Date.now() - lastClick > 15_000) {
-      await d.clickByText('获取验证码|获取|get code', 'mail').catch(() => false);
+    // Failure / "no mail yet" → re-fetch right away; otherwise re-fetch every ~6s.
+    const failed = /失败|重试|未获取|获取失败|无数据|没有(邮件|数据)|稍后|fail|error|not found/i.test(body);
+    if (failed || Date.now() - lastClick > 6_000) {
+      await clickGet();
       lastClick = Date.now();
+      if (failed && Date.now() - lastNote > 8_000) {
+        await report({ line: '171mail 提示失败，再点「获取」重试…' });
+        lastNote = Date.now();
+      }
     }
-    await sleep(POLL_MS);
+    await sleep(failed ? 1_500 : POLL_MS);
   }
-  throw new Error('171mail 未取到验证码（邮件未到 / 令牌无效）');
+  throw new Error('171mail 未取到登录链接（邮件未到 / 令牌无效）');
 }
 
 // ── CLI OAuth ──────────────────────────────────────────────────────────────────
