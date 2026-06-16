@@ -82,6 +82,16 @@ function AgentMain({ name, pendingRequests }: { name: string; pendingRequests: P
   const isDeleting = pendingRequests.some((p) => p.kind === 'delete' && p.agentName === name);
   const isScaffolding = pendingRequests.some((p) => p.kind === 'create' && p.agentName === name);
   const [tab, setTab] = useState<DetailTab>('detail');
+  // Reset to 详情 when the agent changes. The `key={nameParam}` remount above is
+  // unreliable on App-Router soft-nav (?name= only), so a stale "文件" tab can
+  // survive an agent switch. This is React's render-time "reset state on prop
+  // change" pattern (no effect) — it also resets the file explorer, which only
+  // mounts on the 文件 tab.
+  const [tabAgent, setTabAgent] = useState(name);
+  if (tabAgent !== name) {
+    setTabAgent(name);
+    setTab('detail');
+  }
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
