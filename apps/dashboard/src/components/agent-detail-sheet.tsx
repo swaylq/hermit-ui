@@ -92,7 +92,9 @@ function AgentDetailContent({
   return (
     <div className="flex flex-col h-full min-h-0">
       {tab === 'files' ? (
-        <AgentFiles agentName={name} directory={agent.directory} />
+        // Keyed by agent so the tree/selection resets to the new agent's root
+        // when you switch agents while staying on the Files tab.
+        <AgentFiles key={name} agentName={name} directory={agent.directory} />
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-5">

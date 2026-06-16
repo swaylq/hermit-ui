@@ -31,6 +31,10 @@ function AgentsPageInner() {
   // when no `?name=` is set).
   const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 10_000 });
   const pending = trpc.agents.pendingRequests.useQuery(undefined, { refetchInterval: 2_000 });
+  // Tab lives here (not in AgentMain) so it PERSISTS across agent switches —
+  // AgentsPageInner doesn't remount on ?name= soft-nav, whereas AgentMain (keyed
+  // by nameParam) does. Switching agents keeps Detail on Detail, Files on Files.
+  const [tab, setTab] = useState<DetailTab>('detail');
 
   // Default landing: redirect to first agent so the area isn't blank. Mirrors
   // what /chat does for sessions.
@@ -50,7 +54,7 @@ function AgentsPageInner() {
   }
   if (nameParam) {
     // key remounts AgentMain on switch — resets scroll + edit drafts cleanly.
-    return <AgentMain key={nameParam} name={nameParam} pendingRequests={pending.data ?? []} />;
+    return <AgentMain key={nameParam} name={nameParam} pendingRequests={pending.data ?? []} tab={tab} setTab={setTab} />;
   }
 
   // Empty state — sidebar shows skeletons/list, this is the right pane when
@@ -69,7 +73,17 @@ function AgentsPageInner() {
 
 type PendingRequest = { id: string; kind: string; agentName: string; target: string | null; requestedAt: Date | string };
 
-function AgentMain({ name, pendingRequests }: { name: string; pendingRequests: PendingRequest[] }) {
+function AgentMain({
+  name,
+  pendingRequests,
+  tab,
+  setTab,
+}: {
+  name: string;
+  pendingRequests: PendingRequest[];
+  tab: DetailTab;
+  setTab: (t: DetailTab) => void;
+}) {
   const router = useRouter();
   const utils = trpc.useUtils();
   const requestDelete = trpc.agents.requestDelete.useMutation({
@@ -81,17 +95,6 @@ function AgentMain({ name, pendingRequests }: { name: string; pendingRequests: P
   });
   const isDeleting = pendingRequests.some((p) => p.kind === 'delete' && p.agentName === name);
   const isScaffolding = pendingRequests.some((p) => p.kind === 'create' && p.agentName === name);
-  const [tab, setTab] = useState<DetailTab>('detail');
-  // Reset to 详情 when the agent changes. The `key={nameParam}` remount above is
-  // unreliable on App-Router soft-nav (?name= only), so a stale "文件" tab can
-  // survive an agent switch. This is React's render-time "reset state on prop
-  // change" pattern (no effect) — it also resets the file explorer, which only
-  // mounts on the 文件 tab.
-  const [tabAgent, setTabAgent] = useState(name);
-  if (tabAgent !== name) {
-    setTabAgent(name);
-    setTab('detail');
-  }
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
