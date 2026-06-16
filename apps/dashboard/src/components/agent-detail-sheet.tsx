@@ -64,10 +64,10 @@ export function AgentDetailTabs({ tab, setTab }: { tab: DetailTab; setTab: (t: D
   return (
     <div className="flex items-center gap-1">
       <button type="button" onClick={() => setTab('detail')} className={pill(tab === 'detail')}>
-        <Info className="h-3.5 w-3.5" /> 详情
+        <Info className="h-3.5 w-3.5" /> Detail
       </button>
       <button type="button" onClick={() => setTab('files')} className={pill(tab === 'files')}>
-        <Folder className="h-3.5 w-3.5" /> 文件
+        <Folder className="h-3.5 w-3.5" /> Files
       </button>
     </div>
   );
