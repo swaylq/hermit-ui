@@ -46,7 +46,9 @@ export async function globalMemoryTick(): Promise<void> {
     /* no ~/.claude/CLAUDE.md yet — we'll create it */
   }
 
-  const desired = rebuild(existing, mem.content ?? '');
+  // Disabled → drop the block (rebuild with empty content); content stays in the DB.
+  const effective = mem.enabled === false ? '' : mem.content ?? '';
+  const desired = rebuild(existing, effective);
   if (desired === existing) return; // already in sync — never churn the file
 
   fs.mkdirSync(path.dirname(CLAUDE_MD), { recursive: true });

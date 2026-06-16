@@ -154,6 +154,7 @@ model GlobalSkillRequest {
 model GlobalMemory {
   id        String   @id @default("global")
   content   String   @default("") @db.Text
+  enabled   Boolean  @default(true) // off = gateways drop the block; agents stop loading it (content kept)
   updatedAt DateTime  @updatedAt
 }
 

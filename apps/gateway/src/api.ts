@@ -53,11 +53,11 @@ export const api = {
 
   // Global memory — the single shared note the gateway mirrors into this host's
   // ~/.claude/CLAUDE.md so every agent session loads it.
-  getGlobalMemory: async (): Promise<{ content: string; updatedAt: string | null }> => {
+  getGlobalMemory: async (): Promise<{ content: string; enabled: boolean; updatedAt: string | null }> => {
     const r = await get<any>(
       '/api/trpc/globalMemory.get?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
     );
-    return r[0]?.result?.data?.json ?? { content: '', updatedAt: null };
+    return r[0]?.result?.data?.json ?? { content: '', enabled: true, updatedAt: null };
   },
 
   pollChatPending: async (): Promise<{
