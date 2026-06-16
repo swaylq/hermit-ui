@@ -8,7 +8,7 @@
 // the gateway. Performance: one query per expanded directory (lazy, never
 // recursive), the gateway caps + sorts each listing.
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Folder, FolderOpen, File as FileIcon, Download, Upload, Trash2, Pencil,
   FolderPlus, ChevronRight, RotateCw, Loader2, X, Check, FileText,
@@ -20,6 +20,10 @@ import { relTime } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 
 const MAX_UPLOAD = 100 * 1024 * 1024; // 100 MB per the spec
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
+const PREVIEW_IMG_MAX = 25 * 1024 * 1024; // auto-preview images up to 25 MB; bigger → download only
+
+type PrepareAsync = (vars: { agentName: string; path: string; isFolder: boolean }) => Promise<{ id: string }>;
 
 type Entry = { name: string; type: 'dir' | 'file' | 'other'; size: number; mtimeMs: number };
 type Selected = { path: string; name: string; type: 'dir' | 'file' | 'other'; size: number } | null;
@@ -57,29 +61,48 @@ function uploadXhr(file: File, destPath: string, onProgress: (p: number) => void
   });
 }
 
-// Stream a prepared download (file, or gateway-zipped folder) to the browser.
-async function pullDownload(agentName: string, path: string, isFolder: boolean, fallbackName: string, utils: ReturnType<typeof trpc.useUtils>, prepare: ReturnType<typeof trpc.fileManager.prepareDownload.useMutation>): Promise<void> {
-  const { id } = await prepare.mutateAsync({ agentName, path, isFolder });
+// Fetch a prepared download (a file, or a gateway-zipped folder) as a Blob:
+// trigger the gateway prepare, poll until it's stashed, then pull the bytes.
+// Shared by the download action and the inline image preview.
+async function fetchPreparedBlob(
+  agentName: string,
+  path: string,
+  isFolder: boolean,
+  utils: ReturnType<typeof trpc.useUtils>,
+  prepareAsync: PrepareAsync,
+): Promise<{ blob: Blob; filename: string }> {
+  const { id } = await prepareAsync({ agentName, path, isFolder });
   for (let i = 0; i < 180; i++) {
     await sleep(2000);
     const s = await utils.fileManager.downloadStatus.fetch({ id });
     if (s.status === 'ready') {
       const res = await fetch(`/api/file-manager/download/${encodeURIComponent(id)}`, { headers: { 'x-asst-key': getActiveKey() } });
-      if (!res.ok) throw new Error(`下载失败 (${res.status})`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = s.filename || fallbackName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      return;
+      if (!res.ok) throw new Error(`加载失败 (${res.status})`);
+      return { blob: await res.blob(), filename: s.filename };
     }
-    if (s.status === 'error') throw new Error(s.error || '准备下载失败');
+    if (s.status === 'error') throw new Error(s.error || '准备失败');
   }
-  throw new Error('下载超时');
+  throw new Error('超时');
+}
+
+// Save a prepared download to disk (synthetic anchor — the key can't ride <a>).
+async function pullDownload(
+  agentName: string,
+  path: string,
+  isFolder: boolean,
+  fallbackName: string,
+  utils: ReturnType<typeof trpc.useUtils>,
+  prepareAsync: PrepareAsync,
+): Promise<void> {
+  const { blob, filename } = await fetchPreparedBlob(agentName, path, isFolder, utils, prepareAsync);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 export function AgentFiles({ agentName, directory }: { agentName: string; directory: string | null | undefined }) {
@@ -350,7 +373,7 @@ function FilePane({
     onError(null);
     setDownloading(true);
     try {
-      await pullDownload(agentName, selected.path, isDir, selected.name, utils, prepare);
+      await pullDownload(agentName, selected.path, isDir, selected.name, utils, prepare.mutateAsync);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -418,28 +441,109 @@ function FilePane({
   );
 }
 
-// Inline text preview (no modal). Binary / oversized → a notice + download.
+function DownloadBtn({ onDownload, downloading }: { onDownload: () => void; downloading: boolean }) {
+  return (
+    <Button size="sm" variant="outline" onClick={onDownload} disabled={downloading}>
+      {downloading ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1" />} 下载文件
+    </Button>
+  );
+}
+
+// Inline preview (no modal): images render as <img>, everything else tries a
+// text preview; binary / oversized falls back to a download button.
 function FileContent({
   agentName, path, size, onDownload, downloading,
 }: {
   agentName: string; path: string; size: number; onDownload: () => void; downloading: boolean;
 }) {
-  const q = trpc.fileManager.readText.useQuery({ agentName, path }, { retry: false });
+  const name = path.split('/').pop() ?? '';
+  const isImg = IMAGE_RE.test(name);
   return (
     <div className="p-3">
       <div className="mb-2 text-[11px] font-mono text-muted-foreground/60">{fmtSize(size)}</div>
-      {q.isPending ? (
-        <div className="h-40 rounded bg-accent/30 animate-pulse" />
-      ) : q.error ? (
-        <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
-          <p>{q.error.message}</p>
-          <Button size="sm" variant="outline" onClick={onDownload} disabled={downloading}>
-            {downloading ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1" />} 下载文件
-          </Button>
-        </div>
+      {isImg ? (
+        size > PREVIEW_IMG_MAX ? (
+          <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
+            <p>图片较大（{fmtSize(size)}），不自动预览。</p>
+            <DownloadBtn onDownload={onDownload} downloading={downloading} />
+          </div>
+        ) : (
+          <ImagePreview key={path} agentName={agentName} path={path} onDownload={onDownload} downloading={downloading} />
+        )
       ) : (
-        <pre className="text-[12px] font-mono whitespace-pre-wrap break-words text-foreground/90 leading-relaxed">{q.data?.text}</pre>
+        <TextPreview agentName={agentName} path={path} onDownload={onDownload} downloading={downloading} />
       )}
+    </div>
+  );
+}
+
+function TextPreview({
+  agentName, path, onDownload, downloading,
+}: {
+  agentName: string; path: string; onDownload: () => void; downloading: boolean;
+}) {
+  const q = trpc.fileManager.readText.useQuery({ agentName, path }, { retry: false });
+  if (q.isPending) return <div className="h-40 rounded bg-accent/30 animate-pulse" />;
+  if (q.error) {
+    return (
+      <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
+        <p>{q.error.message}</p>
+        <DownloadBtn onDownload={onDownload} downloading={downloading} />
+      </div>
+    );
+  }
+  return <pre className="text-[12px] font-mono whitespace-pre-wrap break-words text-foreground/90 leading-relaxed">{q.data?.text}</pre>;
+}
+
+// Image preview — pull the bytes via the same prepared-download path (gateway →
+// stash → blob), render as an object URL. Keyed by path so it refetches cleanly
+// on file change; the object URL is revoked on unmount.
+function ImagePreview({
+  agentName, path, onDownload, downloading,
+}: {
+  agentName: string; path: string; onDownload: () => void; downloading: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const prepareAsync = trpc.fileManager.prepareDownload.useMutation().mutateAsync;
+  const [state, setState] = useState<{ url?: string; error?: string }>({});
+  useEffect(() => {
+    let cancelled = false;
+    let objUrl: string | undefined;
+    void (async () => {
+      try {
+        const { blob } = await fetchPreparedBlob(agentName, path, false, utils, prepareAsync);
+        if (cancelled) return;
+        objUrl = URL.createObjectURL(blob);
+        setState({ url: objUrl });
+      } catch (e) {
+        if (!cancelled) setState({ error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (objUrl) URL.revokeObjectURL(objUrl);
+    };
+  }, [agentName, path, utils, prepareAsync]);
+
+  if (state.error) {
+    return (
+      <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
+        <p>预览失败：{state.error}</p>
+        <DownloadBtn onDownload={onDownload} downloading={downloading} />
+      </div>
+    );
+  }
+  if (!state.url) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" /> 加载预览…
+      </div>
+    );
+  }
+  return (
+    <div className="flex justify-center">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={state.url} alt={path.split('/').pop() ?? ''} className="max-w-full max-h-[60vh] w-auto h-auto rounded border border-border object-contain" />
     </div>
   );
 }
