@@ -40,6 +40,7 @@ model Machine {
   machineRequests     MachineRequest[]
   fileTransfers       FileTransfer[]
   planUsage           PlanUsage?
+  globalMemory        GlobalMemory?
 }
 
 // File Station: a large file the dashboard uploaded for delivery to a machine at
@@ -147,15 +148,16 @@ model GlobalSkillRequest {
   @@index([machineId, status])
 }
 
-// Global memory — a single shared note loaded by every agent. Edited in the
-// dashboard (Settings → Global Memory); each machine's gateway pulls it and
-// keeps a managed section in that host's ~/.claude/CLAUDE.md, which Claude Code
-// auto-injects into every session. Singleton: always the row id "global".
+// Global memory — a per-MACHINE shared note loaded by every agent on that host.
+// Edited in the dashboard (Settings → Global Memory) for the active machine; that
+// machine's gateway pulls it and keeps a managed section in its ~/.claude/CLAUDE.md,
+// which Claude Code auto-injects into every session. One row per machine.
 model GlobalMemory {
-  id        String   @id @default("global")
+  machineId String   @id
+  machine   Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
   content   String   @default("") @db.Text
-  enabled   Boolean  @default(true) // off = gateways drop the block; agents stop loading it (content kept)
-  updatedAt DateTime  @updatedAt
+  enabled   Boolean  @default(true) // off = the gateway drops the block; agents stop loading it (content kept)
+  updatedAt DateTime @updatedAt
 }
 
 // Machine-level ops the dashboard queues for the gateway to run on its host:

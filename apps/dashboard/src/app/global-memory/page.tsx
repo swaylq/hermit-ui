@@ -15,6 +15,8 @@ import { relTime } from '@/lib/format';
 export default function GlobalMemoryPage() {
   const utils = trpc.useUtils();
   const q = trpc.globalMemory.get.useQuery();
+  const me = trpc.machines.me.useQuery();
+  const machineName = me.data?.alias || me.data?.name || '当前机器';
   // null = untouched (mirror the server value); a string = local edits.
   const [draft, setDraft] = useState<string | null>(null);
   const save = trpc.globalMemory.set.useMutation({
@@ -38,8 +40,9 @@ export default function GlobalMemoryPage() {
             <div className="flex items-start gap-2 text-xs text-muted-foreground min-w-0">
               <Brain className="h-4 w-4 mt-0.5 shrink-0" />
               <p>
-                这个文件会被<span className="font-medium text-foreground/80">所有 agent</span>加载——每台机器的网关把它写进该机的{' '}
-                <code className="font-mono">~/.claude/CLAUDE.md</code>（受管段落），Claude Code 在每个会话自动注入。改完点保存，约 30 秒内同步到各机器，对之后启动的会话生效。
+                <span className="font-medium text-foreground/80">每台机器单独一份</span>。当前编辑的是机器{' '}
+                <span className="font-mono text-foreground/80">{machineName}</span>——它会被该机上<span className="font-medium text-foreground/80">所有 agent</span>加载（网关写进这台机器的{' '}
+                <code className="font-mono">~/.claude/CLAUDE.md</code> 受管段落，Claude Code 每会话自动注入）。改完点保存，约 30 秒内同步，对之后启动的会话生效。切换机器（左上角工作区）即编辑那台的。
               </p>
             </div>
             <label className="flex shrink-0 items-center gap-2 pt-0.5 text-xs cursor-pointer select-none">
