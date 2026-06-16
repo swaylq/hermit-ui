@@ -2422,15 +2422,18 @@ function readyLabel(a: Extract<Attachment, { kind: 'ready' }>): string {
 
 function AttachmentChip({ attachment: a, onRemove }: { attachment: Attachment; onRemove: () => void }) {
   const previewUrl = 'previewUrl' in a ? a.previewUrl : null;
+  const [lightbox, setLightbox] = useState(false);
   return (
     <div className="relative group inline-flex items-center gap-2 rounded-md border border-border bg-background px-1.5 py-1 text-[11px] font-mono">
       {previewUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={previewUrl} alt={a.name} className={cn(
-          'h-10 w-10 rounded object-cover',
-          a.kind === 'uploading' && 'opacity-50',
-          a.kind === 'error' && 'opacity-30 grayscale',
-        )} />
+        <button type="button" onClick={() => setLightbox(true)} aria-label="preview image" className="shrink-0 cursor-zoom-in">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={previewUrl} alt={a.name} className={cn(
+            'h-10 w-10 rounded object-cover',
+            a.kind === 'uploading' && 'opacity-50',
+            a.kind === 'error' && 'opacity-30 grayscale',
+          )} />
+        </button>
       ) : (
         <div className="h-10 w-10 rounded bg-muted text-muted-foreground/70 flex items-center justify-center">
           {a.kind === 'error' ? '!' : <FileText className="h-5 w-5" />}
@@ -2455,6 +2458,7 @@ function AttachmentChip({ attachment: a, onRemove }: { attachment: Attachment; o
       >
         ×
       </button>
+      {previewUrl && <ImageLightbox open={lightbox} onOpenChange={setLightbox} url={previewUrl} alt={a.name} />}
     </div>
   );
 }
