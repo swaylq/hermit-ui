@@ -7,7 +7,7 @@ import { addAgentSkill } from '@/lib/optimistic-skills';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Overlay } from '@/components/overlay';
-import { CategoryChips } from '@/components/category-chips';
+import { CategorySelect } from '@/components/category-chips';
 
 // Pick a marketplace skill and install it into an agent / this machine
 // (installToAgent / installToMachine → AgentRequest(edit) / GlobalSkillRequest).
@@ -64,7 +64,7 @@ export function InstallSkillDialog({
               <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
               <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="search market skills" className="h-8 pl-7 text-sm" />
             </div>
-            <CategoryChips cats={cats} value={cat} onChange={setCat} />
+            <CategorySelect cats={cats} value={cat} onChange={setCat} />
           </div>
           <div className="flex-1 min-h-0 overflow-auto p-3 space-y-1.5">
             {skills.isLoading && <div className="text-xs text-muted-foreground">loading…</div>}
