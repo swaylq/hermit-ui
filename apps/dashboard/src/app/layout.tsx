@@ -4,12 +4,18 @@ import Providers from './providers';
 import { Geist } from "next/font/google";
 import { cn } from "@/lib/utils";
 import { AuthGate } from '@/components/auth-gate';
+import { InstallPrompt } from '@/components/install-prompt';
 
 const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 export const metadata: Metadata = {
   title: 'asst dashboard',
   description: 'hermit-agent state, sessions, and tasks',
+  applicationName: 'asst',
+  // Installable-app metadata. The manifest link is auto-injected from app/manifest.ts.
+  appleWebApp: { capable: true, title: 'asst', statusBarStyle: 'black' },
+  icons: { icon: '/favicon.ico', apple: '/apple-touch-icon.png' },
+  formatDetection: { telephone: false },
 };
 
 // Lock out user zoom on mobile. userScalable/maximumScale covers Android +
@@ -21,6 +27,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  themeColor: '#09090b',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -29,6 +36,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body className="min-h-full flex flex-col">
         <Providers>
           <AuthGate>{children}</AuthGate>
+          <InstallPrompt />
         </Providers>
       </body>
     </html>
