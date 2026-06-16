@@ -1462,11 +1462,39 @@ const MessageTimeline = memo(function MessageTimeline({ messages, streamingTailI
   // Insert date dividers when day rolls over. Also coalesce consecutive
   // tool-result-only messages into a single row so a parallel-fanout batch
   // (e.g. 6 Read calls → 6 result rows) collapses to one expandable chip.
+  // mcp__hermit__ask renders its InteractionCard at the tool_use call site (see
+  // groupConsecutiveTools). Build a question→interaction-block map from the
+  // separately-synced system messages, and suppress those standalone system
+  // cards when a matching ask tool_use is in the window — the system row is
+  // created (by the MCP stub) BEFORE the assistant turn's blocks finish syncing,
+  // so it gets an earlier id and would otherwise sort ABOVE the question text
+  // instead of beside it.
+  const askCardByQuestion = new Map<string, any>();
+  const askedQuestions = new Set<string>();
+  for (const m of messages) {
+    const blocks = Array.isArray(m.content) ? (m.content as any[]) : [];
+    for (const b of blocks) {
+      if (b?.type === 'tool_use' && b?.name === 'mcp__hermit__ask' && typeof b?.input?.question === 'string') {
+        askedQuestions.add(b.input.question);
+      } else if (b?.type === 'interaction' && (b?.kind ?? 'question') === 'question' && typeof b?.payload?.question === 'string') {
+        askCardByQuestion.set(b.payload.question, b);
+      }
+    }
+  }
+  const visibleMessages = messages.filter((m) => {
+    if (m.role !== 'system') return true;
+    const blocks = Array.isArray(m.content) ? (m.content as any[]) : [];
+    if (blocks.length === 0 || !blocks.every((b) => b?.type === 'interaction')) return true;
+    // Drop only if EVERY interaction block is a question whose ask tool_use is
+    // in the window (the call site renders the card); otherwise keep it.
+    return !blocks.every((b) => (b?.kind ?? 'question') === 'question' && askedQuestions.has(b?.payload?.question));
+  });
+
   const out: React.ReactNode[] = [];
   let prevDay: Date | string | null = null;
   let i = 0;
-  while (i < messages.length) {
-    const m = messages[i];
+  while (i < visibleMessages.length) {
+    const m = visibleMessages[i];
     if (!prevDay || !isSameDay(prevDay, m.createdAt)) {
       out.push(<DateDivider key={`d-${m.id}`} day={m.createdAt} />);
       prevDay = m.createdAt;
@@ -1484,13 +1512,13 @@ const MessageTimeline = memo(function MessageTimeline({ messages, streamingTailI
       const combined: Block[] = [...blocks];
       let lastId = m.id;
       let j = i + 1;
-      while (j < messages.length) {
-        const nb = messages[j].content as Block[];
+      while (j < visibleMessages.length) {
+        const nb = visibleMessages[j].content as Block[];
         const nIsToolResultOnly = nb.length > 0 && nb.every((b) => b.type === 'tool_result');
         if (!nIsToolResultOnly) break;
-        if (!isSameDay(prevDay!, messages[j].createdAt)) break;
+        if (!isSameDay(prevDay!, visibleMessages[j].createdAt)) break;
         combined.push(...nb);
-        lastId = messages[j].id;
+        lastId = visibleMessages[j].id;
         j++;
       }
       out.push(<MessageRow key={`g-${m.id}-${lastId}`} role={m.role} content={combined} ts={m.createdAt} />);
@@ -1501,9 +1529,9 @@ const MessageTimeline = memo(function MessageTimeline({ messages, streamingTailI
       // set by a post-render effect (one render late), which would mount the
       // text already-complete and skip the animation. The last assistant row,
       // if it landed in the last few seconds, types out.
-      const isLast = i === messages.length - 1;
+      const isLast = i === visibleMessages.length - 1;
       const typing = isLast && m.role === 'assistant' && Date.now() - new Date(m.createdAt).getTime() < 8_000;
-      out.push(<MessageRow key={m.id} role={m.role} content={blocks} ts={m.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} />);
+      out.push(<MessageRow key={m.id} role={m.role} content={blocks} ts={m.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={askCardByQuestion} />);
       i += 1;
     }
   }
@@ -2431,7 +2459,7 @@ function AttachmentChip({ attachment: a, onRemove }: { attachment: Attachment; o
   );
 }
 
-const MessageRow = memo(function MessageRow({ role, content, ts, streamingTail = false, typing = false, streamingDot }: { role: string; content: Block[]; ts: Date | string; streamingTail?: boolean; typing?: boolean; streamingDot?: string }) {
+const MessageRow = memo(function MessageRow({ role, content, ts, streamingTail = false, typing = false, streamingDot, askCardByQuestion }: { role: string; content: Block[]; ts: Date | string; streamingTail?: boolean; typing?: boolean; streamingDot?: string; askCardByQuestion?: Map<string, any> }) {
   // Tool-result-only rows belong with the assistant's preceding tool calls,
   // so we render them as condensed inline chips with no bubble.
   const allToolResults = content.length > 0 && content.every((b) => b.type === 'tool_result');
@@ -2456,8 +2484,25 @@ const MessageRow = memo(function MessageRow({ role, content, ts, streamingTail =
 
   // Group consecutive same-tool tool_use calls so a noisy claude turn doesn't
   // generate 12 individual cards.
-  const grouped = groupConsecutiveTools(content);
+  const grouped = groupConsecutiveTools(content, askCardByQuestion);
   const hasVisibleText = content.some((b) => b.type === 'text' && (b as any).text?.trim());
+
+  // Interaction cards (permission / question prompts) carry their own border +
+  // controls — render full-width & centered regardless of which message hosts
+  // them: a standalone system row, OR an mcp__hermit__ask tool_use we swapped
+  // for the card at its call site (so it sits beside the question text, not in
+  // an assistant bubble). Must precede the role-specific branches below.
+  if (grouped.some((g) => g.kind === 'interaction')) {
+    return (
+      <div className="flex justify-center my-2">
+        <div className="w-full max-w-[92%] space-y-2">
+          {grouped.map((g, i) => (
+            <GroupView key={i} group={g} dark={false} />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   // Tool-use-only assistant turns: render the chips bare (no bubble, no
   // placeholder text). They belong visually with the surrounding tool_result
@@ -2494,19 +2539,7 @@ const MessageRow = memo(function MessageRow({ role, content, ts, streamingTail =
   // conversation. Render them centered, muted, and full-width with a hairline
   // divider treatment instead of the loud amber bubble.
   if (isSystem) {
-    // Interaction cards (permission / question prompts) carry their own border +
-    // controls, so render them full-width and centered — never inside the pill.
-    if (grouped.some((g) => g.kind === 'interaction')) {
-      return (
-        <div className="flex justify-center my-2">
-          <div className="w-full max-w-[92%] space-y-2">
-            {grouped.map((g, i) => (
-              <GroupView key={i} group={g} dark={false} />
-            ))}
-          </div>
-        </div>
-      );
-    }
+    // (Interaction cards are handled by the role-agnostic branch above.)
     // Short notices (one-liners like "[session restarted]") render as the
     // existing hairline pill. Long ones (captured slash-command TUI output,
     // multi-line errors, etc.) get a wider card so any fenced code block
@@ -2660,7 +2693,7 @@ function imageSourceToUrl(src: any): { url: string; mimeType: string | null } | 
   return null;
 }
 
-function groupConsecutiveTools(blocks: Block[]): Group[] {
+function groupConsecutiveTools(blocks: Block[], askCardByQuestion?: Map<string, any>): Group[] {
   const out: Group[] = [];
   for (const b of blocks) {
     if (b.type === 'text') {
@@ -2669,6 +2702,17 @@ function groupConsecutiveTools(blocks: Block[]): Group[] {
       const t = (b as any).thinking ?? (b as any).text;
       if (t) out.push({ kind: 'thinking', text: String(t) });
     } else if (b.type === 'tool_use') {
+      // mcp__hermit__ask IS the question prompt — render the interactive
+      // InteractionCard right here at the call site instead of the raw tool
+      // JSON. The card is matched (by question text) to the separately-synced
+      // system interaction message, which carries the interactionId/status the
+      // buttons need. Falls back to the raw call if that block isn't in the
+      // loaded window. (The standalone system card is suppressed in
+      // MessageTimeline so the card shows once, anchored beside the question —
+      // it otherwise sorts ABOVE the question text, see the suppression note.)
+      const askQ = (b as any).name === 'mcp__hermit__ask' ? (b as any).input?.question : undefined;
+      const askCard = typeof askQ === 'string' ? askCardByQuestion?.get(askQ) : undefined;
+      if (askCard) { out.push({ kind: 'interaction', block: askCard }); continue; }
       const prev = out[out.length - 1];
       const call = { id: (b as any).id ?? '', name: (b as any).name ?? '?', input: (b as any).input ?? {} };
       if (prev && prev.kind === 'tool') prev.calls.push(call);
