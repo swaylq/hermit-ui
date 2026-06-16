@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Pencil, Check, X, RotateCw, ChevronDown, Download, Trash2, Package } from 'lucide-react';
+import { Pencil, Check, X, ChevronDown, Download, Trash2, Package } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -147,9 +147,11 @@ function SessionsSection({
   loading: boolean;
 }) {
   const utils = trpc.useUtils();
-  const requestRestart = trpc.chat.requestSessionRestart.useMutation({
+  const deleteSession = trpc.chat.deleteSession.useMutation({
     onSuccess: () => {
-      utils.chat.listSessions.invalidate({ agentName });
+      // Invalidate every listSessions variant so the row also vanishes from the
+      // main sidebar, not just this agent-filtered list.
+      utils.chat.listSessions.invalidate();
     },
   });
 
@@ -168,9 +170,10 @@ function SessionsSection({
       ) : (
         <ul className="space-y-1.5">
           {sessions.map((s) => {
-            const pending = !!s.restartRequestedAt;
-            const disabled = !!s.closedAt || pending || requestRestart.isPending;
             const status = sessionStatusView(s, { unread: isSessionUnread(s) });
+            // Only disable the row currently being deleted (isPending is shared
+            // across rows, so narrow it by the in-flight variables' id).
+            const deleting = deleteSession.isPending && deleteSession.variables?.id === s.id;
             return (
               <li key={s.id}>
                 <Link
@@ -201,23 +204,19 @@ function SessionsSection({
                     <Button
                       size="icon-sm"
                       variant="ghost"
-                      className="shrink-0 text-muted-foreground hover:text-foreground"
-                      disabled={disabled}
+                      className="shrink-0 text-muted-foreground hover:text-rose-500"
+                      disabled={deleting}
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        requestRestart.mutate({ id: s.id });
+                        if (confirm('删除这个会话及其聊天记录？此操作不可撤销。')) {
+                          deleteSession.mutate({ id: s.id });
+                        }
                       }}
-                      aria-label="restart session"
-                      title={
-                        s.closedAt
-                          ? 'session is closed'
-                          : pending
-                            ? 'restart already requested — gateway will pick it up'
-                            : "restart — kill this session's tmux pane; next message respawns with --resume"
-                      }
+                      aria-label="delete session"
+                      title="删除会话（连同聊天记录，不可撤销）"
                     >
-                      <RotateCw className={cn('size-3.5', (pending || requestRestart.isPending) && 'animate-spin')} />
+                      <Trash2 className={cn('size-3.5', deleting && 'animate-pulse')} />
                     </Button>
                   </div>
                 </Link>
