@@ -37,6 +37,7 @@ import type { RawData } from 'ws';
 import { WebSocketServer, type WebSocket as WSWebSocket } from 'ws';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from './src/generated/prisma/client';
+import { setGatewaySocket, clearGatewaySocket, resolveFsResponse } from './src/server/gateway-bridge';
 
 const port = parseInt(process.env.PORT || '4101', 10);
 const dev = process.env.NODE_ENV !== 'production';
@@ -136,6 +137,9 @@ app.prepare().then(() => {
       try { prior.close(1000, 'superseded'); } catch {}
     }
     gateways.set(machineId, sock);
+    // Mirror into the cross-module bridge so tRPC / route handlers can send the
+    // file-manager fs.req frames over this same socket (see gateway-bridge.ts).
+    setGatewaySocket(machineId, sock);
     console.log(`[gateway-ws] connected machineId=${machineId.slice(-6)} from ${req.socket.remoteAddress}`);
 
     // Heartbeat — Caddy/Xray idle proxies drop quiet conns after ~1m.
@@ -148,6 +152,11 @@ app.prepare().then(() => {
       let msg: any;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (!msg || typeof msg !== 'object') return;
+      // File-manager response (reqId-correlated, no termId) — hand to the bridge.
+      if (msg.type === 'fs.res') {
+        resolveFsResponse(msg);
+        return;
+      }
       const termId = typeof msg.termId === 'string' ? msg.termId : '';
       if (!termId) return;
       const route = termRoutes.get(termId);
@@ -174,6 +183,7 @@ app.prepare().then(() => {
       if (gateways.get(machineId) === sock) {
         gateways.delete(machineId);
       }
+      clearGatewaySocket(machineId, sock);
       console.log(`[gateway-ws] disconnected machineId=${machineId.slice(-6)}`);
       // Kill terms tied to THIS machine only. Other machines' terms keep going.
       for (const [termId, route] of [...termRoutes.entries()]) {

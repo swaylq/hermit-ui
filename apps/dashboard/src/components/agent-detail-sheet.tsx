@@ -24,6 +24,8 @@ import { type FileItem as SkillFileItem } from './file-detail';
 import { sessionStatusView } from '@/lib/session-status';
 import { isSessionUnread } from '@/lib/session-read';
 import { removeAgentSkill } from '@/lib/optimistic-skills';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { AgentFiles } from './agent-files';
 
 type SessionRow = inferRouterOutputs<AppRouter>['chat']['listSessions'][number];
 type AgentByNameOutput = NonNullable<inferRouterOutputs<AppRouter>['agents']['byName']>;
@@ -52,13 +54,43 @@ export function AgentDetailBody({ name }: { name: string }) {
     return <div className="p-4 sm:p-6 text-sm text-muted-foreground">agent not found.</div>;
   }
   return (
-    <div className="p-4 sm:p-6 space-y-5">
-      <SessionsSection agentName={name} sessions={sessions.data ?? null} loading={sessions.isPending} />
-      <CronsSection agentName={name} />
-      <SkillsAndTasks agent={query.data.agent} agentName={name} />
-      <MarkdownSections agent={query.data.agent} agentName={name} />
-      <TemplatePublishSection agentName={name} />
+    <div className="p-4 sm:p-6">
+      <AgentDetailContent name={name} agent={query.data.agent} sessions={sessions.data ?? null} sessionsLoading={sessions.isPending} />
     </div>
+  );
+}
+
+// Shared tabbed body: "详情" (sessions / crons / skills / markdown / publish) +
+// "文件" (the per-agent file manager). Used by both the inline /agents body and
+// the slide-over Sheet so the two never drift.
+function AgentDetailContent({
+  name,
+  agent,
+  sessions,
+  sessionsLoading,
+}: {
+  name: string;
+  agent: AgentByNameOutput['agent'];
+  sessions: SessionRow[] | null;
+  sessionsLoading: boolean;
+}) {
+  return (
+    <Tabs defaultValue="detail" className="w-full">
+      <TabsList className="w-full">
+        <TabsTrigger value="detail">详情</TabsTrigger>
+        <TabsTrigger value="files">文件</TabsTrigger>
+      </TabsList>
+      <TabsContent value="detail" className="space-y-5">
+        <SessionsSection agentName={name} sessions={sessions} loading={sessionsLoading} />
+        <CronsSection agentName={name} />
+        <SkillsAndTasks agent={agent} agentName={name} />
+        <MarkdownSections agent={agent} agentName={name} />
+        <TemplatePublishSection agentName={name} />
+      </TabsContent>
+      <TabsContent value="files">
+        <AgentFiles agentName={name} directory={agent.directory} />
+      </TabsContent>
+    </Tabs>
   );
 }
 
@@ -113,16 +145,8 @@ export function AgentDetailSheet({
 
         {query.data && name && (
           <ScrollArea className="flex-1 min-h-0">
-            <div className="p-6 space-y-5">
-              <SessionsSection agentName={name} sessions={sessions.data ?? null} loading={sessions.isPending} />
-
-              <CronsSection agentName={name} />
-
-              <SkillsAndTasks agent={query.data.agent} agentName={name} />
-
-              <MarkdownSections agent={query.data.agent} agentName={name} />
-
-              <TemplatePublishSection agentName={name} />
+            <div className="p-6">
+              <AgentDetailContent name={name} agent={query.data.agent} sessions={sessions.data ?? null} sessionsLoading={sessions.isPending} />
             </div>
           </ScrollArea>
         )}

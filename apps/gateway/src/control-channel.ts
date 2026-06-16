@@ -36,6 +36,7 @@
 import WebSocket from 'ws';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 import { DASHBOARD_URL, ASST_KEY } from './config';
+import { handleFsRequest } from './file-manager';
 
 type IPty = ReturnType<typeof pty.spawn>;
 
@@ -243,6 +244,16 @@ function handleFrame(raw: WebSocket.RawData) {
     }
     case 'pty.close': {
       closePty(termId);
+      return;
+    }
+    case 'fs.req': {
+      // Per-agent file manager request/response (apps/gateway/src/file-manager.ts).
+      // Independent of the pty.* multiplexing above — correlated by reqId, not termId.
+      const reqId = typeof msg.reqId === 'string' ? msg.reqId : '';
+      if (!reqId) return;
+      handleFsRequest(msg).then((res) => {
+        safeSend(res.ok ? { type: 'fs.res', reqId, ok: true, data: res.data } : { type: 'fs.res', reqId, ok: false, error: res.error });
+      });
       return;
     }
     case 'ping': {
