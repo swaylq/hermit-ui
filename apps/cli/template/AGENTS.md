@@ -2,6 +2,10 @@
 
 This folder is home. Treat it that way.
 
+## Projects — keep your work in `projects/`
+
+Every project you take on lives in its own folder under `projects/` — `projects/<project-name>/`. Code, scratch files, deliverables, repos you're building: all of it goes inside a project folder, **never loose in the agent root or in `~`**. The root is for your operating files (the `.md` docs, `evolution/`, `scripts/`, `.claude/`); `projects/` is for the actual work. This keeps the root clean, makes each project self-contained (easy to browse, zip, hand off, or delete), and is where the dashboard file browser expects your work to be.
+
 ## Every Session
 
 Bootstrap order lives in `CLAUDE.md`. One rule:
