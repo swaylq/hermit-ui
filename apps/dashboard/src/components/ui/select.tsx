@@ -50,7 +50,10 @@ function SelectContent({
         align="start"
         sideOffset={sideOffset}
         alignItemWithTrigger={false}
-        className="z-50 outline-none"
+        // z-[200] so the dropdown floats ABOVE modal overlays (Overlay = z-110,
+        // lightbox = z-100) when a Select is used inside one — e.g. the market
+        // skill detail's group setter. Was z-50, which hid behind the modal.
+        className="z-[200] outline-none"
       >
         <SelectPrimitive.Popup
           data-slot="select-content"
