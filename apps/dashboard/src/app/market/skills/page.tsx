@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { MarketSkillDetail } from '@/components/market-skill-detail';
-import { CategorySelect } from '@/components/category-chips';
+import { CategoryChips } from '@/components/category-chips';
 import { ImportSkillDialog } from '@/components/import-skill-dialog';
 import { UploadSkillDialog } from '@/components/upload-skill-dialog';
 
@@ -62,7 +62,7 @@ export default function MarketSkillsPage() {
 
       {cats.length > 0 && (
         <div className="border-b border-border px-4 py-2 shrink-0">
-          <CategorySelect cats={cats} value={cat} onChange={setCat} />
+          <CategoryChips cats={cats} value={cat} onChange={setCat} />
         </div>
       )}
 

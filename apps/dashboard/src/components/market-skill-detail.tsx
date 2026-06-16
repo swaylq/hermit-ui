@@ -123,7 +123,7 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
                   {groupOptions.map((g) => (
                     <SelectItem key={g} value={g}>{g}</SelectItem>
                   ))}
-                  <SelectItem value="__new__">＋ 新建分组…</SelectItem>
+                  <SelectItem value="__new__">+ New group…</SelectItem>
                 </SelectContent>
               </Select>
             ) : (
@@ -136,7 +136,7 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
                   if (e.key === 'Escape') setNewGroup(null);
                 }}
                 onBlur={() => { const n = newGroup.trim(); if (n && n !== (skill.category ?? '')) setCat.mutate({ slug, category: n }); else setNewGroup(null); }}
-                placeholder="新分组名，回车保存（Esc 取消）"
+                placeholder="New group name — Enter to save, Esc to cancel"
                 className="h-7 min-w-0 flex-1 rounded border border-border bg-background px-2 outline-none transition-colors focus:border-foreground/30"
               />
             )}
