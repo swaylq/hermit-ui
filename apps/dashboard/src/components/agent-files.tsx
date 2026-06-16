@@ -105,9 +105,9 @@ export function AgentFiles({ agentName, directory }: { agentName: string; direct
   const activeDir = selected ? (selected.type === 'dir' ? selected.path : parentOf(selected.path)) : '';
 
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col flex-1 min-h-0 gap-2 p-3 sm:p-4">
       {error && (
-        <div className="flex items-start gap-2 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-500">
+        <div className="shrink-0 flex items-start gap-2 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-500">
           <span className="flex-1 break-words">{error}</span>
           <button onClick={() => setError(null)} className="shrink-0"><X className="h-3.5 w-3.5" /></button>
         </div>
@@ -122,7 +122,7 @@ export function AgentFiles({ agentName, directory }: { agentName: string; direct
         onRefresh={() => utils.fileManager.list.invalidate()}
       />
 
-      <div className="flex h-[58vh] min-h-[320px] rounded-lg border border-border overflow-hidden">
+      <div className="flex flex-1 min-h-[260px] rounded-lg border border-border overflow-hidden">
         {/* Left: lazy file tree */}
         <div className="w-2/5 min-w-[150px] max-w-[320px] shrink-0 border-r border-border overflow-y-auto bg-muted/20">
           <TreeChildren

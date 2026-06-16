@@ -6,10 +6,9 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { Plus, Trash2, Check, X, FolderPlus, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { AgentDetailBody } from '@/components/agent-detail-sheet';
+import { AgentDetailBody, AgentDetailTabs, type DetailTab } from '@/components/agent-detail-sheet';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 
 export default function AgentsPage() {
@@ -82,6 +81,7 @@ function AgentMain({ name, pendingRequests }: { name: string; pendingRequests: P
   });
   const isDeleting = pendingRequests.some((p) => p.kind === 'delete' && p.agentName === name);
   const isScaffolding = pendingRequests.some((p) => p.kind === 'create' && p.agentName === name);
+  const [tab, setTab] = useState<DetailTab>('detail');
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
@@ -96,6 +96,7 @@ function AgentMain({ name, pendingRequests }: { name: string; pendingRequests: P
             <span className="text-[11px] text-amber-500 animate-pulse">moving to recycle bin…</span>
           )}
         </div>
+        <AgentDetailTabs tab={tab} setTab={setTab} />
         <div className="flex-1" />
         <Link
           href={`/chat?agent=${encodeURIComponent(name)}`}
@@ -116,11 +117,9 @@ function AgentMain({ name, pendingRequests }: { name: string; pendingRequests: P
           }}
         />
       </header>
-      <ScrollArea className="flex-1 min-h-0 bg-background">
-        <div className="max-w-3xl w-full mx-auto">
-          <AgentDetailBody name={name} />
-        </div>
-      </ScrollArea>
+      <div className="flex-1 min-h-0 bg-background">
+        <AgentDetailBody name={name} tab={tab} />
+      </div>
     </div>
   );
 }

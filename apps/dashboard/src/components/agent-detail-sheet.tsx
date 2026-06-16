@@ -4,7 +4,6 @@ import { useCallback, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Pencil, Check, X, ChevronDown, Download, Trash2, Package, Info, Folder } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -29,11 +28,13 @@ import { AgentFiles } from './agent-files';
 type SessionRow = inferRouterOutputs<AppRouter>['chat']['listSessions'][number];
 type AgentByNameOutput = NonNullable<inferRouterOutputs<AppRouter>['agents']['byName']>;
 
+export type DetailTab = 'detail' | 'files';
+
 // AgentDetailBody — renders the agent detail panel without a Sheet wrapper.
-// Used by the inline /agents page (which lays the detail out side-by-side
-// with the sidebar, no modal needed). Owns its own queries so callers just
-// pass `name` and get a rendered detail block.
-export function AgentDetailBody({ name }: { name: string }) {
+// Used by the inline /agents page. Owns its own queries; the active `tab` is
+// owned by the caller so the tab strip (<AgentDetailTabs>) can ride the page
+// header row next to the title + Chat/delete instead of taking its own line.
+export function AgentDetailBody({ name, tab }: { name: string; tab: DetailTab }) {
   const query = trpc.agents.byName.useQuery({ name }, { refetchInterval: 30_000 });
   const sessions = trpc.chat.listSessions.useQuery({ agentName: name }, { refetchInterval: 5_000 });
 
@@ -46,62 +47,61 @@ export function AgentDetailBody({ name }: { name: string }) {
       </div>
     );
   }
-  if (query.error) {
-    return <div className="p-4 sm:p-6 text-sm text-rose-400">error: {query.error.message}</div>;
-  }
-  if (!query.data) {
-    return <div className="p-4 sm:p-6 text-sm text-muted-foreground">agent not found.</div>;
-  }
-  return (
-    <div className="p-4 sm:p-6">
-      <AgentDetailContent name={name} agent={query.data.agent} sessions={sessions.data ?? null} sessionsLoading={sessions.isPending} />
-    </div>
-  );
+  if (query.error) return <div className="p-4 sm:p-6 text-sm text-rose-400">error: {query.error.message}</div>;
+  if (!query.data) return <div className="p-4 sm:p-6 text-sm text-muted-foreground">agent not found.</div>;
+  return <AgentDetailContent name={name} agent={query.data.agent} sessions={sessions.data ?? null} sessionsLoading={sessions.isPending} tab={tab} />;
 }
 
-// Shared tabbed body: "详情" (sessions / crons / skills / markdown / publish) +
-// "文件" (the per-agent file manager). Used by both the inline /agents body and
-// the slide-over Sheet so the two never drift.
-function AgentDetailContent({
-  name,
-  agent,
-  sessions,
-  sessionsLoading,
-}: {
-  name: string;
-  agent: AgentByNameOutput['agent'];
-  sessions: SessionRow[] | null;
-  sessionsLoading: boolean;
-}) {
-  const [tab, setTab] = useState<'detail' | 'files'>('detail');
-  // Settings-strip styling: a thin bottom-bordered row of icon+label pills,
-  // matching components/settings-tabs.tsx so the chrome reads the same.
+// The "详情 / 文件" tab strip — settings-strip styling (icon+label pills, see
+// components/settings-tabs.tsx). Rendered in the parent's header row (page
+// header / SheetHeader) so it shares the line with the title + actions.
+export function AgentDetailTabs({ tab, setTab }: { tab: DetailTab; setTab: (t: DetailTab) => void }) {
   const pill = (active: boolean) =>
     cn(
       'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[13px] whitespace-nowrap transition-colors cursor-pointer',
       active ? 'bg-accent text-foreground font-medium' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
     );
   return (
-    <div>
-      <div className="border-b border-border flex items-center gap-1 h-10">
-        <button type="button" onClick={() => setTab('detail')} className={pill(tab === 'detail')}>
-          <Info className="h-3.5 w-3.5" /> 详情
-        </button>
-        <button type="button" onClick={() => setTab('files')} className={pill(tab === 'files')}>
-          <Folder className="h-3.5 w-3.5" /> 文件
-        </button>
-      </div>
-      {tab === 'detail' ? (
-        <div className="space-y-5 pt-4">
-          <SessionsSection agentName={name} sessions={sessions} loading={sessionsLoading} />
-          <CronsSection agentName={name} />
-          <SkillsAndTasks agent={agent} agentName={name} />
-          <MarkdownSections agent={agent} agentName={name} />
-          <TemplatePublishSection agentName={name} />
-        </div>
+    <div className="flex items-center gap-1">
+      <button type="button" onClick={() => setTab('detail')} className={pill(tab === 'detail')}>
+        <Info className="h-3.5 w-3.5" /> 详情
+      </button>
+      <button type="button" onClick={() => setTab('files')} className={pill(tab === 'files')}>
+        <Folder className="h-3.5 w-3.5" /> 文件
+      </button>
+    </div>
+  );
+}
+
+// Tabbed body, fill-height + controlled by `tab` (the strip lives in the parent
+// header). "详情" scrolls (centered, max-w-3xl); "文件" is the file manager
+// filling the whole pane. Fills its parent — wrap callers in a flex-1 min-h-0.
+function AgentDetailContent({
+  name,
+  agent,
+  sessions,
+  sessionsLoading,
+  tab,
+}: {
+  name: string;
+  agent: AgentByNameOutput['agent'];
+  sessions: SessionRow[] | null;
+  sessionsLoading: boolean;
+  tab: DetailTab;
+}) {
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      {tab === 'files' ? (
+        <AgentFiles agentName={name} directory={agent.directory} />
       ) : (
-        <div className="pt-4">
-          <AgentFiles agentName={name} directory={agent.directory} />
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-5">
+            <SessionsSection agentName={name} sessions={sessions} loading={sessionsLoading} />
+            <CronsSection agentName={name} />
+            <SkillsAndTasks agent={agent} agentName={name} />
+            <MarkdownSections agent={agent} agentName={name} />
+            <TemplatePublishSection agentName={name} />
+          </div>
         </div>
       )}
     </div>
@@ -128,6 +128,7 @@ export function AgentDetailSheet({
     { agentName: name ?? '' },
     { enabled: !!name && open, refetchInterval: open ? 5_000 : false },
   );
+  const [tab, setTab] = useState<DetailTab>('detail');
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -137,15 +138,18 @@ export function AgentDetailSheet({
           variant so the wider cap actually takes effect. */}
       <SheetContent className="w-full sm:max-w-2xl data-[side=right]:sm:max-w-2xl overflow-hidden flex flex-col gap-0 p-0">
         <SheetHeader className="border-b">
-          <div className="min-w-0">
-            <SheetTitle className="font-mono">{name ?? '—'}</SheetTitle>
-            <SheetDescription>
-              {query.data?.agent.directory ? (
-                <span className="font-mono text-[11px] truncate block">{query.data.agent.directory}</span>
-              ) : (
-                'agent workspace'
-              )}
-            </SheetDescription>
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <SheetTitle className="font-mono truncate">{name ?? '—'}</SheetTitle>
+              <SheetDescription>
+                {query.data?.agent.directory ? (
+                  <span className="font-mono text-[11px] truncate block">{query.data.agent.directory}</span>
+                ) : (
+                  'agent workspace'
+                )}
+              </SheetDescription>
+            </div>
+            {query.data && <AgentDetailTabs tab={tab} setTab={setTab} />}
           </div>
         </SheetHeader>
 
@@ -158,11 +162,9 @@ export function AgentDetailSheet({
         )}
 
         {query.data && name && (
-          <ScrollArea className="flex-1 min-h-0">
-            <div className="p-6">
-              <AgentDetailContent name={name} agent={query.data.agent} sessions={sessions.data ?? null} sessionsLoading={sessions.isPending} />
-            </div>
-          </ScrollArea>
+          <div className="flex-1 min-h-0">
+            <AgentDetailContent name={name} agent={query.data.agent} sessions={sessions.data ?? null} sessionsLoading={sessions.isPending} tab={tab} />
+          </div>
         )}
 
         {query.error && (
