@@ -234,4 +234,8 @@
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
   }
+  /* For a bottom bar that already has its own bottom padding: ABSORB the home-
+     indicator inset into that padding (max, not stack) so the bar sits snug above
+     the indicator instead of leaving extra empty space below its content. */
+  .pwa-pb-safe { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
 }

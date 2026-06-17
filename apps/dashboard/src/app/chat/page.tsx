@@ -2194,16 +2194,16 @@ function ComposeBar({
 
   return (
     <form
-      // pwa-safe-b: in the installed PWA the composer's background reaches the
-      // bottom edge (home indicator) while the input stays above it — no empty
-      // band below the bar. No-op in a normal browser tab.
-      className={cn('shrink-0 bg-background transition-colors pwa-safe-b', dragHover && 'bg-accent/30')}
+      className={cn('shrink-0 bg-background transition-colors', dragHover && 'bg-accent/30')}
       onSubmit={(e) => { e.preventDefault(); submit(); }}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      <div className="mx-auto w-full max-w-3xl px-3 pb-3 pt-1">
+      {/* pwa-pb-safe: in the installed PWA, the composer's bottom padding grows to
+          clear the home indicator (absorbed via max(), not stacked) so the input
+          sits snug above it with no empty band. No-op in a normal browser tab. */}
+      <div className="mx-auto w-full max-w-3xl px-3 pb-3 pt-1 pwa-pb-safe">
         {attachments.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
             {attachments.map((a) => (
@@ -2356,7 +2356,7 @@ function ComposeBar({
             </button>
           )}
         </div>
-        <p className="mt-1.5 text-center text-[10px] text-muted-foreground/50">
+        <p className="mt-1.5 text-center text-[10px] text-muted-foreground/50 hidden sm:block">
           messages go to the agent&apos;s terminal · ↵ send · ⇧↵ newline · paste or drop images
         </p>
       </div>
