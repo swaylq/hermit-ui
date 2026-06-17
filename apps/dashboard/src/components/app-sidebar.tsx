@@ -309,7 +309,10 @@ export function AppSidebar() {
                 href="/chat"
                 aria-label="Hermit home"
                 className={cn(
-                  'flex flex-1 min-w-0 items-center rounded-md px-1 py-1 hover:bg-sidebar-accent/60 transition-colors cursor-pointer',
+                  // pl-3 so the wordmark's left edge lines up with the "New chat"
+                  // icon below it (header px-2 = 8px + pl-3 = 12px → 20px, matching
+                  // the CTA container px-2 + the CTA button's px-3).
+                  'flex flex-1 min-w-0 items-center rounded-md pl-3 pr-1 py-1 hover:bg-sidebar-accent/60 transition-colors cursor-pointer',
                   collapsed && 'lg:hidden',
                 )}
               >
