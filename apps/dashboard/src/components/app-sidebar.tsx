@@ -268,19 +268,25 @@ export function AppSidebar() {
             </>
           ) : (
             <>
-              {/* Brand mark, top-left — the hermit-crab logo, links home (/chat).
-                  Hidden on the narrow rail (collapsed) so only the expand toggle
-                  shows there. No wordmark — just the mark. */}
+              {/* Brand mark, top-left — the hermit-crab logo + "Hermit" wordmark,
+                  links home (/chat). Hidden on the narrow rail (collapsed) so only
+                  the expand toggle shows there. The wordmark is a Cochin PNG used
+                  as a CSS mask (bg-sidebar-foreground) so it follows the theme. */}
               <Link
                 href="/chat"
                 aria-label="Hermit home"
                 className={cn(
-                  'flex flex-1 min-w-0 items-center rounded-md px-1 py-1 hover:bg-sidebar-accent/60 transition-colors cursor-pointer',
+                  'flex flex-1 min-w-0 items-center gap-2 rounded-md px-1 py-1 hover:bg-sidebar-accent/60 transition-colors cursor-pointer',
                   collapsed && 'lg:hidden',
                 )}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/logo-crab.png" alt="Hermit" className="h-7 w-7 shrink-0 object-contain" />
+                <img src="/logo-crab.png" alt="" className="h-7 w-7 shrink-0 object-contain" />
+                <span
+                  aria-hidden="true"
+                  className="wordmark-hermit shrink-0 bg-sidebar-foreground"
+                  style={{ width: 76, height: 19 }}
+                />
               </Link>
               <Link
                 href="/market/skills"

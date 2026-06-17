@@ -250,3 +250,12 @@
      the indicator instead of leaving extra empty space below its content. */
   .pwa-pb-safe { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
 }
+
+/* "Hermit" wordmark — a Cochin rendering baked to a transparent PNG, used as a
+   CSS mask so its colour comes from the element's background
+   (bg-sidebar-foreground) and therefore follows the light / dark theme. Sized by
+   the consumer (explicit width/height); the mask scales to contain. */
+.wordmark-hermit {
+  -webkit-mask: url(/wordmark-hermit.png) left center / contain no-repeat;
+  mask: url(/wordmark-hermit.png) left center / contain no-repeat;
+}
