@@ -1397,7 +1397,7 @@ function SessionPane({ sessionId }: { sessionId: string }) {
 // with history preserved.
 function RestartBar({ restarting, onRestart }: { restarting: boolean; onRestart: () => void }) {
   return (
-    <div className="shrink-0 bg-background">
+    <div className="shrink-0 bg-background pwa-safe-b">
       <div className="mx-auto w-full max-w-3xl px-3 pb-3 pt-1">
         <div className="flex items-center justify-between gap-3 rounded-[26px] border border-border bg-muted/40 px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
@@ -2194,7 +2194,10 @@ function ComposeBar({
 
   return (
     <form
-      className={cn('shrink-0 bg-background transition-colors', dragHover && 'bg-accent/30')}
+      // pwa-safe-b: in the installed PWA the composer's background reaches the
+      // bottom edge (home indicator) while the input stays above it — no empty
+      // band below the bar. No-op in a normal browser tab.
+      className={cn('shrink-0 bg-background transition-colors pwa-safe-b', dragHover && 'bg-accent/30')}
       onSubmit={(e) => { e.preventDefault(); submit(); }}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
