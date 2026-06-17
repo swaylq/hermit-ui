@@ -27,15 +27,17 @@ export default function GlobalMemoryPage() {
       <SettingsTabs active="memory" />
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-4">
-          {/* Intro + on/off */}
+          {/* Header: title + on/off, with a compact one-line description */}
           <div className="flex items-start justify-between gap-3">
-            <p className="text-xs text-muted-foreground min-w-0">
-              Loaded by every agent on <span className="font-mono text-foreground/80">{machineName}</span>. Edit the
-              inline note or add files in the explorer below — both are imported into this machine&apos;s{' '}
-              <code className="font-mono">~/.claude/CLAUDE.md</code>. Per-machine; switch machines (top-left) to edit another.
-            </p>
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-foreground">Global Memory</h2>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                Loaded by every agent on <span className="font-mono text-foreground/80">{machineName}</span> · imported into{' '}
+                <code className="font-mono">~/.claude/CLAUDE.md</code> · per-machine (switch top-left)
+              </p>
+            </div>
             <label className="flex shrink-0 items-center gap-2 pt-0.5 text-xs cursor-pointer select-none">
-              <span className={enabled ? 'font-medium text-emerald-600' : 'text-muted-foreground'}>{enabled ? 'on' : 'off'}</span>
+              <span className={enabled ? 'font-medium text-emerald-600' : 'text-muted-foreground'}>{enabled ? 'On' : 'Off'}</span>
               <button
                 type="button"
                 role="switch"

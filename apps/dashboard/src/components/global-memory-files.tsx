@@ -6,7 +6,8 @@
 // in-browser AUTHORING: New file + edit/save text (the folder is for writing
 // memory notes, not uploading binaries — so no upload button here). Every text
 // file dropped here is referenced into ~/.claude/CLAUDE.md as an @import by the
-// gateway, so all agents on this machine load it.
+// gateway, so all agents on this machine load it. The inline note (the CLAUDE.md
+// managed block) rides along as the explorer's first entry.
 
 import { useEffect, useState } from 'react';
 import {
@@ -47,12 +48,12 @@ async function fetchPreparedBlob(
     const s = await utils.fileManager.downloadStatus.fetch({ id });
     if (s.status === 'ready') {
       const res = await fetch(`/api/file-manager/download/${encodeURIComponent(id)}`, { headers: { 'x-asst-key': getActiveKey() } });
-      if (!res.ok) throw new Error(`加载失败 (${res.status})`);
+      if (!res.ok) throw new Error(`Load failed (${res.status})`);
       return { blob: await res.blob(), filename: s.filename };
     }
-    if (s.status === 'error') throw new Error(s.error || '准备失败');
+    if (s.status === 'error') throw new Error(s.error || 'Prepare failed');
   }
-  throw new Error('超时');
+  throw new Error('Timed out');
 }
 
 async function pullDownload(
@@ -110,47 +111,51 @@ export function GlobalMemoryFiles() {
         </div>
       )}
 
-      <Toolbar
-        activeDir={activeDir}
-        onError={setError}
-        onMkdir={(p) => toggleExpand(p, true)}
-        onCreated={(path, name) => { selectFile({ path, name, type: 'file', size: 0 }); setAutoEditPath(path); }}
-        onRefresh={() => utils.fileManager.list.invalidate()}
-      />
+      {/* One card: a toolbar header strip + the two-pane explorer body. */}
+      <div className="flex flex-1 min-h-[320px] flex-col overflow-hidden rounded-lg border border-border">
+        <Toolbar
+          activeDir={activeDir}
+          onError={setError}
+          onMkdir={(p) => toggleExpand(p, true)}
+          onCreated={(path, name) => { selectFile({ path, name, type: 'file', size: 0 }); setAutoEditPath(path); }}
+          onRefresh={() => utils.fileManager.list.invalidate()}
+        />
 
-      <div className="flex flex-1 min-h-[300px] rounded-lg border border-border overflow-hidden">
-        {/* Left: the inline note (pinned first) + the lazy file tree */}
-        <div className="w-2/5 min-w-[150px] max-w-[320px] shrink-0 border-r border-border overflow-y-auto bg-muted/20">
-          <button
-            type="button"
-            onClick={openNote}
-            style={{ paddingLeft: 8 }}
-            className={cn(
-              'flex w-full items-center gap-1 pr-1.5 h-7 cursor-pointer text-sm select-none',
-              noteOpen ? 'bg-accent text-foreground' : 'hover:bg-accent/40 text-foreground/85',
-            )}
-          >
-            <span className="w-3.5 shrink-0" />
-            <NotebookText className="h-4 w-4 shrink-0 text-amber-500" />
-            <span className="truncate flex-1 text-left">Inline note</span>
-          </button>
-          <TreeChildren
-            path="" depth={0}
-            expanded={expanded} toggleExpand={toggleExpand}
-            selectedPath={noteOpen ? null : (selected?.path ?? null)} onSelect={selectFile} onError={setError}
-          />
-        </div>
-        {/* Right: the note editor, or the selected file content / editor (inline) */}
-        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          {noteOpen ? (
-            <NotePane />
-          ) : (
-            <FilePane
-              key={selected?.path ?? '∅'}
-              selected={selected} autoEdit={!!selected && selected.path === autoEditPath}
-              onSelect={setSelected} onError={setError}
+        <div className="flex flex-1 min-h-0">
+          {/* Left: the inline note (pinned first) + the lazy file tree */}
+          <div className="w-2/5 min-w-[150px] max-w-[320px] shrink-0 border-r border-border overflow-y-auto bg-muted/20">
+            <div className="px-2 pt-2 pb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60">Note &amp; files</div>
+            <button
+              type="button"
+              onClick={openNote}
+              style={{ paddingLeft: 8 }}
+              className={cn(
+                'flex w-full items-center gap-1 pr-1.5 h-7 cursor-pointer text-sm select-none',
+                noteOpen ? 'bg-accent text-foreground' : 'hover:bg-accent/40 text-foreground/85',
+              )}
+            >
+              <span className="w-3.5 shrink-0" />
+              <NotebookText className="h-4 w-4 shrink-0 text-amber-500" />
+              <span className="truncate flex-1 text-left">Inline note</span>
+            </button>
+            <TreeChildren
+              path="" depth={0}
+              expanded={expanded} toggleExpand={toggleExpand}
+              selectedPath={noteOpen ? null : (selected?.path ?? null)} onSelect={selectFile} onError={setError}
             />
-          )}
+          </div>
+          {/* Right: the note editor, or the selected file content / editor (inline) */}
+          <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+            {noteOpen ? (
+              <NotePane />
+            ) : (
+              <FilePane
+                key={selected?.path ?? '∅'}
+                selected={selected} autoEdit={!!selected && selected.path === autoEditPath}
+                onSelect={setSelected} onError={setError}
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -192,20 +197,20 @@ function NotePane() {
           />
           <div className="flex shrink-0 items-center gap-2">
             <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate({ content: value })}>
-              {save.isPending ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> 保存中…</> : <><Save className="h-3.5 w-3.5 mr-1" /> 保存</>}
+              {save.isPending ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Saving…</> : <><Save className="h-3.5 w-3.5 mr-1" /> Save</>}
             </Button>
             <span className="text-[11px] text-muted-foreground">
               {save.isError ? (
                 <span className="text-rose-500">{save.error.message}</span>
               ) : dirty ? (
-                '有未保存的修改'
+                'Unsaved changes'
               ) : q.data?.updatedAt ? (
-                `已保存 · ${relTime(q.data.updatedAt)}`
+                `Saved · ${relTime(q.data.updatedAt)}`
               ) : (
-                '尚未设置'
+                'Not set yet'
               )}
             </span>
-            <span className="ml-auto text-[11px] tabular-nums text-muted-foreground/60">{value.length} 字符</span>
+            <span className="ml-auto text-[11px] tabular-nums text-muted-foreground/60">{value.length} chars</span>
           </div>
         </div>
       </div>
@@ -214,6 +219,7 @@ function NotePane() {
 }
 
 // ── Toolbar: new file + new folder, targeting the active directory ───────────
+// Rendered as the explorer card's header strip.
 function Toolbar({
   activeDir, onError, onMkdir, onCreated, onRefresh,
 }: {
@@ -251,16 +257,16 @@ function Toolbar({
   }
 
   return (
-    <div className="space-y-1.5">
+    <div className="shrink-0 space-y-1.5 border-b border-border bg-muted/30 px-2 py-2">
       <div className="flex items-center gap-1.5">
         <Button size="sm" variant="outline" onClick={() => { setMode('file'); setName(''); }}>
-          <FilePlus className="h-3.5 w-3.5 mr-1" /> 新建文件
+          <FilePlus className="h-3.5 w-3.5 mr-1" /> New file
         </Button>
         <Button size="sm" variant="ghost" onClick={() => { setMode('folder'); setName(''); }}>
-          <FolderPlus className="h-3.5 w-3.5 mr-1" /> 新建文件夹
+          <FolderPlus className="h-3.5 w-3.5 mr-1" /> New folder
         </Button>
         <span className="text-[11px] text-muted-foreground/70 font-mono truncate min-w-0">→ {activeDir || 'global-memory'}</span>
-        <Button size="icon-sm" variant="ghost" onClick={onRefresh} title="刷新" className="ml-auto shrink-0">
+        <Button size="icon-sm" variant="ghost" onClick={onRefresh} title="Refresh" className="ml-auto shrink-0">
           <RotateCw className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -271,7 +277,7 @@ function Toolbar({
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') close(); }}
-            placeholder={mode === 'file' ? `在 ${activeDir || 'global-memory'} 下新建文件（如 note.md）` : `在 ${activeDir || 'global-memory'} 下新建文件夹`}
+            placeholder={mode === 'file' ? `New file in ${activeDir || 'global-memory'} (e.g. note.md)` : `New folder in ${activeDir || 'global-memory'}`}
             autoFocus
             className="h-8 flex-1 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-foreground/30"
           />
@@ -302,7 +308,7 @@ function TreeChildren({
   }
   const entries = (list.data?.entries ?? []) as Entry[];
   if (entries.length === 0) {
-    return <div style={{ paddingLeft: indent + 16 }} className="py-1 text-[11px] text-muted-foreground/50">空 — 用上方「新建文件」开始</div>;
+    return <div style={{ paddingLeft: indent + 16 }} className="py-1 text-[11px] text-muted-foreground/50">Empty — use “New file” above to start</div>;
   }
   return (
     <ul>
@@ -314,7 +320,7 @@ function TreeChildren({
         />
       ))}
       {list.data?.truncated && (
-        <li style={{ paddingLeft: indent + 16 }} className="py-1 text-[11px] text-amber-600">…目录过大，已截断</li>
+        <li style={{ paddingLeft: indent + 16 }} className="py-1 text-[11px] text-amber-600">…directory too large, truncated</li>
       )}
     </ul>
   );
@@ -397,7 +403,7 @@ function FilePane({
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-center px-6 text-muted-foreground">
         <FileText className="h-9 w-9 mb-2 opacity-25" />
-        <p className="text-xs">在左侧选择文件查看 / 编辑，或新建一个文件开始写。</p>
+        <p className="text-xs">Select a file on the left to view / edit, or create one to start writing.</p>
       </div>
     );
   }
@@ -419,7 +425,7 @@ function FilePane({
   }
   function doDelete() {
     if (!selected) return;
-    if (!confirm(`删除${isDir ? '文件夹' : '文件'}「${selected.name}」${isDir ? '及其全部内容' : ''}？此操作不可撤销。`)) return;
+    if (!confirm(`Delete ${isDir ? 'folder' : 'file'} “${selected.name}”${isDir ? ' and all its contents' : ''}? This cannot be undone.`)) return;
     remove.mutate({ globalMemory: true, path: selected.path });
   }
   function commitRename() {
@@ -447,19 +453,19 @@ function FilePane({
         )}
         {renaming ? (
           <>
-            <button onClick={commitRename} className="p-1 text-muted-foreground hover:text-foreground" title="保存"><Check className="h-4 w-4" /></button>
-            <button onClick={() => setRenaming(false)} className="p-1 text-muted-foreground hover:text-foreground" title="取消"><X className="h-4 w-4" /></button>
+            <button onClick={commitRename} className="p-1 text-muted-foreground hover:text-foreground" title="Save"><Check className="h-4 w-4" /></button>
+            <button onClick={() => setRenaming(false)} className="p-1 text-muted-foreground hover:text-foreground" title="Cancel"><X className="h-4 w-4" /></button>
           </>
         ) : (
           <>
             {!isDir && !isImg && !editing && (
-              <button onClick={() => setEditing(true)} className="p-1 text-muted-foreground hover:text-foreground" title="编辑"><Pencil className="h-4 w-4" /></button>
+              <button onClick={() => setEditing(true)} className="p-1 text-muted-foreground hover:text-foreground" title="Edit"><Pencil className="h-4 w-4" /></button>
             )}
-            <button onClick={doDownload} disabled={downloading} className="p-1 text-muted-foreground hover:text-foreground" title={isDir ? '打包下载' : '下载'}>
+            <button onClick={doDownload} disabled={downloading} className="p-1 text-muted-foreground hover:text-foreground" title={isDir ? 'Download as zip' : 'Download'}>
               {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
             </button>
-            <button onClick={() => { setDraft(selected.name); setRenaming(true); }} className="p-1 text-muted-foreground hover:text-foreground" title="重命名"><Pencil className="h-4 w-4" /></button>
-            <button onClick={doDelete} disabled={remove.isPending} className="p-1 text-muted-foreground hover:text-rose-500" title="删除">
+            <button onClick={() => { setDraft(selected.name); setRenaming(true); }} className="p-1 text-muted-foreground hover:text-foreground" title="Rename"><Pencil className="h-4 w-4" /></button>
+            <button onClick={doDelete} disabled={remove.isPending} className="p-1 text-muted-foreground hover:text-rose-500" title="Delete">
               {remove.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
             </button>
           </>
@@ -470,8 +476,8 @@ function FilePane({
       <div className="flex-1 min-h-0 overflow-auto">
         {isDir ? (
           <div className="p-4 text-xs text-muted-foreground space-y-1">
-            <p className="font-mono text-foreground/70 break-all">{selected.path || '(根目录)'}</p>
-            <p>文件夹 — 在左侧展开浏览，或用上方按钮打包下载 / 重命名 / 删除。</p>
+            <p className="font-mono text-foreground/70 break-all">{selected.path || '(root)'}</p>
+            <p>Folder — expand it on the left, or use the buttons above to download / rename / delete.</p>
           </div>
         ) : editing && !isImg ? (
           <FileEditor path={selected.path} onError={onError} onDone={() => setEditing(false)} />
@@ -486,7 +492,7 @@ function FilePane({
 function DownloadBtn({ onDownload, downloading }: { onDownload: () => void; downloading: boolean }) {
   return (
     <Button size="sm" variant="outline" onClick={onDownload} disabled={downloading}>
-      {downloading ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1" />} 下载文件
+      {downloading ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1" />} Download
     </Button>
   );
 }
@@ -514,15 +520,15 @@ function FileEditor({ path, onError, onDone }: { path: string; onError: (e: stri
         disabled={q.isPending}
         spellCheck={false}
         autoFocus
-        placeholder="在此编写内容（Markdown）。保存后约 30 秒内被这台机器的 ~/.claude/CLAUDE.md 引用。"
+        placeholder="Write content here (Markdown). Referenced by this machine’s ~/.claude/CLAUDE.md within ~30s of saving."
         className="flex-1 min-h-[200px] w-full rounded-md border border-border bg-background p-3 font-mono text-[12px] leading-relaxed outline-none focus:border-foreground/30 resize-none"
       />
       <div className="flex items-center gap-2 shrink-0">
         <Button size="sm" disabled={save.isPending} onClick={() => save.mutate({ globalMemory: true, path, text: value })}>
-          {save.isPending ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> 保存中…</> : <><Save className="h-3.5 w-3.5 mr-1" /> 保存</>}
+          {save.isPending ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Saving…</> : <><Save className="h-3.5 w-3.5 mr-1" /> Save</>}
         </Button>
-        <Button size="sm" variant="ghost" onClick={onDone}>取消</Button>
-        <span className="ml-auto text-[11px] tabular-nums text-muted-foreground/60">{value.length} 字符</span>
+        <Button size="sm" variant="ghost" onClick={onDone}>Cancel</Button>
+        <span className="ml-auto text-[11px] tabular-nums text-muted-foreground/60">{value.length} chars</span>
       </div>
     </div>
   );
@@ -541,7 +547,7 @@ function FileContent({
       {isImg ? (
         size > PREVIEW_IMG_MAX ? (
           <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
-            <p>图片较大（{fmtSize(size)}），不自动预览。</p>
+            <p>Large image ({fmtSize(size)}) — not previewed automatically.</p>
             <DownloadBtn onDownload={onDownload} downloading={downloading} />
           </div>
         ) : (
@@ -572,8 +578,8 @@ function TextPreview({
   if (!q.data?.text) {
     return (
       <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
-        <p>空文件。</p>
-        <Button size="sm" variant="outline" onClick={onEdit}><Pencil className="h-3.5 w-3.5 mr-1" /> 编辑</Button>
+        <p>Empty file.</p>
+        <Button size="sm" variant="outline" onClick={onEdit}><Pencil className="h-3.5 w-3.5 mr-1" /> Edit</Button>
       </div>
     );
   }
@@ -611,7 +617,7 @@ function ImagePreview({
   if (state.error) {
     return (
       <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
-        <p>预览失败：{state.error}</p>
+        <p>Preview failed: {state.error}</p>
         <DownloadBtn onDownload={onDownload} downloading={downloading} />
       </div>
     );
@@ -619,7 +625,7 @@ function ImagePreview({
   if (!state.url) {
     return (
       <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> 加载预览…
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading preview…
       </div>
     );
   }
