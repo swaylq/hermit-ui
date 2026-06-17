@@ -1086,7 +1086,7 @@ function RecentSessions() {
           onClose={() => setMenu(null)}
           items={[
             {
-              label: pins.has(menu.id) ? '取消置顶' : '置顶',
+              label: pins.has(menu.id) ? 'Unpin' : 'Pin',
               icon: <Pin className="h-3.5 w-3.5 -rotate-45 fill-current" />,
               onClick: () => togglePin(menu.id),
             },

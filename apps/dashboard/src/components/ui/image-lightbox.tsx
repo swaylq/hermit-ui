@@ -204,6 +204,10 @@ export function ImageLightbox({
       const onImage = imgRef.current?.contains(e.target as Node);
       if (!onImage) {
         onOpenChange(false); // tapped the backdrop area
+      } else if (e.pointerType === 'touch') {
+        // On touch, a single tap closes the viewer (not zoom-toggle) — zooming
+        // on phones is pinch or the −/＋ buttons. Desktop keeps click-to-zoom.
+        onOpenChange(false);
       } else if (view.current.scale > 1.01) {
         reset(); // already zoomed → back to fit
       } else {
