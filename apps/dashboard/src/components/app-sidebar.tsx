@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, MenuIcon, Plus,
-  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, type LucideIcon,
+  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -1059,6 +1059,25 @@ function RecentSessions() {
   const openMenuAt = useCallback((id: string, x: number, y: number) => setMenu({ x, y, id }), []);
   const longPress = useLongPress(openMenuAt);
 
+  // Hidden sessions are dropped from the list; a footer toggle reveals them.
+  const [showHidden, setShowHidden] = useState(false);
+  // Hide/unhide optimistically so the row vanishes (or reappears) on the click,
+  // not on the next 5s poll — then reconcile on settle.
+  const setHidden = trpc.chat.setHidden.useMutation({
+    onMutate: async ({ id, hidden }) => {
+      await utils.chat.listSessions.cancel({});
+      const prev = utils.chat.listSessions.getData({});
+      utils.chat.listSessions.setData({}, (old) =>
+        old?.map((s) => (s.id === id ? { ...s, hiddenAt: hidden ? new Date() : null } : s)),
+      );
+      return { prev };
+    },
+    onError: (_e, _v, context) => {
+      if (context?.prev) utils.chat.listSessions.setData({}, context.prev);
+    },
+    onSettled: () => { void utils.chat.listSessions.invalidate(); },
+  });
+
   // Local agent filter — persisted in sessionStorage so it survives reloads
   // but doesn't pollute the URL. "" means "all agents".
   const [filter, setFilter] = useState<string>('');
@@ -1097,8 +1116,15 @@ function RecentSessions() {
     sessions.data?.forEach((s) => { if (s.agentName !== orchestratorName) names.add(s.agentName); });
     return Array.from(names).sort();
   }, [sessions.data, orchestratorName]);
+  // Worker sessions (orchestrator/Brain lives only in /brain).
+  const baseRows = useMemo(
+    () => (sessions.data ?? []).filter((s) => s.agentName !== orchestratorName),
+    [sessions.data, orchestratorName],
+  );
+  const hiddenCount = useMemo(() => baseRows.filter((s) => s.hiddenAt).length, [baseRows]);
   const visible = useMemo(() => {
-    let rows = (sessions.data ?? []).filter((s) => s.agentName !== orchestratorName);
+    // Hidden sessions drop out of the list unless the footer toggle is on.
+    let rows = showHidden ? baseRows : baseRows.filter((s) => !s.hiddenAt);
     if (filter) rows = rows.filter((s) => s.agentName === filter);
     const needle = q.trim().toLowerCase();
     if (needle) {
@@ -1112,7 +1138,7 @@ function RecentSessions() {
     // order within the pinned and unpinned groups.
     if (pins.size) rows = [...rows].sort((a, b) => (pins.has(b.id) ? 1 : 0) - (pins.has(a.id) ? 1 : 0));
     return rows;
-  }, [sessions.data, filter, q, pins, orchestratorName]);
+  }, [baseRows, showHidden, filter, q, pins]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">
@@ -1131,6 +1157,14 @@ function RecentSessions() {
               icon: <Pin className="h-3.5 w-3.5 -rotate-45 fill-current" />,
               onClick: () => togglePin(menu.id),
             },
+            (() => {
+              const isHidden = !!(sessions.data ?? []).find((s) => s.id === menu.id)?.hiddenAt;
+              return {
+                label: isHidden ? 'Unhide' : 'Hide',
+                icon: isHidden ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />,
+                onClick: () => setHidden.mutate({ id: menu.id, hidden: !isHidden }),
+              };
+            })(),
           ]}
         />
       )}
@@ -1219,6 +1253,7 @@ function RecentSessions() {
                       'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors select-none [-webkit-touch-callout:none]',
                       active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
                       s.closedAt && 'opacity-60',
+                      s.hiddenAt && 'opacity-50',
                     )}
                     title={s.title || s.preview || s.agentName}
                   >
@@ -1234,6 +1269,9 @@ function RecentSessions() {
                           </span>
                           {pins.has(s.id) && (
                             <Pin className="h-3 w-3 shrink-0 self-center -rotate-45 fill-current text-muted-foreground/70" aria-label="pinned" />
+                          )}
+                          {s.hiddenAt && (
+                            <EyeOff className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hidden" />
                           )}
                           <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
                             {relTime(s.lastMessageAt ?? s.startedAt)}
@@ -1257,6 +1295,16 @@ function RecentSessions() {
           </ul>
         )}
       </div>
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowHidden((v) => !v)}
+          className="mx-2 mb-2 mt-1 flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] text-muted-foreground/70 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/80 cursor-pointer"
+        >
+          {showHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          <span>{showHidden ? 'Hide hidden chats' : `Show hidden (${hiddenCount})`}</span>
+        </button>
+      )}
     </div>
   );
 }

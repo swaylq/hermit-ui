@@ -62,6 +62,7 @@ export const chatRouter = router({
           lastMessageAt: true,
           lastReadAt: true,
           closedAt: true,
+          hiddenAt: true,
           restartRequestedAt: true,
           pid: true,
           alive: true,
@@ -103,6 +104,20 @@ export const chatRouter = router({
       const res = await prisma.chatSession.updateMany({
         where: { id: input.sessionId, machineId: ctx.machine.id },
         data: { lastReadAt: new Date() },
+      });
+      return { ok: res.count > 0 };
+    }),
+
+  // Hide / unhide a session from the sidebar recents list. Purely a UI filter —
+  // the session keeps running; a "show hidden" toggle in the sidebar reveals it.
+  // updateMany + machineId guard (like markRead) so a stale tab can't 500 / touch
+  // another machine's session.
+  setHidden: machineProcedure
+    .input(z.object({ id: z.string(), hidden: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const res = await prisma.chatSession.updateMany({
+        where: { id: input.id, machineId: ctx.machine.id },
+        data: { hiddenAt: input.hidden ? new Date() : null },
       });
       return { ok: res.count > 0 };
     }),

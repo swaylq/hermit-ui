@@ -201,6 +201,10 @@ model ChatSession {
   // device. Stamped by chat.markRead from the open chat pane.
   lastReadAt        DateTime?
   closedAt          DateTime? // null = active, gateway listens; non-null = archived
+  // User "hide" — drops a noisy chat from the sidebar recents list (purely a UI
+  // filter; the session keeps running). A "show hidden" toggle reveals them.
+  // Server-side (not localStorage) so a hide syncs across devices, like lastReadAt.
+  hiddenAt          DateTime?
   // User-requested stop signal for the in-flight turn. Set by chat.cancelTurn,
   // cleared by gateway via chat.ackCancel once the child process is killed.
   cancelRequestedAt DateTime?
