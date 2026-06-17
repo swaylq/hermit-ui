@@ -6,12 +6,12 @@ import { trpc } from '@/lib/trpc';
 import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { FileList, type FileItem } from '@/components/file-detail';
+import { MemoryDir } from '@/components/brain-memory';
 
 // Brain · Dream — see the daily "dream" in action: its persistent reflections
-// (memory/dreams/<date>.md, the journal) and the cron run history (when it
-// dreamed + the output it produced), plus a "Dream now" button to trigger one.
-type Mem = { path: string; content: string };
-
+// (memory/dreams/<date>.md, the journal, read from the brain's workspace) and the
+// cron run history (when it dreamed + the output it produced), plus a "Dream now"
+// button to trigger one.
 const Centered = ({ children }: { children: React.ReactNode }) => (
   <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">{children}</div>
 );
@@ -56,18 +56,7 @@ function DreamBody({ brainName, dreamCron }: { brainName: string; dreamCron: Dre
     },
   });
   const detail = trpc.cron.get.useQuery({ id: dreamCron?.id ?? '' }, { enabled: !!dreamCron, refetchInterval: 10_000 });
-  const memory = trpc.agents.folderContent.useQuery({ name: brainName, scope: 'memory' }, { refetchInterval: 15_000 });
-
   const runs = detail.data?.runs ?? [];
-  const dreams = ((memory.data ?? []) as Mem[])
-    .filter((f) => /^dreams\//i.test(f.path))
-    .sort((a, b) => b.path.localeCompare(a.path));
-
-  const journalItems: FileItem[] = dreams.map((f) => ({
-    key: f.path,
-    label: f.path.replace(/^dreams\//i, '').replace(/\.md$/i, ''),
-    body: f.content || null,
-  }));
   const runItems: FileItem[] = runs.map((r) => ({
     key: r.id,
     label: `${relTime(r.firedAt)} · ${r.status}${r.durationMs ? ` · ${Math.round(r.durationMs / 1000)}s` : ''}`,
@@ -101,18 +90,17 @@ function DreamBody({ brainName, dreamCron }: { brainName: string; dreamCron: Dre
         </div>
       )}
 
-      <section className="space-y-2">
-        <div className="flex items-baseline gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
-          <span>Dream journal</span>
-          <span className="tabular-nums text-muted-foreground/40">{journalItems.length}</span>
-        </div>
+      <div className="space-y-1.5">
         <p className="text-xs text-muted-foreground">What each dream consolidated — Brain&apos;s daily reflections.</p>
-        {journalItems.length === 0 ? (
-          <p className="px-1 py-2 text-xs text-muted-foreground">No dreams yet. Brain writes one each time it dreams.</p>
-        ) : (
-          <FileList items={journalItems} />
-        )}
-      </section>
+        <MemoryDir
+          agentName={brainName}
+          dir="memory/dreams"
+          title="Dream journal"
+          sortDesc
+          labelOf={(n) => n.replace(/\.md$/i, '')}
+          emptyHint="No dreams yet. Brain writes one each time it dreams — hit “Dream now” to trigger one."
+        />
+      </div>
 
       <section className="space-y-2">
         <div className="flex items-baseline gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
