@@ -59,15 +59,14 @@ function MemoryBody({ files }: { files: Mem[] }) {
   const sections = [
     { title: 'Roster & index', items: roster.map((f) => toItem(f, f.path === 'roster.md' ? 'Roster' : 'Index · MEMORY.md')) },
     { title: 'Agent dossiers', items: dossiers.map((f) => toItem(f, f.path.replace(/^agents\//i, '').replace(/\.md$/i, ''))) },
-    { title: 'Dreams', items: dreams.map((f) => toItem(f, f.path.replace(/^dreams\//i, '').replace(/\.md$/i, ''))) },
     { title: 'Other', items: other.map((f) => toItem(f, f.path)) },
   ].filter((s) => s.items.length > 0);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6">
       <p className="text-xs text-muted-foreground">
-        Brain&apos;s own memory — its roster, per-agent dossiers, and daily dreams. Brain curates this
-        itself (read-only here) and keeps it terse on purpose.
+        Brain&apos;s own memory — its roster and per-agent dossiers (dreams have their own tab). Brain
+        curates this itself (read-only here) and keeps it terse on purpose.
       </p>
       {sections.map((s) => (
         <section key={s.title} className="space-y-2">
