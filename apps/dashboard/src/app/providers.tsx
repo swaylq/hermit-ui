@@ -61,23 +61,35 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const vv = window.visualViewport;
     const setVar = (h: number) => document.documentElement.style.setProperty('--app-h', `${Math.round(h)}px`);
-    // Live height — tracks the keyboard (visualViewport shrinks when it opens, so
-    // the shell shrinks and the composer stays above it).
-    const measure = () => setVar(vv?.height ?? window.innerHeight);
+    // Probe to read env(safe-area-inset-top) in JS.
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;visibility:hidden;top:0;left:0;padding-top:env(safe-area-inset-top)';
+    document.body.appendChild(probe);
+
+    // Measure the shell height. KEY: an installed iOS PWA reports innerHeight /
+    // visualViewport.height EXCLUDING the top safe area, so the true full-screen
+    // canvas = innerHeight + safe-area-inset-top. Without adding it back, the shell
+    // is short by the status-bar height and leaves a white gap at the bottom
+    // (confirmed on-device: screen.height 956 vs innerHeight 894, delta 62 = safeTop).
+    // When the keyboard is open (vh well below ih) we shrink to the visible area
+    // instead, so the composer stays above the keyboard.
+    const measure = () => {
+      const safeTop = parseFloat(getComputedStyle(probe).paddingTop) || 0;
+      const ih = window.innerHeight;
+      const vh = vv?.height ?? ih;
+      const keyboardOpen = vh < ih - 60;
+      setVar(keyboardOpen ? vh : ih + safeTop);
+    };
     measure();
     window.addEventListener('resize', measure);
     vv?.addEventListener('resize', measure);
+    vv?.addEventListener('scroll', measure);
 
-    // iOS bug: after the on-screen keyboard DISMISSES, visualViewport height /
-    // offsetTop don't fully revert and the window is often left scrolled — so the
-    // shell stays short and a white gap reappears at the bottom. On blur, reset
-    // the scroll and re-measure the full height (window.innerHeight ignores the
-    // keyboard) once the dismiss animation settles. Two passes catch fast + slow.
+    // iOS: after the keyboard dismisses, visualViewport doesn't fully revert and
+    // the window is often left scrolled — reset scroll + re-measure once the
+    // dismiss animation settles (two passes catch fast + slow).
     const onBlur = () => {
-      const fix = () => {
-        window.scrollTo(0, 0);
-        setVar(window.innerHeight);
-      };
+      const fix = () => { window.scrollTo(0, 0); measure(); };
       setTimeout(fix, 100);
       setTimeout(fix, 400);
     };
@@ -86,7 +98,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     return () => {
       window.removeEventListener('resize', measure);
       vv?.removeEventListener('resize', measure);
+      vv?.removeEventListener('scroll', measure);
       window.removeEventListener('focusout', onBlur);
+      probe.remove();
     };
   }, []);
 
