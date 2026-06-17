@@ -11,11 +11,12 @@
 import { useEffect, useState } from 'react';
 import {
   Folder, FolderOpen, File as FileIcon, Download, Trash2, Pencil,
-  FolderPlus, FilePlus, ChevronRight, RotateCw, Loader2, X, Check, FileText, Save,
+  FolderPlus, FilePlus, ChevronRight, RotateCw, Loader2, X, Check, FileText, Save, NotebookText,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { getActiveKey } from '@/lib/keyring';
 import { cn } from '@/lib/utils';
+import { relTime } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
@@ -79,6 +80,10 @@ export function GlobalMemoryFiles() {
   const [error, setError] = useState<string | null>(null);
   // The freshly-created file auto-opens in edit mode (so you can start typing).
   const [autoEditPath, setAutoEditPath] = useState<string | null>(null);
+  // The inline note is the tree's first entry (the CLAUDE.md managed block, not a
+  // folder file). Open by default — it's the thing people edit most. Selecting a
+  // real file closes it; clicking the note row reopens it.
+  const [noteOpen, setNoteOpen] = useState(true);
 
   const toggleExpand = (path: string, force?: boolean) =>
     setExpanded((prev) => {
@@ -87,6 +92,10 @@ export function GlobalMemoryFiles() {
       if (open) next.add(path); else next.delete(path);
       return next;
     });
+
+  // Selecting a real file (or folder) takes over the right pane from the note.
+  const selectFile = (s: Selected) => { setSelected(s); setNoteOpen(false); };
+  const openNote = () => { setNoteOpen(true); setSelected(null); };
 
   // New file / new folder target: the selected folder, the parent of the selected
   // file, else the folder root.
@@ -105,29 +114,102 @@ export function GlobalMemoryFiles() {
         activeDir={activeDir}
         onError={setError}
         onMkdir={(p) => toggleExpand(p, true)}
-        onCreated={(path, name) => { setSelected({ path, name, type: 'file', size: 0 }); setAutoEditPath(path); }}
+        onCreated={(path, name) => { selectFile({ path, name, type: 'file', size: 0 }); setAutoEditPath(path); }}
         onRefresh={() => utils.fileManager.list.invalidate()}
       />
 
       <div className="flex flex-1 min-h-[300px] rounded-lg border border-border overflow-hidden">
-        {/* Left: lazy file tree */}
+        {/* Left: the inline note (pinned first) + the lazy file tree */}
         <div className="w-2/5 min-w-[150px] max-w-[320px] shrink-0 border-r border-border overflow-y-auto bg-muted/20">
+          <button
+            type="button"
+            onClick={openNote}
+            style={{ paddingLeft: 8 }}
+            className={cn(
+              'flex w-full items-center gap-1 pr-1.5 h-7 cursor-pointer text-sm select-none',
+              noteOpen ? 'bg-accent text-foreground' : 'hover:bg-accent/40 text-foreground/85',
+            )}
+          >
+            <span className="w-3.5 shrink-0" />
+            <NotebookText className="h-4 w-4 shrink-0 text-amber-500" />
+            <span className="truncate flex-1 text-left">Inline note</span>
+          </button>
           <TreeChildren
             path="" depth={0}
             expanded={expanded} toggleExpand={toggleExpand}
-            selectedPath={selected?.path ?? null} onSelect={setSelected} onError={setError}
+            selectedPath={noteOpen ? null : (selected?.path ?? null)} onSelect={selectFile} onError={setError}
           />
         </div>
-        {/* Right: selected file content / editor (inline, no modal) */}
+        {/* Right: the note editor, or the selected file content / editor (inline) */}
         <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          <FilePane
-            key={selected?.path ?? '∅'}
-            selected={selected} autoEdit={!!selected && selected.path === autoEditPath}
-            onSelect={setSelected} onError={setError}
-          />
+          {noteOpen ? (
+            <NotePane />
+          ) : (
+            <FilePane
+              key={selected?.path ?? '∅'}
+              selected={selected} autoEdit={!!selected && selected.path === autoEditPath}
+              onSelect={setSelected} onError={setError}
+            />
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+// ── The inline note, shown as the explorer's first "file" ────────────────────
+// Persists to the DB-backed CLAUDE.md managed block (globalMemory.get/set), not
+// the folder — so it stays a managed block (no gateway change) while living in
+// the same explorer as the @import files.
+function NotePane() {
+  const utils = trpc.useUtils();
+  const q = trpc.globalMemory.get.useQuery();
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = trpc.globalMemory.set.useMutation({
+    onSuccess: () => utils.globalMemory.get.invalidate(),
+  });
+
+  const serverContent = q.data?.content ?? '';
+  const value = draft ?? serverContent;
+  const dirty = draft !== null && draft !== serverContent;
+
+  return (
+    <>
+      <div className="flex items-center gap-2 px-3 h-11 border-b border-border shrink-0">
+        <NotebookText className="h-4 w-4 shrink-0 text-amber-500" />
+        <span className="font-mono text-sm truncate flex-1">Inline note</span>
+        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground/70">CLAUDE.md block</span>
+      </div>
+      <div className="flex-1 min-h-0 overflow-auto">
+        <div className="flex h-full flex-col gap-2 p-3">
+          <textarea
+            value={value}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={q.isPending}
+            spellCheck={false}
+            placeholder="A global note every agent loads (Markdown). e.g. shared preferences, naming conventions, current focus…"
+            className="min-h-[220px] w-full flex-1 resize-none rounded-md border border-border bg-background p-3 font-mono text-[12px] leading-relaxed outline-none focus:border-foreground/30"
+          />
+          <div className="flex shrink-0 items-center gap-2">
+            <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate({ content: value })}>
+              {save.isPending ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> 保存中…</> : <><Save className="h-3.5 w-3.5 mr-1" /> 保存</>}
+            </Button>
+            <span className="text-[11px] text-muted-foreground">
+              {save.isError ? (
+                <span className="text-rose-500">{save.error.message}</span>
+              ) : dirty ? (
+                '有未保存的修改'
+              ) : q.data?.updatedAt ? (
+                `已保存 · ${relTime(q.data.updatedAt)}`
+              ) : (
+                '尚未设置'
+              )}
+            </span>
+            <span className="ml-auto text-[11px] tabular-nums text-muted-foreground/60">{value.length} 字符</span>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 
