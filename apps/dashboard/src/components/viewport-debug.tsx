@@ -12,6 +12,8 @@ export function ViewportDebug() {
   const [text, setText] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const latest = useRef('');
+  const maxIH = useRef(0);
+  const maxVV = useRef(0);
 
   useEffect(() => {
     const standalone =
@@ -32,9 +34,12 @@ export function ViewportDebug() {
       const shell = document.querySelector('.app-h.flex.overflow-hidden') as HTMLElement | null;
       const shellH = shell ? Math.round(shell.getBoundingClientRect().height) : '?';
       const ps = getComputedStyle(probe);
+      if (window.innerHeight > maxIH.current) maxIH.current = window.innerHeight;
+      if (vv && vv.height > maxVV.current) maxVV.current = Math.round(vv.height);
       const t =
-        `vv.height=${vv ? Math.round(vv.height) : '?'}  vv.offsetTop=${vv ? Math.round(vv.offsetTop) : '?'}  vv.pageTop=${vv ? Math.round(vv.pageTop) : '?'}\n` +
-        `innerHeight=${window.innerHeight}  --app-h=${appH}  shellH=${shellH}\n` +
+        `vv.height=${vv ? Math.round(vv.height) : '?'} (max=${maxVV.current})  vv.offsetTop=${vv ? Math.round(vv.offsetTop) : '?'}  vv.pageTop=${vv ? Math.round(vv.pageTop) : '?'}\n` +
+        `innerHeight=${window.innerHeight} (max=${maxIH.current})  screen.height=${window.screen.height}\n` +
+        `--app-h=${appH}  shellH=${shellH}\n` +
         `scrollY=${Math.round(window.scrollY)}  docClientH=${root.clientHeight}  docScrollH=${root.scrollHeight}\n` +
         `safeTop=${ps.paddingTop}  safeBottom=${ps.paddingBottom}\n` +
         `ua=${navigator.userAgent}`;
