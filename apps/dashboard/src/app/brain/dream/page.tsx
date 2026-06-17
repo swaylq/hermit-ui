@@ -19,6 +19,35 @@ const Centered = ({ children }: { children: React.ReactNode }) => (
 const everyLabel = (sec: number) =>
   sec % 86_400 === 0 ? (sec === 86_400 ? 'daily' : `every ${sec / 86_400}d`) : `every ${Math.round(sec / 3600)}h`;
 
+// Change the dream cadence. cron.update reschedules nextFire from the last run,
+// so a shorter interval dreams sooner.
+function FrequencySelect({ cronId, current }: { cronId: string; current: number }) {
+  const utils = trpc.useUtils();
+  const update = trpc.cron.update.useMutation({
+    onSuccess: () => { void utils.cron.list.invalidate(); void utils.cron.get.invalidate(); },
+  });
+  const OPTIONS: Array<{ v: number; l: string }> = [
+    { v: 21_600, l: 'Every 6h' },
+    { v: 43_200, l: 'Every 12h' },
+    { v: 86_400, l: 'Daily' },
+    { v: 172_800, l: 'Every 2 days' },
+    { v: 604_800, l: 'Weekly' },
+  ];
+  const hasCurrent = OPTIONS.some((o) => o.v === current);
+  return (
+    <select
+      aria-label="dream frequency"
+      value={String(current)}
+      onChange={(e) => update.mutate({ id: cronId, intervalSec: Number(e.target.value) })}
+      disabled={update.isPending}
+      className="h-8 rounded-lg border border-border bg-background px-2 text-[13px] text-foreground outline-none transition-colors hover:border-foreground/30 focus-visible:border-foreground/40 disabled:opacity-50 cursor-pointer"
+    >
+      {!hasCurrent && <option value={String(current)}>{everyLabel(current)}</option>}
+      {OPTIONS.map((o) => <option key={o.v} value={String(o.v)}>{o.l}</option>)}
+    </select>
+  );
+}
+
 export default function BrainDreamPage() {
   const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 15_000 });
   const brain = (agents.data ?? []).find((a) => a.isOrchestrator);
@@ -75,14 +104,17 @@ function DreamBody({ brainName, dreamCron }: { brainName: string; dreamCron: Dre
               {' · '}{everyLabel(dreamCron.intervalSec)}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => runNow.mutate({ id: dreamCron.id })}
-            disabled={runNow.isPending}
-            className="shrink-0 inline-flex h-8 items-center justify-center rounded-lg bg-foreground px-3 text-[13px] font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-40 cursor-pointer"
-          >
-            {runNow.isPending ? '…' : 'Dream now'}
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <FrequencySelect cronId={dreamCron.id} current={dreamCron.intervalSec} />
+            <button
+              type="button"
+              onClick={() => runNow.mutate({ id: dreamCron.id })}
+              disabled={runNow.isPending}
+              className="inline-flex h-8 items-center justify-center rounded-lg bg-foreground px-3 text-[13px] font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-40 cursor-pointer"
+            >
+              {runNow.isPending ? '…' : 'Dream now'}
+            </button>
+          </div>
         </div>
       ) : (
         <div className="rounded-xl border border-border bg-card p-6 text-center text-sm text-muted-foreground">

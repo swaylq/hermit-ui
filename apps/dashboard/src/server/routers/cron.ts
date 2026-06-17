@@ -112,7 +112,14 @@ export const cronRouter = router({
       const { id, ...patch } = input;
       const existing = await prisma.cron.findUnique({ where: { id } });
       if (!existing || existing.machineId !== ctx.machine.id) throw new Error('not found');
-      return prisma.cron.update({ where: { id }, data: patch });
+      // Changing the interval reschedules the next fire from the last run, so a
+      // shorter interval runs sooner (and a longer one later) instead of waiting
+      // out the old schedule. (A never-fired cron keeps its nextFire = now.)
+      const data: Record<string, unknown> = { ...patch };
+      if (patch.intervalSec != null && existing.lastFire) {
+        data.nextFire = new Date(existing.lastFire.getTime() + patch.intervalSec * 1000);
+      }
+      return prisma.cron.update({ where: { id }, data });
     }),
 
   delete: machineProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
