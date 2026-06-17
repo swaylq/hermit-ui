@@ -221,6 +221,17 @@
   color: #0a0a0a;
 }
 
+/* App-shell height. In a normal browser tab we use 100dvh (it tracks Safari's
+   dynamic toolbar smoothly). In an INSTALLED iOS PWA, 100dvh is unreliable —
+   cold-start / phantom-toolbar bugs leave a white gap at the bottom — so there we
+   use the real rendered height, measured in JS as --app-h (window.visualViewport
+   .height), falling back to 100vh before the script runs (100vh is correct from a
+   cold start in standalone, unlike dvh). See providers.tsx for the measurement. */
+.app-h { height: 100dvh; }
+@media (display-mode: standalone) {
+  .app-h { height: var(--app-h, 100vh); }
+}
+
 /* Installed-PWA safe areas. Only INSIDE a standalone PWA does the canvas extend
    under the iOS status bar / home indicator (viewport-fit=cover), so these insets
    apply only there — a normal browser tab is left exactly as it was. Applied to

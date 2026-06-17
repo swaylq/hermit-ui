@@ -52,6 +52,26 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // In an installed iOS PWA, 100dvh is unreliable (cold-start / phantom-toolbar
+  // bugs leave a white gap at the bottom). Mirror the REAL rendered height into
+  // --app-h so the app shell (.app-h) fills the screen exactly. visualViewport
+  // .height also tracks the on-screen keyboard, keeping the composer above it.
+  // In a normal browser tab .app-h uses 100dvh instead, so this just feeds a var
+  // nothing consumes there.
+  useEffect(() => {
+    const setAppH = () => {
+      const h = window.visualViewport?.height ?? window.innerHeight;
+      document.documentElement.style.setProperty('--app-h', `${Math.round(h)}px`);
+    };
+    setAppH();
+    window.addEventListener('resize', setAppH);
+    window.visualViewport?.addEventListener('resize', setAppH);
+    return () => {
+      window.removeEventListener('resize', setAppH);
+      window.visualViewport?.removeEventListener('resize', setAppH);
+    };
+  }, []);
+
   return (
     // Theme: follows the OS by default; the Settings → Appearance tab can pin
     // light/dark. next-themes toggles the `.dark` class on <html> (no flash).
