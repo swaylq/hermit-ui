@@ -240,8 +240,10 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
         aria-label="navigation"
         className={cn(
           'bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col shrink-0',
-          // mobile: fixed off-canvas drawer
-          'fixed inset-y-0 left-0 z-50 w-[280px] transition-transform duration-200 ease-out',
+          // mobile: fixed off-canvas drawer. pwa-safe-* keeps the drawer's header
+          // below the iOS status bar + its footer above the home indicator when
+          // installed (standalone); a normal browser tab is unaffected.
+          'fixed inset-y-0 left-0 z-50 w-[280px] transition-transform duration-200 ease-out pwa-safe-t pwa-safe-b',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
           // desktop: in-flow, width animates on collapse
           'lg:static lg:translate-x-0 lg:z-0 lg:transition-[width] lg:duration-200',

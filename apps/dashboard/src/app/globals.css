@@ -49,6 +49,7 @@
 }
 
 :root {
+  color-scheme: light;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -218,4 +219,19 @@
 ::highlight(chat-find-current) {
   background-color: rgba(249, 115, 22, 0.85); /* orange-500 — the active match */
   color: #0a0a0a;
+}
+
+/* Installed-PWA safe areas. Only INSIDE a standalone PWA does the canvas extend
+   under the iOS status bar / home indicator (viewport-fit=cover), so these insets
+   apply only there — a normal browser tab is left exactly as it was. Applied to
+   the app shell (auth-gate) and the mobile drawer (app-sidebar) so their content
+   isn't occluded and the app background fills the status-bar / home-indicator
+   zones. On desktop the insets are 0, so this is a no-op there too. */
+@media (display-mode: standalone) {
+  .pwa-safe-t { padding-top: env(safe-area-inset-top); }
+  .pwa-safe-b { padding-bottom: env(safe-area-inset-bottom); }
+  .pwa-safe-x {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
 }
