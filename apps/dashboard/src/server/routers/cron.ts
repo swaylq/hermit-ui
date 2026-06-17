@@ -212,14 +212,17 @@ export const cronRouter = router({
     const agents = names.length
       ? await prisma.agent.findMany({
           where: { machineId: ctx.machine.id, name: { in: names } },
-          select: { name: true, directory: true },
+          select: { name: true, directory: true, isOrchestrator: true },
         })
       : [];
     const dirByName = new Map(agents.map((a) => [a.name, a.directory]));
+    const orchByName = new Map(agents.map((a) => [a.name, a.isOrchestrator]));
     return crons.map((c) => ({
       id: c.id,
       agentName: c.agentName,
       agentDirectory: dirByName.get(c.agentName) ?? null,
+      // Orchestrator crons run WITH the brain MCP (cron-runner); others headless.
+      isOrchestrator: orchByName.get(c.agentName) ?? false,
       directory: c.directory,
       prompt: c.prompt,
       intervalSec: c.intervalSec,

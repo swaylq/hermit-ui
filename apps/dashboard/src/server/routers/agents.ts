@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
-import { BRAIN_PERSONA, BRAIN_IDENTITY } from '../brain-template';
+import { BRAIN_PERSONA, BRAIN_IDENTITY, BRAIN_DREAMING_SKILL, BRAIN_DREAM_PROMPT } from '../brain-template';
 
 // Dashboard reads agent state purely from postgres. The Mac-side gateway
 // pushes:
@@ -407,13 +407,32 @@ export const agentsRouter = router({
     });
     if (pending) return { name, created: false };
 
-    // Overlay just IDENTITY — keep the base AGENTS.md workspace rules + default
-    // skills (incl. cron, which the brain uses to schedule its own digest).
-    const templateContent = JSON.stringify({ templateFiles: [{ path: 'IDENTITY.md', content: BRAIN_IDENTITY }] });
+    // Overlay the orchestrator IDENTITY + the `dreaming` skill onto the base
+    // scaffold (keeps the base AGENTS.md rules + default skills, incl. cron).
+    const templateContent = JSON.stringify({
+      templateFiles: [
+        { path: 'IDENTITY.md', content: BRAIN_IDENTITY },
+        { path: '.claude/skills/dreaming/SKILL.md', content: BRAIN_DREAMING_SKILL },
+      ],
+    });
     await prisma.$transaction(async (tx) => {
       await tx.agent.create({ data: { machineId: ctx.machine.id, name, isOrchestrator: true } });
       await tx.agentRequest.create({
         data: { machineId: ctx.machine.id, kind: 'create', agentName: name, persona: BRAIN_PERSONA, content: templateContent },
+      });
+      // Seed the daily "dream": consolidate memory + roster and prune context.
+      // First run ~6h out (after some use); then every 24h. The orchestrator's
+      // crons run WITH the brain MCP (see cron-runner) so the dream can roster().
+      await tx.cron.create({
+        data: {
+          machineId: ctx.machine.id,
+          agentName: name,
+          title: 'Daily dream',
+          prompt: BRAIN_DREAM_PROMPT,
+          intervalSec: 86_400,
+          jitterSec: 3_600,
+          nextFire: new Date(Date.now() + 6 * 60 * 60 * 1000),
+        },
       });
     });
     return { name, created: true };

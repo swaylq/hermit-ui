@@ -43,7 +43,7 @@ import { relayImages } from './image-relay';
 // attach_image, attach_file. Spawned as a stdio child of `claude --mcp-config <json>`.
 const MCP_STUB_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-stub.cjs');
 
-function buildMcpConfigArg(chatSessionId: string, isBrain = false): string {
+export function buildMcpConfigArg(chatSessionId: string, isBrain = false): string {
   const config = {
     mcpServers: {
       hermit: {

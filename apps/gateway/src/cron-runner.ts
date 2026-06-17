@@ -23,6 +23,7 @@ import {
 import { AGENTS_ROOT } from './config';
 import { api } from './api';
 import { paneIsWorking } from './pane';
+import { buildMcpConfigArg } from './chat-runner';
 
 const RUN_TIMEOUT_MS = 120 * 60_000; // hard cap per run (2h)
 const IDLE_DONE_MS = 8_000;         // assistant quiet this long ⇒ turn complete
@@ -32,6 +33,7 @@ type Cron = {
   id: string;
   agentName: string;
   agentDirectory: string | null;
+  isOrchestrator?: boolean;
   directory: string | null;
   prompt: string;
   intervalSec: number;
@@ -127,10 +129,14 @@ async function fire(c: Cron): Promise<void> {
 
   try {
     const claudeUuid = randomUUID();
+    // The orchestrator (Brain) runs its crons (e.g. the daily dream) WITH the
+    // brain MCP so they can roster()/agent_activity()/dispatch(). Other agents'
+    // crons stay headless (no MCP). The stub keys on this run's id.
+    const claudeArgs = c.isOrchestrator ? ['--mcp-config', buildMcpConfigArg(runSessionId, true)] : [];
     ensureSession({
       sessionId: runSessionId,
       cwd,
-      claudeArgs: [],
+      claudeArgs,
       claudeSessionUuid: claudeUuid,
     });
     const jsonlPath = path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`);
