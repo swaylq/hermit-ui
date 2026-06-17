@@ -45,7 +45,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="zh" suppressHydrationWarning className={cn("app-h overscroll-none antialiased touch-manipulation bg-background text-foreground", "font-sans", geist.variable)}>
+    <html lang="zh" suppressHydrationWarning className={cn("app-h overflow-hidden overscroll-none antialiased touch-manipulation bg-background text-foreground", "font-sans", geist.variable)}>
       <body className="min-h-full flex flex-col">
         <Providers>
           <AuthGate>{children}</AuthGate>
