@@ -830,11 +830,16 @@ function RecentCrons() {
   const search = useSearchParams();
   const activeId = search.get('id');
   const crons = trpc.cron.list.useQuery(undefined, { refetchInterval: 5_000 });
+  // The orchestrator (Brain) lives only in /brain — keep its crons out of the
+  // dashboard. agents.list is cached (shared), so this is cheap.
+  const orchestratorsQ = trpc.agents.list.useQuery(undefined, { staleTime: 60_000 });
+  const brainName = (orchestratorsQ.data ?? []).find((a) => a.isOrchestrator)?.name;
+  const allCrons = (crons.data ?? []).filter((c) => c.agentName !== brainName);
   const [q, setQ] = useState('');
   const needle = q.trim().toLowerCase();
   const visible = needle
-    ? (crons.data ?? []).filter((c) => (c.title || c.prompt || '').toLowerCase().includes(needle) || c.agentName.toLowerCase().includes(needle))
-    : (crons.data ?? []);
+    ? allCrons.filter((c) => (c.title || c.prompt || '').toLowerCase().includes(needle) || c.agentName.toLowerCase().includes(needle))
+    : allCrons;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">
@@ -852,7 +857,7 @@ function RecentCrons() {
               <div key={i} className="h-10 rounded-md bg-sidebar-accent/40 animate-pulse" />
             ))}
           </div>
-        ) : (crons.data?.length ?? 0) === 0 ? (
+        ) : allCrons.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">no crons yet — start with “New cron”.</p>
         ) : visible.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">没有匹配 “{q.trim()}” 的 cron。</p>

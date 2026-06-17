@@ -59,14 +59,17 @@ function CronPageInner() {
   const id = search.get('id');
   const showNew = !!search.get('new');
   const crons = trpc.cron.list.useQuery(undefined, { refetchInterval: 10_000 });
+  const agents = trpc.agents.list.useQuery(undefined, { staleTime: 60_000 });
 
   // Default landing: jump to the first cron so the pane isn't blank (mirrors /agents).
-  // Skip while the "New cron" form is open.
+  // Skip the orchestrator (Brain) — its crons live only in /brain. Skip while the
+  // "New cron" form is open.
   useEffect(() => {
     if (id || showNew) return;
-    const first = crons.data?.[0];
+    const brainName = agents.data?.find((a) => a.isOrchestrator)?.name;
+    const first = (crons.data ?? []).find((c) => c.agentName !== brainName);
     if (first) router.replace(`/cron?id=${encodeURIComponent(first.id)}`);
-  }, [id, showNew, crons.data, router]);
+  }, [id, showNew, crons.data, agents.data, router]);
 
   if (showNew) {
     return <NewCronPane />;

@@ -138,9 +138,12 @@ function ChatPageInner() {
   // new chat, land on the most recent session so the area is never blank.
   useEffect(() => {
     if (showNew || sessionParam) return;
-    const first = sessions.data?.[0];
+    // Skip the orchestrator (Brain) — its chats live only in /brain, never the
+    // dashboard. (listSessions still returns them; we just never land on one.)
+    const brainName = agents.data?.find((a) => a.isOrchestrator)?.name;
+    const first = (sessions.data ?? []).find((s) => s.agentName !== brainName);
     if (first) router.replace(`/chat?session=${encodeURIComponent(first.id)}`);
-  }, [showNew, sessionParam, sessions.data, router]);
+  }, [showNew, sessionParam, sessions.data, agents.data, router]);
 
   if (showNew) {
     return (
