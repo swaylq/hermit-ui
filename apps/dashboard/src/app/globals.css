@@ -259,3 +259,12 @@
   -webkit-mask: url(/wordmark-hermit.png) left center / contain no-repeat;
   mask: url(/wordmark-hermit.png) left center / contain no-repeat;
 }
+
+/* The hermit-crab brand mark, monochrome (woodcut) — same CSS-mask trick as the
+   wordmark so it renders in bg-sidebar-foreground and follows the light / dark
+   theme. The starburst / eyes / leg gaps are transparent holes in the PNG, so the
+   sidebar background shows through them. */
+.logo-crab-mono {
+  -webkit-mask: url(/logo-crab-mono.png) center / contain no-repeat;
+  mask: url(/logo-crab-mono.png) center / contain no-repeat;
+}

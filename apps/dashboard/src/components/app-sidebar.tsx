@@ -268,10 +268,12 @@ export function AppSidebar() {
             </>
           ) : (
             <>
-              {/* Brand mark, top-left — the hermit-crab logo + "Hermit" wordmark,
-                  links home (/chat). Hidden on the narrow rail (collapsed) so only
-                  the expand toggle shows there. The wordmark is a Cochin PNG used
-                  as a CSS mask (bg-sidebar-foreground) so it follows the theme. */}
+              {/* Brand mark, top-left — the monochrome hermit-crab + "Hermit"
+                  wordmark, links home (/chat). Both are PNGs (woodcut crab +
+                  Cochin wordmark) used as CSS masks filled with
+                  bg-sidebar-foreground, so they follow the light / dark theme.
+                  Hidden on the narrow rail (collapsed) — only the expand toggle
+                  shows there. */}
               <Link
                 href="/chat"
                 aria-label="Hermit home"
@@ -280,8 +282,7 @@ export function AppSidebar() {
                   collapsed && 'lg:hidden',
                 )}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/logo-crab.png" alt="" className="h-7 w-7 shrink-0 object-contain" />
+                <span aria-hidden="true" className="logo-crab-mono h-7 w-7 shrink-0 bg-sidebar-foreground" />
                 <span
                   aria-hidden="true"
                   className="wordmark-hermit shrink-0 bg-sidebar-foreground"
