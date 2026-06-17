@@ -5,7 +5,6 @@ import { Geist } from "next/font/google";
 import { cn } from "@/lib/utils";
 import { AuthGate } from '@/components/auth-gate';
 import { InstallPrompt } from '@/components/install-prompt';
-import { ViewportDebug } from '@/components/viewport-debug';
 
 const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
@@ -50,7 +49,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <Providers>
           <AuthGate>{children}</AuthGate>
           <InstallPrompt />
-          <ViewportDebug />
         </Providers>
       </body>
     </html>
