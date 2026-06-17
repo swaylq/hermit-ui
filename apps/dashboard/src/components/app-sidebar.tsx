@@ -88,8 +88,8 @@ function BrainButton({ collapsed }: { collapsed: boolean }) {
   return (
     <Link
       href="/brain"
-      title="义脑 / Brain"
-      aria-label="义脑 brain"
+      title="Brain"
+      aria-label="Brain"
       className={cn(
         'inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer shrink-0',
         active
@@ -129,7 +129,7 @@ function BrainSidebar({ collapsed }: { collapsed: boolean }) {
           type="button"
           onClick={newChat}
           disabled={!brain || busy}
-          title="New 义脑 chat"
+          title="New Brain chat"
           className={cn(
             'flex w-full items-center gap-2 rounded-lg h-9 text-sm font-medium transition-colors cursor-pointer',
             'border border-sidebar-border bg-sidebar hover:bg-sidebar-accent text-sidebar-foreground disabled:opacity-50',
@@ -137,7 +137,7 @@ function BrainSidebar({ collapsed }: { collapsed: boolean }) {
           )}
         >
           <SquarePen className="h-4 w-4 shrink-0" />
-          <span className={cn('truncate', collapsed && 'lg:hidden')}>{busy ? '…' : 'New 义脑 chat'}</span>
+          <span className={cn('truncate', collapsed && 'lg:hidden')}>{busy ? '…' : 'New Brain chat'}</span>
         </button>
       </div>
       {!collapsed && <RecentBrainSessions brainName={brain?.name} />}
@@ -160,12 +160,12 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">
       <div className="px-3 pb-1 flex items-baseline gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
-        <span>义脑 对话</span>
+        <span>Brain chats</span>
         <span className="tabular-nums text-muted-foreground/50">{rows.length}</span>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
         {!brainName ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">还没有义脑——在主区设置一个。</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground">No Brain yet — set one up in the main area.</p>
         ) : sessions.isPending ? (
           <div className="space-y-1 px-1 pt-1">
             {Array.from({ length: 4 }).map((_, i) => (
@@ -173,7 +173,7 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
             ))}
           </div>
         ) : rows.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">还没有对话——点上面「New 义脑 chat」。</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground">No conversations yet — use New Brain chat above.</p>
         ) : (
           <ul className="space-y-px">
             {rows.map((s) => {
@@ -186,7 +186,7 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
                       'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors',
                       active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
                     )}
-                    title={s.title || s.preview || '义脑 对话'}
+                    title={s.title || s.preview || 'Brain chat'}
                   >
                     <div className="flex items-start gap-2 min-w-0">
                       <span
@@ -196,7 +196,7 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline justify-between gap-1.5">
                           <span className={cn('flex-1 truncate text-[13px]', active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85')}>
-                            {s.title || s.preview || '义脑 对话'}
+                            {s.title || s.preview || 'Brain chat'}
                           </span>
                           <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
                             {relTime(s.lastMessageAt ?? s.startedAt)}
@@ -408,7 +408,7 @@ export function AppSidebar() {
             <>
               <Link
                 href="/chat"
-                title="返回 Dashboard"
+                title="Back to dashboard"
                 aria-label="back to dashboard"
                 className="inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0"
               >
@@ -419,7 +419,7 @@ export function AppSidebar() {
                 className={cn('flex flex-1 min-w-0 items-center gap-1.5 rounded-md px-1 py-1 hover:bg-sidebar-accent/60 transition-colors cursor-pointer', collapsed && 'lg:hidden')}
               >
                 <span aria-hidden="true" className="logo-crab-mono h-4 w-4 shrink-0 bg-sidebar-foreground" />
-                <span className="text-sm font-semibold text-sidebar-foreground">义脑</span>
+                <span className="text-sm font-semibold text-sidebar-foreground">Brain</span>
               </Link>
             </>
           ) : (

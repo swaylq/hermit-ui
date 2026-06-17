@@ -12,8 +12,8 @@ import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { SessionPane } from '@/app/chat/page';
 import { ArrowRight } from 'lucide-react';
 
-// The dedicated 义脑 / Brain workspace. The sidebar swaps to brain mode here (its
-// own "New 义脑 chat" + the brain's conversations — see app-sidebar). This page is
+// The dedicated Brain workspace. The sidebar swaps to brain mode here (its own
+// "New Brain chat" + the brain's conversations — see app-sidebar). This page is
 // the main area: a brain conversation when ?session=<id> is set, otherwise the
 // command center (give the brain a goal + the machine overview).
 export default function BrainPage() {
@@ -40,7 +40,7 @@ function BrainHome() {
       <header className="h-12 px-3 flex items-center gap-2 border-b border-border shrink-0">
         <SidebarMobileToggle />
         <span aria-hidden className="logo-crab-mono h-5 w-5 bg-foreground" />
-        <span className="text-sm font-medium text-foreground">义脑 / Brain</span>
+        <span className="text-sm font-medium text-foreground">Brain</span>
       </header>
       <div className="flex-1 min-h-0 overflow-y-auto">
         {agents.isPending ? (
@@ -69,15 +69,17 @@ function BrainSetup() {
     } catch (e) {
       setBusy(false);
       // eslint-disable-next-line no-alert
-      alert(`义脑: ${e instanceof Error ? e.message : String(e)}`);
+      alert(`Brain: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
   return (
     <div className="mx-auto mt-12 max-w-md space-y-4 p-8 text-center">
       <span aria-hidden className="logo-crab-mono mx-auto block h-14 w-14 bg-foreground" />
-      <h2 className="text-lg font-medium text-foreground">还没有义脑</h2>
+      <h2 className="text-lg font-medium text-foreground">No Brain yet</h2>
       <p className="text-sm text-muted-foreground">
-        义脑是这台机器的调度中枢——它不亲自干活，而是把任务派给本机其它 agent，并定期把它们的动态盘点进自己的 memory。设置后从这里指挥它。
+        Brain is this machine&apos;s orchestrator — it does no work itself. It routes tasks to the
+        other agents on this machine and digests their activity into its own memory. Set it up to
+        direct it from here.
       </p>
       <button
         type="button"
@@ -85,7 +87,7 @@ function BrainSetup() {
         disabled={busy}
         className="inline-flex h-9 items-center justify-center rounded-lg bg-foreground px-4 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50 cursor-pointer"
       >
-        {busy ? '设置中…' : '设置义脑'}
+        {busy ? 'Setting up…' : 'Set up Brain'}
       </button>
     </div>
   );
@@ -98,9 +100,9 @@ const byRecent = (a: SessionRow, b: SessionRow) =>
 function BrainPanel({ brainName }: { brainName: string }) {
   const sessions = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
   const all = sessions.data ?? [];
-  // Dispatch sessions live on the TARGET agent, titled "义脑 → <agent>" (set by
+  // Dispatch sessions live on the TARGET agent, titled "Brain → <agent>" (set by
   // the dispatch tool) — the brain's outstanding/recent hand-offs.
-  const dispatches = all.filter((s) => (s.title ?? '').startsWith('义脑 →')).sort(byRecent).slice(0, 12);
+  const dispatches = all.filter((s) => (s.title ?? '').startsWith('Brain →')).sort(byRecent).slice(0, 12);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6">
@@ -128,29 +130,29 @@ function CommandBox({ brainName }: { brainName: string }) {
     } catch (e) {
       setBusy(false);
       // eslint-disable-next-line no-alert
-      alert(`义脑: ${e instanceof Error ? e.message : String(e)}`);
+      alert(`Brain: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
   return (
     <div className="space-y-3 rounded-xl border border-border bg-card p-4">
-      <div className="text-[13px] font-medium text-foreground">给义脑下达目标</div>
+      <div className="text-[13px] font-medium text-foreground">Give Brain a goal</div>
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void submit(); } }}
         rows={3}
-        placeholder="比如：整理今天各 agent 的进展并汇报；或把「X 任务」派给合适的 agent…"
+        placeholder="e.g. summarize what each agent did today and report back; or route task X to the right agent…"
         className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 outline-none transition-colors focus-visible:border-foreground/30 focus-visible:ring-1 focus-visible:ring-foreground/15"
       />
       <div className="flex items-center justify-between">
-        <span className="text-[11px] text-muted-foreground">⌘/Ctrl + Enter 发送 · 会开一个新对话</span>
+        <span className="text-[11px] text-muted-foreground">⌘/Ctrl + Enter to send · opens a new conversation</span>
         <button
           type="button"
           onClick={submit}
           disabled={busy || !text.trim()}
           className="inline-flex h-8 items-center justify-center rounded-lg bg-foreground px-3 text-[13px] font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-40 cursor-pointer"
         >
-          {busy ? '…' : '发送'}
+          {busy ? '…' : 'Send'}
         </button>
       </div>
     </div>
@@ -173,9 +175,9 @@ function Roster() {
   const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 15_000 });
   const workers = (agents.data ?? []).filter((a) => !a.isOrchestrator);
   return (
-    <SectionCard title="管理的 agent" count={workers.length}>
+    <SectionCard title="Managed agents" count={workers.length}>
       {workers.length === 0 ? (
-        <p className="px-2.5 py-2 text-xs text-muted-foreground">本机还没有其它 agent。</p>
+        <p className="px-2.5 py-2 text-xs text-muted-foreground">No other agents on this machine yet.</p>
       ) : (
         <ul className="space-y-px">
           {workers.map((a) => (
@@ -203,9 +205,9 @@ function Roster() {
 
 function Dispatches({ dispatches }: { dispatches: SessionRow[] }) {
   return (
-    <SectionCard title="最近派发" count={dispatches.length}>
+    <SectionCard title="Recent dispatches" count={dispatches.length}>
       {dispatches.length === 0 ? (
-        <p className="px-2.5 py-2 text-xs text-muted-foreground">还没有派发记录。义脑把一次性任务派给 agent 后会出现在这里。</p>
+        <p className="px-2.5 py-2 text-xs text-muted-foreground">No dispatches yet. One-shot tasks Brain hands to an agent appear here.</p>
       ) : (
         <ul className="space-y-px">
           {dispatches.map((s) => (

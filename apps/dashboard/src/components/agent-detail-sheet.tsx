@@ -92,12 +92,12 @@ function OrchestratorToggle({ agentName, isOrchestrator }: { agentName: string; 
     <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card p-3">
       <div className="min-w-0">
         <div className="text-[13px] font-medium text-foreground">
-          义脑 / Orchestrator{isOrchestrator && <span className="ml-1.5 text-[11px] text-emerald-600">· 当前义脑</span>}
+          Orchestrator{isOrchestrator && <span className="ml-1.5 text-[11px] text-emerald-600">· current</span>}
         </div>
         <div className="text-[11px] text-muted-foreground">
           {isOrchestrator
-            ? '这个 agent 是本机义脑——它的会话拥有跨 agent 的 roster / dispatch 工具。'
-            : '设为义脑后它能调度本机其它 agent（每台机器至多一个）。'}
+            ? "This agent is the machine's Brain — its sessions get the cross-agent roster / dispatch tools."
+            : 'Make it the Brain to orchestrate the other agents on this machine (at most one per machine).'}
         </div>
       </div>
       <button
@@ -111,7 +111,7 @@ function OrchestratorToggle({ agentName, isOrchestrator }: { agentName: string; 
             : 'bg-foreground text-background hover:opacity-90',
         )}
       >
-        {setOrch.isPending ? '…' : isOrchestrator ? '取消义脑' : '设为义脑'}
+        {setOrch.isPending ? '…' : isOrchestrator ? 'Unset Brain' : 'Set as Brain'}
       </button>
     </div>
   );

@@ -306,7 +306,7 @@ const BRAIN_TOOLS = [
   {
     name: 'dispatch',
     description:
-      "Delegate a task to ANOTHER agent — you (义脑) never do the work yourself. One-shot by default: opens a fresh chat session on the target and sends `prompt`; returns its sessionId (read the result later with dispatch_result). Pass recurring={intervalMinutes} to make it a cron on the target instead. Pick the target from roster / agent_activity.",
+      "Delegate a task to ANOTHER agent — you (Brain) never do the work yourself. One-shot by default: opens a fresh chat session on the target and sends `prompt`; returns its sessionId (read the result later with dispatch_result). Pass recurring={intervalMinutes} to make it a cron on the target instead. Pick the target from roster / agent_activity.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -414,7 +414,7 @@ async function dispatchBrainTool(name, args) {
       const cron = res?.[0]?.result?.data?.json;
       return JSON.stringify({ ok: true, kind: 'recurring', agent: agentName, cronId: cron?.id ?? null });
     }
-    const sres = await trpcMutate('chat.createSession', { agentName, title: title || `义脑 → ${agentName}` });
+    const sres = await trpcMutate('chat.createSession', { agentName, title: title || `Brain → ${agentName}` });
     const session = sres?.[0]?.result?.data?.json;
     if (!session?.id) throw new Error('failed to create a session on the target agent');
     await trpcMutate('chat.send', { sessionId: session.id, text: prompt.trim() });
@@ -452,7 +452,7 @@ async function dispatchBrainTool(name, args) {
 async function dispatchTool(name, args) {
   if (!SESSION_ID) throw new Error('HERMIT_SESSION_ID missing');
   if (BRAIN_TOOL_NAMES.has(name)) {
-    if (!BRAIN) throw new Error('brain tools are only available to the orchestrator (义脑) session');
+    if (!BRAIN) throw new Error('brain tools are only available to the orchestrator (Brain) session');
     return dispatchBrainTool(name, args);
   }
   if (name === 'set_session_title') {
