@@ -538,7 +538,7 @@ function ChatFind({ getViewport, onClose }: { getViewport: () => HTMLElement | n
   );
 }
 
-function SessionPane({ sessionId }: { sessionId: string }) {
+export function SessionPane({ sessionId }: { sessionId: string }) {
   const utils = trpc.useUtils();
   // Poll on our own heartbeat instead of free-riding the sidebar's listSessions
   // query: the sidebar's RecentSessions only mounts when the sidebar is expanded

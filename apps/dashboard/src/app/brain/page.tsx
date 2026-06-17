@@ -1,24 +1,40 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
-import { Plus, ArrowRight } from 'lucide-react';
+import { SessionPane } from '@/app/chat/page';
+import { ArrowRight } from 'lucide-react';
 
-// The dedicated 义脑 / Brain panel — the orchestrator's own home, kept separate
-// from the worker agents (which are filtered out of /agents + the sidebar). It is
-// mission control: a command box to hand the brain a goal, the brain's own
-// conversations, the roster of managed agents, and the brain's recent dispatches.
-// The conversation itself opens in the full /chat UI (scoped to the brain).
+// The dedicated 义脑 / Brain workspace. The sidebar swaps to brain mode here (its
+// own "New 义脑 chat" + the brain's conversations — see app-sidebar). This page is
+// the main area: a brain conversation when ?session=<id> is set, otherwise the
+// command center (give the brain a goal + the machine overview).
 export default function BrainPage() {
+  return (
+    <Suspense fallback={null}>
+      <BrainPageInner />
+    </Suspense>
+  );
+}
+
+function BrainPageInner() {
+  const search = useSearchParams();
+  const sessionParam = search.get('session');
+  // A selected brain conversation renders the full chat UI (its own header).
+  if (sessionParam) return <SessionPane key={sessionParam} sessionId={sessionParam} />;
+  return <BrainHome />;
+}
+
+function BrainHome() {
   const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 15_000 });
   const brain = (agents.data ?? []).find((a) => a.isOrchestrator);
-
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <header className="h-12 px-3 flex items-center gap-2 border-b border-border shrink-0">
@@ -82,21 +98,15 @@ const byRecent = (a: SessionRow, b: SessionRow) =>
 function BrainPanel({ brainName }: { brainName: string }) {
   const sessions = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
   const all = sessions.data ?? [];
-  const convos = all.filter((s) => s.agentName === brainName).sort(byRecent);
   // Dispatch sessions live on the TARGET agent, titled "义脑 → <agent>" (set by
-  // the dispatch tool) — surface them as the brain's outstanding/recent hand-offs.
+  // the dispatch tool) — the brain's outstanding/recent hand-offs.
   const dispatches = all.filter((s) => (s.title ?? '').startsWith('义脑 →')).sort(byRecent).slice(0, 12);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
+    <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6">
       <CommandBox brainName={brainName} />
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Conversations brainName={brainName} convos={convos} />
-        <div className="space-y-6">
-          <Roster />
-          <Dispatches dispatches={dispatches} />
-        </div>
-      </div>
+      <Roster />
+      <Dispatches dispatches={dispatches} />
     </div>
   );
 }
@@ -113,9 +123,8 @@ function CommandBox({ brainName }: { brainName: string }) {
     try {
       const s = await create.mutateAsync({ agentName: brainName });
       await send.mutateAsync({ sessionId: s.id, text: t });
-      // Land in the full chat UI on the new brain conversation (hard nav — Next16
-      // + custom server swallows programmatic router pushes to a new query).
-      window.location.href = `/chat?session=${encodeURIComponent(s.id)}`;
+      // Land on the new brain conversation, inside the brain workspace.
+      window.location.href = `/brain?session=${encodeURIComponent(s.id)}`;
     } catch (e) {
       setBusy(false);
       // eslint-disable-next-line no-alert
@@ -157,51 +166,6 @@ function SectionCard({ title, count, children }: { title: string; count?: number
       </div>
       <div className="p-2">{children}</div>
     </section>
-  );
-}
-
-function Conversations({ brainName, convos }: { brainName: string; convos: SessionRow[] }) {
-  const create = trpc.chat.createSession.useMutation();
-  const [busy, setBusy] = useState(false);
-  const newConvo = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const s = await create.mutateAsync({ agentName: brainName });
-      window.location.href = `/chat?session=${encodeURIComponent(s.id)}`;
-    } catch {
-      setBusy(false);
-    }
-  };
-  return (
-    <SectionCard title="与义脑的对话" count={convos.length}>
-      <button
-        type="button"
-        onClick={newConvo}
-        disabled={busy}
-        className="mb-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50 cursor-pointer"
-      >
-        <Plus className="h-4 w-4" /> 新对话
-      </button>
-      {convos.length === 0 ? (
-        <p className="px-2.5 py-2 text-xs text-muted-foreground">还没有对话——用上面的命令台开始。</p>
-      ) : (
-        <ul className="space-y-px">
-          {convos.map((s) => (
-            <li key={s.id}>
-              <Link
-                href={`/chat?session=${encodeURIComponent(s.id)}`}
-                className="group flex items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-accent cursor-pointer"
-              >
-                <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', s.alive ? 'bg-emerald-500' : 'border border-muted-foreground/40')} aria-hidden />
-                <span className="min-w-0 flex-1 truncate text-[13px] text-foreground/90">{s.title || s.preview || '未命名对话'}</span>
-                <span className="shrink-0 text-[10px] font-mono tabular-nums text-muted-foreground/60">{relTime(s.lastMessageAt ?? s.startedAt)}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </SectionCard>
   );
 }
 
