@@ -3,19 +3,15 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import type { inferRouterOutputs } from '@trpc/server';
-import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { SessionPane } from '@/app/chat/page';
-import { ArrowRight } from 'lucide-react';
 
-// The dedicated Brain workspace. The sidebar swaps to brain mode here (its own
-// "New Brain chat" + the brain's conversations — see app-sidebar). This page is
-// the main area: a brain conversation when ?session=<id> is set, otherwise the
-// command center (give the brain a goal + the machine overview).
+// The Brain workspace — Chat view. The sidebar swaps to brain mode (its menu +
+// the brain's conversations — see app-sidebar). This page: a brain conversation
+// when ?session=<id>, otherwise the command center (give the brain a goal + the
+// roster of managed agents). Memory + Dispatches are sibling routes.
 export default function BrainPage() {
   return (
     <Suspense fallback={null}>
@@ -27,7 +23,6 @@ export default function BrainPage() {
 function BrainPageInner() {
   const search = useSearchParams();
   const sessionParam = search.get('session');
-  // A selected brain conversation renders the full chat UI (its own header).
   if (sessionParam) return <SessionPane key={sessionParam} sessionId={sessionParam} />;
   return <BrainHome />;
 }
@@ -93,22 +88,11 @@ function BrainSetup() {
   );
 }
 
-type SessionRow = inferRouterOutputs<AppRouter>['chat']['listSessions'][number];
-const byRecent = (a: SessionRow, b: SessionRow) =>
-  new Date(b.lastMessageAt ?? b.startedAt).getTime() - new Date(a.lastMessageAt ?? a.startedAt).getTime();
-
 function BrainPanel({ brainName }: { brainName: string }) {
-  const sessions = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
-  const all = sessions.data ?? [];
-  // Dispatch sessions live on the TARGET agent, titled "Brain → <agent>" (set by
-  // the dispatch tool) — the brain's outstanding/recent hand-offs.
-  const dispatches = all.filter((s) => (s.title ?? '').startsWith('Brain →')).sort(byRecent).slice(0, 12);
-
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6">
       <CommandBox brainName={brainName} />
       <Roster />
-      <Dispatches dispatches={dispatches} />
     </div>
   );
 }
@@ -125,7 +109,6 @@ function CommandBox({ brainName }: { brainName: string }) {
     try {
       const s = await create.mutateAsync({ agentName: brainName });
       await send.mutateAsync({ sessionId: s.id, text: t });
-      // Land on the new brain conversation, inside the brain workspace.
       window.location.href = `/brain?session=${encodeURIComponent(s.id)}`;
     } catch (e) {
       setBusy(false);
@@ -159,73 +142,40 @@ function CommandBox({ brainName }: { brainName: string }) {
   );
 }
 
-function SectionCard({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
-  return (
-    <section className="rounded-xl border border-border bg-card">
-      <div className="flex items-baseline gap-1.5 border-b border-border px-4 py-2.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">
-        <span>{title}</span>
-        {count != null && <span className="tabular-nums text-muted-foreground/50">{count}</span>}
-      </div>
-      <div className="p-2">{children}</div>
-    </section>
-  );
-}
-
 function Roster() {
   const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 15_000 });
   const workers = (agents.data ?? []).filter((a) => !a.isOrchestrator);
   return (
-    <SectionCard title="Managed agents" count={workers.length}>
-      {workers.length === 0 ? (
-        <p className="px-2.5 py-2 text-xs text-muted-foreground">No other agents on this machine yet.</p>
-      ) : (
-        <ul className="space-y-px">
-          {workers.map((a) => (
-            <li key={a.id}>
-              <Link
-                href={`/agents?name=${encodeURIComponent(a.name)}`}
-                className="group flex items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-accent cursor-pointer"
-              >
-                <span
-                  className={cn('mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full', a.activeSessionCount > 0 ? 'bg-emerald-500' : 'border border-muted-foreground/40')}
-                  aria-hidden
-                />
-                <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-foreground/90">{a.name}</span>
-                <span className="shrink-0 text-[10px] font-mono tabular-nums text-muted-foreground/60">
-                  {a.activeSessionCount > 0 ? `${a.activeSessionCount} active` : `${a.sessionCount} sess`} · {a.skillNames.length} skill
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </SectionCard>
-  );
-}
-
-function Dispatches({ dispatches }: { dispatches: SessionRow[] }) {
-  return (
-    <SectionCard title="Recent dispatches" count={dispatches.length}>
-      {dispatches.length === 0 ? (
-        <p className="px-2.5 py-2 text-xs text-muted-foreground">No dispatches yet. One-shot tasks Brain hands to an agent appear here.</p>
-      ) : (
-        <ul className="space-y-px">
-          {dispatches.map((s) => (
-            <li key={s.id}>
-              <Link
-                href={`/chat?session=${encodeURIComponent(s.id)}`}
-                className="group flex items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-accent cursor-pointer"
-                title={s.title ?? undefined}
-              >
-                <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', s.alive ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500')} aria-hidden />
-                <span className="min-w-0 flex-1 truncate text-[13px] text-foreground/90">{s.title}</span>
-                <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
-                <span className="shrink-0 text-[10px] font-mono tabular-nums text-muted-foreground/60">{relTime(s.lastMessageAt ?? s.startedAt)}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </SectionCard>
+    <section className="rounded-xl border border-border bg-card">
+      <div className="flex items-baseline gap-1.5 border-b border-border px-4 py-2.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">
+        <span>Managed agents</span>
+        <span className="tabular-nums text-muted-foreground/50">{workers.length}</span>
+      </div>
+      <div className="p-2">
+        {workers.length === 0 ? (
+          <p className="px-2.5 py-2 text-xs text-muted-foreground">No other agents on this machine yet.</p>
+        ) : (
+          <ul className="space-y-px">
+            {workers.map((a) => (
+              <li key={a.id}>
+                <Link
+                  href={`/agents?name=${encodeURIComponent(a.name)}`}
+                  className="group flex items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-accent cursor-pointer"
+                >
+                  <span
+                    className={cn('mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full', a.activeSessionCount > 0 ? 'bg-emerald-500' : 'border border-muted-foreground/40')}
+                    aria-hidden
+                  />
+                  <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-foreground/90">{a.name}</span>
+                  <span className="shrink-0 text-[10px] font-mono tabular-nums text-muted-foreground/60">
+                    {a.activeSessionCount > 0 ? `${a.activeSessionCount} active` : `${a.sessionCount} sess`} · {a.skillNames.length} skill
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }

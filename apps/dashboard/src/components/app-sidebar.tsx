@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, MenuIcon, Plus,
-  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, Search, Settings, Pin, type LucideIcon,
+  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -78,6 +78,13 @@ const MARKET_NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/market/templates', label: 'Templates', icon: Package },
 ];
 
+// Brain mode's own menu: Chat / Memory / Dispatches.
+const BRAIN_NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
+  { href: '/brain', label: 'Chat', icon: MessageSquare },
+  { href: '/brain/memory', label: 'Memory', icon: NotebookText },
+  { href: '/brain/dispatch', label: 'Dispatches', icon: Send },
+];
+
 // The hermit-crab button in the sidebar header → the dedicated 义脑 / Brain panel
 // (/brain). The orchestrator lives there, kept out of the worker agent lists. The
 // icon is the monochrome woodcut crab (CSS mask, bg-current) so it tints like the
@@ -124,7 +131,7 @@ function BrainSidebar({ collapsed }: { collapsed: boolean }) {
   };
   return (
     <>
-      <div className="px-2">
+      <div className="px-2 mt-2">
         <button
           type="button"
           onClick={newChat}
@@ -227,6 +234,7 @@ export function AppSidebar() {
   const onOps = pathname.startsWith('/ops');
   const onMarket = pathname.startsWith('/market');
   const onBrain = pathname.startsWith('/brain');
+  const onBrainChat = pathname === '/brain'; // the Chat view (no sub-route; ?session= keeps this path)
   // When viewing a chat session, point the Agents nav at THAT session's agent, so
   // entering Agents from a session lands on its agent instead of the default
   // first-agent. Reuses RecentSessions' listSessions query (same key → deduped).
@@ -500,8 +508,34 @@ export function AppSidebar() {
             <div className="flex-1" />
           </>
         ) : onBrain ? (
-          /* Brain mode: 义脑's own chat system — New chat + the brain's sessions. */
-          <BrainSidebar collapsed={collapsed} />
+          /* Brain mode: its own menu (Chat / Memory / Dispatches). The Chat view
+             also shows New chat + the brain's conversations below the menu. */
+          <>
+            <nav className="px-2 pt-2 space-y-0.5">
+              {BRAIN_NAV.map((n) => {
+                const active = n.href === '/brain' ? onBrainChat : pathname.startsWith(n.href);
+                const Icon = n.icon;
+                return (
+                  <Link
+                    key={n.href}
+                    href={n.href}
+                    title={n.label}
+                    className={cn(
+                      'flex items-center gap-2.5 rounded-lg h-8 text-sm transition-colors cursor-pointer',
+                      collapsed ? 'lg:justify-center lg:px-0 px-3' : 'px-3',
+                      active
+                        ? 'bg-sidebar-accent text-sidebar-foreground font-medium'
+                        : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className={cn('truncate', collapsed && 'lg:hidden')}>{n.label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
+            {onBrainChat ? <BrainSidebar collapsed={collapsed} /> : <div className="flex-1" />}
+          </>
         ) : (
           <>
             {/* Primary CTA — route-aware (New agent / New cron / New chat). */}
