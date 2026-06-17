@@ -59,16 +59,34 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   // In a normal browser tab .app-h uses 100dvh instead, so this just feeds a var
   // nothing consumes there.
   useEffect(() => {
-    const setAppH = () => {
-      const h = window.visualViewport?.height ?? window.innerHeight;
-      document.documentElement.style.setProperty('--app-h', `${Math.round(h)}px`);
+    const vv = window.visualViewport;
+    const setVar = (h: number) => document.documentElement.style.setProperty('--app-h', `${Math.round(h)}px`);
+    // Live height — tracks the keyboard (visualViewport shrinks when it opens, so
+    // the shell shrinks and the composer stays above it).
+    const measure = () => setVar(vv?.height ?? window.innerHeight);
+    measure();
+    window.addEventListener('resize', measure);
+    vv?.addEventListener('resize', measure);
+
+    // iOS bug: after the on-screen keyboard DISMISSES, visualViewport height /
+    // offsetTop don't fully revert and the window is often left scrolled — so the
+    // shell stays short and a white gap reappears at the bottom. On blur, reset
+    // the scroll and re-measure the full height (window.innerHeight ignores the
+    // keyboard) once the dismiss animation settles. Two passes catch fast + slow.
+    const onBlur = () => {
+      const fix = () => {
+        window.scrollTo(0, 0);
+        setVar(window.innerHeight);
+      };
+      setTimeout(fix, 100);
+      setTimeout(fix, 400);
     };
-    setAppH();
-    window.addEventListener('resize', setAppH);
-    window.visualViewport?.addEventListener('resize', setAppH);
+    window.addEventListener('focusout', onBlur);
+
     return () => {
-      window.removeEventListener('resize', setAppH);
-      window.visualViewport?.removeEventListener('resize', setAppH);
+      window.removeEventListener('resize', measure);
+      vv?.removeEventListener('resize', measure);
+      window.removeEventListener('focusout', onBlur);
     };
   }, []);
 
