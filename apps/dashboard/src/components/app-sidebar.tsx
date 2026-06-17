@@ -11,7 +11,6 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
-import { PixelCrab } from '@/components/pixel-crab';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { sessionStatusView } from '@/lib/session-status';
 import { isSessionUnread } from '@/lib/session-read';
@@ -269,20 +268,19 @@ export function AppSidebar() {
             </>
           ) : (
             <>
-              {/* Brand mark, top-left. Links home (/chat); collapses to just the
-                  crab on the narrow rail. */}
+              {/* Brand mark, top-left — the hermit-crab logo, links home (/chat).
+                  Hidden on the narrow rail (collapsed) so only the expand toggle
+                  shows there. No wordmark — just the mark. */}
               <Link
                 href="/chat"
                 aria-label="Hermit home"
                 className={cn(
-                  'flex flex-1 min-w-0 items-center gap-2 rounded-md px-1 py-1 hover:bg-sidebar-accent/60 transition-colors cursor-pointer',
-                  collapsed && 'lg:flex-none lg:px-0',
+                  'flex flex-1 min-w-0 items-center rounded-md px-1 py-1 hover:bg-sidebar-accent/60 transition-colors cursor-pointer',
+                  collapsed && 'lg:hidden',
                 )}
               >
-                <PixelCrab className="h-6 w-6 shrink-0" />
-                <span className={cn('truncate text-[15px] font-semibold tracking-tight text-sidebar-foreground', collapsed && 'lg:hidden')}>
-                  Hermit
-                </span>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/logo-crab.png" alt="Hermit" className="h-7 w-7 shrink-0 object-contain" />
               </Link>
               <Link
                 href="/market/skills"
