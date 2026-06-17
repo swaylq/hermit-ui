@@ -35,6 +35,11 @@ export const viewport: Viewport = {
   // background (not a black band) shows there; the app shell re-insets content via
   // env(safe-area-inset-*) padding so nothing is occluded.
   viewportFit: 'cover',
+  // On-screen keyboard: RESIZE the viewport (like Android) instead of the iOS
+  // default (overlay + scroll), whose offset doesn't fully revert on dismiss and
+  // leaves a white gap at the bottom. Safari 17.4+; ignored on older iOS (the
+  // visualViewport measurement + focusout reset in providers.tsx cover those).
+  interactiveWidget: 'resizes-content',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
