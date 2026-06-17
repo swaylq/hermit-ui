@@ -13,7 +13,10 @@ export const metadata: Metadata = {
   description: 'hermit-agent state, sessions, and tasks',
   applicationName: 'asst',
   // Installable-app metadata. The manifest link is auto-injected from app/manifest.ts.
-  appleWebApp: { capable: true, title: 'asst', statusBarStyle: 'black' },
+  // statusBarStyle 'black-translucent' makes the iOS status bar transparent so the
+  // app's own dark background fills it (seamless — no separate black band). Paired
+  // with viewport-fit=cover + safe-area padding on the app shell (see auth-gate).
+  appleWebApp: { capable: true, title: 'asst', statusBarStyle: 'black-translucent' },
   icons: { icon: '/favicon.ico', apple: '/apple-touch-icon.png' },
   formatDetection: { telephone: false },
 };
@@ -28,6 +31,10 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   themeColor: '#09090b',
+  // Extend the canvas under the iOS status bar / home indicator so the dark app
+  // background (not a black band) shows there; the app shell re-insets content via
+  // env(safe-area-inset-*) padding so nothing is occluded.
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
