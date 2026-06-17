@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, mem
 import { keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Plus, ArrowUp, FileText, RotateCw, Trash2, Check, X, Terminal, Pencil, ChevronDown, ListCollapse, Search, ChevronUp, FoldVertical, type LucideIcon } from 'lucide-react';
+import { Plus, ArrowUp, FileText, Download, RotateCw, Trash2, Check, X, Terminal, Pencil, ChevronDown, ListCollapse, Search, ChevronUp, FoldVertical, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -15,6 +15,7 @@ import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { relTime } from '@/lib/format';
 import { Markdown } from '@/components/markdown';
 import { ImageLightbox } from '@/components/ui/image-lightbox';
+import { Overlay } from '@/components/overlay';
 import { CtxBar } from '@/components/ctx-bar';
 import { sessionStatusView } from '@/lib/session-status';
 import { useMarkSessionRead } from '@/lib/session-read';
@@ -2808,24 +2809,186 @@ function ChatImage({ url, width, height }: { url: string; width: number | null; 
   );
 }
 
+// Save an attached file WITHOUT ever navigating the PWA away. iOS standalone has
+// no back chrome and ignores `<a download>` for renderable types (html / pdf /
+// text) — a plain link there navigates the whole app to the file with no way
+// back (the "发个 html 预览就回不来了" trap). So: fetch → Blob → the native share
+// sheet where it can take files (iOS/Android → "Save to Files"), else a
+// programmatic object-URL download (desktop). Neither touches the top frame.
+async function saveAttachment(url: string, name: string, mimeType: string | null) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const blob = await res.blob();
+  const file = new File([blob], name || 'file', { type: mimeType || blob.type || 'application/octet-stream' });
+  const nav = typeof navigator !== 'undefined' ? navigator : undefined;
+  if (nav?.canShare?.({ files: [file] })) {
+    // Use share exclusively when available — falling through to a link download
+    // on cancel would re-introduce the iOS navigate-away trap.
+    try { await nav.share({ files: [file] }); } catch { /* cancelled / unsupported */ }
+    return;
+  }
+  const obj = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = obj;
+  a.download = name || 'file';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(obj), 4000);
+}
+
+// File extensions a browser renders inline (→ would navigate the PWA on a plain
+// link). These get an in-app preview overlay instead of a download.
+const TEXT_EXT = new Set([
+  'txt','text','md','markdown','csv','tsv','json','yaml','yml','xml','log','sql',
+  'ini','conf','cfg','toml','env','js','mjs','cjs','ts','tsx','jsx','css','scss',
+  'py','sh','bash','zsh','c','h','cpp','hpp','cc','java','go','rs','rb','php','lua','r','kt','swift','pl',
+]);
+
+function classifyFile(name: string, mimeType: string | null) {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  const mt = (mimeType || '').toLowerCase();
+  const isHtml = mt.includes('html') || ext === 'html' || ext === 'htm';
+  const isSvg = mt.includes('svg') || ext === 'svg';
+  const isPdf = mt.includes('pdf') || ext === 'pdf';
+  const isMarkdown = ext === 'md' || ext === 'markdown';
+  const isText = !isHtml && !isSvg && (mt.startsWith('text/') || TEXT_EXT.has(ext));
+  return { isHtml, isSvg, isPdf, isText, isMarkdown, previewable: isHtml || isSvg || isPdf || isText };
+}
+
+// Lazily fetch + render an attachment INSIDE the overlay, independent of how the
+// server labels its content-type (the dev /uploads route serves everything as
+// octet-stream; prod Caddy sends real types). So we don't trust the header:
+//   · html → fetch text, render via iframe `srcDoc` + sandbox="allow-scripts"
+//            (scripts run in an opaque origin; cannot navigate the top frame)
+//   · text → fetch text, render as Markdown (.md) or a <pre>
+//   · svg / pdf → typed Blob URL (image/svg+xml · application/pdf) so it renders
+//     regardless of the served content-type
+function FilePreviewBody({ url, name, c }: { url: string; name: string; c: ReturnType<typeof classifyFile> }) {
+  const [html, setHtml] = useState<string | null>(null);
+  const [text, setText] = useState<string | null>(null);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    let created: string | null = null;
+    setHtml(null); setText(null); setBlobUrl(null); setError(null);
+    fetch(url)
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
+      .then(async (blob) => {
+        if (!alive) return;
+        if (c.isHtml) { const t = await blob.text(); if (alive) setHtml(t); return; }
+        if (c.isText) {
+          const t = await blob.text();
+          if (alive) setText(t.length > 200_000 ? `${t.slice(0, 200_000)}\n…(truncated)` : t);
+          return;
+        }
+        const type = c.isSvg ? 'image/svg+xml' : c.isPdf ? 'application/pdf' : (blob.type || 'application/octet-stream');
+        created = URL.createObjectURL(new Blob([blob], { type }));
+        if (alive) setBlobUrl(created); else URL.revokeObjectURL(created);
+      })
+      .catch((e) => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
+    return () => { alive = false; if (created) URL.revokeObjectURL(created); };
+  }, [url, c]);
+
+  const loading = <div className="p-4 text-xs text-muted-foreground">loading…</div>;
+  if (error) return <div className="p-4 text-xs text-rose-500">Failed to load: {error}</div>;
+
+  if (c.isHtml) {
+    if (html == null) return loading;
+    return <iframe srcDoc={html} title={name} sandbox="allow-scripts" className="h-full w-full border-0 bg-white" />;
+  }
+  if (c.isText) {
+    if (text == null) return loading;
+    if (c.isMarkdown) return <div className="p-4 text-sm"><Markdown>{text}</Markdown></div>;
+    return <pre className="p-4 text-xs font-mono whitespace-pre-wrap break-words text-foreground/90">{text}</pre>;
+  }
+  if (blobUrl == null) return loading;
+  if (c.isSvg) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-white p-4">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={blobUrl} alt={name} className="max-h-full max-w-full" />
+      </div>
+    );
+  }
+  return <iframe src={blobUrl} title={name} className="h-full w-full border-0" />; // pdf
+}
+
+// An agent-attached file (attach_file). Clicking a RENDERABLE file (html / svg /
+// pdf / text) opens an in-app preview overlay — never a navigation — so the chat
+// is always one Close away. Other types (office docs, archives) download in place
+// via the share sheet / object-URL. Fixes the standalone-PWA "no way back" trap.
+function ChatFile({ url, name, mimeType }: { url: string; name: string; mimeType: string | null }) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const c = useMemo(() => classifyFile(name, mimeType), [name, mimeType]);
+
+  const save = useCallback(async () => {
+    setSaving(true);
+    try { await saveAttachment(url, name, mimeType); }
+    catch { /* swallow — rare; the user can retry */ }
+    finally { setSaving(false); }
+  }, [url, name, mimeType]);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => (c.previewable ? setOpen(true) : void save())}
+        title={c.previewable ? `Preview ${name}` : `Download ${name}`}
+        className="inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs transition-colors hover:border-foreground/30 hover:bg-accent/40 cursor-pointer"
+      >
+        <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="truncate text-foreground/90">{name}</span>
+      </button>
+
+      {open && (
+        <Overlay
+          onClose={() => setOpen(false)}
+          panelClassName="flex h-[88vh] w-[96vw] max-w-[1100px] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+        >
+          {(close) => (
+            <>
+              <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+                <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{name}</span>
+                <button
+                  type="button"
+                  onClick={save}
+                  disabled={saving}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[13px] text-foreground transition-colors hover:bg-accent/40 disabled:opacity-50 cursor-pointer"
+                >
+                  <Download className="h-3.5 w-3.5" /> {saving ? '…' : 'Download'}
+                </button>
+                <button
+                  type="button"
+                  onClick={close}
+                  aria-label="close preview"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto bg-background">
+                <FilePreviewBody url={url} name={name} c={c} />
+              </div>
+            </>
+          )}
+        </Overlay>
+      )}
+    </>
+  );
+}
+
 function GroupView({ group, dark, inline = false, typing = false }: { group: Group; dark: boolean; inline?: boolean; typing?: boolean }) {
   if (group.kind === 'text') return <TypedText text={group.text} typing={typing} />;
   if (group.kind === 'image') {
     return <ChatImage url={group.url} width={group.width} height={group.height} />;
   }
   if (group.kind === 'file') {
-    return (
-      <a
-        href={group.url}
-        download={group.name}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs no-underline transition-colors hover:border-foreground/30 hover:bg-accent/40"
-      >
-        <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="truncate text-foreground/90">{group.name}</span>
-      </a>
-    );
+    return <ChatFile url={group.url} name={group.name} mimeType={group.mimeType} />;
   }
   if (group.kind === 'thinking') {
     return (
