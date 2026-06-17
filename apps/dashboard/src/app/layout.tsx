@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   // app's own dark background fills it (seamless — no separate black band). Paired
   // with viewport-fit=cover + safe-area padding on the app shell (see auth-gate).
   appleWebApp: { capable: true, title: 'Hermit', statusBarStyle: 'black-translucent' },
-  icons: { icon: '/favicon.ico', apple: '/apple-touch-icon.png' },
+  icons: { icon: '/favicon.ico', apple: '/apple-touch-icon.png?v=2' },
   formatDetection: { telephone: false },
 };
 
