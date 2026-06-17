@@ -300,11 +300,25 @@ export function AppSidebar() {
             </>
           ) : (
             <>
-              {/* The brand mark moved out of the header — the left side is just a
-                  spacer now. The crab became a button on the right (the entry
-                  point for the planned 义脑 / brain feature), next to Market. Both
-                  hide on the collapsed rail so only the toggle shows. */}
-              <div className={cn('flex-1 min-w-0', collapsed && 'lg:hidden')} />
+              {/* "Hermit" wordmark on the left (Cochin PNG → CSS mask filled with
+                  bg-sidebar-foreground, so it follows the theme), links home. The
+                  crab is no longer paired here — it became the Brain button on the
+                  right (planned 义脑 feature), next to Market. All hide on the
+                  collapsed rail so only the toggle shows. */}
+              <Link
+                href="/chat"
+                aria-label="Hermit home"
+                className={cn(
+                  'flex flex-1 min-w-0 items-center rounded-md px-1 py-1 hover:bg-sidebar-accent/60 transition-colors cursor-pointer',
+                  collapsed && 'lg:hidden',
+                )}
+              >
+                <span
+                  aria-hidden="true"
+                  className="wordmark-hermit shrink-0 bg-sidebar-foreground"
+                  style={{ width: 76, height: 19 }}
+                />
+              </Link>
               <BrainButton collapsed={collapsed} />
               <Link
                 href="/market/skills"
