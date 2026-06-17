@@ -14,6 +14,8 @@ export function ViewportDebug() {
   const latest = useRef('');
   const maxIH = useRef(0);
   const maxVV = useRef(0);
+  const minVV = useRef(Infinity);
+  const kbSnap = useRef('(no keyboard captured yet)');
 
   useEffect(() => {
     const standalone =
@@ -36,12 +38,18 @@ export function ViewportDebug() {
       const ps = getComputedStyle(probe);
       if (window.innerHeight > maxIH.current) maxIH.current = window.innerHeight;
       if (vv && vv.height > maxVV.current) maxVV.current = Math.round(vv.height);
+      // Capture the keyboard-open state (smallest vv.height) so it survives until copy.
+      if (vv && vv.height < window.innerHeight - 120 && vv.height < minVV.current) {
+        minVV.current = vv.height;
+        kbSnap.current = `vv.h=${Math.round(vv.height)} vv.ot=${Math.round(vv.offsetTop)} --app-h=${appH} shellH=${shellH} ih=${window.innerHeight} sY=${Math.round(window.scrollY)}`;
+      }
       const t =
         `vv.height=${vv ? Math.round(vv.height) : '?'} (max=${maxVV.current})  vv.offsetTop=${vv ? Math.round(vv.offsetTop) : '?'}  vv.pageTop=${vv ? Math.round(vv.pageTop) : '?'}\n` +
         `innerHeight=${window.innerHeight} (max=${maxIH.current})  screen.height=${window.screen.height}\n` +
         `--app-h=${appH}  shellH=${shellH}\n` +
         `scrollY=${Math.round(window.scrollY)}  docClientH=${root.clientHeight}  docScrollH=${root.scrollHeight}\n` +
         `safeTop=${ps.paddingTop}  safeBottom=${ps.paddingBottom}\n` +
+        `[KB-OPEN snapshot] ${kbSnap.current}\n` +
         `ua=${navigator.userAgent}`;
       latest.current = t;
       setText(t);

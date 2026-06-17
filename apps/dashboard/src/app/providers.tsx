@@ -74,8 +74,13 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       const ih = window.innerHeight;
       const sh = window.screen?.height || ih;
       const vh = vv?.height ?? ih;
+      const ot = vv?.offsetTop ?? 0;
       const keyboardOpen = vh < sh - 120;
-      setVar(keyboardOpen ? vh : sh);
+      // Keyboard open: the shell bottom should sit at the keyboard top, which is
+      // the BOTTOM edge of the visual viewport = offsetTop + height (iOS offsets
+      // the visual viewport when the keyboard appears, so height alone leaves the
+      // composer floating too high). Otherwise fill the real screen.
+      setVar(keyboardOpen ? ot + vh : sh);
     };
     measure();
     window.addEventListener('resize', measure);
