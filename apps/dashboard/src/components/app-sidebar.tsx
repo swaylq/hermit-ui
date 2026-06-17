@@ -78,56 +78,28 @@ const MARKET_NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/market/templates', label: 'Templates', icon: Package },
 ];
 
-// The hermit-crab button in the sidebar header — the 义脑 / "brain" orchestrator.
-// Opens (or starts) a chat with the machine's orchestrator agent. If none has
-// been set up yet, one click scaffolds a dedicated `brain` agent and lands on it.
-// Its icon is the monochrome woodcut crab (CSS mask, bg-current) so it tints like
-// the sibling header icons (muted → foreground on hover) and follows the theme.
+// The hermit-crab button in the sidebar header → the dedicated 义脑 / Brain panel
+// (/brain). The orchestrator lives there, kept out of the worker agent lists. The
+// icon is the monochrome woodcut crab (CSS mask, bg-current) so it tints like the
+// sibling header icons (muted → foreground on hover) and follows the theme.
 function BrainButton({ collapsed }: { collapsed: boolean }) {
-  const utils = trpc.useUtils();
-  const agents = trpc.agents.list.useQuery(undefined, { staleTime: 60_000 });
-  const brain = (agents.data ?? []).find((a) => a.isOrchestrator);
-  const createSession = trpc.chat.createSession.useMutation();
-  const setupBrain = trpc.agents.setupBrain.useMutation();
-  const [busy, setBusy] = useState(false);
-
-  const open = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      if (brain) {
-        // Reuse the most recent open session, else start a fresh one.
-        const list = await utils.chat.listSessions.fetch({ agentName: brain.name });
-        const latest = (list ?? []).find((s) => !s.closedAt);
-        const id = latest?.id ?? (await createSession.mutateAsync({ agentName: brain.name })).id;
-        window.location.href = `/chat?session=${encodeURIComponent(id)}`;
-      } else {
-        // No orchestrator yet — set one up, then land on it (it scaffolds there).
-        const res = await setupBrain.mutateAsync();
-        await utils.agents.list.invalidate();
-        window.location.href = `/agents?name=${encodeURIComponent(res.name)}`;
-      }
-    } catch (e) {
-      setBusy(false);
-      // eslint-disable-next-line no-alert
-      alert(`义脑: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
-
+  const pathname = usePathname();
+  const active = pathname.startsWith('/brain');
   return (
-    <button
-      type="button"
-      onClick={open}
-      disabled={busy}
-      title={brain ? '义脑 / brain' : '设置义脑 / set up brain'}
-      aria-label={brain ? '义脑 brain' : 'set up 义脑 brain'}
+    <Link
+      href="/brain"
+      title="义脑 / Brain"
+      aria-label="义脑 brain"
       className={cn(
-        'inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0 disabled:opacity-60',
+        'inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer shrink-0',
+        active
+          ? 'bg-sidebar-accent text-sidebar-foreground'
+          : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground',
         collapsed && 'lg:hidden',
       )}
     >
-      <span aria-hidden="true" className={cn('logo-crab-mono h-5 w-5 bg-current', busy && 'animate-pulse')} />
-    </button>
+      <span aria-hidden="true" className="logo-crab-mono h-5 w-5 bg-current" />
+    </Link>
   );
 }
 
@@ -502,7 +474,9 @@ function RecentAgents() {
   const pendingAdds = (pending.data ?? []).filter((p) => p.kind === 'create' || p.kind === 'import');
   const [q, setQ] = useState('');
   const needle = q.trim().toLowerCase();
-  const visible = needle ? (agents.data ?? []).filter((a) => a.name.toLowerCase().includes(needle)) : (agents.data ?? []);
+  // The orchestrator (义脑) lives in its own /brain panel, not the worker list.
+  const workers = (agents.data ?? []).filter((a) => !a.isOrchestrator);
+  const visible = needle ? workers.filter((a) => a.name.toLowerCase().includes(needle)) : workers;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">
@@ -520,7 +494,7 @@ function RecentAgents() {
               <div key={i} className="h-10 rounded-md bg-sidebar-accent/40 animate-pulse" />
             ))}
           </div>
-        ) : (agents.data?.length ?? 0) === 0 && pendingAdds.length === 0 ? (
+        ) : workers.length === 0 && pendingAdds.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">no agents yet — start with “New agent”.</p>
         ) : visible.length === 0 && pendingAdds.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">没有匹配 “{q.trim()}” 的 agent。</p>
@@ -897,6 +871,10 @@ function RecentSessions() {
   const search = useSearchParams();
   const activeId = search.get('session');
   const sessions = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
+  // The orchestrator (义脑) lives in /brain — keep its conversations out of the
+  // worker session recents. agents.list is cached (shared), so this is cheap.
+  const orchestratorsQ = trpc.agents.list.useQuery(undefined, { staleTime: 60_000 });
+  const orchestratorName = (orchestratorsQ.data ?? []).find((a) => a.isOrchestrator)?.name;
   const utils = trpc.useUtils();
   const liveWorkingSince = useLiveWorking();
   const pins = usePins();
@@ -941,11 +919,11 @@ function RecentSessions() {
 
   const agentNames = useMemo(() => {
     const names = new Set<string>();
-    sessions.data?.forEach((s) => names.add(s.agentName));
+    sessions.data?.forEach((s) => { if (s.agentName !== orchestratorName) names.add(s.agentName); });
     return Array.from(names).sort();
-  }, [sessions.data]);
+  }, [sessions.data, orchestratorName]);
   const visible = useMemo(() => {
-    let rows = sessions.data ?? [];
+    let rows = (sessions.data ?? []).filter((s) => s.agentName !== orchestratorName);
     if (filter) rows = rows.filter((s) => s.agentName === filter);
     const needle = q.trim().toLowerCase();
     if (needle) {
@@ -959,7 +937,7 @@ function RecentSessions() {
     // order within the pinned and unpinned groups.
     if (pins.size) rows = [...rows].sort((a, b) => (pins.has(b.id) ? 1 : 0) - (pins.has(a.id) ? 1 : 0));
     return rows;
-  }, [sessions.data, filter, q, pins]);
+  }, [sessions.data, filter, q, pins, orchestratorName]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">

@@ -40,7 +40,8 @@ function AgentsPageInner() {
   // what /chat does for sessions.
   useEffect(() => {
     if (showNew || showImport || nameParam) return;
-    const first = agents.data?.[0];
+    // Skip the orchestrator (义脑) — it has its own /brain panel, not this list.
+    const first = agents.data?.find((a) => !a.isOrchestrator);
     if (first) router.replace(`/agents?name=${encodeURIComponent(first.name)}`);
   }, [showNew, showImport, nameParam, agents.data, router]);
 
