@@ -32,7 +32,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
   const active = getActiveEntry();
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -63,7 +63,18 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
   useEffect(() => {
     if (!open) return;
     const r = btnRef.current?.getBoundingClientRect();
-    if (r) setPos({ left: r.left, top: r.bottom + 6, width: Math.max(r.width, 240) });
+    if (r) {
+      const width = Math.max(r.width, 240);
+      // The switcher now lives in the sidebar FOOTER, so the trigger sits near the
+      // bottom of the viewport — open the menu upward when there isn't room below
+      // (anchor its bottom to the trigger's top instead of top→bottom).
+      const spaceBelow = window.innerHeight - r.bottom;
+      setPos(
+        spaceBelow < 340
+          ? { left: r.left, bottom: window.innerHeight - r.top + 6, width }
+          : { left: r.left, top: r.bottom + 6, width },
+      );
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
     };
@@ -146,8 +157,8 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
         createPortal(
           <div
             ref={menuRef}
-            className="fixed z-[60] rounded-lg border border-sidebar-border bg-sidebar shadow-lg p-1"
-            style={{ left: pos.left, top: pos.top, width: pos.width }}
+            className="fixed z-[60] max-h-[70vh] overflow-y-auto rounded-lg border border-sidebar-border bg-sidebar shadow-lg p-1"
+            style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width }}
           >
             {list.map((e) =>
               editingId === e.id ? (

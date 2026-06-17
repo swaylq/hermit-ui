@@ -71,7 +71,7 @@ function Authed({ onSignOut, children }: { onSignOut: () => void; children: Reac
   return (
     <SidebarProvider>
       <div className="flex app-h w-full overflow-hidden bg-background text-foreground pwa-safe-t pwa-safe-x">
-        <AppSidebar machine={me.data} onLogout={onSignOut} />
+        <AppSidebar />
         <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">{children}</main>
       </div>
     </SidebarProvider>

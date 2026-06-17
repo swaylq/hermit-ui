@@ -4,13 +4,14 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
-  SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, LogOut, MenuIcon, Plus,
+  SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, MenuIcon, Plus,
   Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, Search, Settings, Pin, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
+import { PixelCrab } from '@/components/pixel-crab';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { sessionStatusView } from '@/lib/session-status';
 import { isSessionUnread } from '@/lib/session-read';
@@ -63,8 +64,6 @@ export function SidebarMobileToggle({ className }: { className?: string }) {
   );
 }
 
-type MachineInfo = { name: string; hostname?: string | null; keyPrefix?: string };
-
 const NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/chat', label: 'Chat', icon: MessageSquare },
   { href: '/agents', label: 'Agents', icon: Bot },
@@ -80,7 +79,7 @@ const MARKET_NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/market/templates', label: 'Templates', icon: Package },
 ];
 
-export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLogout: () => void }) {
+export function AppSidebar() {
   const pathname = usePathname();
   const search = useSearchParams();
   const { mobileOpen, setMobileOpen, collapsed, setCollapsed } = useSidebar();
@@ -270,14 +269,29 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
             </>
           ) : (
             <>
-              <div className={cn('flex-1 min-w-0', collapsed && 'lg:hidden')}>
-                <WorkspaceSwitcher collapsed={collapsed} />
-              </div>
+              {/* Brand mark, top-left. Links home (/chat); collapses to just the
+                  crab on the narrow rail. */}
+              <Link
+                href="/chat"
+                aria-label="Hermit home"
+                className={cn(
+                  'flex flex-1 min-w-0 items-center gap-2 rounded-md px-1 py-1 hover:bg-sidebar-accent/60 transition-colors cursor-pointer',
+                  collapsed && 'lg:flex-none lg:px-0',
+                )}
+              >
+                <PixelCrab className="h-6 w-6 shrink-0" />
+                <span className={cn('truncate text-[15px] font-semibold tracking-tight text-sidebar-foreground', collapsed && 'lg:hidden')}>
+                  Hermit
+                </span>
+              </Link>
               <Link
                 href="/market/skills"
                 title="Public marketplace"
                 aria-label="public marketplace"
-                className="inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0"
+                className={cn(
+                  'inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0',
+                  collapsed && 'lg:hidden',
+                )}
               >
                 <Store className="h-4 w-4" />
               </Link>
@@ -371,26 +385,11 @@ export function AppSidebar({ machine, onLogout }: { machine?: MachineInfo; onLog
           </>
         )}
 
-        {/* Footer: machine + sign out */}
+        {/* Footer: machine switcher (switch / add / remove machines). Replaced the
+            static machine name + a sign-out button — there are no accounts to sign
+            out of, and the brand mark took over the header's top-left. */}
         <div className="border-t border-sidebar-border p-2 mt-auto shrink-0">
-          <div className={cn('flex items-center gap-2', collapsed && 'lg:justify-center')}>
-            <div className="h-7 w-7 shrink-0 rounded-full bg-sidebar-accent text-sidebar-foreground flex items-center justify-center text-[11px] font-medium" aria-hidden="true">
-              {(machine?.name ?? '?').slice(0, 2).toUpperCase()}
-            </div>
-            <div className={cn('flex-1 min-w-0', collapsed && 'lg:hidden')}>
-              <div className="text-xs font-medium truncate">{machine?.name ?? 'machine'}</div>
-              {machine?.hostname && <div className="text-[10px] text-muted-foreground truncate font-mono">{machine.hostname}</div>}
-            </div>
-            <button
-              type="button"
-              onClick={onLogout}
-              aria-label="sign out"
-              title="sign out"
-              className={cn('p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer', collapsed && 'lg:hidden')}
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
-          </div>
+          <WorkspaceSwitcher collapsed={collapsed} />
         </div>
       </aside>
     </>
