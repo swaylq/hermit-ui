@@ -87,7 +87,7 @@ export function InstallPrompt() {
           </p>
         ) : (
           <div className="flex-1 min-w-0 text-xs leading-snug">
-            <span className="font-medium text-foreground">安装 asst 到桌面</span>
+            <span className="font-medium text-foreground">安装 Hermit 到桌面</span>
             <span className="block text-muted-foreground">像原生应用一样独立窗口打开。</span>
           </div>
         )}

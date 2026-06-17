@@ -5,18 +5,19 @@ import { Geist } from "next/font/google";
 import { cn } from "@/lib/utils";
 import { AuthGate } from '@/components/auth-gate';
 import { InstallPrompt } from '@/components/install-prompt';
+import { ThemeColorMeta } from '@/components/theme-color-meta';
 
 const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 export const metadata: Metadata = {
-  title: 'asst dashboard',
+  title: 'Hermit',
   description: 'hermit-agent state, sessions, and tasks',
-  applicationName: 'asst',
+  applicationName: 'Hermit',
   // Installable-app metadata. The manifest link is auto-injected from app/manifest.ts.
   // statusBarStyle 'black-translucent' makes the iOS status bar transparent so the
   // app's own dark background fills it (seamless — no separate black band). Paired
   // with viewport-fit=cover + safe-area padding on the app shell (see auth-gate).
-  appleWebApp: { capable: true, title: 'asst', statusBarStyle: 'black-translucent' },
+  appleWebApp: { capable: true, title: 'Hermit', statusBarStyle: 'black-translucent' },
   icons: { icon: '/favicon.ico', apple: '/apple-touch-icon.png' },
   formatDetection: { telephone: false },
 };
@@ -30,7 +31,14 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: '#09090b',
+  // theme-color drives the installed-PWA window frame / title bar (e.g. on macOS)
+  // and the mobile browser UI tint. Two variants so it follows the system light /
+  // dark scheme instead of being stuck dark; the resolved app theme (incl. the
+  // Appearance override) is also pushed live via <ThemeColorMeta>.
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
+    { media: '(prefers-color-scheme: dark)', color: '#09090b' },
+  ],
   // Extend the canvas under the iOS status bar / home indicator so the dark app
   // background (not a black band) shows there; the app shell re-insets content via
   // env(safe-area-inset-*) padding so nothing is occluded.
@@ -49,6 +57,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <Providers>
           <AuthGate>{children}</AuthGate>
           <InstallPrompt />
+          <ThemeColorMeta />
         </Providers>
       </body>
     </html>

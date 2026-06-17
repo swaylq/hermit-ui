@@ -4,8 +4,8 @@ import type { MetadataRoute } from 'next';
 // Makes dash.swaylab.ai installable as a standalone desktop/mobile app.
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'asst dashboard',
-    short_name: 'asst',
+    name: 'Hermit',
+    short_name: 'Hermit',
     description: 'hermit-agent state, sessions, and tasks',
     id: '/',
     start_url: '/',
