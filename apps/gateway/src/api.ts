@@ -61,7 +61,7 @@ export const api = {
   },
 
   pollChatPending: async (): Promise<{
-    sessions: Array<{ id: string; agentName: string; claudeSessionId: string | null; agentDirectory: string | null }>;
+    sessions: Array<{ id: string; agentName: string; claudeSessionId: string | null; agentDirectory: string | null; isOrchestrator?: boolean }>;
     messages: Array<{ id: string; sessionId: string; role: string; content: any; createdAt: string }>;
   }> => {
     const r = await get<any>(

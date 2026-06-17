@@ -43,7 +43,7 @@ import { relayImages } from './image-relay';
 // attach_image, attach_file. Spawned as a stdio child of `claude --mcp-config <json>`.
 const MCP_STUB_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-stub.cjs');
 
-function buildMcpConfigArg(chatSessionId: string): string {
+function buildMcpConfigArg(chatSessionId: string, isBrain = false): string {
   const config = {
     mcpServers: {
       hermit: {
@@ -58,6 +58,9 @@ function buildMcpConfigArg(chatSessionId: string): string {
           HERMIT_SESSION_ID: chatSessionId,
           HERMIT_DASHBOARD_URL: DASHBOARD_URL,
           HERMIT_KEY: ASST_KEY,
+          // The orchestrator ("义脑") session gets HERMIT_BRAIN=1 — the stub then
+          // registers the brain-only cross-agent tools (roster/dispatch/...).
+          ...(isBrain ? { HERMIT_BRAIN: '1' } : {}),
         },
       },
     },
@@ -66,7 +69,7 @@ function buildMcpConfigArg(chatSessionId: string): string {
 }
 
 type PendingMsg = { id: string; sessionId: string; role: string; content: any; createdAt: string };
-type PendingSession = { id: string; agentName: string; claudeSessionId: string | null; agentDirectory: string | null };
+type PendingSession = { id: string; agentName: string; claudeSessionId: string | null; agentDirectory: string | null; isOrchestrator?: boolean };
 
 // One outbound chat-message sync (the shape /api/sync/chat-message accepts).
 type SyncItem = {
@@ -685,7 +688,7 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     // self-defers in bypassPermissions mode, so nothing routes to the web and no
     // invisible TUI prompt can hang the chat. Revert this flag to restore gating.
     claudeArgs.push('--dangerously-skip-permissions');
-    claudeArgs.push('--mcp-config', buildMcpConfigArg(session.id));
+    claudeArgs.push('--mcp-config', buildMcpConfigArg(session.id, session.isOrchestrator ?? false));
   }
 
   const { created, preExistingUuids } = ensureSession({

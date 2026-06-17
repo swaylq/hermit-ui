@@ -435,13 +435,17 @@ export const chatRouter = router({
     const agentNames = [...new Set(sessions.map((s) => s.agentName))];
     const agents = await prisma.agent.findMany({
       where: { machineId: ctx.machine.id, name: { in: agentNames } },
-      select: { name: true, directory: true },
+      select: { name: true, directory: true, isOrchestrator: true },
     });
     const dirByName = new Map(agents.map((a) => [a.name, a.directory]));
+    const orchByName = new Map(agents.map((a) => [a.name, a.isOrchestrator]));
 
     const sessionsWithDir = sessions.map((s) => ({
       ...s,
       agentDirectory: dirByName.get(s.agentName) ?? null,
+      // The orchestrator flag rides along so the gateway can set HERMIT_BRAIN on
+      // this session's MCP stub (which unlocks the brain-only cross-agent tools).
+      isOrchestrator: orchByName.get(s.agentName) ?? false,
     }));
 
     const sessionIds = sessions.map((s) => s.id);

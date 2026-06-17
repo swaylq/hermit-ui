@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
+import { BRAIN_PERSONA, BRAIN_IDENTITY } from '../brain-template';
 
 // Dashboard reads agent state purely from postgres. The Mac-side gateway
 // pushes:
@@ -24,6 +25,7 @@ export const agentsRouter = router({
         directory: true,
         skillNames: true,
         metadataAt: true,
+        isOrchestrator: true,
       },
     });
     if (rows.length === 0) return [];
@@ -68,7 +70,7 @@ export const agentsRouter = router({
           id: true, name: true, directory: true, trashedAt: true, updatedAt: true,
           identityText: true, userText: true, agentsText: true, toolsText: true,
           evolutionLessons: true, skillNames: true, skills: true, memorySummary: true,
-          metadataAt: true,
+          metadataAt: true, isOrchestrator: true,
         },
       });
       if (!agent) return null;
@@ -353,6 +355,70 @@ export const agentsRouter = router({
       });
     }),
 
+  // Designate (or clear) the machine's orchestrator ("义脑" / brain). At most one
+  // per machine — promoting one clears the flag on any other. A plain DB flag;
+  // the gateway reads it via chat.pollPending to gate the brain-only MCP tools.
+  setOrchestrator: machineProcedure
+    .input(z.object({ name: z.string(), value: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const agent = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { id: true, trashedAt: true },
+      });
+      if (!agent) throw new Error('agent not found');
+      if (agent.trashedAt) throw new Error('cannot designate a trashed agent');
+      await prisma.$transaction(async (tx) => {
+        if (input.value) {
+          // single-orchestrator invariant: clear any other on this machine first.
+          await tx.agent.updateMany({
+            where: { machineId: ctx.machine.id, isOrchestrator: true, name: { not: input.name } },
+            data: { isOrchestrator: false },
+          });
+        }
+        await tx.agent.update({
+          where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+          data: { isOrchestrator: input.value },
+        });
+      });
+      return { ok: true };
+    }),
+
+  // One-click "set up 义脑": scaffold a dedicated `brain` agent (orchestrator
+  // persona overlaid into its IDENTITY) and flag it as the machine's orchestrator.
+  // Returns the existing orchestrator if there already is one.
+  setupBrain: machineProcedure.mutation(async ({ ctx }) => {
+    const existing = await prisma.agent.findFirst({
+      where: { machineId: ctx.machine.id, isOrchestrator: true, trashedAt: null },
+      select: { name: true },
+    });
+    if (existing) return { name: existing.name, created: false };
+
+    const name = 'brain';
+    const clash = await prisma.agent.findUnique({
+      where: { machineId_name: { machineId: ctx.machine.id, name } },
+      select: { id: true },
+    });
+    if (clash) {
+      throw new Error('an agent named "brain" already exists — open it and toggle "设为义脑" instead');
+    }
+    const pending = await prisma.agentRequest.findFirst({
+      where: { machineId: ctx.machine.id, agentName: name, status: 'pending' },
+      select: { id: true },
+    });
+    if (pending) return { name, created: false };
+
+    // Overlay just IDENTITY — keep the base AGENTS.md workspace rules + default
+    // skills (incl. cron, which the brain uses to schedule its own digest).
+    const templateContent = JSON.stringify({ templateFiles: [{ path: 'IDENTITY.md', content: BRAIN_IDENTITY }] });
+    await prisma.$transaction(async (tx) => {
+      await tx.agent.create({ data: { machineId: ctx.machine.id, name, isOrchestrator: true } });
+      await tx.agentRequest.create({
+        data: { machineId: ctx.machine.id, kind: 'create', agentName: name, persona: BRAIN_PERSONA, content: templateContent },
+      });
+    });
+    return { name, created: true };
+  }),
+
   // Pending lifecycle requests — the agents page shows "creating…/deleting…".
   pendingRequests: machineProcedure.query(async ({ ctx }) => {
     return prisma.agentRequest.findMany({
@@ -392,7 +458,7 @@ export const agentsRouter = router({
       // Trashed agents are skipped — their dirs are in .hermit-trash, so there's
       // nothing for the gateway to read; their content stays frozen until restore.
       where: { machineId: ctx.machine.id, trashedAt: null },
-      select: { name: true, directory: true },
+      select: { name: true, directory: true, isOrchestrator: true },
       orderBy: { name: 'asc' },
     });
   }),

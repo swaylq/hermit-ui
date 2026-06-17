@@ -324,6 +324,11 @@ model Agent {
   machine   Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
   name      String
   directory String? // absolute path on the gateway's host
+  // The machine's orchestrator ("义脑" / brain): at most one per machine
+  // (app-enforced via agents.setOrchestrator). Unlocks the brain-only MCP tools —
+  // the gateway sets HERMIT_BRAIN on this agent's sessions so mcp-stub registers
+  // roster/agent_activity/dispatch/... A plain dashboard flag; no on-disk effect.
+  isOrchestrator Boolean @default(false)
   // Soft-delete / recycle bin. Set when the agent is moved to trash; cleared on
   // restore. The gateway mv's the dir to AGENTS_ROOT/.hermit-trash/ on delete,
   // back on restore, and rm -rf's it on purge. agents.list hides rows where this

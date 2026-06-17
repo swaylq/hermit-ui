@@ -73,6 +73,50 @@ export function AgentDetailTabs({ tab, setTab }: { tab: DetailTab; setTab: (t: D
   );
 }
 
+// Promote / demote this agent as the machine's 义脑 (orchestrator). Flag-only —
+// it unlocks the cross-agent brain tools on this agent's chat sessions. The
+// recommended way to get a clean orchestrator is the sidebar crab button (it
+// scaffolds a dedicated `brain` agent with the orchestrator identity); this
+// toggle is for promoting an existing agent (at most one per machine).
+function OrchestratorToggle({ agentName, isOrchestrator }: { agentName: string; isOrchestrator: boolean }) {
+  const utils = trpc.useUtils();
+  const setOrch = trpc.agents.setOrchestrator.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        utils.agents.byName.invalidate({ name: agentName }),
+        utils.agents.list.invalidate(),
+      ]);
+    },
+  });
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card p-3">
+      <div className="min-w-0">
+        <div className="text-[13px] font-medium text-foreground">
+          义脑 / Orchestrator{isOrchestrator && <span className="ml-1.5 text-[11px] text-emerald-600">· 当前义脑</span>}
+        </div>
+        <div className="text-[11px] text-muted-foreground">
+          {isOrchestrator
+            ? '这个 agent 是本机义脑——它的会话拥有跨 agent 的 roster / dispatch 工具。'
+            : '设为义脑后它能调度本机其它 agent（每台机器至多一个）。'}
+        </div>
+      </div>
+      <button
+        type="button"
+        disabled={setOrch.isPending}
+        onClick={() => setOrch.mutate({ name: agentName, value: !isOrchestrator })}
+        className={cn(
+          'shrink-0 inline-flex items-center justify-center h-8 px-3 rounded-md text-[13px] font-medium transition-colors cursor-pointer disabled:opacity-50',
+          isOrchestrator
+            ? 'border border-border text-muted-foreground hover:bg-accent'
+            : 'bg-foreground text-background hover:opacity-90',
+        )}
+      >
+        {setOrch.isPending ? '…' : isOrchestrator ? '取消义脑' : '设为义脑'}
+      </button>
+    </div>
+  );
+}
+
 // Tabbed body, fill-height + controlled by `tab` (the strip lives in the parent
 // header). "详情" scrolls (centered, max-w-3xl); "文件" is the file manager
 // filling the whole pane. Fills its parent — wrap callers in a flex-1 min-h-0.
@@ -98,6 +142,7 @@ function AgentDetailContent({
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-5">
+            <OrchestratorToggle agentName={name} isOrchestrator={!!agent.isOrchestrator} />
             <SessionsSection agentName={name} sessions={sessions} loading={sessionsLoading} />
             <CronsSection agentName={name} />
             <SkillsAndTasks agent={agent} agentName={name} />

@@ -25,6 +25,10 @@ const path = require('node:path');
 const SESSION_ID = process.env.HERMIT_SESSION_ID || '';
 const DASHBOARD_URL = process.env.HERMIT_DASHBOARD_URL || 'http://127.0.0.1:4101';
 const KEY = process.env.HERMIT_KEY || '';
+// The orchestrator ("义脑") session is launched by chat-runner with HERMIT_BRAIN=1.
+// Only then are the cross-agent brain tools (roster / agent_activity / dispatch /
+// dispatch_result) registered + accepted — a normal agent never gets them.
+const BRAIN = process.env.HERMIT_BRAIN === '1';
 
 const MIME_BY_EXT = {
   png: 'image/png',
@@ -154,6 +158,18 @@ async function uploadFile(filePath) {
   return r.json();
 }
 
+// Flatten Anthropic content blocks to plain text (drops tool_use / tool_result /
+// image blocks) — used to summarize an agent's last turn for the brain tools.
+function textOf(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text)
+    .join('\n')
+    .trim();
+}
+
 const TOOLS = [
   {
     name: 'set_session_title',
@@ -263,8 +279,182 @@ const TOOLS = [
   },
 ];
 
+// ── Brain-only tools (registered + accepted only when HERMIT_BRAIN=1) ─────────
+// The orchestrator ("义脑") manages every OTHER agent on this machine. These wrap
+// the EXISTING machine-scoped tRPC — the stub already holds the machine key — so
+// the brain sees + delegates without ever handling the key or doing work itself.
+const BRAIN_TOOLS = [
+  {
+    name: 'roster',
+    description:
+      "List the OTHER agents on this machine (you, the orchestrator, are excluded) with their skills + session counts — your routing table. Call this first to see who can take a task; for an agent's role/recent work follow up with agent_activity.",
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'agent_activity',
+    description:
+      "Inspect ONE agent: its identity/role summary, skills, recent chat sessions (+ the latest turn's text) and crons. Use it to understand what an agent does and what it has been doing — before routing work to it, or when writing your digest. Optional `since` (ISO timestamp) limits sessions to those active after it (incremental digests).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The agent name (from roster).' },
+        since: { type: 'string', description: 'Optional ISO timestamp — only sessions active after this.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'dispatch',
+    description:
+      "Delegate a task to ANOTHER agent — you (义脑) never do the work yourself. One-shot by default: opens a fresh chat session on the target and sends `prompt`; returns its sessionId (read the result later with dispatch_result). Pass recurring={intervalMinutes} to make it a cron on the target instead. Pick the target from roster / agent_activity.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentName: { type: 'string', description: 'Target agent (on the roster, not yourself).' },
+        prompt: { type: 'string', description: 'The task to hand to that agent.' },
+        title: { type: 'string', description: 'Optional short label for the session/cron.' },
+        recurring: {
+          type: 'object',
+          description: 'Make it a recurring cron on the target instead of a one-shot.',
+          properties: {
+            intervalMinutes: { type: 'number', description: 'Run every N minutes (≥1).' },
+            jitterMinutes: { type: 'number', description: 'Optional ± random minutes.' },
+          },
+          required: ['intervalMinutes'],
+        },
+      },
+      required: ['agentName', 'prompt'],
+    },
+  },
+  {
+    name: 'dispatch_result',
+    description:
+      "Read back a one-shot dispatch: the target session's latest assistant text + whether it is still working. Optional `waitMs` (≤120000) briefly polls for a result still being produced. Dispatch is asynchronous — call this on a LATER turn (or after a short wait), not expecting an instant reply.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'The sessionId returned by dispatch.' },
+        waitMs: { type: 'number', description: 'Optional poll window in ms (capped at 120000).' },
+      },
+      required: ['sessionId'],
+    },
+  },
+];
+const BRAIN_TOOL_NAMES = new Set(BRAIN_TOOLS.map((t) => t.name));
+
+async function dispatchBrainTool(name, args) {
+  if (name === 'roster') {
+    const agents = (await trpcQuery('agents.list', null)) || [];
+    const workers = (Array.isArray(agents) ? agents : [])
+      .filter((a) => !a.isOrchestrator)
+      .map((a) => ({ name: a.name, skills: a.skillNames || [], sessions: a.sessionCount ?? 0, active: a.activeSessionCount ?? 0 }));
+    return JSON.stringify({ agents: workers });
+  }
+  if (name === 'agent_activity') {
+    const target = args?.name;
+    if (typeof target !== 'string' || !target) throw new Error('name required');
+    const since = typeof args?.since === 'string' ? Date.parse(args.since) : NaN;
+    const detail = await trpcQuery('agents.byName', { name: target });
+    const agent = detail?.agent || null;
+    let sessions = (await trpcQuery('chat.listSessions', { agentName: target })) || [];
+    if (!Array.isArray(sessions)) sessions = [];
+    if (Number.isFinite(since)) {
+      sessions = sessions.filter((s) => Date.parse(s.lastMessageAt || s.startedAt || 0) >= since);
+    }
+    let crons = (await trpcQuery('cron.listForAgent', { agentName: target })) || [];
+    if (!Array.isArray(crons)) crons = [];
+    // Latest turn from the most-recent session.
+    let latest = null;
+    const recent = [...sessions].sort(
+      (a, b) => Date.parse(b.lastMessageAt || b.startedAt || 0) - Date.parse(a.lastMessageAt || a.startedAt || 0),
+    )[0];
+    if (recent) {
+      const msgs = (await trpcQuery('chat.listMessages', { sessionId: recent.id, limit: 16 })) || [];
+      const arr = Array.isArray(msgs) ? msgs : [];
+      const lastA = [...arr].reverse().find((m) => m.role === 'assistant' && textOf(m.content));
+      const lastU = [...arr].reverse().find((m) => m.role === 'user' && textOf(m.content));
+      latest = {
+        sessionId: recent.id,
+        lastUser: textOf(lastU?.content).slice(0, 600) || null,
+        lastAssistant: textOf(lastA?.content).slice(0, 800) || null,
+      };
+    }
+    return JSON.stringify({
+      name: target,
+      identity: (agent?.identityText || agent?.memorySummary || '').slice(0, 500) || null,
+      skills: agent?.skillNames || [],
+      sessions: sessions.map((s) => ({ id: s.id, title: s.title || s.preview || null, alive: s.alive, state: s.state, lastMessageAt: s.lastMessageAt })),
+      crons: crons.map((c) => ({ id: c.id, title: c.title || String(c.prompt || '').slice(0, 40), intervalSec: c.intervalSec, enabled: c.enabled, lastStatus: c.lastStatus, lastFire: c.lastFire })),
+      latest,
+    });
+  }
+  if (name === 'dispatch') {
+    const agentName = args?.agentName;
+    const prompt = args?.prompt;
+    if (typeof agentName !== 'string' || !agentName) throw new Error('agentName required');
+    if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('prompt required');
+    // Validate the target: a real, non-trashed, non-orchestrator agent on this
+    // machine (also blocks the brain dispatching to itself).
+    const agents = (await trpcQuery('agents.list', null)) || [];
+    const target = (Array.isArray(agents) ? agents : []).find((a) => a.name === agentName);
+    if (!target) throw new Error(`no agent named "${agentName}" on this machine (see roster)`);
+    if (target.isOrchestrator) throw new Error('cannot dispatch to the orchestrator itself');
+    const title = typeof args?.title === 'string' && args.title.trim() ? args.title.trim().slice(0, 120) : undefined;
+    if (args?.recurring && Number.isFinite(Number(args.recurring.intervalMinutes))) {
+      const intervalMinutes = Number(args.recurring.intervalMinutes);
+      if (intervalMinutes < 1) throw new Error('recurring.intervalMinutes must be ≥ 1');
+      const jitterMinutes = Number.isFinite(Number(args.recurring.jitterMinutes)) ? Math.max(0, Number(args.recurring.jitterMinutes)) : 0;
+      const res = await trpcMutate('cron.create', {
+        agentName,
+        prompt: prompt.trim(),
+        intervalSec: Math.max(60, Math.round(intervalMinutes * 60)),
+        jitterSec: Math.round(jitterMinutes * 60),
+        ...(title ? { title } : {}),
+      });
+      const cron = res?.[0]?.result?.data?.json;
+      return JSON.stringify({ ok: true, kind: 'recurring', agent: agentName, cronId: cron?.id ?? null });
+    }
+    const sres = await trpcMutate('chat.createSession', { agentName, title: title || `义脑 → ${agentName}` });
+    const session = sres?.[0]?.result?.data?.json;
+    if (!session?.id) throw new Error('failed to create a session on the target agent');
+    await trpcMutate('chat.send', { sessionId: session.id, text: prompt.trim() });
+    return JSON.stringify({ ok: true, kind: 'oneshot', agent: agentName, sessionId: session.id });
+  }
+  if (name === 'dispatch_result') {
+    const sessionId = args?.sessionId;
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    const waitMs = Math.min(Math.max(0, Number(args?.waitMs) || 0), 120_000);
+    const deadline = Date.now() + waitMs;
+    let msgs = [];
+    // Poll: stop once the newest message is an assistant turn (a reply landed),
+    // else keep checking until the wait window elapses.
+    for (;;) {
+      const got = (await trpcQuery('chat.listMessages', { sessionId, limit: 20 })) || [];
+      msgs = Array.isArray(got) ? got : [];
+      const last = msgs[msgs.length - 1];
+      if ((last && last.role === 'assistant' && textOf(last.content)) || Date.now() >= deadline) break;
+      await sleep(3000);
+    }
+    const lastA = [...msgs].reverse().find((m) => m.role === 'assistant' && textOf(m.content));
+    const sessions = (await trpcQuery('chat.listSessions', {})) || [];
+    const s = (Array.isArray(sessions) ? sessions : []).find((x) => x.id === sessionId);
+    return JSON.stringify({
+      sessionId,
+      alive: s?.alive ?? null,
+      state: s?.state ?? null,
+      messageCount: msgs.length,
+      lastAssistant: textOf(lastA?.content).slice(0, 2000) || null,
+    });
+  }
+  throw new Error(`unknown brain tool: ${name}`);
+}
+
 async function dispatchTool(name, args) {
   if (!SESSION_ID) throw new Error('HERMIT_SESSION_ID missing');
+  if (BRAIN_TOOL_NAMES.has(name)) {
+    if (!BRAIN) throw new Error('brain tools are only available to the orchestrator (义脑) session');
+    return dispatchBrainTool(name, args);
+  }
   if (name === 'set_session_title') {
     if (typeof args?.title !== 'string') throw new Error('title required');
     await trpcMutate('chat.setTitle', { id: SESSION_ID, title: args.title.slice(0, 120) });
@@ -423,7 +613,7 @@ rl.on('line', async (line) => {
       return;
     }
     if (method === 'tools/list') {
-      sendResult(id, { tools: TOOLS });
+      sendResult(id, { tools: BRAIN ? TOOLS.concat(BRAIN_TOOLS) : TOOLS });
       return;
     }
     if (method === 'tools/call') {

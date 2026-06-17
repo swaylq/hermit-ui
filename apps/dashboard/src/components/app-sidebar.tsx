@@ -78,35 +78,56 @@ const MARKET_NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/market/templates', label: 'Templates', icon: Package },
 ];
 
-// The hermit-crab button in the sidebar header — the entry point for the planned
-// 义脑 / "brain" feature. The feature isn't built yet, so for now it flags itself
-// as coming soon (a tooltip + a transient hint on click). Its icon is the
-// monochrome woodcut crab (CSS mask, bg-current) so it tints like the sibling
-// header icons (muted → foreground on hover) and follows the theme.
+// The hermit-crab button in the sidebar header — the 义脑 / "brain" orchestrator.
+// Opens (or starts) a chat with the machine's orchestrator agent. If none has
+// been set up yet, one click scaffolds a dedicated `brain` agent and lands on it.
+// Its icon is the monochrome woodcut crab (CSS mask, bg-current) so it tints like
+// the sibling header icons (muted → foreground on hover) and follows the theme.
 function BrainButton({ collapsed }: { collapsed: boolean }) {
-  const [hint, setHint] = useState(false);
-  useEffect(() => {
-    if (!hint) return;
-    const t = setTimeout(() => setHint(false), 2500);
-    return () => clearTimeout(t);
-  }, [hint]);
+  const utils = trpc.useUtils();
+  const agents = trpc.agents.list.useQuery(undefined, { staleTime: 60_000 });
+  const brain = (agents.data ?? []).find((a) => a.isOrchestrator);
+  const createSession = trpc.chat.createSession.useMutation();
+  const setupBrain = trpc.agents.setupBrain.useMutation();
+  const [busy, setBusy] = useState(false);
+
+  const open = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (brain) {
+        // Reuse the most recent open session, else start a fresh one.
+        const list = await utils.chat.listSessions.fetch({ agentName: brain.name });
+        const latest = (list ?? []).find((s) => !s.closedAt);
+        const id = latest?.id ?? (await createSession.mutateAsync({ agentName: brain.name })).id;
+        window.location.href = `/chat?session=${encodeURIComponent(id)}`;
+      } else {
+        // No orchestrator yet — set one up, then land on it (it scaffolds there).
+        const res = await setupBrain.mutateAsync();
+        await utils.agents.list.invalidate();
+        window.location.href = `/agents?name=${encodeURIComponent(res.name)}`;
+      }
+    } catch (e) {
+      setBusy(false);
+      // eslint-disable-next-line no-alert
+      alert(`义脑: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   return (
-    <div className={cn('relative shrink-0', collapsed && 'lg:hidden')}>
-      <button
-        type="button"
-        onClick={() => setHint(true)}
-        title="义脑 · brain"
-        aria-label="义脑 brain（即将上线）"
-        className="inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer"
-      >
-        <span aria-hidden="true" className="logo-crab-mono h-5 w-5 bg-current" />
-      </button>
-      {hint && (
-        <div className="absolute right-0 top-full mt-1 z-50 whitespace-nowrap rounded-md border border-sidebar-border bg-sidebar px-2 py-1 text-[11px] text-sidebar-foreground shadow-lg">
-          义脑 · 即将上线
-        </div>
+    <button
+      type="button"
+      onClick={open}
+      disabled={busy}
+      title={brain ? '义脑 / brain' : '设置义脑 / set up brain'}
+      aria-label={brain ? '义脑 brain' : 'set up 义脑 brain'}
+      className={cn(
+        'inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0 disabled:opacity-60',
+        collapsed && 'lg:hidden',
       )}
-    </div>
+    >
+      <span aria-hidden="true" className={cn('logo-crab-mono h-5 w-5 bg-current', busy && 'animate-pulse')} />
+    </button>
   );
 }
 
