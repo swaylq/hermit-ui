@@ -31,7 +31,7 @@ export const marketRouter = router({
         ];
       }
       if (input?.category) where.category = input.category;
-      return prisma.marketSkill.findMany({
+      const rows = await prisma.marketSkill.findMany({
         where,
         orderBy: { updatedAt: 'desc' },
         select: {
@@ -39,6 +39,16 @@ export const marketRouter = router({
           origin: true, category: true, tags: true, latestVersion: true, updatedAt: true,
         },
       });
+      // In the list, description only feeds a 2-line clamp (market page) / isn't
+      // shown at all (install dialog) — the full text is served by getSkill on the
+      // detail page. Truncate to a preview so this 15s-polled list stops shipping
+      // multi-KB SKILL.md descriptions (one was 16KB) on every tick. Search still
+      // runs `contains` against the full column above, so it's unaffected.
+      return rows.map((s) =>
+        s.description && s.description.length > 200
+          ? { ...s, description: s.description.slice(0, 200) + '…' }
+          : s,
+      );
     }),
 
   getSkill: machineProcedure.input(z.object({ slug: z.string() })).query(async ({ input }) => {
