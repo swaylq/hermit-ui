@@ -25,11 +25,31 @@ export const skillsRouter = router({
   }),
 
   get: machineProcedure.input(z.object({ name: z.string() })).query(async ({ ctx, input }) => {
+    // Metadata only — the detail page polls this every 8s. The heavy SKILL.md
+    // `content` + bundle `refs` (dws's ref files alone were ~1.5MB) are split into
+    // skills.content, fetched once: they don't change between edits/pulls, so
+    // re-shipping multi-MB bodies on every metadata tick was pure waste.
     const skill = await prisma.globalSkill.findUnique({
       where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+      select: {
+        id: true, name: true, description: true, source: true,
+        isBundle: true, subSkills: true, fileCount: true, metadataAt: true,
+      },
     });
     if (!skill) return null;
     return { skill };
+  }),
+
+  // Heavy SKILL.md content + bundle reference files, split out of `get` so the
+  // 8s metadata poll stays tiny. Fetched once (long staleTime client-side);
+  // invalidated on edit/pull.
+  content: machineProcedure.input(z.object({ name: z.string() })).query(async ({ ctx, input }) => {
+    const skill = await prisma.globalSkill.findUnique({
+      where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+      select: { content: true, refs: true },
+    });
+    if (!skill) return null;
+    return skill;
   }),
 
   // ── Dashboard-driven lifecycle (round-trips through the gateway) ────────────

@@ -203,8 +203,11 @@ function NewSkillForm() {
 function SkillDetail({ name }: { name: string }) {
   const utils = trpc.useUtils();
   const q = trpc.skills.get.useQuery({ name }, { refetchInterval: 8_000 });
+  // SKILL.md body + bundle ref files are split out of the 8s metadata poll —
+  // fetched once (they only change on edit/pull, which invalidate this).
+  const body = trpc.skills.content.useQuery({ name }, { staleTime: 5 * 60_000 });
   const update = trpc.skills.requestEdit.useMutation({
-    onSuccess: () => { utils.skills.get.invalidate({ name }); utils.skills.list.invalidate(); },
+    onSuccess: () => { utils.skills.get.invalidate({ name }); utils.skills.content.invalidate({ name }); utils.skills.list.invalidate(); },
   });
   const del = trpc.skills.requestDelete.useMutation({
     onSuccess: () => { utils.skills.list.invalidate(); window.location.href = '/skills'; },
@@ -212,7 +215,7 @@ function SkillDetail({ name }: { name: string }) {
   // Marketplace binding status for this machine skill + install/pull controls.
   const status = trpc.market.globalSkillStatus.useQuery();
   const pull = trpc.market.installToMachine.useMutation({
-    onSuccess: () => { utils.skills.get.invalidate({ name }); utils.skills.list.invalidate(); utils.market.globalSkillStatus.invalidate(); },
+    onSuccess: () => { utils.skills.get.invalidate({ name }); utils.skills.content.invalidate({ name }); utils.skills.list.invalidate(); utils.market.globalSkillStatus.invalidate(); },
   });
   const [installOpen, setInstallOpen] = useState(false);
   const machineSkillNames = (trpc.skills.list.useQuery().data ?? []).map((s) => s.name);
@@ -232,18 +235,18 @@ function SkillDetail({ name }: { name: string }) {
     );
   }
 
-  const refs = Array.isArray(skill.refs) ? (skill.refs as Array<{ path?: string; name?: string; content: string }>) : [];
+  const refs = Array.isArray(body.data?.refs) ? (body.data.refs as Array<{ path?: string; name?: string; content: string }>) : [];
 
   // Every file in one list — click any to open the view/edit modal (mirrors the
   // agent detail). SKILL.md is editable on a manual skill; bundles (git/plugin)
   // and reference files are read-only (no onSave). Bundle content is null, so
   // SKILL.md only appears for real single skills.
   const files: FileItem[] = [];
-  if (skill.content) {
+  if (body.data?.content) {
     files.push({
       key: 'SKILL.md',
       label: 'SKILL.md',
-      body: skill.content,
+      body: body.data.content,
       monoLabel: true,
       onSave: skill.isBundle ? undefined : (content) => update.mutateAsync({ name: skill.name, content }),
     });
