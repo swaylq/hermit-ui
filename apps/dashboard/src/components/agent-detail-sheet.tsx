@@ -403,9 +403,12 @@ function isEvolvedSkill(content: string | null): boolean {
 }
 
 function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent']; agentName: string }) {
-  // Per-skill SKILL.md contents come down on the agent sync (Agent.skills Json).
-  // Falls back to a chip-only list if the gateway hasn't synced contents yet.
-  const skills = ((agent as unknown as { skills?: Array<{ name: string; content: string }> }).skills) ?? [];
+  // Skill CONTENT is lazy — byName carries only skill NAMES now (the SKILL.md
+  // bodies were ~150KB re-sent on every 30s detail poll). Fetch the bodies ONCE
+  // here with a long staleTime. Falls back to a chip-only list while loading / if
+  // the gateway hasn't synced contents yet.
+  const contentsQ = trpc.agents.skillContents.useQuery({ name: agentName }, { staleTime: 5 * 60_000 });
+  const skills = contentsQ.data ?? [];
   const hasContent = skills.length > 0;
   // Marketplace binding status — which skills are linked + have a newer version.
   const status = trpc.market.agentSkillStatus.useQuery({ agentName }, { refetchInterval: 30_000 });

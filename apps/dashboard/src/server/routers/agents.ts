@@ -145,13 +145,15 @@ export const agentsRouter = router({
         },
       });
       if (!agent) return null;
-      // Strip per-skill refs (the sub-file trees) from the response: they can be
-      // large (scripts/references) and byName is fetched on hover + every 30s.
-      // The detail sheet lazy-loads a skill's refs via `skillRefs` when opened.
-      // The DB column keeps refs, so publishSkillFromLocal still reads them.
+      // Strip per-skill refs AND the SKILL.md `content` from the response: both
+      // can be large (content measured ~150KB for a skill-heavy agent) and byName
+      // is fetched on hover + every 30s. The detail sheet lazy-loads the content
+      // via `skillContents` (once) and refs via `skillRefs` (on open); byName now
+      // carries only skill NAMES. The DB column keeps both, so skillContents /
+      // skillRefs / publishSkillFromLocal still read them.
       if (Array.isArray(agent.skills)) {
         for (const s of agent.skills as Array<Record<string, unknown>>) {
-          if (s && typeof s === 'object') delete s.refs;
+          if (s && typeof s === 'object') { delete s.refs; delete s.content; }
         }
       }
       // Sessions are queried separately by the detail sheet via
@@ -173,6 +175,22 @@ export const agentsRouter = router({
         : [];
       const found = skills.find((x) => x?.name === input.skill);
       return (found?.refs ?? []) as Array<{ path: string; content: string }>;
+    }),
+
+  // Per-skill SKILL.md content. Split out of byName (where it was the heavy ~150KB
+  // part re-sent on every 30s detail poll) so the detail fetches the bodies ONCE
+  // (long staleTime) instead of on each poll. byName now carries only skill names.
+  skillContents: machineProcedure
+    .input(z.object({ name: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const agent = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { skills: true },
+      });
+      const skills = Array.isArray(agent?.skills)
+        ? (agent!.skills as Array<{ name?: string; content?: string }>)
+        : [];
+      return skills.map((s) => ({ name: String(s?.name ?? ''), content: typeof s?.content === 'string' ? s.content : '' }));
     }),
 
   // Just the file PATHS for each folder — NOT content. The detail sheet renders

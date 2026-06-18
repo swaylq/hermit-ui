@@ -35,6 +35,9 @@ export function InstallSkillDialog({
       // Show the skill in the agent's list now; content + chip follow.
       utils.agents.byName.setData({ name: agentName! }, addAgentSkill(vars.slug));
       utils.market.agentSkillStatus.invalidate({ agentName: agentName! });
+      // Skill bodies are a separate (long-staleTime) query now — refresh it so the
+      // newly-installed skill's SKILL.md shows once the gateway syncs it.
+      utils.agents.skillContents.invalidate({ name: agentName! });
       setDoneSlug(vars.slug);
     },
   });
