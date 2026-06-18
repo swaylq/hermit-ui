@@ -100,14 +100,29 @@ function BrainButton({ collapsed }: { collapsed: boolean }) {
       title="Brain"
       aria-label="Brain"
       className={cn(
-        'inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer shrink-0',
-        active
-          ? 'bg-sidebar-accent text-sidebar-foreground'
-          : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground',
+        'group inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer shrink-0',
+        active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent',
         collapsed && 'lg:hidden',
       )}
     >
-      <span aria-hidden="true" className="logo-crab-mono h-5 w-5 bg-current" />
+      {/* Crab: monochrome by default (tints with text color), the full-color logo
+          crossfades in on hover / when active. Sized to match the sibling header
+          icons (h-4 w-4). */}
+      <span aria-hidden="true" className="relative h-4 w-4 shrink-0">
+        <span
+          className={cn(
+            'absolute inset-0 logo-crab-mono bg-current transition-opacity',
+            active ? 'opacity-0' : 'text-muted-foreground group-hover:opacity-0',
+          )}
+        />
+        <span
+          style={{ backgroundImage: 'url(/logo-crab.png)' }}
+          className={cn(
+            'absolute inset-0 bg-contain bg-center bg-no-repeat transition-opacity',
+            active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+          )}
+        />
+      </span>
     </Link>
   );
 }
