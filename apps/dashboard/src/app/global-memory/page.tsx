@@ -25,10 +25,12 @@ export default function GlobalMemoryPage() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="memory" />
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-4">
+      {/* Fill the whole content area on PC — the two-pane file explorer wants the
+          width (and height); a max-w-3xl center column wasted most of the screen. */}
+      <div className="flex-1 min-h-0 flex flex-col">
+        <div className="w-full flex-1 min-h-0 p-4 sm:p-6 flex flex-col gap-4">
           {/* Header: title + on/off, with a compact one-line description */}
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex shrink-0 items-start justify-between gap-3">
             <div className="min-w-0">
               <h2 className="text-sm font-semibold text-foreground">Global Memory</h2>
               <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
@@ -62,7 +64,7 @@ export default function GlobalMemoryPage() {
           )}
 
           {/* One explorer for the inline note + the ~/.claude/global-memory folder. */}
-          <section className="flex flex-col gap-2 min-h-[460px]">
+          <section className="flex flex-1 min-h-[460px] flex-col gap-2">
             <GlobalMemoryFiles />
           </section>
         </div>
