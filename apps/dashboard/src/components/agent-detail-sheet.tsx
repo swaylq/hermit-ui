@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState, useEffect } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { Pencil, Check, X, ChevronDown, Download, Trash2, Package, Info, Folder } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
@@ -30,12 +30,48 @@ type AgentByNameOutput = NonNullable<inferRouterOutputs<AppRouter>['agents']['by
 
 export type DetailTab = 'detail' | 'files';
 
+// Keep the agent detail fresh after a gateway-applied change — a new agent's
+// scaffold, or a skill install/uninstall — WITHOUT a manual refresh, and without
+// fast-polling the heavy `byName` payload when nothing's happening.
+//
+// Both flows go through an AgentRequest the gateway materializes asynchronously
+// (~3-6s) and then re-syncs. Right after install the cache shows the skill with
+// EMPTY content (optimistic add, see optimistic-skills); a brand-new agent shows
+// no skills until its scaffold lands — the "未显示" states the user sees. So:
+//   · while a request for THIS agent is in flight → poll byName at 4s,
+//   · the moment it resolves (gateway applied + the post-ack sync is landing) →
+//     pull byName once more after a short beat, so the real content fills in,
+//   · idle → byName stays at its cheap 30s baseline.
+// pendingRequests is a tiny machine-scoped query (usually an empty array), so
+// polling it at 3s while the panel is open is cheap.
+function useAgentDetailRefresh(name: string | null, active: boolean): { refetchInterval: number } {
+  const utils = trpc.useUtils();
+  const pending = trpc.agents.pendingRequests.useQuery(undefined, {
+    enabled: !!name && active,
+    refetchInterval: !!name && active ? 3_000 : false,
+  });
+  const inFlight = !!name && (pending.data ?? []).some((p) => p.agentName === name);
+  const prev = useRef(inFlight);
+  useEffect(() => {
+    if (prev.current && !inFlight && name) {
+      const t = setTimeout(() => { void utils.agents.byName.invalidate({ name }); }, 1_500);
+      prev.current = inFlight;
+      return () => clearTimeout(t);
+    }
+    prev.current = inFlight;
+  }, [inFlight, name, utils]);
+  return { refetchInterval: inFlight ? 4_000 : 30_000 };
+}
+
 // AgentDetailBody — renders the agent detail panel without a Sheet wrapper.
 // Used by the inline /agents page. Owns its own queries; the active `tab` is
 // owned by the caller so the tab strip (<AgentDetailTabs>) can ride the page
 // header row next to the title + Chat/delete instead of taking its own line.
 export function AgentDetailBody({ name, tab }: { name: string; tab: DetailTab }) {
-  const query = trpc.agents.byName.useQuery({ name }, { refetchInterval: 30_000 });
+  // Fast-poll while a create/install request for this agent is in flight, so the
+  // panel fills in within seconds (no manual refresh); 30s when idle.
+  const { refetchInterval } = useAgentDetailRefresh(name, true);
+  const query = trpc.agents.byName.useQuery({ name }, { refetchInterval });
   const sessions = trpc.chat.listSessions.useQuery({ agentName: name }, { refetchInterval: 5_000 });
 
   if (query.isPending) {
@@ -119,12 +155,13 @@ export function AgentDetailSheet({
   onOpenChange: (b: boolean) => void;
   name: string | null;
 }) {
-  // metadataAt only updates every ~5min on the gateway side, so 30s refetch
-  // on the dashboard is plenty (mostly we're catching agent rename / new
-  // skill folder).
+  // Idle metadata changes ~every 5min, so byName sits at 30s — but right after a
+  // scaffold/install we fast-poll (4s) until the gateway's change lands, so the
+  // panel fills in without a manual refresh. Only while the sheet is open.
+  const { refetchInterval } = useAgentDetailRefresh(name, open);
   const query = trpc.agents.byName.useQuery(
     { name: name ?? '' },
-    { enabled: !!name && open, refetchInterval: open ? 30_000 : false },
+    { enabled: !!name && open, refetchInterval: open ? refetchInterval : false },
   );
   const sessions = trpc.chat.listSessions.useQuery(
     { agentName: name ?? '' },
