@@ -113,8 +113,12 @@ export const agentsRouter = router({
       sessionCount.set(c.agentName, (sessionCount.get(c.agentName) ?? 0) + c._count._all);
       if (c.alive) activeCount.set(c.agentName, (activeCount.get(c.agentName) ?? 0) + c._count._all);
     }
-    return rows.map((r) => ({
+    return rows.map(({ skillNames, ...r }) => ({
       ...r,
+      // The sidebar only renders the *count*; the names themselves are read from
+      // byName on the agent detail. Ship the count, not the per-agent names array
+      // (~29% of this 10s-polled payload), so the wire stays lean.
+      skillCount: skillNames.length,
       sessionCount: sessionCount.get(r.name) ?? 0,
       activeSessionCount: activeCount.get(r.name) ?? 0,
     }));

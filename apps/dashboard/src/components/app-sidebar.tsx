@@ -829,7 +829,7 @@ function RecentAgents() {
                             <span>{a.sessionCount} session{a.sessionCount === 1 ? '' : 's'}</span>
                           )}
                           <span className="text-muted-foreground/40">·</span>
-                          <span>{a.skillNames.length} skill{a.skillNames.length === 1 ? '' : 's'}</span>
+                          <span>{a.skillCount} skill{a.skillCount === 1 ? '' : 's'}</span>
                         </div>
                       </div>
                     </div>
