@@ -80,7 +80,7 @@ function Input({
           // preventDefault on mousedown so clicking the x doesn't blur the input first
           onMouseDown={(e) => e.preventDefault()}
           onClick={clear}
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:text-foreground"
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:text-foreground cursor-pointer"
         >
           <X className="h-3.5 w-3.5" />
         </button>
