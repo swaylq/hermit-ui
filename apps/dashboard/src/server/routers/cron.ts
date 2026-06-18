@@ -39,7 +39,16 @@ export const cronRouter = router({
       orderBy: [{ agentName: 'asc' }, { createdAt: 'asc' }],
     });
     const unread = await unreadCountByCron(crons.map((c) => c.id));
-    return crons.map((c) => ({ ...c, unreadCount: unread.get(c.id) ?? 0 }));
+    // The list (sidebar, polled every 5s) only uses `prompt` as a label/search
+    // fallback when `title` is empty — the FULL prompt for the detail/edit view
+    // comes from cron.get. Prompts are @db.Text and dominated this payload (~60%),
+    // so cap to a short preview here; trims the bulk of cron.list's bytes/poll.
+    const PROMPT_PREVIEW = 100;
+    return crons.map((c) => ({
+      ...c,
+      prompt: c.prompt.length > PROMPT_PREVIEW ? c.prompt.slice(0, PROMPT_PREVIEW) : c.prompt,
+      unreadCount: unread.get(c.id) ?? 0,
+    }));
   }),
 
   // All crons for one agent — the agent-detail panel's scheduled-tasks list.
