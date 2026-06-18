@@ -2333,6 +2333,19 @@ function ComposeBar({
             className="flex-1 bg-transparent text-base sm:text-[15px] resize-none outline-none leading-relaxed min-h-[28px] max-h-[360px] overflow-auto py-1.5 text-foreground placeholder:text-muted-foreground/70 disabled:cursor-not-allowed"
           />
 
+          {/* Clear the draft once there's text — mirrors the x on the other inputs. */}
+          {draft.length > 0 && !disabled && (
+            <button
+              type="button"
+              onClick={() => { setDraft(''); taRef.current?.focus(); }}
+              aria-label="clear draft"
+              title="Clear"
+              className="h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          )}
+
           {showStop && (
             <button
               type="button"
