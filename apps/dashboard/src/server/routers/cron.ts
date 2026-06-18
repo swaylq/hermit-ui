@@ -70,15 +70,36 @@ export const cronRouter = router({
     }),
 
   // One cron + its recent runs — the detail view (read-only run log).
-  get: machineProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
-    const cron = await prisma.cron.findUnique({ where: { id: input.id } });
-    if (!cron || cron.machineId !== ctx.machine.id) throw new Error('not found');
-    const runs = await prisma.cronRun.findMany({
-      where: { cronId: input.id },
-      orderBy: { firedAt: 'desc' },
-      take: 50,
+  get: machineProcedure
+    .input(z.object({ id: z.string(), includeRunOutput: z.boolean().optional() }))
+    .query(async ({ ctx, input }) => {
+      const cron = await prisma.cron.findUnique({ where: { id: input.id } });
+      if (!cron || cron.machineId !== ctx.machine.id) throw new Error('not found');
+      // Run `output` (@db.Text, can be long) shows only when a run row is expanded,
+      // so by default keep it OUT of this 5s-polled payload — the /cron rows need
+      // just status/timing and lazy-load output via cron.runOutput on expand. The
+      // dream journal renders outputs inline, so it opts in with includeRunOutput.
+      const runs = await prisma.cronRun.findMany({
+        where: { cronId: input.id },
+        orderBy: { firedAt: 'desc' },
+        take: 50,
+        select: {
+          id: true, firedAt: true, status: true, durationMs: true, readAt: true,
+          ...(input.includeRunOutput ? { output: true } : {}),
+        },
+      });
+      return { cron, runs };
+    }),
+
+  // One run's output, fetched lazily when its row is expanded (kept out of the
+  // recurring cron.get payload above). Guarded: the run's cron must be this machine's.
+  runOutput: machineProcedure.input(z.object({ runId: z.string() })).query(async ({ ctx, input }) => {
+    const run = await prisma.cronRun.findUnique({
+      where: { id: input.runId },
+      select: { output: true, status: true, cron: { select: { machineId: true } } },
     });
-    return { cron, runs };
+    if (!run || run.cron.machineId !== ctx.machine.id) throw new Error('not found');
+    return { output: run.output, status: run.status };
   }),
 
   // Mark one run read = now (clears its red dot). Reading = expanding the run row

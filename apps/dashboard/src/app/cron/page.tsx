@@ -472,17 +472,21 @@ function CronRunRow({
   run,
   onRead,
 }: {
-  run: { id: string; firedAt: Date | string; status: string; output: string | null; durationMs: number | null; readAt: Date | string | null };
+  run: { id: string; firedAt: Date | string; status: string; durationMs: number | null; readAt: Date | string | null };
   onRead: () => void;
 }) {
   // Unread = finished run not yet expanded. A transparent dot keeps the row
   // height/alignment identical whether read or unread.
   const unread = !run.readAt && run.status !== 'running';
+  // Output is lazy — fetched only when this row is expanded (kept out of cron.get's
+  // 5s-polled payload). staleTime keeps it cached so re-expanding doesn't refetch.
+  const [open, setOpen] = useState(false);
+  const out = trpc.cron.runOutput.useQuery({ runId: run.id }, { enabled: open, staleTime: 60_000 });
   return (
     <li>
       <details
         className="group rounded-md border border-border"
-        onToggle={(e) => { if (e.currentTarget.open && unread) onRead(); }}
+        onToggle={(e) => { const o = e.currentTarget.open; setOpen(o); if (o && unread) onRead(); }}
       >
         <summary className="cursor-pointer list-none flex items-center gap-2 px-2.5 h-9 text-[12px]">
           <span
@@ -496,9 +500,11 @@ function CronRunRow({
           <ChevronDown className="ml-auto h-3.5 w-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />
         </summary>
         <div className="border-t border-border px-3 py-2">
-          {run.output ? (
+          {!open ? null : out.isPending ? (
+            <p className="text-xs text-muted-foreground">loading…</p>
+          ) : out.data?.output ? (
             <div className="max-h-72 overflow-auto text-[12px] text-foreground/85">
-              <Markdown>{run.output}</Markdown>
+              <Markdown>{out.data.output}</Markdown>
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">{run.status === 'running' ? 'running…' : 'no output captured'}</p>

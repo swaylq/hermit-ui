@@ -84,7 +84,8 @@ function DreamBody({ brainName, dreamCron }: { brainName: string; dreamCron: Dre
       void utils.cron.list.invalidate();
     },
   });
-  const detail = trpc.cron.get.useQuery({ id: dreamCron?.id ?? '' }, { enabled: !!dreamCron, refetchInterval: 10_000 });
+  // includeRunOutput: this journal renders each run's output inline (FileList body).
+  const detail = trpc.cron.get.useQuery({ id: dreamCron?.id ?? '', includeRunOutput: true }, { enabled: !!dreamCron, refetchInterval: 10_000 });
   const runs = detail.data?.runs ?? [];
   const runItems: FileItem[] = runs.map((r) => ({
     key: r.id,
