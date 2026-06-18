@@ -137,11 +137,15 @@ export const agentsRouter = router({
         // Everything the detail sheet renders EXCEPT the heavy evolutionFiles /
         // memoryFiles JSON — those load once via `folders`, not on the sheet's
         // 30s refetch. For a big auto-memory this drops ~200KB per refetch.
+        // The markdown texts (identity/user/agents/tools, ~22KB) moved to the
+        // once-fetched agents.coreTexts query — they're shown in a collapsed
+        // FileList, not needed on byName's 30s/4s detail poll. evolutionLessons /
+        // memorySummary were dead weight here (rendered nowhere — the evolution /
+        // memory folders come from agents.folders). byName now carries just
+        // names + metadata (~2KB).
         select: {
           id: true, name: true, directory: true, trashedAt: true, updatedAt: true,
-          identityText: true, userText: true, agentsText: true, toolsText: true,
-          evolutionLessons: true, skillNames: true, skills: true, memorySummary: true,
-          metadataAt: true, isOrchestrator: true,
+          skillNames: true, skills: true, metadataAt: true, isOrchestrator: true,
         },
       });
       if (!agent) return null;
@@ -191,6 +195,18 @@ export const agentsRouter = router({
         ? (agent!.skills as Array<{ name?: string; content?: string }>)
         : [];
       return skills.map((s) => ({ name: String(s?.name ?? ''), content: typeof s?.content === 'string' ? s.content : '' }));
+    }),
+
+  // The agent's markdown profile texts (Identity / User / Workspace rules / Tools).
+  // Fetched once when the detail opens (long staleTime) — split out of byName so
+  // they're not re-sent on its 30s/4s poll; shown in a collapsed FileList.
+  coreTexts: machineProcedure
+    .input(z.object({ name: z.string() }))
+    .query(async ({ ctx, input }) => {
+      return prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { identityText: true, userText: true, agentsText: true, toolsText: true },
+      });
     }),
 
   // Just the file PATHS for each folder — NOT content. The detail sheet renders

@@ -140,7 +140,7 @@ function AgentDetailContent({
             <SessionsSection agentName={name} sessions={sessions} loading={sessionsLoading} />
             <CronsSection agentName={name} />
             <SkillsAndTasks agent={agent} agentName={name} />
-            <MarkdownSections agent={agent} agentName={name} />
+            <MarkdownSections agentName={name} />
             <TemplatePublishSection agentName={name} />
           </div>
         </div>
@@ -523,12 +523,15 @@ function TemplatePublishSection({ agentName }: { agentName: string }) {
   );
 }
 
-function MarkdownSections({ agent, agentName }: { agent: AgentByNameOutput['agent']; agentName: string }) {
+function MarkdownSections({ agentName }: { agentName: string }) {
+  // Profile texts are lazy now — byName carries names/metadata only. Fetch the
+  // bodies once (long staleTime, NOT on byName's 30s/4s poll); shown collapsed.
+  const texts = trpc.agents.coreTexts.useQuery({ name: agentName }, { staleTime: 5 * 60_000 });
   const coreItems: FileItem[] = [
-    { key: 'identity', label: 'Identity', body: agent.identityText, target: 'identity' },
-    { key: 'user', label: 'User', body: agent.userText, target: 'user' },
-    { key: 'agents', label: 'Workspace rules', body: agent.agentsText, target: 'agents' },
-    { key: 'tools', label: 'Tools', body: agent.toolsText, target: 'tools' },
+    { key: 'identity', label: 'Identity', body: texts.data?.identityText ?? null, target: 'identity' },
+    { key: 'user', label: 'User', body: texts.data?.userText ?? null, target: 'user' },
+    { key: 'agents', label: 'Workspace rules', body: texts.data?.agentsText ?? null, target: 'agents' },
+    { key: 'tools', label: 'Tools', body: texts.data?.toolsText ?? null, target: 'tools' },
   ];
   // Heavy folder trees come from a separate once-fetched query — NOT byName's 30s
   // refetch (keeps ~200KB of auto-memory JSON off the recurring payload).
