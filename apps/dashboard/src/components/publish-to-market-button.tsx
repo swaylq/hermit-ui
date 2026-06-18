@@ -25,11 +25,15 @@ export function PublishToMarketButton({
   // content → a silent no-op re-publish. The per-skill request queue is the
   // signal: a pending edit means the new content hasn't landed yet. One shared
   // poll per page (React Query dedupes the no-arg query across every button).
+  // Adaptive, matching every other pendingRequests observer (RQ polls at the MIN
+  // interval across them, so a stale fast poll here would undercut the idle
+  // back-off): 2s while something's in flight, 12s when nothing's pending.
+  const adaptivePoll = (q: { state: { data?: unknown[] } }) => ((q.state.data?.length ?? 0) > 0 ? 2_000 : 12_000);
   const agentPending = trpc.agents.pendingRequests.useQuery(undefined, {
-    enabled: source === 'agent', refetchInterval: 3000,
+    enabled: source === 'agent', refetchInterval: adaptivePoll,
   });
   const globalPending = trpc.skills.pendingRequests.useQuery(undefined, {
-    enabled: source === 'global', refetchInterval: 3000,
+    enabled: source === 'global', refetchInterval: adaptivePoll,
   });
   const syncing = source === 'agent'
     ? (agentPending.data ?? []).some((r) => r.kind === 'edit' && r.agentName === agentName && r.target === `skill:${skillName}`)

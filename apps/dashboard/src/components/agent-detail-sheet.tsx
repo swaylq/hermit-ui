@@ -775,7 +775,9 @@ function DetailModal({
   });
   const pending = trpc.agents.pendingRequests.useQuery(undefined, {
     enabled: !!item && editable,
-    refetchInterval: !!item && editable ? 2_000 : false,
+    // Adaptive (must match the other pendingRequests observers — RQ uses the min):
+    // 2s while something's in flight, 12s idle. requestEdit invalidates on success.
+    refetchInterval: (q) => (((q.state.data as unknown[] | undefined)?.length ?? 0) > 0 ? 2_000 : 12_000),
   });
   const isSaving =
     editable && (pending.data ?? []).some((p) => p.kind === 'edit' && p.agentName === agentName && p.target === item?.target);
