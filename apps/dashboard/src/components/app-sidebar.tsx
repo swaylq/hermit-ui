@@ -630,8 +630,23 @@ function SidebarFindInput({ value, onChange, placeholder, label }: {
           onKeyDown={(e) => { if (e.key === 'Escape') onChange(''); }}
           placeholder={placeholder}
           aria-label={label}
-          className="h-8 w-full rounded-lg border border-sidebar-border bg-sidebar/60 pl-7 pr-2 text-[12px] text-sidebar-foreground/90 placeholder:text-muted-foreground/50 outline-none transition-colors hover:border-sidebar-foreground/20 focus-visible:border-sidebar-foreground/40 focus-visible:ring-1 focus-visible:ring-sidebar-foreground/15"
+          className={cn(
+            'h-8 w-full rounded-lg border border-sidebar-border bg-sidebar/60 pl-7 text-[12px] text-sidebar-foreground/90 placeholder:text-muted-foreground/50 outline-none transition-colors hover:border-sidebar-foreground/20 focus-visible:border-sidebar-foreground/40 focus-visible:ring-1 focus-visible:ring-sidebar-foreground/15',
+            value ? 'pr-7' : 'pr-2',
+          )}
         />
+        {value && (
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="clear"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => onChange('')}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1194,8 +1209,23 @@ function RecentSessions() {
               onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }}
               placeholder="搜索标题 / agent"
               aria-label="search recents by title or agent"
-              className="h-8 w-full rounded-lg border border-sidebar-border bg-sidebar/60 pl-7 pr-2 text-[12px] text-sidebar-foreground/90 placeholder:text-muted-foreground/50 outline-none transition-colors hover:border-sidebar-foreground/20 focus-visible:border-sidebar-foreground/40 focus-visible:ring-1 focus-visible:ring-sidebar-foreground/15"
+              className={cn(
+                'h-8 w-full rounded-lg border border-sidebar-border bg-sidebar/60 pl-7 text-[12px] text-sidebar-foreground/90 placeholder:text-muted-foreground/50 outline-none transition-colors hover:border-sidebar-foreground/20 focus-visible:border-sidebar-foreground/40 focus-visible:ring-1 focus-visible:ring-sidebar-foreground/15',
+                q ? 'pr-7' : 'pr-2',
+              )}
             />
+            {q && (
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label="clear"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setQ('')}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
           {/* Right: the existing per-agent filter (only when >1 agent). Custom
               base-ui Select; modal={false} so its backdrop can't lock the page —

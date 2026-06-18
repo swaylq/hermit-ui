@@ -49,7 +49,7 @@ export default function MarketSkillsPage() {
         <div className="ml-auto flex items-center gap-2">
           <div className="relative hidden sm:block">
             <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
-            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="search skills" className="h-8 w-48 pl-7 text-sm" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="search skills" wrapperClassName="w-48" className="h-8 pl-7 text-sm" />
           </div>
           <Button size="sm" onClick={() => setImportOpen(true)}>
             <Plus className="h-3.5 w-3.5 mr-1" /> Import
