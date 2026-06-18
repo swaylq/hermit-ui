@@ -64,6 +64,20 @@ async function pushGlobalSkillsTick() {
   await safe('global-skills', async () => { await pushGlobalSkills(); });
 }
 
+// Idempotent brain convergence (issue #1): on every startup (and a low-freq
+// fallback), ask the dashboard to reconcile this machine's orchestrator — bring
+// an out-of-date brain up to the current template (the `dreaming` skill), ensure
+// its Daily dream cron, and trigger the first dream. No-op when there's no brain
+// (opt-in). Runs after pushAgents so the brain's `directory` is freshly synced
+// (the dream-trigger gate needs it). The skill overlay it queues is materialized
+// by the agent-requests tick; the version stamps when we ack that overlay.
+async function ensureBrainTick() {
+  await safe('ensure-brain', async () => {
+    const r = await api.ensureBrain();
+    if (r?.name) console.log(`[ensure-brain] reconciled orchestrator: ${r.name}`);
+  });
+}
+
 // Scrape the REAL Claude Max plan % from `claude /usage` (throwaway tmux pane)
 // and push it. The only accurate source — ccusage is a cost estimate that never
 // matches /usage. Each run spins a ~20s claude session + one minimal API call,
@@ -140,6 +154,7 @@ function loop(fn: () => Promise<void>, ms: number) {
 // Initial run kicks all uploaders ASAP so the dashboard isn't empty.
 (async () => {
   await pushAgents();
+  await ensureBrainTick(); // after pushAgents: the brain's directory is fresh
   await pushGlobalSkillsTick();
   await safe('global-memory', globalMemoryTick);
   await pushSessionSnapshots();
@@ -160,6 +175,7 @@ startLoginBridge();
 startExtensionLoginListener();
 
 loop(pushAgents, 5 * 60_000);
+loop(ensureBrainTick, 5 * 60_000); // fallback for brains created/updated between restarts
 loop(pushSessionSnapshots, 8_000);
 loop(pushCronTick, 15_000);
 loop(pushChatTick, 2_000);

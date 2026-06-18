@@ -1,7 +1,78 @@
 import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
-import { BRAIN_PERSONA, BRAIN_IDENTITY, BRAIN_DREAMING_SKILL, BRAIN_DREAM_PROMPT } from '../brain-template';
+import {
+  BRAIN_PERSONA, BRAIN_DREAM_PROMPT,
+  BRAIN_TEMPLATE_VERSION, BRAIN_MANAGED_FILES, BRAIN_CREATE_FILES, BRAIN_DREAM_CRON,
+} from '../brain-template';
+
+// ── Brain reconciler (shared by setupBrain create + ensureBrain update) ──────
+// Idempotent convergence for the machine's orchestrator. Called on every
+// gateway startup (agents.ensureBrain) and from setupBrain. DB-only; the
+// filesystem overlay is queued as an AgentRequest the gateway materializes.
+// Does NOTHING if there's no orchestrator — Brain stays opt-in.
+async function reconcileBrain(machineId: string): Promise<{ name: string | null }> {
+  const brain = await prisma.agent.findFirst({
+    where: { machineId, isOrchestrator: true, trashedAt: null },
+    select: { name: true, directory: true, brainTemplateVersion: true },
+  });
+  if (!brain) return { name: null };
+
+  // (a) Re-overlay the machine-managed files (the `dreaming` skill — never
+  //     IDENTITY/memory) when the brain predates the current template version.
+  //     Gate on no pending overlay so a duplicate isn't queued each tick; the
+  //     version is stamped only when the gateway acks the overlay done (so a
+  //     failed overlay auto-retries on the next tick).
+  if (brain.brainTemplateVersion < BRAIN_TEMPLATE_VERSION) {
+    const pendingOverlay = await prisma.agentRequest.findFirst({
+      where: { machineId, agentName: brain.name, kind: 'overlay', status: 'pending' },
+      select: { id: true },
+    });
+    if (!pendingOverlay) {
+      await prisma.agentRequest.create({
+        data: {
+          machineId, kind: 'overlay', agentName: brain.name,
+          content: JSON.stringify({ templateFiles: BRAIN_MANAGED_FILES, version: BRAIN_TEMPLATE_VERSION }),
+        },
+      });
+    }
+  }
+
+  // (b) Ensure the Daily dream cron exists (match by agent + title; create if
+  //     missing — fixes brains scaffolded before cron-seeding existed).
+  let dream = await prisma.cron.findFirst({
+    where: { machineId, agentName: brain.name, title: BRAIN_DREAM_CRON.title },
+    select: { id: true, lastFire: true, nextFire: true },
+  });
+  if (!dream) {
+    dream = await prisma.cron.create({
+      data: {
+        machineId, agentName: brain.name,
+        title: BRAIN_DREAM_CRON.title, prompt: BRAIN_DREAM_PROMPT,
+        intervalSec: BRAIN_DREAM_CRON.intervalSec, jitterSec: BRAIN_DREAM_CRON.jitterSec,
+        nextFire: new Date(Date.now() + 6 * 60 * 60 * 1000),
+      },
+      select: { id: true, lastFire: true, nextFire: true },
+    });
+  }
+
+  // (c) Trigger the FIRST dream once — but only after the skill is in place
+  //     (version current) and the agent is scaffolded (directory set), and only
+  //     if it has never dreamed. So a fresh/updated brain self-populates its
+  //     memory/roster.md in minutes, not up to 24h. lastFire!=null ⇒ never again.
+  if (
+    dream.lastFire == null &&
+    brain.directory &&
+    brain.brainTemplateVersion >= BRAIN_TEMPLATE_VERSION
+  ) {
+    const now = Date.now();
+    if (!dream.nextFire || dream.nextFire.getTime() > now) {
+      await prisma.cron.update({ where: { id: dream.id }, data: { nextFire: new Date(now) } });
+    }
+  }
+
+  return { name: brain.name };
+}
 
 // Dashboard reads agent state purely from postgres. The Mac-side gateway
 // pushes:
@@ -391,7 +462,9 @@ export const agentsRouter = router({
       where: { machineId: ctx.machine.id, isOrchestrator: true, trashedAt: null },
       select: { name: true },
     });
-    if (existing) return { name: existing.name, created: false };
+    // Already have a brain → reconcile it (same path as ensureBrain) so the crab
+    // button also converges an out-of-date brain instead of no-op'ing.
+    if (existing) { await reconcileBrain(ctx.machine.id); return { name: existing.name, created: false }; }
 
     const name = 'brain';
     const clash = await prisma.agent.findUnique({
@@ -407,35 +480,44 @@ export const agentsRouter = router({
     });
     if (pending) return { name, created: false };
 
-    // Overlay the orchestrator IDENTITY + the `dreaming` skill onto the base
-    // scaffold (keeps the base AGENTS.md rules + default skills, incl. cron).
-    const templateContent = JSON.stringify({
-      templateFiles: [
-        { path: 'IDENTITY.md', content: BRAIN_IDENTITY },
-        { path: '.claude/skills/dreaming/SKILL.md', content: BRAIN_DREAMING_SKILL },
-      ],
-    });
+    // Overlay the orchestrator IDENTITY (write-once) + the managed `dreaming`
+    // skill onto the base scaffold (keeps base AGENTS.md rules + default skills,
+    // incl. cron). Stamp the template version so ensureBrain won't re-overlay.
+    const templateContent = JSON.stringify({ templateFiles: BRAIN_CREATE_FILES });
     await prisma.$transaction(async (tx) => {
-      await tx.agent.create({ data: { machineId: ctx.machine.id, name, isOrchestrator: true } });
+      await tx.agent.create({
+        data: { machineId: ctx.machine.id, name, isOrchestrator: true, brainTemplateVersion: BRAIN_TEMPLATE_VERSION },
+      });
       await tx.agentRequest.create({
         data: { machineId: ctx.machine.id, kind: 'create', agentName: name, persona: BRAIN_PERSONA, content: templateContent },
       });
       // Seed the daily "dream": consolidate memory + roster and prune context.
-      // First run ~6h out (after some use); then every 24h. The orchestrator's
-      // crons run WITH the brain MCP (see cron-runner) so the dream can roster().
+      // First run ~6h out (ensureBrain pulls it sooner once scaffolded); then
+      // every 24h. The orchestrator's crons run WITH the brain MCP (cron-runner)
+      // so the dream can roster().
       await tx.cron.create({
         data: {
           machineId: ctx.machine.id,
           agentName: name,
-          title: 'Daily dream',
+          title: BRAIN_DREAM_CRON.title,
           prompt: BRAIN_DREAM_PROMPT,
-          intervalSec: 86_400,
-          jitterSec: 3_600,
+          intervalSec: BRAIN_DREAM_CRON.intervalSec,
+          jitterSec: BRAIN_DREAM_CRON.jitterSec,
           nextFire: new Date(Date.now() + 6 * 60 * 60 * 1000),
         },
       });
     });
     return { name, created: true };
+  }),
+
+  // Idempotent brain convergence — called by the gateway on startup + a low-freq
+  // tick. No-op when there's no orchestrator (Brain stays opt-in; only the crab
+  // button's setupBrain creates one). Brings an out-of-date brain up to the
+  // current template (the `dreaming` skill), ensures its Daily dream cron exists,
+  // and triggers the first dream once so a fresh/updated brain self-populates its
+  // memory in minutes instead of waiting up to 24h.
+  ensureBrain: machineProcedure.mutation(async ({ ctx }) => {
+    return reconcileBrain(ctx.machine.id);
   }),
 
   // Pending lifecycle requests — the agents page shows "creating…/deleting…".
@@ -498,6 +580,20 @@ export const agentsRouter = router({
       // in requestCreate so the user isn't stuck with a permanently-empty agent.
       if (r.kind === 'create' && input.status === 'error') {
         await prisma.agent.deleteMany({ where: { machineId: ctx.machine.id, name: r.agentName, directory: null } });
+      }
+      // An 'overlay' (ensureBrain re-applying the brain's machine-managed files)
+      // done → stamp the template version it carried, so ensureBrain stops
+      // re-queuing it. Stamp only on success (a failed overlay leaves the version
+      // behind → auto-retries next tick). Only ever advance the stamp.
+      if (r.kind === 'overlay' && input.status === 'done') {
+        let version = 0;
+        try { version = Number(JSON.parse(r.content ?? '{}')?.version) || 0; } catch { /* ignore */ }
+        if (version > 0) {
+          await prisma.agent.updateMany({
+            where: { machineId: ctx.machine.id, name: r.agentName, brainTemplateVersion: { lt: version } },
+            data: { brainTemplateVersion: version },
+          });
+        }
       }
       return prisma.agentRequest.update({
         where: { id: input.id },

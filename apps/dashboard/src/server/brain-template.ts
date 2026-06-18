@@ -101,3 +101,27 @@ Brain.
 
 export const BRAIN_DREAM_PROMPT =
   'Run your daily dream now, following your `dreaming` skill: survey the roster and rewrite memory/roster.md, fold each agent\'s new activity into its memory/agents/<name>.md dossier, write today\'s memory/dreams/<date>.md reflection, then PRUNE every memory file back to its essence so your context stays small. A good dream leaves your memory smaller and sharper than it found it.';
+
+// ── Reconciler constants (shared by setupBrain create + ensureBrain update) ──
+// Bump BRAIN_TEMPLATE_VERSION whenever the MACHINE-MANAGED files below change, so
+// ensureBrain re-overlays them onto brains scaffolded by an older template. The
+// stamp lives on Agent.brainTemplateVersion (bumped when the gateway acks the
+// overlay). v1 = the version that ships the `dreaming` skill + Daily dream cron.
+export const BRAIN_TEMPLATE_VERSION = 1;
+
+// Brain-owned files re-overlaid on every version bump. NEVER includes IDENTITY.md
+// or anything under memory/ — those are user-editable and must never be clobbered
+// by a reconcile (only the initial create writes IDENTITY).
+export const BRAIN_MANAGED_FILES: Array<{ path: string; content: string }> = [
+  { path: '.claude/skills/dreaming/SKILL.md', content: BRAIN_DREAMING_SKILL },
+];
+
+// Full overlay for a first-time create: the IDENTITY (write-once) + the managed
+// files. setupBrain queues this; ensureBrain only ever queues BRAIN_MANAGED_FILES.
+export const BRAIN_CREATE_FILES: Array<{ path: string; content: string }> = [
+  { path: 'IDENTITY.md', content: BRAIN_IDENTITY },
+  ...BRAIN_MANAGED_FILES,
+];
+
+// The seeded "Daily dream" cron — matched by (agentName, title) when reconciling.
+export const BRAIN_DREAM_CRON = { title: 'Daily dream', intervalSec: 86_400, jitterSec: 3_600 } as const;

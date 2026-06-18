@@ -325,6 +325,27 @@ export async function agentRequestTick() {
           if (r.content) { try { templateFiles = JSON.parse(r.content)?.templateFiles; } catch { /* not a template create */ } }
           const dir = scaffold(r.agentName, (r.persona || 'a hermit agent').trim(), templateFiles);
           refreshAfter.push({ name: r.agentName, directory: dir });
+        } else if (r.kind === 'overlay') {
+          // ensureBrain re-applying the brain's machine-managed files (the
+          // `dreaming` skill) onto an ALREADY-scaffolded agent — overlayTemplate
+          // straight onto the existing dir (scaffold would throw "exists"). The
+          // allow-list (IDENTITY/AGENTS/skills SKILL.md) still applies; memory/ is
+          // never reachable. Dashboard stamps brainTemplateVersion when it acks.
+          const dir = r.agentDirectory ?? path.join(AGENTS_ROOT, r.agentName);
+          if (!fs.existsSync(dir)) throw new Error(`overlay: agent dir missing: ${dir}`);
+          let templateFiles: unknown;
+          if (r.content) { try { templateFiles = JSON.parse(r.content)?.templateFiles; } catch { /* malformed */ } }
+          if (!templateFiles) throw new Error('overlay request missing templateFiles');
+          const subs: Record<string, string> = {
+            AGENT_NAME: r.agentName,
+            AGENT_DISPLAY_NAME: titlecase(r.agentName),
+            PERSONA: (r.persona || '').trim(),
+            USER_NAME: deriveUserName(),
+            AGENT_DIR: path.resolve(dir),
+            DASHBOARD_URL,
+          };
+          overlayTemplate(dir, templateFiles, subs);
+          refreshAfter.push({ name: r.agentName, directory: dir });
         } else if (r.kind === 'delete') {
           deleteAgent(r.agentName, r.agentDirectory);
         } else if (r.kind === 'restore') {

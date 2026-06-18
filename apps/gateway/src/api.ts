@@ -159,6 +159,23 @@ export const api = {
     if (!r.ok) throw new Error(`ackAgentRequest → ${r.status}`);
   },
 
+  // Idempotent brain convergence — POSTed on gateway startup + a low-freq tick.
+  // The dashboard reconciles the machine's orchestrator (re-overlays the dreaming
+  // skill via an AgentRequest, ensures the Daily dream cron, triggers the first
+  // dream). No-op server-side when there's no orchestrator (Brain stays opt-in).
+  ensureBrain: async (): Promise<{ name: string | null }> => {
+    const url = `${DASHBOARD_URL}/api/trpc/agents.ensureBrain?batch=1`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
+      body: JSON.stringify({ '0': { json: null } }),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+    if (!r.ok) throw new Error(`ensureBrain → ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    const j = (await r.json()) as any;
+    return j?.[0]?.result?.data?.json ?? { name: null };
+  },
+
   // ── Machine-level ops (upgrade claude / restart all sessions) round-trip ─────
   pollMachineRequests: async (): Promise<Array<{ id: string; kind: string }>> => {
     const r = await get<any>(
