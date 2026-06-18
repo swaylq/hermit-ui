@@ -58,21 +58,20 @@ export const chatRouter = router({
           agentName: true,
           title: true,
           origin: true,
-          claudeSessionId: true,
           startedAt: true,
           lastMessageAt: true,
           lastReadAt: true,
           closedAt: true,
           hiddenAt: true,
           restartRequestedAt: true,
-          pid: true,
           alive: true,
           state: true,
           contextTokens: true,
-          outputTokens: true,
-          lastActivity: true,
           snapshotAt: true,
           loopState: true,
+          // Dropped claudeSessionId / pid / outputTokens / lastActivity: no UI
+          // consumer reads them, and this payload (~900B × every session) polls
+          // every 5s on every page. The gateway still gets them via its own routes.
           // First user message → "preview" shown in the sidebar so two
           // untitled sessions for the same agent are distinguishable. Limit
           // to one row per session via Prisma's nested `take`.
