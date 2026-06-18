@@ -414,7 +414,12 @@ async function dispatchBrainTool(name, args) {
       const cron = res?.[0]?.result?.data?.json;
       return JSON.stringify({ ok: true, kind: 'recurring', agent: agentName, cronId: cron?.id ?? null });
     }
-    const sres = await trpcMutate('chat.createSession', { agentName, title: title || `Brain → ${agentName}` });
+    // Mark the session origin:'dispatch' so the /brain/dispatch page can list it
+    // structurally — independent of the title. (Previously the page keyed on a
+    // "Brain → " title prefix, so a custom title hid the dispatch entirely.)
+    // Title stays clean: the caller's label if given, else the "Brain → <agent>"
+    // default (which the page's transitional fallback also recognizes).
+    const sres = await trpcMutate('chat.createSession', { agentName, title: title || `Brain → ${agentName}`, origin: 'dispatch' });
     const session = sres?.[0]?.result?.data?.json;
     if (!session?.id) throw new Error('failed to create a session on the target agent');
     await trpcMutate('chat.send', { sessionId: session.id, text: prompt.trim() });

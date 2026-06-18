@@ -192,6 +192,11 @@ model ChatSession {
   machine           Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
   agentName         String
   title             String?
+  // How this session was created. 'dispatch' = opened by Brain's MCP `dispatch`
+  // tool (one-shot delegation to another agent); NULL = a normal user-opened
+  // chat. The /brain/dispatch page filters on this structural marker instead of
+  // the title prefix, so a dispatch with a custom title is still recognized.
+  origin            String?
   claudeSessionId   String? // populated by gateway once SDK boots
   startedAt         DateTime  @default(now())
   lastMessageAt     DateTime?

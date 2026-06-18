@@ -57,6 +57,7 @@ export const chatRouter = router({
           id: true,
           agentName: true,
           title: true,
+          origin: true,
           claudeSessionId: true,
           startedAt: true,
           lastMessageAt: true,
@@ -123,10 +124,10 @@ export const chatRouter = router({
     }),
 
   createSession: machineProcedure
-    .input(z.object({ agentName: z.string().min(1).max(64), title: z.string().max(120).optional() }))
+    .input(z.object({ agentName: z.string().min(1).max(64), title: z.string().max(120).optional(), origin: z.string().max(32).optional() }))
     .mutation(async ({ ctx, input }) => {
       return prisma.chatSession.create({
-        data: { machineId: ctx.machine.id, agentName: input.agentName, title: input.title ?? null },
+        data: { machineId: ctx.machine.id, agentName: input.agentName, title: input.title ?? null, origin: input.origin ?? null },
       });
     }),
 

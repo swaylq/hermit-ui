@@ -8,12 +8,14 @@ import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { ArrowRight } from 'lucide-react';
 
 // Brain · Dispatches — the record of one-shot tasks the brain has handed to other
-// agents. Dispatch sessions live on the TARGET agent, titled "Brain → <agent>"
-// (set by the dispatch tool); clicking opens that agent's conversation.
+// agents. Dispatch sessions live on the TARGET agent and are marked origin:
+// 'dispatch' by the dispatch tool; clicking opens that agent's conversation.
+// (The "Brain →" title-prefix fallback keeps pre-origin sessions visible during
+// the transition — drop it once all dispatches carry the origin marker.)
 export default function BrainDispatchPage() {
   const sessions = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
   const dispatches = (sessions.data ?? [])
-    .filter((s) => (s.title ?? '').startsWith('Brain →'))
+    .filter((s) => s.origin === 'dispatch' || (s.title ?? '').startsWith('Brain →'))
     .sort((a, b) => new Date(b.lastMessageAt ?? b.startedAt).getTime() - new Date(a.lastMessageAt ?? a.startedAt).getTime());
   return (
     <div className="flex flex-1 min-h-0 flex-col">
