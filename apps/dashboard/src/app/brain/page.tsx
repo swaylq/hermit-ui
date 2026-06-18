@@ -21,7 +21,27 @@ export default function BrainPage() {
 function BrainPageInner() {
   const search = useSearchParams();
   const sessionParam = search.get('session');
-  if (sessionParam) return <SessionPane key={sessionParam} sessionId={sessionParam} />;
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 15_000 });
+  const brain = (agents.data ?? []).find((a) => a.isOrchestrator);
+  // Only ever render a chat pane for a session that ACTUALLY belongs to the brain.
+  // A stray ?session= — e.g. a worker chat id that ended up in the /brain URL
+  // (back/forward, a stale link, a hand-typed URL) — must NOT surface a worker
+  // conversation inside Brain, and must not pre-empt BrainSetup on a machine that
+  // has no Brain. So: no Brain → setup; otherwise validate the id is the brain's.
+  const sessions = trpc.chat.listSessions.useQuery(
+    { agentName: brain?.name },
+    { enabled: !!brain && !!sessionParam, refetchInterval: 10_000 },
+  );
+
+  if (agents.isPending) return <Shell><Centered>loading…</Centered></Shell>;
+  if (!brain) return <Shell><BrainSetup /></Shell>;
+  if (sessionParam) {
+    if (sessions.isPending) return <Shell><Centered>loading…</Centered></Shell>;
+    if ((sessions.data ?? []).some((s) => s.id === sessionParam)) {
+      return <SessionPane key={sessionParam} sessionId={sessionParam} />;
+    }
+    // Foreign / stale id → ignore it; the landing redirects to a real brain chat.
+  }
   return <BrainChatLanding />;
 }
 
