@@ -169,7 +169,13 @@ export const Markdown = memo(function Markdown({ children }: { children: string 
       <div className="prose prose-sm max-w-none break-words [overflow-wrap:anywhere] leading-[1.65] [&_p]:my-1.5 [&_p]:whitespace-pre-wrap [&_code]:font-mono [&_code]:text-[12px] [&_a]:underline [&_a]:underline-offset-2 [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_li>p]:my-0 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-medium [&_h1]:mt-3 [&_h2]:mt-3 [&_h3]:mt-3 [&_h1]:mb-1 [&_h2]:mb-1 [&_h3]:mb-1 [&_table]:my-2 [&_table]:text-xs [&_th]:px-2 [&_th]:py-0.5 [&_td]:px-2 [&_td]:py-0.5 [&_th]:border [&_td]:border [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:my-2 [&_blockquote]:opacity-80 [&_hr]:my-3 [&_hr]:border-border">
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkCjkFriendly]}
-          rehypePlugins={[[rehypeHighlight, { languages, detect: true, ignoreMissing: true }]]}
+          // detect:false — only highlight fences with an explicit language tag
+          // (```ts / ```bash / ```json …). Auto-detection runs the full language
+          // pack against EVERY untagged block; the chat is full of untagged
+          // tool-output fences, so that was a real chunk of the first-render long
+          // task — and it mis-highlights plain logs/output anyway. Tagged blocks
+          // still highlight; untagged render as clean monospace.
+          rehypePlugins={[[rehypeHighlight, { languages, detect: false, ignoreMissing: true }]]}
           components={{
             a({ href, children: linkChildren, node: _n, ...rest }) {
               return (
