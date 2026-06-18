@@ -306,13 +306,14 @@ const BRAIN_TOOLS = [
   {
     name: 'dispatch',
     description:
-      "Delegate a task to ANOTHER agent — you (Brain) never do the work yourself. One-shot by default: opens a fresh chat session on the target and sends `prompt`; returns its sessionId (read the result later with dispatch_result). Pass recurring={intervalMinutes} to make it a cron on the target instead. Pick the target from roster / agent_activity.",
+      "Delegate a task to ANOTHER agent — you (Brain) never do the work yourself. One-shot by default: sends `prompt` to a dispatch session on the target and returns its sessionId (read the result later with dispatch_result). To avoid piling up sessions (each is a live claude process), call dispatch_list first and pass reuseSessionId to send into an EXISTING idle dispatch session on that agent; omit it to open a fresh one. Pass recurring={intervalMinutes} to make it a cron on the target instead. Pick the target from roster / agent_activity.",
     inputSchema: {
       type: 'object',
       properties: {
         agentName: { type: 'string', description: 'Target agent (on the roster, not yourself).' },
         prompt: { type: 'string', description: 'The task to hand to that agent.' },
-        title: { type: 'string', description: 'Optional short label for the session/cron.' },
+        reuseSessionId: { type: 'string', description: 'Optional — an existing idle dispatch session (from dispatch_list) on this agent to send into, instead of opening a new one. Ignored if it is not a valid open dispatch session for this agent.' },
+        title: { type: 'string', description: 'Optional short label for a NEW session/cron (ignored when reusing).' },
         recurring: {
           type: 'object',
           description: 'Make it a recurring cron on the target instead of a one-shot.',
@@ -336,6 +337,22 @@ const BRAIN_TOOLS = [
         sessionId: { type: 'string', description: 'The sessionId returned by dispatch.' },
         waitMs: { type: 'number', description: 'Optional poll window in ms (capped at 120000).' },
       },
+      required: ['sessionId'],
+    },
+  },
+  {
+    name: 'dispatch_list',
+    description:
+      "List YOUR open dispatch sessions (the one-shot conversations you've opened on other agents). Each is { sessionId, agent, title, working, lastActivity }. Use it BEFORE dispatching — to reuse an idle session on the target instead of opening a new one — and in your daily dream, to find finished sessions to reap with dispatch_close. Each session is a live claude process, so keep the list short.",
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'dispatch_close',
+    description:
+      "Reap a finished dispatch session you no longer need — closes the conversation and frees the worker's idle claude process. Do this in your daily dream for dispatches that are done and whose result you've already used. Refuses anything that isn't one of your dispatch sessions.",
+    inputSchema: {
+      type: 'object',
+      properties: { sessionId: { type: 'string', description: 'A dispatch sessionId (from dispatch_list).' } },
       required: ['sessionId'],
     },
   },
@@ -414,16 +431,29 @@ async function dispatchBrainTool(name, args) {
       const cron = res?.[0]?.result?.data?.json;
       return JSON.stringify({ ok: true, kind: 'recurring', agent: agentName, cronId: cron?.id ?? null });
     }
-    // Mark the session origin:'dispatch' so the /brain/dispatch page can list it
-    // structurally — independent of the title. (Previously the page keyed on a
-    // "Brain → " title prefix, so a custom title hid the dispatch entirely.)
-    // Title stays clean: the caller's label if given, else the "Brain → <agent>"
-    // default (which the page's transitional fallback also recognizes).
-    const sres = await trpcMutate('chat.createSession', { agentName, title: title || `Brain → ${agentName}`, origin: 'dispatch' });
-    const session = sres?.[0]?.result?.data?.json;
-    if (!session?.id) throw new Error('failed to create a session on the target agent');
-    await trpcMutate('chat.send', { sessionId: session.id, text: prompt.trim() });
-    return JSON.stringify({ ok: true, kind: 'oneshot', agent: agentName, sessionId: session.id });
+    // Reuse an existing idle dispatch session on this agent when the brain asked
+    // for it AND it's valid (open dispatch session for this agent) — else open a
+    // fresh one. Reuse keeps dispatch sessions (each a live claude process) from
+    // piling up. Sessions are marked origin:'dispatch' so /brain/dispatch lists
+    // them structurally (independent of the title; the title stays the caller's
+    // label or the "Brain → <agent>" default).
+    let sessionId = null;
+    const reuseId = typeof args?.reuseSessionId === 'string' ? args.reuseSessionId.trim() : '';
+    if (reuseId) {
+      const all = (await trpcQuery('chat.listSessions', {})) || [];
+      const reuse = (Array.isArray(all) ? all : []).find(
+        (s) => s.id === reuseId && s.agentName === agentName && s.origin === 'dispatch' && !s.closedAt,
+      );
+      if (reuse) sessionId = reuse.id;
+    }
+    if (!sessionId) {
+      const sres = await trpcMutate('chat.createSession', { agentName, title: title || `Brain → ${agentName}`, origin: 'dispatch' });
+      const session = sres?.[0]?.result?.data?.json;
+      if (!session?.id) throw new Error('failed to create a session on the target agent');
+      sessionId = session.id;
+    }
+    await trpcMutate('chat.send', { sessionId, text: prompt.trim() });
+    return JSON.stringify({ ok: true, kind: 'oneshot', agent: agentName, sessionId, reused: !!reuseId && sessionId === reuseId });
   }
   if (name === 'dispatch_result') {
     const sessionId = args?.sessionId;
@@ -450,6 +480,30 @@ async function dispatchBrainTool(name, args) {
       messageCount: msgs.length,
       lastAssistant: textOf(lastA?.content).slice(0, 2000) || null,
     });
+  }
+  if (name === 'dispatch_list') {
+    const sessions = (await trpcQuery('chat.listSessions', {})) || [];
+    const list = (Array.isArray(sessions) ? sessions : [])
+      .filter((s) => s.origin === 'dispatch' && !s.closedAt)
+      .sort((a, b) => new Date(b.lastMessageAt || b.startedAt).getTime() - new Date(a.lastMessageAt || a.startedAt).getTime())
+      .map((s) => ({
+        sessionId: s.id,
+        agent: s.agentName,
+        title: s.title || null,
+        working: !!s.alive,
+        lastActivity: s.lastMessageAt || s.startedAt || null,
+      }));
+    return JSON.stringify({ count: list.length, dispatches: list });
+  }
+  if (name === 'dispatch_close') {
+    const sessionId = args?.sessionId;
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    const sessions = (await trpcQuery('chat.listSessions', {})) || [];
+    const s = (Array.isArray(sessions) ? sessions : []).find((x) => x.id === sessionId);
+    if (!s) throw new Error('session not found');
+    if (s.origin !== 'dispatch') throw new Error('not a dispatch session — dispatch_close only reaps dispatches');
+    await trpcMutate('chat.deleteSession', { id: sessionId });
+    return JSON.stringify({ ok: true, closed: sessionId, agent: s.agentName });
   }
   throw new Error(`unknown brain tool: ${name}`);
 }

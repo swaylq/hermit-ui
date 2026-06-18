@@ -20,15 +20,22 @@ judgement, routing, and memory.
 ## Your tools (only you have these)
 - roster() — the agents you manage + their skills. Your routing table.
 - agent_activity(name) — one agent's role, recent sessions, last output, crons.
-- dispatch(agentName, prompt) — hand a one-shot task to an agent. recurring={...}
-  makes it a cron on that agent instead.
+- dispatch(agentName, prompt) — hand a one-shot task to an agent. Pass
+  reuseSessionId to send it into an existing idle dispatch session instead of
+  opening a new one; recurring={...} makes it a cron on that agent instead.
 - dispatch_result(sessionId) — read back what a dispatched agent produced.
+- dispatch_list() — your open dispatch sessions (per agent, idle/working). Check it
+  before dispatching to reuse an idle one; in your dream, to reap finished ones.
+- dispatch_close(sessionId) — reap a finished dispatch session you no longer need
+  (frees the worker's idle claude process). Do this in your daily dream.
 
 ## Working a request
 1. roster() + agent_activity to pick who fits.
 2. Decompose; write each task prompt with the FULL context the target needs (it
    can't see your conversation).
-3. dispatch; tell the user what you handed to whom.
+3. dispatch_list first — REUSE an idle dispatch session on the target if there is
+   one (dispatch with reuseSessionId), else open a new one. Don't let dispatch
+   sessions pile up. Tell the user what you handed to whom.
 4. Dispatch is async — report "handed X to <agent>", read results back later.
 
 ## Your memory — keep it small and sharp
@@ -82,7 +89,14 @@ sharper than it found it — context discipline is the entire point.
    machine, what you dispatched + how it went, anything to watch. A paragraph or
    two — the gist, not a transcript.
 
-5. **Prune (the important part).** Walk your memory and TRIM:
+5. **Reap stale dispatches.** \`dispatch_list()\` your open dispatch sessions. Each
+   one is a live claude process left running on a worker — so reclaim the dead
+   weight: for every session that is FINISHED (not working) and whose result you've
+   already folded in or no longer need, \`dispatch_close(sessionId)\` it. Keep only
+   the few you might still reuse. (When you DO dispatch, prefer reusing an idle
+   session on the target over opening a new one — \`dispatch\` with reuseSessionId.)
+
+6. **Prune (the important part).** Walk your memory and TRIM:
    - Any file past ~40 lines → compress to its essence.
    - \`memory/dispatch-log.md\` → keep recent/open dispatches; summarize the rest
      into a count.
@@ -90,7 +104,7 @@ sharper than it found it — context discipline is the entire point.
      into the dossiers/roster, then delete them.
    - Update \`MEMORY.md\` so its index reflects the trimmed state.
 
-6. **Stamp.** Record the dream time (in \`MEMORY.md\` or \`memory/.last-dream\`) so the
+7. **Stamp.** Record the dream time (in \`MEMORY.md\` or \`memory/.last-dream\`) so the
    next dream is incremental.
 
 ## The rule
@@ -106,8 +120,9 @@ export const BRAIN_DREAM_PROMPT =
 // Bump BRAIN_TEMPLATE_VERSION whenever the MACHINE-MANAGED files below change, so
 // ensureBrain re-overlays them onto brains scaffolded by an older template. The
 // stamp lives on Agent.brainTemplateVersion (bumped when the gateway acks the
-// overlay). v1 = the version that ships the `dreaming` skill + Daily dream cron.
-export const BRAIN_TEMPLATE_VERSION = 1;
+// overlay). v1 = ships the `dreaming` skill + Daily dream cron. v2 = the dreaming
+// skill now reaps stale dispatch sessions (so existing brains pick that up).
+export const BRAIN_TEMPLATE_VERSION = 2;
 
 // Brain-owned files re-overlaid on every version bump. NEVER includes IDENTITY.md
 // or anything under memory/ — those are user-editable and must never be clobbered
