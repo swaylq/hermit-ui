@@ -48,7 +48,10 @@ function useAgentDetailRefresh(name: string | null, active: boolean): { refetchI
   const utils = trpc.useUtils();
   const pending = trpc.agents.pendingRequests.useQuery(undefined, {
     enabled: !!name && active,
-    refetchInterval: !!name && active ? 3_000 : false,
+    // Adaptive like the other pendingRequests observers (RQ uses the min across
+    // them, so this must agree or it'd undercut the idle back-off): fast only
+    // while something's in flight, slow when idle. `enabled` gates it off otherwise.
+    refetchInterval: (q) => (((q.state.data as unknown[] | undefined)?.length ?? 0) > 0 ? 2_000 : 12_000),
   });
   const inFlight = !!name && (pending.data ?? []).some((p) => p.agentName === name);
   const prev = useRef(inFlight);

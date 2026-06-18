@@ -30,7 +30,12 @@ function AgentsPageInner() {
   // need the list here for the default-landing redirect (pick the first agent
   // when no `?name=` is set).
   const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 10_000 });
-  const pending = trpc.agents.pendingRequests.useQuery(undefined, { refetchInterval: 2_000 });
+  // Poll fast only while something is in flight (tracking its resolution); idle —
+  // the common case, no pending request — backs off hard. The create/delete flows
+  // already invalidate this query, so a fresh pending shows immediately regardless.
+  const pending = trpc.agents.pendingRequests.useQuery(undefined, {
+    refetchInterval: (q) => (((q.state.data as unknown[] | undefined)?.length ?? 0) > 0 ? 2_000 : 12_000),
+  });
   // Tab lives here (not in AgentMain) so it PERSISTS across agent switches —
   // AgentsPageInner doesn't remount on ?name= soft-nav, whereas AgentMain (keyed
   // by nameParam) does. Switching agents keeps Detail on Detail, Files on Files.

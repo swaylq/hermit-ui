@@ -737,7 +737,12 @@ function RecentAgents() {
   const search = useSearchParams();
   const activeName = search.get('name');
   const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 10_000 });
-  const pending = trpc.agents.pendingRequests.useQuery(undefined, { refetchInterval: 2_000 });
+  const pending = trpc.agents.pendingRequests.useQuery(undefined, {
+    // Fast only while something is in flight; idle backs off hard (create/delete
+    // already invalidate this, so a fresh pending shows at once). Both observers
+    // of this query (here + /agents page) must agree — RQ uses the min interval.
+    refetchInterval: (q) => (((q.state.data as unknown[] | undefined)?.length ?? 0) > 0 ? 2_000 : 12_000),
+  });
   const utils = trpc.useUtils();
 
   // Prefetch an agent's full detail on hover/focus (intent to open) so the click
@@ -1076,7 +1081,11 @@ function RecentSkills() {
   const search = useSearchParams();
   const activeName = search.get('name');
   const skills = trpc.skills.list.useQuery(undefined, { refetchInterval: 10_000 });
-  const pending = trpc.skills.pendingRequests.useQuery(undefined, { refetchInterval: 2_000 });
+  const pending = trpc.skills.pendingRequests.useQuery(undefined, {
+    // Fast only while a skill op is in flight; idle backs off (the install/delete
+    // flow invalidates this, so a fresh pending shows immediately regardless).
+    refetchInterval: (q) => (((q.state.data as unknown[] | undefined)?.length ?? 0) > 0 ? 2_000 : 12_000),
+  });
   const pendingCreates = (pending.data ?? []).filter((p) => p.kind === 'create');
 
   return (
