@@ -1143,12 +1143,14 @@ function RecentSessions() {
 
   const agentNames = useMemo(() => {
     const names = new Set<string>();
-    sessions.data?.forEach((s) => { if (s.agentName !== orchestratorName) names.add(s.agentName); });
+    sessions.data?.forEach((s) => { if (s.agentName !== orchestratorName && s.origin !== 'dispatch') names.add(s.agentName); });
     return Array.from(names).sort();
   }, [sessions.data, orchestratorName]);
-  // Worker sessions (orchestrator/Brain lives only in /brain).
+  // Worker sessions (orchestrator/Brain lives only in /brain). Brain's dispatch
+  // sessions (origin:'dispatch') are the brain's, shown only in /brain/dispatch —
+  // keep them out of the worker chat recents.
   const baseRows = useMemo(
-    () => (sessions.data ?? []).filter((s) => s.agentName !== orchestratorName),
+    () => (sessions.data ?? []).filter((s) => s.agentName !== orchestratorName && s.origin !== 'dispatch'),
     [sessions.data, orchestratorName],
   );
   const hiddenCount = useMemo(() => baseRows.filter((s) => s.hiddenAt).length, [baseRows]);

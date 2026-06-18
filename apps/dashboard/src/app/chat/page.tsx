@@ -142,9 +142,9 @@ function ChatPageInner() {
     // Skip the orchestrator (Brain) — its chats live only in /brain, never the
     // dashboard. (listSessions still returns them; we just never land on one.)
     const brainName = agents.data?.find((a) => a.isOrchestrator)?.name;
-    // Also skip hidden sessions — landing on one the user just hid (to declutter)
-    // would immediately re-open it. They're still reachable via "show hidden".
-    const first = (sessions.data ?? []).find((s) => s.agentName !== brainName && !s.hiddenAt);
+    // Also skip hidden sessions (the user decluttered them) and Brain's dispatch
+    // sessions (origin:'dispatch' — those live only in /brain/dispatch).
+    const first = (sessions.data ?? []).find((s) => s.agentName !== brainName && !s.hiddenAt && s.origin !== 'dispatch');
     if (first) router.replace(`/chat?session=${encodeURIComponent(first.id)}`);
   }, [showNew, sessionParam, sessions.data, agents.data, router]);
 
