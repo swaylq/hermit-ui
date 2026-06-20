@@ -75,6 +75,20 @@ export function addMachine(entry: KeyringEntry) {
   setActiveMachine(entry.id);
 }
 
+// Add an agent SHARE entry and make it active FOR THIS TAB only. Unlike
+// addMachine it does NOT clobber the localStorage default when the user already
+// has one — so opening a share link in a tab can't hijack an owner's other tabs
+// or what a freshly-opened tab inherits. A first-time visitor (no default yet)
+// does get it as their default.
+export function addScopedMachine(entry: KeyringEntry) {
+  const list = read().filter((e) => e.id !== entry.id);
+  list.push(entry);
+  write(list);
+  if (typeof window === 'undefined') return;
+  sessionStorage.setItem(ACTIVE, entry.id);
+  if (localStorage.getItem(ACTIVE) == null) localStorage.setItem(ACTIVE, entry.id);
+}
+
 // Returns the next active entry (first remaining), or null if the keyring is empty.
 export function removeMachine(id: string): KeyringEntry | null {
   const next = read().filter((e) => e.id !== id);

@@ -1,26 +1,39 @@
 'use client';
 
 // The sidebar shown ONLY in a scoped agent-share session: just the one agent —
-// its chats + a link into its workspace (files / terminal). No machine switcher,
-// primary nav, Brain, or Market: a share holder can reach nothing but their agent.
-// The server enforces that; this hides the rest. Reuses the SidebarProvider
-// context so the pages' mobile hamburger still opens it.
+// its chats + a link into its files. No machine switcher, primary nav, Brain,
+// Market, or terminal: a share holder can reach nothing but their agent (the
+// server enforces it; this hides the rest). Reuses the SidebarProvider context so
+// the pages' mobile hamburger still opens it.
 
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
-import { SquarePen, Folder, KeyRound } from 'lucide-react';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { SquarePen, Folder, KeyRound, LogOut } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { useSidebar } from '@/components/app-sidebar';
+import { getKeyring, getActiveEntry, removeMachine } from '@/lib/keyring';
 
 export function ScopedSidebar({ agentName }: { agentName: string }) {
   const { mobileOpen, setMobileOpen } = useSidebar();
+  const pathname = usePathname();
   const search = useSearchParams();
   const activeSession = search.get('session');
+  const onAgents = pathname.startsWith('/agents');
+  const composingNew = pathname.startsWith('/chat') && !activeSession; // new-chat compose
   const sessions = trpc.chat.listSessions.useQuery({ agentName }, { refetchInterval: 5_000 });
   const rows = (sessions.data ?? []).filter((s) => !s.hiddenAt);
   const close = () => setMobileOpen(false);
+
+  // An owner who opened a share link (they have OTHER workspaces) can leave the
+  // scoped view; a pure recipient (this key is all they have) has nowhere to go.
+  const canExit = typeof window !== 'undefined' && getKeyring().length > 1;
+  const exit = () => {
+    const me = getActiveEntry();
+    if (me) removeMachine(me.id); // drop the share entry → active falls to a real workspace
+    window.location.href = '/chat';
+  };
 
   return (
     <>
@@ -51,21 +64,27 @@ export function ScopedSidebar({ agentName }: { agentName: string }) {
           </span>
         </div>
 
-        {/* New chat + the agent's workspace (files / terminal live on its detail page) */}
+        {/* New chat + the agent's files */}
         <div className="px-2 pt-2 space-y-0.5">
           <Link
             href={`/chat?agent=${encodeURIComponent(agentName)}`}
             onClick={close}
-            className="flex items-center gap-2.5 rounded-lg h-8 px-3 text-sm font-medium bg-sidebar-accent text-sidebar-foreground hover:bg-sidebar-accent/80 transition-colors cursor-pointer"
+            className={cn(
+              'flex items-center gap-2.5 rounded-lg h-8 px-3 text-sm font-medium transition-colors cursor-pointer',
+              composingNew ? 'bg-sidebar-accent text-sidebar-foreground' : 'bg-sidebar-accent/50 text-sidebar-foreground hover:bg-sidebar-accent/80',
+            )}
           >
             <SquarePen className="h-4 w-4 shrink-0" /> New chat
           </Link>
           <Link
             href={`/agents?name=${encodeURIComponent(agentName)}`}
             onClick={close}
-            className="flex items-center gap-2.5 rounded-lg h-8 px-3 text-sm text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground transition-colors cursor-pointer"
+            className={cn(
+              'flex items-center gap-2.5 rounded-lg h-8 px-3 text-sm transition-colors cursor-pointer',
+              onAgents ? 'bg-sidebar-accent text-sidebar-foreground font-medium' : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
+            )}
           >
-            <Folder className="h-4 w-4 shrink-0" /> Files &amp; terminal
+            <Folder className="h-4 w-4 shrink-0" /> Files
           </Link>
         </div>
 
@@ -95,6 +114,19 @@ export function ScopedSidebar({ agentName }: { agentName: string }) {
             ))
           )}
         </div>
+
+        {/* Exit — only when there's another workspace to return to */}
+        {canExit && (
+          <div className="border-t border-sidebar-border p-2 shrink-0">
+            <button
+              type="button"
+              onClick={exit}
+              className="flex w-full items-center gap-2.5 rounded-lg h-8 px-3 text-sm text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground transition-colors cursor-pointer"
+            >
+              <LogOut className="h-4 w-4 shrink-0" /> Exit shared view
+            </button>
+          </div>
+        )}
       </aside>
     </>
   );

@@ -68,7 +68,7 @@ function ShareAgentDialog({ name, onClose }: { name: string; onClose: () => void
                 <Share2 className="size-4" /> Share <span className="font-mono">{name}</span>
               </h2>
               <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                Anyone with the link gets full operation of <span className="font-medium text-foreground/80">this agent only</span> — chat, files, terminal — and can&apos;t see your other agents or machine settings. The terminal is a real shell, so share only with people you trust.
+                Anyone with the link gets full operation of <span className="font-medium text-foreground/80">this agent only</span> — chat, files, and schedules — and can&apos;t see your other agents or anything else on this machine. Only share with people you trust.
               </p>
             </div>
             <button type="button" onClick={close} aria-label="close" className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground">

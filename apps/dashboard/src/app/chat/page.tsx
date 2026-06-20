@@ -23,6 +23,7 @@ import { markSessionWorking } from '@/lib/session-live';
 import { TimeAgo } from '@/components/time-ago';
 import { getActiveKey } from '@/app/providers';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
+import { useScope } from '@/lib/use-scope';
 
 type Block = { type: string; text?: string; name?: string; input?: any; tool_use_id?: string; content?: any; source?: any; width?: number; height?: number };
 
@@ -127,8 +128,11 @@ function ChatPageInner() {
   const sessionParam = search.get('session');
   const agentParam = search.get('agent');
   const showNew = !!search.get('new') || (!!agentParam && !sessionParam);
+  const scope = useScope();
 
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 30_000 });
+  // agents.list is machine-wide (403 in a scoped share session) — disable it
+  // there; a scoped new-chat is locked to the shared agent and needs no list.
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 30_000, enabled: !scope.scoped });
   // No own refetchInterval — the always-mounted sidebar already polls
   // listSessions every 5s; this shares that cache (used here only for the
   // landing redirect + empty state). Drops a duplicate 5s poll/re-render.
@@ -153,6 +157,7 @@ function ChatPageInner() {
       <NewChatPane
         agents={(agents.data ?? []).map((a) => a.name)}
         preset={agentParam ?? undefined}
+        lockedAgent={scope.scoped ? scope.agentName ?? undefined : undefined}
         // Land on the freshly-created session via a hard navigation. A
         // programmatic router.replace()/push() does NOT reliably navigate here
         // (Next 16 + custom server): createSession makes the row but the view
@@ -187,11 +192,13 @@ function ChatPageInner() {
   );
 }
 
-function NewChatPane({ agents, preset, onCreated, onCancel }: { agents: string[]; preset?: string; onCreated: (id: string) => void; onCancel: () => void }) {
-  const [agent, setAgent] = useState('');
+function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }: { agents: string[]; preset?: string; lockedAgent?: string; onCreated: (id: string) => void; onCancel: () => void }) {
+  const [picked, setPicked] = useState('');
   useEffect(() => {
-    setAgent((cur) => cur || (preset && agents.includes(preset) ? preset : agents[0] ?? ''));
+    setPicked((cur) => cur || (preset && agents.includes(preset) ? preset : agents[0] ?? ''));
   }, [preset, agents]);
+  // A scoped share session is locked to its one agent — no picker.
+  const agent = lockedAgent ?? picked;
   const create = trpc.chat.createSession.useMutation({ onSuccess: (s) => onCreated(s.id) });
   return (
     <div className="flex flex-1 flex-col">
@@ -209,19 +216,23 @@ function NewChatPane({ agents, preset, onCreated, onCancel }: { agents: string[]
               <Plus className="h-6 w-6" />
             </div>
             <h2 className="text-lg font-medium tracking-tight text-foreground">Start a new chat</h2>
-            <p className="text-xs text-muted-foreground">Pick an agent to talk to.</p>
+            <p className="text-xs text-muted-foreground">
+              {lockedAgent ? <>with <span className="font-mono text-foreground/80">{lockedAgent}</span></> : 'Pick an agent to talk to.'}
+            </p>
           </div>
-          <label className="block">
-            <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Agent</span>
-            <Select value={agent} onValueChange={(v) => setAgent(v ?? '')} modal={false}>
-              <SelectTrigger aria-label="select agent" className="mt-1.5 w-full py-2 text-sm font-mono">
-                <SelectValue>{(v: string | null) => (v ? v : (agents.length ? 'Pick an agent' : 'no agents found'))}</SelectValue>
-              </SelectTrigger>
-              <SelectContent className="font-mono">
-                {agents.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </label>
+          {!lockedAgent && (
+            <label className="block">
+              <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Agent</span>
+              <Select value={agent} onValueChange={(v) => setPicked(v ?? '')} modal={false}>
+                <SelectTrigger aria-label="select agent" className="mt-1.5 w-full py-2 text-sm font-mono">
+                  <SelectValue>{(v: string | null) => (v ? v : (agents.length ? 'Pick an agent' : 'no agents found'))}</SelectValue>
+                </SelectTrigger>
+                <SelectContent className="font-mono">
+                  {agents.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </label>
+          )}
           <div className="flex gap-2">
             <Button type="submit" disabled={!agent || create.isPending} className="flex-1 h-10">
               {create.isPending ? 'creating…' : 'Start chat'}
@@ -546,6 +557,7 @@ function ChatFind({ getViewport, onClose }: { getViewport: () => HTMLElement | n
 
 export function SessionPane({ sessionId }: { sessionId: string }) {
   const utils = trpc.useUtils();
+  const scope = useScope();
   // Poll on our own heartbeat instead of free-riding the sidebar's listSessions
   // query: the sidebar's RecentSessions only mounts when the sidebar is expanded
   // AND on /chat, so on mobile (off-canvas drawer, unmounted) or a collapsed
@@ -1210,14 +1222,16 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
           >
             <ListCollapse className="h-4 w-4" />
           </button>
-          <Link
-            href={`/chat/terminal?session=${encodeURIComponent(sessionId)}`}
-            title="attach to this session's tmux pane"
-            aria-label="terminal access"
-            className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground"
-          >
-            <Terminal className="h-4 w-4" />
-          </Link>
+          {!scope.scoped && (
+            <Link
+              href={`/chat/terminal?session=${encodeURIComponent(sessionId)}`}
+              title="attach to this session's tmux pane"
+              aria-label="terminal access"
+              className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground"
+            >
+              <Terminal className="h-4 w-4" />
+            </Link>
+          )}
           <ConfirmIconButton
             icon={FoldVertical}
             title="compact — summarize the conversation so the agent's context window shrinks (runs /compact, keeps continuity). THIS is what reduces a large context; restart only reloads the whole history via --resume."

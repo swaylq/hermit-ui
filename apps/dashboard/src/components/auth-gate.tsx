@@ -112,7 +112,9 @@ function Authed({ onSignOut, children }: { onSignOut: () => void; children: Reac
 function ScopedBounds({ agentName, children }: { agentName: string; children: React.ReactNode }) {
   const pathname = usePathname();
   const search = useSearchParams();
-  const inBounds = pathname.startsWith('/chat') || (pathname.startsWith('/agents') && search.get('name') === agentName);
+  const inBounds =
+    (pathname.startsWith('/chat') && !pathname.startsWith('/chat/terminal')) ||
+    (pathname.startsWith('/agents') && search.get('name') === agentName);
   useEffect(() => {
     if (!inBounds) window.location.replace(`/chat?agent=${encodeURIComponent(agentName)}`);
   }, [inBounds, agentName]);

@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
-import { addMachine } from '@/lib/keyring';
+import { addScopedMachine } from '@/lib/keyring';
 
 export default function ShareLandingPage() {
   const params = useParams<{ token: string }>();
@@ -25,7 +25,7 @@ export default function ShareLandingPage() {
     void (async () => {
       try {
         const { agentName, machineName } = await redeem.mutateAsync({ token });
-        addMachine({
+        addScopedMachine({
           id: `shr-${token.slice(0, 12)}`,
           name: agentName,
           key: token,
