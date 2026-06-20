@@ -169,6 +169,19 @@ export const agentsRouter = router({
       return { agent };
     }),
 
+  // The most recent lifecycle request for an agent NAME (any status) — lets the
+  // detail page explain WHY an agent isn't there (e.g. a create that failed to
+  // scaffold) instead of a bare "not found". Null if no request is on record.
+  latestRequest: machineProcedure
+    .input(z.object({ name: z.string() }))
+    .query(async ({ ctx, input }) => {
+      return prisma.agentRequest.findFirst({
+        where: { machineId: ctx.machine.id, agentName: input.name },
+        orderBy: { requestedAt: 'desc' },
+        select: { kind: true, status: true, error: true, requestedAt: true },
+      });
+    }),
+
   // One skill's sub-file tree (everything besides SKILL.md), lazy-loaded when a
   // skill is opened in the detail sheet — kept OUT of byName's recurring payload.
   skillRefs: agentProcedure

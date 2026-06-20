@@ -93,8 +93,33 @@ export function AgentDetailBody({ name, tab }: { name: string; tab: DetailTab })
     );
   }
   if (query.error) return <div className="p-4 sm:p-6 text-sm text-rose-400">error: {query.error.message}</div>;
-  if (!query.data) return <div className="p-4 sm:p-6 text-sm text-muted-foreground">agent not found.</div>;
+  if (!query.data) return <AgentMissing name={name} />;
   return <AgentDetailContent name={name} agent={query.data.agent} sessions={sessions.data ?? null} sessionsLoading={sessions.isPending} tab={tab} />;
+}
+
+// byName found no agent. Explain why: a create/import that ERRORED surfaces its
+// message (with an Import hint for the common "directory already exists" case),
+// instead of a bare "not found"; a genuine miss still falls back to "not found".
+function AgentMissing({ name }: { name: string }) {
+  const req = trpc.agents.latestRequest.useQuery({ name });
+  if (req.isPending) return <div className="p-4 sm:p-6 text-sm text-muted-foreground">loading…</div>;
+  const r = req.data;
+  if (r && r.status === 'error') {
+    const dirExists = /already exists/i.test(r.error ?? '');
+    return (
+      <div className="p-4 sm:p-6 max-w-xl space-y-2">
+        <p className="text-sm font-medium text-rose-400">Couldn&apos;t {r.kind} &ldquo;{name}&rdquo;.</p>
+        {r.error && <p className="text-xs text-muted-foreground break-words font-mono">{r.error}</p>}
+        {dirExists && r.kind === 'create' && (
+          <p className="text-xs text-muted-foreground">
+            That path already holds an agent — use <span className="font-medium text-foreground">Import</span> (point it at the existing
+            directory) instead of <span className="font-medium text-foreground">Create</span>, which scaffolds a fresh one and won&apos;t overwrite.
+          </p>
+        )}
+      </div>
+    );
+  }
+  return <div className="p-4 sm:p-6 text-sm text-muted-foreground">agent not found.</div>;
 }
 
 // The "详情 / 文件" tab strip — settings-strip styling (icon+label pills, see
