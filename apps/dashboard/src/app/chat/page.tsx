@@ -2836,9 +2836,15 @@ async function saveAttachment(url: string, name: string, mimeType: string | null
   const blob = await res.blob();
   const file = new File([blob], name || 'file', { type: mimeType || blob.type || 'application/octet-stream' });
   const nav = typeof navigator !== 'undefined' ? navigator : undefined;
-  if (nav?.canShare?.({ files: [file] })) {
-    // Use share exclusively when available — falling through to a link download
-    // on cancel would re-introduce the iOS navigate-away trap.
+  // Touch / iOS-standalone ONLY: there `<a download>` is ignored and a plain link
+  // navigates the PWA away with no way back, so the share sheet is the only safe
+  // path — and we stay on it even on cancel (no link fallthrough = no trap).
+  // DESKTOP also reports canShare({files})=true (macOS Safari/Chrome), but routing
+  // a download click into the OS share sheet means a normal click never downloads,
+  // and share() after the awaited fetch can silently throw on lost user-activation
+  // (the "点击不会下载" bug). So gate share to touch; desktop falls through to the
+  // reliable object-URL download below.
+  if (isTouchPrimary() && nav?.canShare?.({ files: [file] })) {
     try { await nav.share({ files: [file] }); } catch { /* cancelled / unsupported */ }
     return;
   }
