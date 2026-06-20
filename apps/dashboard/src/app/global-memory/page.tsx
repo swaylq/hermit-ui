@@ -29,7 +29,7 @@ export default function GlobalMemoryPage() {
       {/* Fill the whole content area on PC — the two-pane file explorer wants the
           width (and height); a max-w-3xl center column wasted most of the screen. */}
       <div className="flex-1 min-h-0 flex flex-col">
-        <div className="w-full flex-1 min-h-0 p-4 sm:p-6 flex flex-col gap-4">
+        <div className="w-full flex-1 min-h-0 p-4 sm:p-6 flex flex-col gap-4 overflow-y-auto">
           {/* Header: title + on/off, with a compact one-line description */}
           <div className="flex shrink-0 items-start justify-between gap-3">
             <div className="min-w-0">
@@ -65,7 +65,7 @@ export default function GlobalMemoryPage() {
           )}
 
           {/* One explorer for the inline note + the ~/.claude/global-memory folder. */}
-          <section className="flex flex-1 min-h-[460px] flex-col gap-2">
+          <section className="flex h-[65vh] min-h-[440px] shrink-0 flex-col gap-2">
             <GlobalMemoryFiles />
           </section>
 
