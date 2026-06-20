@@ -21,10 +21,10 @@ export function ShareAgentButton({ name }: { name: string }) {
         type="button"
         onClick={() => setOpen(true)}
         title={`share ${name}`}
-        className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+        aria-label={`share ${name}`}
+        className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
       >
         <Share2 className="h-3.5 w-3.5" />
-        Share
       </button>
       {open && <ShareAgentDialog name={name} onClose={() => setOpen(false)} />}
     </>

@@ -127,11 +127,11 @@ function AgentMain({
         {!scope.scoped && <ShareAgentButton name={name} />}
         <Link
           href={`/chat?agent=${encodeURIComponent(name)}`}
-          className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+          className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
           title={`chat with ${name}`}
+          aria-label={`chat with ${name}`}
         >
           <MessageSquare className="h-3.5 w-3.5" />
-          Chat
         </Link>
         {!scope.scoped && (
           <ConfirmDeleteButton
