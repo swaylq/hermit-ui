@@ -354,15 +354,22 @@ export async function agentRequestTick() {
           purgeAgent(r.agentName, r.agentDirectory);
         } else if (r.kind === 'edit') {
           if (!r.target || r.content == null) throw new Error('edit request missing target/content');
-          editAgentFile(r.agentName, r.agentDirectory, r.target, r.content);
+          // A create-time skill install (pick-skills-from-market) rides in the
+          // SAME poll batch as the agent's `create` (requestedAt asc → create
+          // scaffolds first), so Agent.directory isn't synced back yet and
+          // r.agentDirectory is null. Fall back to the just-scaffolded dir on
+          // disk — same as the `overlay` kind — instead of erroring "no directory
+          // yet" and silently dropping the picked skill.
+          const dir = r.agentDirectory ?? path.join(AGENTS_ROOT, r.agentName);
+          editAgentFile(r.agentName, dir, r.target, r.content);
           // Install bundles carry the skill's sub-files in `refs`; write the whole
           // tree into the skill dir, not just SKILL.md. (Plain edits have no refs.)
           const sm = r.target.match(/^skill:([a-z0-9][a-z0-9-]{0,30})$/);
-          if (sm && r.agentDirectory && r.refs) {
-            const wrote = writeSkillRefs(path.join(path.resolve(r.agentDirectory), '.claude', 'skills', sm[1]), r.refs);
+          if (sm && r.refs) {
+            const wrote = writeSkillRefs(path.join(path.resolve(dir), '.claude', 'skills', sm[1]), r.refs);
             if (wrote) console.log(`[agent-lifecycle] ${r.agentName}: wrote ${wrote} sub-file(s) for skill ${sm[1]}`);
           }
-          if (r.agentDirectory) refreshAfter.push({ name: r.agentName, directory: r.agentDirectory });
+          refreshAfter.push({ name: r.agentName, directory: dir });
         } else if (r.kind === 'delete-skill') {
           if (!r.target) throw new Error('delete-skill request missing target');
           deleteAgentSkill(r.agentName, r.agentDirectory, r.target);
