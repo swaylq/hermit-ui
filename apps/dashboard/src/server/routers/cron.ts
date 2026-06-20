@@ -4,7 +4,7 @@
 // /api/sync/cron-run. Each fire is a fresh tmux + claude turn in the agent dir.
 
 import { z } from 'zod';
-import { router, machineProcedure } from '../trpc';
+import { router, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 
 // Unread finished runs per cron (status not 'running', readAt null) → the red
@@ -33,6 +33,8 @@ const CronInput = z.object({
 export const cronRouter = router({
   // All crons for the machine — the /cron page sidebar. `unreadCount` = finished
   // runs the user hasn't read yet (drives the red roll-up dot on the sidebar row).
+  // Machine-wide → stays machineProcedure (a scoped share key can't list all
+  // agents' crons; the agent-detail panel uses listForAgent instead).
   list: machineProcedure.query(async ({ ctx }) => {
     const crons = await prisma.cron.findMany({
       where: { machineId: ctx.machine.id },
@@ -54,7 +56,7 @@ export const cronRouter = router({
   // All crons for one agent — the agent-detail panel's scheduled-tasks list.
   // Narrow select (no prompt-history / run rows) since it's just a summary list
   // that links out to /cron?id=… for the full detail/edit view.
-  listForAgent: machineProcedure
+  listForAgent: agentProcedure
     .input(z.object({ agentName: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       const crons = await prisma.cron.findMany({
@@ -70,11 +72,12 @@ export const cronRouter = router({
     }),
 
   // One cron + its recent runs — the detail view (read-only run log).
-  get: machineProcedure
+  get: agentProcedure
     .input(z.object({ id: z.string(), includeRunOutput: z.boolean().optional() }))
     .query(async ({ ctx, input }) => {
       const cron = await prisma.cron.findUnique({ where: { id: input.id } });
       if (!cron || cron.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(cron.agentName);
       // Run `output` (@db.Text, can be long) shows only when a run row is expanded,
       // so by default keep it OUT of this 5s-polled payload — the /cron rows need
       // just status/timing and lazy-load output via cron.runOutput on expand. The
@@ -93,35 +96,38 @@ export const cronRouter = router({
 
   // One run's output, fetched lazily when its row is expanded (kept out of the
   // recurring cron.get payload above). Guarded: the run's cron must be this machine's.
-  runOutput: machineProcedure.input(z.object({ runId: z.string() })).query(async ({ ctx, input }) => {
+  runOutput: agentProcedure.input(z.object({ runId: z.string() })).query(async ({ ctx, input }) => {
     const run = await prisma.cronRun.findUnique({
       where: { id: input.runId },
-      select: { output: true, status: true, cron: { select: { machineId: true } } },
+      select: { output: true, status: true, cron: { select: { machineId: true, agentName: true } } },
     });
     if (!run || run.cron.machineId !== ctx.machine.id) throw new Error('not found');
+    ctx.assertAgent(run.cron.agentName);
     return { output: run.output, status: run.status };
   }),
 
   // Mark one run read = now (clears its red dot). Reading = expanding the run row
   // on the detail page. Guarded: the run's cron must belong to this machine.
-  markRunRead: machineProcedure
+  markRunRead: agentProcedure
     .input(z.object({ runId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const run = await prisma.cronRun.findUnique({
         where: { id: input.runId },
-        select: { cron: { select: { machineId: true } } },
+        select: { cron: { select: { machineId: true, agentName: true } } },
       });
       if (!run || run.cron.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(run.cron.agentName);
       await prisma.cronRun.update({ where: { id: input.runId }, data: { readAt: new Date() } });
       return { ok: true };
     }),
 
   // Mark every unread run of a cron read — the detail page's "全部已读" button.
-  markAllRead: machineProcedure
+  markAllRead: agentProcedure
     .input(z.object({ cronId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const cron = await prisma.cron.findUnique({ where: { id: input.cronId }, select: { machineId: true } });
+      const cron = await prisma.cron.findUnique({ where: { id: input.cronId }, select: { machineId: true, agentName: true } });
       if (!cron || cron.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(cron.agentName);
       const res = await prisma.cronRun.updateMany({
         where: { cronId: input.cronId, readAt: null },
         data: { readAt: new Date() },
@@ -129,19 +135,20 @@ export const cronRouter = router({
       return { ok: true, count: res.count };
     }),
 
-  create: machineProcedure.input(CronInput).mutation(async ({ ctx, input }) => {
+  create: agentProcedure.input(CronInput).mutation(async ({ ctx, input }) => {
     // nextFire = now ⇒ first run on the next gateway tick.
     return prisma.cron.create({
       data: { machineId: ctx.machine.id, ...input, nextFire: new Date() },
     });
   }),
 
-  update: machineProcedure
+  update: agentProcedure
     .input(z.object({ id: z.string() }).and(CronInput.partial()))
     .mutation(async ({ ctx, input }) => {
       const { id, ...patch } = input;
       const existing = await prisma.cron.findUnique({ where: { id } });
       if (!existing || existing.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(existing.agentName);
       // Changing the interval reschedules the next fire from the last run, so a
       // shorter interval runs sooner (and a longer one later) instead of waiting
       // out the old schedule. (A never-fired cron keeps its nextFire = now.)
@@ -152,9 +159,10 @@ export const cronRouter = router({
       return prisma.cron.update({ where: { id }, data });
     }),
 
-  delete: machineProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+  delete: agentProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
     const existing = await prisma.cron.findUnique({ where: { id: input.id } });
     if (!existing || existing.machineId !== ctx.machine.id) throw new Error('not found');
+    ctx.assertAgent(existing.agentName);
     await prisma.cron.delete({ where: { id: input.id } }); // CronRuns cascade
     return { ok: true };
   }),
@@ -164,9 +172,10 @@ export const cronRouter = router({
   // "下次" line for the ≤15s window before the gateway fires and recomputes
   // nextFire = now + interval. "now" is ≤ now so it still fires next tick, but
   // reads sensibly if shown — and the UI now labels a due nextFire "即将运行…".)
-  runNow: machineProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+  runNow: agentProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
     const existing = await prisma.cron.findUnique({ where: { id: input.id } });
     if (!existing || existing.machineId !== ctx.machine.id) throw new Error('not found');
+    ctx.assertAgent(existing.agentName);
     await prisma.cron.update({ where: { id: input.id }, data: { nextFire: new Date() } });
     return { ok: true };
   }),
@@ -174,7 +183,7 @@ export const cronRouter = router({
   // ── Skill-facing (agent calls mcp__hermit__cron_* mid-chat) ───────────────
   // The MCP stub knows only the chat sessionId; resolve agentName from it so a
   // skill-created cron lands on the right agent and shows on /cron like any other.
-  createFromSession: machineProcedure
+  createFromSession: agentProcedure
     .input(
       z.object({
         sessionId: z.string(),
@@ -190,6 +199,7 @@ export const cronRouter = router({
         select: { agentName: true, machineId: true },
       });
       if (!session || session.machineId !== ctx.machine.id) throw new Error('session not found');
+      ctx.assertAgent(session.agentName);
       return prisma.cron.create({
         data: {
           machineId: ctx.machine.id,
@@ -203,7 +213,7 @@ export const cronRouter = router({
       });
     }),
 
-  listForSession: machineProcedure
+  listForSession: agentProcedure
     .input(z.object({ sessionId: z.string() }))
     .query(async ({ ctx, input }) => {
       const session = await prisma.chatSession.findUnique({
@@ -211,6 +221,7 @@ export const cronRouter = router({
         select: { agentName: true, machineId: true },
       });
       if (!session || session.machineId !== ctx.machine.id) return [];
+      ctx.assertAgent(session.agentName);
       return prisma.cron.findMany({
         where: { machineId: ctx.machine.id, agentName: session.agentName },
         orderBy: { createdAt: 'asc' },
@@ -221,7 +232,7 @@ export const cronRouter = router({
       });
     }),
 
-  deleteFromSession: machineProcedure
+  deleteFromSession: agentProcedure
     .input(z.object({ sessionId: z.string(), id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const session = await prisma.chatSession.findUnique({
@@ -229,6 +240,7 @@ export const cronRouter = router({
         select: { agentName: true, machineId: true },
       });
       if (!session || session.machineId !== ctx.machine.id) throw new Error('session not found');
+      ctx.assertAgent(session.agentName);
       const cron = await prisma.cron.findUnique({ where: { id: input.id } });
       if (!cron || cron.machineId !== ctx.machine.id || cron.agentName !== session.agentName) {
         throw new Error('cron not found for this agent');

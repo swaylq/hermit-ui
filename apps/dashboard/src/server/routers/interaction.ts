@@ -8,7 +8,7 @@
 // and rewrites the card message so the SSE stream shows the outcome.
 
 import { z } from 'zod';
-import { router, machineProcedure } from '../trpc';
+import { router, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 
 const DecisionInput = z.object({
@@ -22,21 +22,26 @@ const DecisionInput = z.object({
 export const interactionRouter = router({
   // Pending interactions for a session. The inline card block carries most of
   // the state, but the chat page also polls this to gate the composer.
-  listPending: machineProcedure
+  listPending: agentProcedure
     .input(z.object({ sessionId: z.string() }))
     .query(async ({ ctx, input }) => {
       return prisma.interaction.findMany({
-        where: { sessionId: input.sessionId, status: 'pending', session: { machineId: ctx.machine.id } },
+        where: {
+          sessionId: input.sessionId,
+          status: 'pending',
+          session: { machineId: ctx.machine.id, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+        },
         orderBy: { createdAt: 'asc' },
       });
     }),
 
-  byId: machineProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+  byId: agentProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
     const i = await prisma.interaction.findUnique({
       where: { id: input.id },
-      include: { session: { select: { machineId: true } } },
+      include: { session: { select: { machineId: true, agentName: true } } },
     });
     if (!i || i.session.machineId !== ctx.machine.id) return null;
+    ctx.assertAgent(i.session.agentName);
     const { session: _s, ...rest } = i;
     return rest;
   }),
@@ -44,14 +49,15 @@ export const interactionRouter = router({
   // User clicked a button. Write the decision + flip status (idempotent), then
   // rewrite the inline card message so the SSE stream re-renders it as resolved.
   // The blocked hook / ask tool sees status!=pending on its next poll and runs.
-  resolve: machineProcedure
+  resolve: agentProcedure
     .input(z.object({ id: z.string(), decision: DecisionInput }))
     .mutation(async ({ ctx, input }) => {
       const i = await prisma.interaction.findUnique({
         where: { id: input.id },
-        include: { session: { select: { machineId: true } } },
+        include: { session: { select: { machineId: true, agentName: true } } },
       });
       if (!i || i.session.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(i.session.agentName);
       if (i.status !== 'pending') return i; // already resolved — idempotent
 
       const updated = await prisma.interaction.update({

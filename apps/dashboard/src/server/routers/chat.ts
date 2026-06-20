@@ -4,7 +4,7 @@
 // /api/sync/chat-message. Browser tails messages via tRPC refetch (1s).
 
 import { z } from 'zod';
-import { router, machineProcedure } from '../trpc';
+import { router, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 import { QUEUE_LIMIT } from '../../lib/chat-queue';
 import { stripNulDeep } from '../sanitize';
@@ -40,17 +40,20 @@ const ContentBlock = z.union([
 const USER_QUEUE_FILTER = { role: 'user', deliveredAt: null, externalId: null } as const;
 
 export const chatRouter = router({
-  listSessions: machineProcedure
+  listSessions: agentProcedure
     // Tolerate a `null` input (some client paths serialize an omitted/undefined
     // arg as JSON null in the GET batch → zod's `.default({})` only fills
     // undefined, so null 400'd: 3 failed listSessions per page load + retries).
     // null/undefined both mean "no agent filter" → normalize to {}.
     .input(z.preprocess((v) => (v == null ? undefined : v), z.object({ agentName: z.string().optional() }).default({})))
     .query(async ({ ctx, input }) => {
+      // A scoped share key can only ever see its own agent's sessions, no matter
+      // what (or whether) agentName was passed.
+      const agentName = ctx.scopedAgent ?? input.agentName;
       const rows = await prisma.chatSession.findMany({
         where: {
           machineId: ctx.machine.id,
-          ...(input.agentName ? { agentName: input.agentName } : {}),
+          ...(agentName ? { agentName } : {}),
         },
         orderBy: [{ closedAt: 'asc' }, { lastMessageAt: 'desc' }, { startedAt: 'desc' }],
         select: {
@@ -98,11 +101,11 @@ export const chatRouter = router({
   // this on open + on each new message while open; other devices reconcile on
   // their next listSessions poll). Idempotent; silently no-ops for other
   // machines' sessions so a stale tab can't 500.
-  markRead: machineProcedure
+  markRead: agentProcedure
     .input(z.object({ sessionId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const res = await prisma.chatSession.updateMany({
-        where: { id: input.sessionId, machineId: ctx.machine.id },
+        where: { id: input.sessionId, machineId: ctx.machine.id, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
         data: { lastReadAt: new Date() },
       });
       return { ok: res.count > 0 };
@@ -112,17 +115,17 @@ export const chatRouter = router({
   // the session keeps running; a "show hidden" toggle in the sidebar reveals it.
   // updateMany + machineId guard (like markRead) so a stale tab can't 500 / touch
   // another machine's session.
-  setHidden: machineProcedure
+  setHidden: agentProcedure
     .input(z.object({ id: z.string(), hidden: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const res = await prisma.chatSession.updateMany({
-        where: { id: input.id, machineId: ctx.machine.id },
+        where: { id: input.id, machineId: ctx.machine.id, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
         data: { hiddenAt: input.hidden ? new Date() : null },
       });
       return { ok: res.count > 0 };
     }),
 
-  createSession: machineProcedure
+  createSession: agentProcedure
     .input(z.object({ agentName: z.string().min(1).max(64), title: z.string().max(120).optional(), origin: z.string().max(32).optional() }))
     .mutation(async ({ ctx, input }) => {
       return prisma.chatSession.create({
@@ -130,19 +133,21 @@ export const chatRouter = router({
       });
     }),
 
-  closeSession: machineProcedure
+  closeSession: agentProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
       return prisma.chatSession.update({ where: { id: input.id }, data: { closedAt: new Date() } });
     }),
 
-  reopenSession: machineProcedure
+  reopenSession: agentProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
       return prisma.chatSession.update({ where: { id: input.id }, data: { closedAt: null } });
     }),
 
@@ -150,11 +155,12 @@ export const chatRouter = router({
   // dashboard's "close" action maps to this now. The session's tmux pane (if
   // any) is orphaned — harmless, idle, reclaimed on the next gateway restart;
   // pollPending no longer returns the deleted session so nothing re-spawns it.
-  deleteSession: machineProcedure
+  deleteSession: agentProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
       await prisma.chatSession.delete({ where: { id: input.id } });
       return { ok: true };
     }),
@@ -166,11 +172,12 @@ export const chatRouter = router({
   // "assistant is working…" (isWaitingAssistant is driven by lastMsg.role ===
   // 'user'). A short "↳ sent /X" note flips lastMsg.role to 'system' and
   // clears the in-flight state.
-  appendSystemNote: machineProcedure
+  appendSystemNote: agentProcedure
     .input(z.object({ sessionId: z.string(), text: z.string().min(1).max(500) }))
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
       const content = [{ type: 'text', text: input.text }];
       return prisma.chatMessage.create({
         data: {
@@ -181,20 +188,22 @@ export const chatRouter = router({
       });
     }),
 
-  setTitle: machineProcedure
+  setTitle: agentProcedure
     .input(z.object({ id: z.string(), title: z.string().max(120) }))
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
       return prisma.chatSession.update({ where: { id: input.id }, data: { title: input.title } });
     }),
 
-  listMessages: machineProcedure
+  listMessages: agentProcedure
     .input(z.object({ sessionId: z.string(), limit: z.number().int().min(1).max(1000).default(300) }))
     .query(async ({ ctx, input }) => {
       // Owner check folded into the WHERE clause — drops the extra
       // chatSession.findUnique round trip. Returns [] for unknown or
-      // cross-tenant sessions (vs throwing) — chat UI tolerates that.
+      // cross-tenant sessions (vs throwing) — chat UI tolerates that. A scoped
+      // share key additionally only matches its own agent's session.
       //
       // Fetch the NEWEST `limit` rows, not the oldest. `take` with an ascending
       // order returns the FIRST N (oldest), so a session past `limit` messages
@@ -205,7 +214,10 @@ export const chatRouter = router({
       // collide at ms resolution) stay deterministically ordered — and match
       // the SSE stream's ordering so the client's merge-by-id aligns.
       const rows = await prisma.chatMessage.findMany({
-        where: { sessionId: input.sessionId, session: { machineId: ctx.machine.id } },
+        where: {
+          sessionId: input.sessionId,
+          session: { machineId: ctx.machine.id, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+        },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: input.limit,
         // Only the columns the timeline actually reads (`CachedMsg` in
@@ -221,13 +233,13 @@ export const chatRouter = router({
   // picked up yet (deliveredAt=null), oldest first. Small by construction (capped
   // at QUEUE_LIMIT by `send`). Kept SEPARATE from listMessages so that hot,
   // perf-tuned query keeps skipping deliveredAt. Drives the composer's QueueBar.
-  queue: machineProcedure
+  queue: agentProcedure
     .input(z.object({ sessionId: z.string() }))
     .query(async ({ ctx, input }) => {
       return prisma.chatMessage.findMany({
         where: {
           sessionId: input.sessionId,
-          session: { machineId: ctx.machine.id },
+          session: { machineId: ctx.machine.id, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
           ...USER_QUEUE_FILTER,
         },
         orderBy: { createdAt: 'asc' },
@@ -241,7 +253,7 @@ export const chatRouter = router({
   // 300-row window — the loop card can show every round. id8 = first 8 chars (the
   // skill's marker uses the short id; a ≤8-char custom id matches itself). Newest
   // first.
-  loopRuns: machineProcedure
+  loopRuns: agentProcedure
     .input(
       z.object({
         sessionId: z.string(),
@@ -252,9 +264,10 @@ export const chatRouter = router({
     .query(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({
         where: { id: input.sessionId },
-        select: { machineId: true },
+        select: { machineId: true, agentName: true },
       });
       if (!s || s.machineId !== ctx.machine.id) return [];
+      ctx.assertAgent(s.agentName);
       // Require the marker INSIDE a "text" block — excludes the role:'assistant'
       // Bash tool_use messages that merely echo the marker into a file (which
       // would otherwise double the count). jsonb sorts keys, so a text block is
@@ -278,7 +291,7 @@ export const chatRouter = router({
   // good — not just hide it locally. Only stopped loops are offered a delete in
   // the UI, and the gateway additionally refuses to remove a running one.
   // agentName is resolved from the session (the loop lives in that agent's file).
-  deleteLoop: machineProcedure
+  deleteLoop: agentProcedure
     .input(z.object({ sessionId: z.string(), loopId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({
@@ -286,6 +299,7 @@ export const chatRouter = router({
         select: { machineId: true, agentName: true },
       });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
       await prisma.agentRequest.create({
         data: {
           machineId: ctx.machine.id,
@@ -297,7 +311,7 @@ export const chatRouter = router({
       return { ok: true };
     }),
 
-  send: machineProcedure
+  send: agentProcedure
     .input(
       z.object({
         sessionId: z.string(),
@@ -330,6 +344,7 @@ export const chatRouter = router({
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
       if (s.closedAt) throw new Error('session is closed');
 
       const text = input.text.trim();
@@ -389,11 +404,12 @@ export const chatRouter = router({
   // User clicks Stop on the compose bar. Flips a flag the gateway polls; the
   // gateway then SIGTERMs the in-flight `claude --print` child and writes a
   // "[stopped by user]" system row before clearing the flag via ackCancel.
-  cancelTurn: machineProcedure
+  cancelTurn: agentProcedure
     .input(z.object({ sessionId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
       await prisma.chatSession.update({
         where: { id: input.sessionId },
         data: { cancelRequestedAt: new Date() },
@@ -404,14 +420,15 @@ export const chatRouter = router({
   // Pull a single still-queued message out before the gateway sends it. Only an
   // UNDELIVERED user row can go (a delivered one is already in claude's hands —
   // can't un-send). Ownership checked via its session, matching send/cancelTurn.
-  dequeue: machineProcedure
+  dequeue: agentProcedure
     .input(z.object({ messageId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const m = await prisma.chatMessage.findUnique({
         where: { id: input.messageId },
-        select: { id: true, role: true, deliveredAt: true, externalId: true, session: { select: { machineId: true } } },
+        select: { id: true, role: true, deliveredAt: true, externalId: true, session: { select: { machineId: true, agentName: true } } },
       });
       if (!m || m.session.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(m.session.agentName);
       // Only a user-composed, still-queued row can be pulled — never a delivered
       // one, and never a transcript row (externalId set ⇒ the agent's own).
       if (m.role !== 'user' || m.deliveredAt || m.externalId) return { removed: false };
@@ -420,11 +437,12 @@ export const chatRouter = router({
     }),
 
   // Empty the whole waiting queue for a session (undelivered user rows only).
-  clearQueue: machineProcedure
+  clearQueue: agentProcedure
     .input(z.object({ sessionId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
       const r = await prisma.chatMessage.deleteMany({
         // USER_QUEUE_FILTER, NOT a bare role:'user' — a bare delete would also
         // wipe the agent's transcript tool_result rows out of the conversation.
@@ -517,11 +535,12 @@ export const chatRouter = router({
   // Per-session restart. Kills the tmux pane backing this ChatSession; the
   // next user message will respawn `claude --resume <claudeSessionId>` so
   // history is preserved. Used when claude is wedged, MCP went stale, etc.
-  requestSessionRestart: machineProcedure
+  requestSessionRestart: agentProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
       await prisma.chatSession.update({
         where: { id: input.id },
         data: { restartRequestedAt: new Date() },

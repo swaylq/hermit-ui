@@ -52,10 +52,27 @@ export const machineProcedure = withScope.use(async ({ ctx, next }) => {
 // scoped key targeting a different agent), or constrain queries by
 // `ctx.scopedAgent`. Forgetting the check on an id/session-keyed endpoint would
 // let a scoped key reach sibling agents, so every converted resolver asserts.
-export const agentProcedure = withScope.use(async ({ ctx, next }) => {
+export const agentProcedure = withScope.use(async ({ ctx, getRawInput, next }) => {
   const assertAgent = (agentName: string | null | undefined) => {
     if (ctx.scopedAgent && agentName !== ctx.scopedAgent)
       throw new TRPCError({ code: 'FORBIDDEN', message: 'outside the shared agent' });
   };
+  // Scoped keys: auto-assert on a top-level `agentName`/`name` input field so the
+  // many name-keyed endpoints (agents.*, createSession, cron.listForAgent, …) are
+  // covered with no per-resolver edit. Endpoints keyed by a session/cron id carry
+  // no such field — those MUST call ctx.assertAgent(loadedName) themselves. Fail
+  // CLOSED: if a scoped call's input can't be read, refuse rather than risk a leak.
+  if (ctx.scopedAgent) {
+    let raw: unknown;
+    try {
+      raw = await getRawInput();
+    } catch {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'cannot scope this request' });
+    }
+    if (raw && typeof raw === 'object') {
+      const named = (raw as Record<string, unknown>).agentName ?? (raw as Record<string, unknown>).name;
+      if (typeof named === 'string') assertAgent(named);
+    }
+  }
   return next({ ctx: { ...ctx, assertAgent } });
 });

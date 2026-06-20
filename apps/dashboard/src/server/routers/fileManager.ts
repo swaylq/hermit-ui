@@ -11,7 +11,7 @@
 
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { router, machineProcedure } from '../trpc';
+import { router, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 import { requestFs, createDownload, getDownload } from '../gateway-bridge';
 
@@ -27,14 +27,20 @@ async function agentDir(machineId: string, agentName: string): Promise<string> {
 }
 
 // The base-directory selector passed to the gateway: either a resolved agentDir
-// or the global-memory root marker (resolved gateway-side).
+// or the global-memory root marker (resolved gateway-side). A scoped share key is
+// the chokepoint here — it may only reach ITS agent's directory, never the
+// machine-global memory folder and never a sibling agent.
 async function fsTarget(
-  machineId: string,
+  ctx: { machine: { id: string }; scopedAgent: string | null },
   input: { agentName?: string; globalMemory?: boolean },
 ): Promise<Record<string, string>> {
+  if (ctx.scopedAgent) {
+    if (input.globalMemory) throw new Error('global memory is not part of a shared agent');
+    if (input.agentName !== ctx.scopedAgent) throw new Error('outside the shared agent');
+  }
   if (input.globalMemory) return { root: 'global-memory' };
   if (!input.agentName) throw new Error('agentName required');
-  return { agentDir: await agentDir(machineId, input.agentName) };
+  return { agentDir: await agentDir(ctx.machine.id, input.agentName) };
 }
 
 type ListData = { entries: Array<{ name: string; type: 'dir' | 'file' | 'other'; size: number; mtimeMs: number }>; truncated: boolean };
@@ -48,23 +54,23 @@ const PathInput = z.object({
 
 export const fileManagerRouter = router({
   // Directory listing — folders first, capped (the gateway truncates huge dirs).
-  list: machineProcedure.input(PathInput).query(async ({ ctx, input }) => {
-    const target = await fsTarget(ctx.machine.id, input);
+  list: agentProcedure.input(PathInput).query(async ({ ctx, input }) => {
+    const target = await fsTarget(ctx, input);
     const res = await requestFs(ctx.machine.id, 'list', { ...target, relPath: input.path });
     if (!res.ok) throw new Error(res.error);
     return res.data as ListData;
   }),
 
   // Text preview of a single file (gateway rejects binary / >256 KB).
-  readText: machineProcedure.input(PathInput).query(async ({ ctx, input }) => {
-    const target = await fsTarget(ctx.machine.id, input);
+  readText: agentProcedure.input(PathInput).query(async ({ ctx, input }) => {
+    const target = await fsTarget(ctx, input);
     const res = await requestFs(ctx.machine.id, 'readText', { ...target, relPath: input.path });
     if (!res.ok) throw new Error(res.error);
     return res.data as { text: string; size: number };
   }),
 
   // Create / overwrite a text file (in-browser authoring — global-memory folder).
-  writeText: machineProcedure
+  writeText: agentProcedure
     .input(z.object({
       agentName: z.string().min(1).optional(),
       globalMemory: z.boolean().default(false),
@@ -72,27 +78,27 @@ export const fileManagerRouter = router({
       text: z.string(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const target = await fsTarget(ctx.machine.id, input);
+      const target = await fsTarget(ctx, input);
       const res = await requestFs(ctx.machine.id, 'writeText', { ...target, relPath: input.path, text: input.text });
       if (!res.ok) throw new Error(res.error);
       return { ok: true };
     }),
 
-  mkdir: machineProcedure.input(PathInput).mutation(async ({ ctx, input }) => {
-    const target = await fsTarget(ctx.machine.id, input);
+  mkdir: agentProcedure.input(PathInput).mutation(async ({ ctx, input }) => {
+    const target = await fsTarget(ctx, input);
     const res = await requestFs(ctx.machine.id, 'mkdir', { ...target, relPath: input.path });
     if (!res.ok) throw new Error(res.error);
     return { ok: true };
   }),
 
-  remove: machineProcedure.input(PathInput).mutation(async ({ ctx, input }) => {
-    const target = await fsTarget(ctx.machine.id, input);
+  remove: agentProcedure.input(PathInput).mutation(async ({ ctx, input }) => {
+    const target = await fsTarget(ctx, input);
     const res = await requestFs(ctx.machine.id, 'remove', { ...target, relPath: input.path });
     if (!res.ok) throw new Error(res.error);
     return { ok: true };
   }),
 
-  rename: machineProcedure
+  rename: agentProcedure
     .input(z.object({
       agentName: z.string().min(1).optional(),
       globalMemory: z.boolean().default(false),
@@ -100,7 +106,7 @@ export const fileManagerRouter = router({
       toPath: z.string().min(1),
     }))
     .mutation(async ({ ctx, input }) => {
-      const target = await fsTarget(ctx.machine.id, input);
+      const target = await fsTarget(ctx, input);
       const res = await requestFs(ctx.machine.id, 'rename', { ...target, relPath: input.path, toRelPath: input.toPath });
       if (!res.ok) throw new Error(res.error);
       return { ok: true };
@@ -108,7 +114,7 @@ export const fileManagerRouter = router({
 
   // Kick off a download: the gateway reads the file (or `zip -r`s the folder) and
   // streams it up to the dashboard stash. Returns an id the browser polls.
-  prepareDownload: machineProcedure
+  prepareDownload: agentProcedure
     .input(z.object({
       agentName: z.string().min(1).optional(),
       globalMemory: z.boolean().default(false),
@@ -116,7 +122,7 @@ export const fileManagerRouter = router({
       isFolder: z.boolean().default(false),
     }))
     .mutation(async ({ ctx, input }) => {
-      const target = await fsTarget(ctx.machine.id, input);
+      const target = await fsTarget(ctx, input);
       const id = `dl_${randomUUID()}`;
       createDownload(id, ctx.machine.id);
       const res = await requestFs(ctx.machine.id, 'download', {
@@ -130,7 +136,7 @@ export const fileManagerRouter = router({
     }),
 
   // Poll until status === 'ready' (then GET /api/file-manager/download/<id>).
-  downloadStatus: machineProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+  downloadStatus: agentProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
     const d = getDownload(input.id);
     if (!d || d.machineId !== ctx.machine.id)
       return { status: 'error' as const, error: '下载已过期或不存在', filename: '', size: 0 };

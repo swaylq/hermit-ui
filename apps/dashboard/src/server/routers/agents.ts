@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { router, machineProcedure } from '../trpc';
+import { router, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 import {
   BRAIN_PERSONA, BRAIN_DREAM_PROMPT,
@@ -133,7 +133,7 @@ export const agentsRouter = router({
     });
   }),
 
-  byName: machineProcedure
+  byName: agentProcedure
     .input(z.object({ name: z.string() }))
     .query(async ({ ctx, input }) => {
       const agent = await prisma.agent.findUnique({
@@ -171,7 +171,7 @@ export const agentsRouter = router({
 
   // One skill's sub-file tree (everything besides SKILL.md), lazy-loaded when a
   // skill is opened in the detail sheet — kept OUT of byName's recurring payload.
-  skillRefs: machineProcedure
+  skillRefs: agentProcedure
     .input(z.object({ name: z.string(), skill: z.string() }))
     .query(async ({ ctx, input }) => {
       const agent = await prisma.agent.findUnique({
@@ -188,7 +188,7 @@ export const agentsRouter = router({
   // Per-skill SKILL.md content. Split out of byName (where it was the heavy ~150KB
   // part re-sent on every 30s detail poll) so the detail fetches the bodies ONCE
   // (long staleTime) instead of on each poll. byName now carries only skill names.
-  skillContents: machineProcedure
+  skillContents: agentProcedure
     .input(z.object({ name: z.string() }))
     .query(async ({ ctx, input }) => {
       const agent = await prisma.agent.findUnique({
@@ -204,7 +204,7 @@ export const agentsRouter = router({
   // The agent's markdown profile texts (Identity / User / Workspace rules / Tools).
   // Fetched once when the detail opens (long staleTime) — split out of byName so
   // they're not re-sent on its 30s/4s poll; shown in a collapsed FileList.
-  coreTexts: machineProcedure
+  coreTexts: agentProcedure
     .input(z.object({ name: z.string() }))
     .query(async ({ ctx, input }) => {
       return prisma.agent.findUnique({
@@ -219,7 +219,7 @@ export const agentsRouter = router({
   // the user actually expands a folder. This query used to ship the whole ~600KB
   // on every detail open and, batched with cron.listForAgent, made the schedule
   // list wait behind it too.
-  folders: machineProcedure
+  folders: agentProcedure
     .input(z.object({ name: z.string() }))
     .query(async ({ ctx, input }) => {
       const a = await prisma.agent.findUnique({
@@ -235,7 +235,7 @@ export const agentsRouter = router({
 
   // Full content for one folder (evolution | memory), fetched lazily when the
   // user expands that folder in the detail sheet.
-  folderContent: machineProcedure
+  folderContent: agentProcedure
     .input(z.object({ name: z.string(), scope: z.enum(['evolution', 'memory']) }))
     .query(async ({ ctx, input }) => {
       const a = await prisma.agent.findUnique({
@@ -470,7 +470,7 @@ export const agentsRouter = router({
   // Edit one of the agent's text files. `target` is an opaque slug — never a
   // raw path — that the gateway maps via an allow-list (see agent-lifecycle.ts).
   // Allowed: identity / user / agents / tools / evolution / claude / skill:<name>.
-  requestEdit: machineProcedure
+  requestEdit: agentProcedure
     .input(z.object({
       name: z.string(),
       // Flat targets, a skill's SKILL.md, OR any file under the workspace
