@@ -1,13 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
 import { getKeyring, addMachine, removeMachine, getActiveEntry, fetchMachineByKey, migrateLegacyKey } from '@/lib/keyring';
 import { LoginScreen } from '@/components/login-screen';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { AppSidebar, SidebarProvider } from '@/components/app-sidebar';
+import { ScopedSidebar } from '@/components/scoped-sidebar';
+import { useScope } from '@/lib/use-scope';
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [count, setCount] = useState(0);
@@ -60,9 +62,11 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 function Authed({ onSignOut, children }: { onSignOut: () => void; children: React.ReactNode }) {
-  const me = trpc.machines.me.useQuery(undefined, { retry: false, refetchInterval: 30_000 });
+  const scope = useScope();
+  // machines.me is owner-only (machineProcedure) → skip it in a scoped session.
+  const me = trpc.machines.me.useQuery(undefined, { retry: false, refetchInterval: 30_000, enabled: !scope.scoped });
 
-  if (me.error?.data?.code === 'UNAUTHORIZED') {
+  if (!scope.scoped && me.error?.data?.code === 'UNAUTHORIZED') {
     return (
       <main className="flex flex-1 items-center justify-center p-4">
         <Card className="max-w-md p-6 space-y-3 border-rose-500/40">
@@ -76,6 +80,21 @@ function Authed({ onSignOut, children }: { onSignOut: () => void; children: Reac
     );
   }
 
+  // Scoped agent-share session: stripped shell (ScopedSidebar) + a route bound so
+  // the holder can only stay on /chat* or /agents?name=<their agent>.
+  if (scope.scoped && scope.agentName) {
+    return (
+      <SidebarProvider>
+        <div className="flex app-h w-full overflow-hidden bg-background text-foreground pwa-safe-t pwa-safe-x">
+          <ScopedSidebar agentName={scope.agentName} />
+          <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+            <ScopedBounds agentName={scope.agentName}>{children}</ScopedBounds>
+          </main>
+        </div>
+      </SidebarProvider>
+    );
+  }
+
   return (
     <SidebarProvider>
       <div className="flex app-h w-full overflow-hidden bg-background text-foreground pwa-safe-t pwa-safe-x">
@@ -84,4 +103,19 @@ function Authed({ onSignOut, children }: { onSignOut: () => void; children: Reac
       </div>
     </SidebarProvider>
   );
+}
+
+// In a scoped session, allow only /chat* and the agent's own detail
+// (/agents?name=<agent>). Anything else (other agents, /cron, /skills, /brain,
+// /market, /global-memory) is redirected back to the agent's chat. The server
+// also 403s those — this is the UX half of the boundary.
+function ScopedBounds({ agentName, children }: { agentName: string; children: React.ReactNode }) {
+  const pathname = usePathname();
+  const search = useSearchParams();
+  const inBounds = pathname.startsWith('/chat') || (pathname.startsWith('/agents') && search.get('name') === agentName);
+  useEffect(() => {
+    if (!inBounds) window.location.replace(`/chat?agent=${encodeURIComponent(agentName)}`);
+  }, [inBounds, agentName]);
+  if (!inBounds) return <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">Redirecting…</div>;
+  return <>{children}</>;
 }

@@ -10,6 +10,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { AgentDetailBody, AgentDetailTabs, type DetailTab } from '@/components/agent-detail-sheet';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
+import { useScope } from '@/lib/use-scope';
 
 export default function AgentsPage() {
   return (
@@ -25,15 +26,19 @@ function AgentsPageInner() {
   const nameParam = search.get('name');
   const showNew = !!search.get('new');
   const showImport = !!search.get('import');
+  // A scoped agent-share session can't call these machine-wide queries (they 403);
+  // disable them. The page still renders the one agent's detail via ?name= (scoped).
+  const scope = useScope();
 
   // Sidebar owns the agent list now; this page is just the right pane. Still
   // need the list here for the default-landing redirect (pick the first agent
   // when no `?name=` is set).
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 10_000 });
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 10_000, enabled: !scope.scoped });
   // Poll fast only while something is in flight (tracking its resolution); idle —
   // the common case, no pending request — backs off hard. The create/delete flows
   // already invalidate this query, so a fresh pending shows immediately regardless.
   const pending = trpc.agents.pendingRequests.useQuery(undefined, {
+    enabled: !scope.scoped,
     refetchInterval: (q) => (((q.state.data as unknown[] | undefined)?.length ?? 0) > 0 ? 2_000 : 12_000),
   });
   // Tab lives here (not in AgentMain) so it PERSISTS across agent switches —
