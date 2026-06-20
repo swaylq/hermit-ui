@@ -1125,7 +1125,9 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
                   value={titleDraft}
                   onChange={(e) => setTitleDraft(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
+                    // Ignore the Enter that confirms an IME candidate (输入法组字中回车)
+                    // — same guard as the composer, so it doesn't submit mid-composition.
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
                       e.preventDefault();
                       setTitleMut.mutate({ id: sessionId, title: titleDraft.trim() });
                     } else if (e.key === 'Escape') {
