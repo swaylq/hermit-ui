@@ -13,13 +13,13 @@ export const runtime = 'nodejs';
 import { NextRequest, NextResponse } from 'next/server';
 import { mkdir, rename, rm } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, normalize } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { platform } from 'node:os';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { prisma } from '@/server/db';
-import { resolveMachineByKey } from '@/server/auth';
+import { resolveKey } from '@/server/auth';
 
 const MAX_BYTES = 300 * 1024 * 1024;
 
@@ -29,8 +29,11 @@ function fileStationDir(): string {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const machine = await resolveMachineByKey(req.headers.get('x-asst-key') || '');
-  if (!machine) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  // resolveKey accepts a machine key OR an agent share token; a scoped token may
+  // only write INTO its own agent's directory (enforced once destPath is parsed).
+  const scope = await resolveKey(req.headers.get('x-asst-key') || '');
+  if (!scope) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const machine = scope.machine;
 
   let rawName = req.headers.get('x-file-name') || '';
   try {
@@ -47,6 +50,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const unzip = req.headers.get('x-file-unzip') === '1';
   if (!filename || !destPath) return NextResponse.json({ error: '缺少文件名或目标路径' }, { status: 400 });
+
+  // A scoped share key may only upload INTO its own agent's directory — never a
+  // sibling agent or an arbitrary host path. normalize() collapses any `..`.
+  if (scope.scopedAgent) {
+    const agent = await prisma.agent.findUnique({
+      where: { machineId_name: { machineId: machine.id, name: scope.scopedAgent } },
+      select: { directory: true },
+    });
+    const dir = agent?.directory;
+    const norm = normalize(destPath);
+    if (!dir || !(norm === dir || norm.startsWith(dir.endsWith('/') ? dir : dir + '/'))) {
+      return NextResponse.json({ error: 'outside the shared agent' }, { status: 403 });
+    }
+  }
 
   const declared = Number(req.headers.get('content-length') || '0');
   if (declared && declared > MAX_BYTES) return NextResponse.json({ error: '文件超过 300MB 上限' }, { status: 413 });
