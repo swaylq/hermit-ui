@@ -24,6 +24,7 @@ import { sessionStatusView } from '@/lib/session-status';
 import { isSessionUnread } from '@/lib/session-read';
 import { removeAgentSkill } from '@/lib/optimistic-skills';
 import { AgentFiles } from './agent-files';
+import { useScope } from '@/lib/use-scope';
 
 type SessionRow = inferRouterOutputs<AppRouter>['chat']['listSessions'][number];
 type AgentByNameOutput = NonNullable<inferRouterOutputs<AppRouter>['agents']['byName']>;
@@ -46,8 +47,13 @@ export type DetailTab = 'detail' | 'files';
 // polling it at 3s while the panel is open is cheap.
 function useAgentDetailRefresh(name: string | null, active: boolean): { refetchInterval: number } {
   const utils = trpc.useUtils();
+  const { scoped } = useScope();
   const pending = trpc.agents.pendingRequests.useQuery(undefined, {
-    enabled: !!name && active,
+    // pendingRequests is machine-only (403 for a scoped share key). Skipping it
+    // there keeps it OUT of byName's HTTP batch — a 403 sibling makes the whole
+    // batch 207 and the client then reads byName as having no data, rendering a
+    // bogus "agent not found".
+    enabled: !!name && active && !scoped,
     // Adaptive like the other pendingRequests observers (RQ uses the min across
     // them, so this must agree or it'd undercut the idle back-off): fast only
     // while something's in flight, slow when idle. `enabled` gates it off otherwise.
@@ -403,6 +409,7 @@ function isEvolvedSkill(content: string | null): boolean {
 }
 
 function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent']; agentName: string }) {
+  const { scoped } = useScope();
   // Skill CONTENT is lazy — byName carries only skill NAMES now (the SKILL.md
   // bodies were ~150KB re-sent on every 30s detail poll). Fetch the bodies ONCE
   // here with a long staleTime. Falls back to a chip-only list while loading / if
@@ -411,7 +418,7 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
   const skills = contentsQ.data ?? [];
   const hasContent = skills.length > 0;
   // Marketplace binding status — which skills are linked + have a newer version.
-  const status = trpc.market.agentSkillStatus.useQuery({ agentName }, { refetchInterval: 30_000 });
+  const status = trpc.market.agentSkillStatus.useQuery({ agentName }, { refetchInterval: 30_000, enabled: !scoped });
   const statusMap = new Map((status.data ?? []).map((s) => [s.skillName, s]));
   const [installOpen, setInstallOpen] = useState(false);
   const [openSkill, setOpenSkill] = useState<string | null>(null);
@@ -771,6 +778,7 @@ function DetailModal({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const utils = trpc.useUtils();
+  const { scoped } = useScope();
   const editable = !!item?.target;
 
   const save = trpc.agents.requestEdit.useMutation({
@@ -780,7 +788,7 @@ function DetailModal({
     },
   });
   const pending = trpc.agents.pendingRequests.useQuery(undefined, {
-    enabled: !!item && editable,
+    enabled: !!item && editable && !scoped,
     // Adaptive (must match the other pendingRequests observers — RQ uses the min):
     // 2s while something's in flight, 12s idle. requestEdit invalidates on success.
     refetchInterval: (q) => (((q.state.data as unknown[] | undefined)?.length ?? 0) > 0 ? 2_000 : 12_000),

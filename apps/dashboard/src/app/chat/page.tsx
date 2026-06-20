@@ -142,7 +142,17 @@ function ChatPageInner() {
   // session list + New chat. When nothing is selected and we're not composing a
   // new chat, land on the most recent session so the area is never blank.
   useEffect(() => {
-    if (showNew || sessionParam) return;
+    if (sessionParam) return;
+    // Scoped share session: the link drops you at /chat?agent=X. Default into the
+    // most recent EXISTING chat with the agent; only show the new-chat compose
+    // when there are none, or when New chat was explicitly clicked (?new=1).
+    if (scope.scoped) {
+      if (search.get('new')) return;
+      const recent = (sessions.data ?? []).find((s) => !s.hiddenAt && s.origin !== 'dispatch');
+      if (recent) window.location.href = `/chat?session=${encodeURIComponent(recent.id)}`;
+      return;
+    }
+    if (showNew) return;
     // Skip the orchestrator (Brain) — its chats live only in /brain, never the
     // dashboard. (listSessions still returns them; we just never land on one.)
     const brainName = agents.data?.find((a) => a.isOrchestrator)?.name;
@@ -150,7 +160,7 @@ function ChatPageInner() {
     // sessions (origin:'dispatch' — those live only in /brain/dispatch).
     const first = (sessions.data ?? []).find((s) => s.agentName !== brainName && !s.hiddenAt && s.origin !== 'dispatch');
     if (first) router.replace(`/chat?session=${encodeURIComponent(first.id)}`);
-  }, [showNew, sessionParam, sessions.data, agents.data, router]);
+  }, [showNew, sessionParam, sessions.data, agents.data, router, scope.scoped, search]);
 
   if (showNew) {
     return (

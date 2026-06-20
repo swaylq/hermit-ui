@@ -67,7 +67,7 @@ export function ScopedSidebar({ agentName }: { agentName: string }) {
         {/* New chat + the agent's files */}
         <div className="px-2 pt-2 space-y-0.5">
           <Link
-            href={`/chat?agent=${encodeURIComponent(agentName)}`}
+            href={`/chat?agent=${encodeURIComponent(agentName)}&new=1`}
             onClick={close}
             className={cn(
               'flex items-center gap-2.5 rounded-lg h-8 px-3 text-sm font-medium transition-colors cursor-pointer',
