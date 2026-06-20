@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { AgentDetailBody, AgentDetailTabs, type DetailTab } from '@/components/agent-detail-sheet';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { useScope } from '@/lib/use-scope';
+import { ShareAgentButton } from '@/components/share-agent-dialog';
 
 export default function AgentsPage() {
   return (
@@ -97,6 +98,7 @@ function AgentMain({
 }) {
   const router = useRouter();
   const utils = trpc.useUtils();
+  const scope = useScope();
   const requestDelete = trpc.agents.requestDelete.useMutation({
     onSuccess: () => {
       utils.agents.list.invalidate();
@@ -122,6 +124,7 @@ function AgentMain({
         </div>
         <AgentDetailTabs tab={tab} setTab={setTab} />
         <div className="flex-1" />
+        {!scope.scoped && <ShareAgentButton name={name} />}
         <Link
           href={`/chat?agent=${encodeURIComponent(name)}`}
           className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
@@ -130,16 +133,18 @@ function AgentMain({
           <MessageSquare className="h-3.5 w-3.5" />
           Chat
         </Link>
-        <ConfirmDeleteButton
-          name={name}
-          disabled={isDeleting}
-          onConfirm={() => {
-            requestDelete.mutate({ name });
-            // After delete is queued, bounce back to /agents so the default
-            // redirect lands on whichever agent remains.
-            setTimeout(() => router.replace('/agents'), 50);
-          }}
-        />
+        {!scope.scoped && (
+          <ConfirmDeleteButton
+            name={name}
+            disabled={isDeleting}
+            onConfirm={() => {
+              requestDelete.mutate({ name });
+              // After delete is queued, bounce back to /agents so the default
+              // redirect lands on whichever agent remains.
+              setTimeout(() => router.replace('/agents'), 50);
+            }}
+          />
+        )}
       </header>
       <div className="flex-1 min-h-0 bg-background">
         <AgentDetailBody name={name} tab={tab} />
