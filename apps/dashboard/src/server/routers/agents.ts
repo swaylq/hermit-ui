@@ -262,6 +262,10 @@ export const agentsRouter = router({
       // Create from a marketplace template — the gateway scaffolds the base then
       // overlays the template's IDENTITY/AGENTS/skills.
       templateId: z.string().optional(),
+      // Extra market skills to install into the new agent on top of the base
+      // template defaults (slugs). Each writes its full tree via the same
+      // AgentRequest(edit) path as market.installToAgent.
+      skills: z.array(z.string()).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       // The base template's default skills (apps/cli/template/.claude/skills/);
@@ -327,6 +331,36 @@ export const agentsRouter = router({
         }
       } catch (e) {
         console.error('[requestCreate] skill auto-bind failed:', e);
+      }
+      // User-picked market skills (beyond the base/template defaults). Each
+      // writes its whole tree via AgentRequest(edit, skill:<slug>) — the same
+      // path as market.installToAgent — and binds for update-tracking. Ordered
+      // AFTER the create request, so the gateway scaffolds first (FIFO), then
+      // overlays these skills. Best-effort: a bad slug is skipped, never blocks.
+      try {
+        const SKILL_RE = /^[a-z0-9][a-z0-9-]{0,30}$/;
+        const skip = new Set([...DEFAULT_TEMPLATE_SKILLS, ...includedSkills]);
+        const pickSlugs = [...new Set(input.skills ?? [])].filter((s) => SKILL_RE.test(s) && !skip.has(s));
+        if (pickSlugs.length) {
+          const picked = await prisma.marketSkill.findMany({
+            where: { slug: { in: pickSlugs } },
+            include: { versions: { orderBy: { createdAt: 'desc' }, take: 1 } },
+          });
+          for (const m of picked) {
+            const ver = m.versions[0];
+            if (!ver || ver.content == null) continue; // bundles w/o a SKILL.md aren't installable
+            await prisma.agentRequest.create({
+              data: { machineId: ctx.machine.id, kind: 'edit', agentName: input.name, target: `skill:${m.slug}`, content: ver.content, refs: ver.refs ?? undefined },
+            });
+            await prisma.agentSkillInstall.upsert({
+              where: { machineId_agentName_skillName: { machineId: ctx.machine.id, agentName: input.name, skillName: m.slug } },
+              create: { machineId: ctx.machine.id, agentName: input.name, skillName: m.slug, marketSkillId: m.id, marketVersion: m.latestVersion },
+              update: { marketSkillId: m.id, marketVersion: m.latestVersion },
+            });
+          }
+        }
+      } catch (e) {
+        console.error('[requestCreate] market skill install failed:', e);
       }
       return created;
     }),

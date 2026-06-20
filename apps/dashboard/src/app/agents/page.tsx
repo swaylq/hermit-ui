@@ -234,7 +234,9 @@ function NewAgentForm({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
   const [persona, setPersona] = useState('');
   const [templateId, setTemplateId] = useState('');
+  const [skills, setSkills] = useState<string[]>([]);
   const templates = trpc.market.listTemplates.useQuery();
+  const marketSkills = trpc.market.listSkills.useQuery();
   const router = useRouter();
   const utils = trpc.useUtils();
   const create = trpc.agents.requestCreate.useMutation({
@@ -245,13 +247,15 @@ function NewAgentForm({ onClose }: { onClose: () => void }) {
     },
   });
   const nameOk = /^[a-z][a-z0-9-]{0,30}$/.test(name);
+  const toggleSkill = (slug: string) =>
+    setSkills((prev) => (prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]));
 
   return (
         <form
           className="w-full max-w-md rounded-2xl border border-border bg-card p-6 space-y-5 shadow-sm"
           onSubmit={(e) => {
             e.preventDefault();
-            if (nameOk) create.mutate({ name, persona: persona.trim() || undefined, templateId: templateId || undefined });
+            if (nameOk) create.mutate({ name, persona: persona.trim() || undefined, templateId: templateId || undefined, skills: skills.length ? skills : undefined });
           }}
         >
           <div className="text-center space-y-2">
@@ -303,6 +307,30 @@ function NewAgentForm({ onClose }: { onClose: () => void }) {
               </select>
               <span className="text-[10px] text-muted-foreground/70">从市场模板新建会套用它的 identity / 工作区规则 / skills</span>
             </label>
+          )}
+          {(marketSkills.data?.length ?? 0) > 0 && (
+            <div>
+              <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                Skills from market <span className="text-muted-foreground/60 normal-case">(optional)</span>
+              </span>
+              <div className="mt-1.5 max-h-44 overflow-y-auto rounded-md border border-border divide-y divide-border">
+                {(marketSkills.data ?? []).map((s) => (
+                  <label key={s.slug} className="flex items-start gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-accent/40">
+                    <input
+                      type="checkbox"
+                      checked={skills.includes(s.slug)}
+                      onChange={() => toggleSkill(s.slug)}
+                      className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                    />
+                    <span className="min-w-0">
+                      <span className="block font-mono text-sm text-foreground truncate">{s.displayName || s.slug}</span>
+                      {s.description && <span className="block text-[11px] leading-snug text-muted-foreground line-clamp-2">{s.description}</span>}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <span className="text-[10px] text-muted-foreground/70">勾选的 skill 会装进新 agent 的 .claude/skills/（默认 skill 已含,无需勾）</span>
+            </div>
           )}
           {create.error && <p className="text-xs text-rose-500">{create.error.message}</p>}
           <div className="flex gap-2">
