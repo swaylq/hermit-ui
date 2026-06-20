@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
 import { getKeyring, addMachine, removeMachine, getActiveEntry, fetchMachineByKey, migrateLegacyKey } from '@/lib/keyring';
 import { LoginScreen } from '@/components/login-screen';
@@ -11,6 +12,7 @@ import { AppSidebar, SidebarProvider } from '@/components/app-sidebar';
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [count, setCount] = useState(0);
   const [hydrated, setHydrated] = useState(false);
+  const pathname = usePathname();
 
   useEffect(() => {
     // Await the legacy-key migration before checking the keyring, so an existing
@@ -23,6 +25,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   }, []);
 
   if (!hydrated) return null;
+
+  // A share-link landing (/s/<token>) redeems the token and bootstraps its OWN
+  // scoped keyring entry, so it must render before any key exists — skip the gate
+  // entirely (no sidebar/shell; it's a standalone "opening…" screen that then
+  // hard-navigates into the agent).
+  if (pathname?.startsWith('/s/')) return <>{children}</>;
 
   if (count === 0) {
     return (

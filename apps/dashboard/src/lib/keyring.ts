@@ -10,7 +10,10 @@
 // across a refresh. The localStorage copy is only the "default" a freshly-opened
 // tab inherits (the last machine picked in any tab) — see activeId().
 
-export type KeyringEntry = { id: string; name: string; key: string; hostname?: string | null; alias?: string | null };
+// `scoped`/`agentName` mark an AGENT SHARE entry: its `key` is a `shr_…` token
+// that grants access to only that one agent (vs a machine key). The UI reads
+// these to render the stripped scoped shell; the server is the real boundary.
+export type KeyringEntry = { id: string; name: string; key: string; hostname?: string | null; alias?: string | null; scoped?: boolean; agentName?: string | null };
 
 const KEYRING = 'asst-dashboard-keyring';
 const ACTIVE = 'asst-dashboard-active';
