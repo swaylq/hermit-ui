@@ -15,7 +15,7 @@
 
 import { NextRequest } from 'next/server';
 import { prisma } from '@/server/db';
-import { resolveMachine } from '../../sync/route';
+import { resolveKey } from '@/server/auth';
 import { capMessageContent } from '@/server/message-cap';
 
 export const dynamic = 'force-dynamic';
@@ -26,8 +26,11 @@ const DEFAULT_LIMIT = 60;
 const MAX_LIMIT = 1000;
 
 export async function GET(req: NextRequest) {
-  const machine = await resolveMachine(req);
-  if (!machine) return new Response('unauthorized', { status: 401 });
+  // resolveKey accepts a machine key OR an agent share token; a scoped token can
+  // only stream its own agent's session (the ownership check below adds agentName).
+  const scope = await resolveKey(req.headers.get('x-asst-key') ?? '');
+  if (!scope) return new Response('unauthorized', { status: 401 });
+  const machine = scope.machine;
 
   const sessionId = req.nextUrl.searchParams.get('sessionId');
   if (!sessionId) return new Response('sessionId required', { status: 400 });
@@ -43,7 +46,7 @@ export async function GET(req: NextRequest) {
   // Ownership check up front — the per-tick query also scopes by machine, but
   // this gives a clean 404 instead of an empty stream.
   const session = await prisma.chatSession.findFirst({
-    where: { id: sessionId, machineId: machine.id },
+    where: { id: sessionId, machineId: machine.id, ...(scope.scopedAgent ? { agentName: scope.scopedAgent } : {}) },
     select: { id: true },
   });
   if (!session) return new Response('not found', { status: 404 });

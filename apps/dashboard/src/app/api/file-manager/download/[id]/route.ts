@@ -12,7 +12,7 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { platform } from 'node:os';
 import { Readable } from 'node:stream';
-import { resolveMachineByKey } from '@/server/auth';
+import { resolveKey } from '@/server/auth';
 import { getDownload } from '@/server/gateway-bridge';
 
 function fileManagerDir(): string {
@@ -21,7 +21,10 @@ function fileManagerDir(): string {
 }
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }): Promise<NextResponse> {
-  const machine = await resolveMachineByKey(req.headers.get('x-asst-key') || '');
+  // resolveKey accepts a machine key OR an agent share token (a scoped user
+  // downloading a file from their own agent's directory). The download id was
+  // created by their prepareDownload, so the machineId guard below suffices.
+  const machine = (await resolveKey(req.headers.get('x-asst-key') || ''))?.machine;
   if (!machine) return new NextResponse('unauthorized', { status: 401 });
 
   const { id } = await params;

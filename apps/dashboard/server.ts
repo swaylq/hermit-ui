@@ -73,6 +73,19 @@ async function resolveMachineByKey(key: string): Promise<string | null> {
   return null;
 }
 
+// Resolve an agent SHARE token (shr_…) → its machine + the single agent it's
+// scoped to. Mirrors resolveMachineByKey but against AgentShareLink; used only by
+// the terminal WS so a share-link holder can attach to THEIR agent's pane (the
+// shell itself can still wander — the one accepted hole in the isolation).
+async function resolveShareToken(key: string): Promise<{ machineId: string; agentName: string } | null> {
+  if (!key.startsWith('shr_')) return null;
+  const candidates = await prisma.agentShareLink.findMany({ where: { keyPrefix: key.slice(0, 12) } });
+  for (const l of candidates) {
+    if (await bcrypt.compare(key, l.keyHash)) return { machineId: l.machineId, agentName: l.agentName };
+  }
+  return null;
+}
+
 // ── Per-machine gateway control connections ─────────────────────────────────
 //
 // One Mac gateway per machineId. Multiple Macs (multi-host hermit-agent) each
@@ -309,7 +322,14 @@ app.prepare().then(() => {
         const tokens = proto.split(',').map((s) => s.trim()).filter(Boolean);
         const keyToken = tokens.find((t) => t.startsWith('hermit-key.'));
         const key = keyToken ? keyToken.slice('hermit-key.'.length) : '';
-        const machineId = await resolveMachineByKey(key);
+        let machineId = await resolveMachineByKey(key);
+        // A share token isn't a machine — resolve it to its agent and restrict the
+        // attach to THAT agent's session.
+        let scopedAgent: string | null = null;
+        if (!machineId) {
+          const share = await resolveShareToken(key);
+          if (share) { machineId = share.machineId; scopedAgent = share.agentName; }
+        }
         if (!machineId) {
           socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
           socket.destroy();
@@ -317,7 +337,7 @@ app.prepare().then(() => {
         }
         const sessionId = decodeURIComponent(termMatch[1]);
         const sess = await prisma.chatSession.findFirst({
-          where: { id: sessionId, machineId },
+          where: { id: sessionId, machineId, ...(scopedAgent ? { agentName: scopedAgent } : {}) },
           select: { id: true },
         });
         if (!sess) {
