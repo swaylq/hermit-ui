@@ -37,6 +37,7 @@ import WebSocket from 'ws';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 import { DASHBOARD_URL, ASST_KEY } from './config';
 import { handleFsRequest } from './file-manager';
+import { handleSecretsReq } from './secrets';
 
 type IPty = ReturnType<typeof pty.spawn>;
 
@@ -253,6 +254,17 @@ function handleFrame(raw: WebSocket.RawData) {
       if (!reqId) return;
       handleFsRequest(msg).then((res) => {
         safeSend(res.ok ? { type: 'fs.res', reqId, ok: true, data: res.data } : { type: 'fs.res', reqId, ok: false, error: res.error });
+      });
+      return;
+    }
+    case 'secrets.req': {
+      // Encrypted-secrets view (apps/gateway/src/secrets.ts) — decrypts via the
+      // local `secret` CLI (master key in this host's Keychain). Correlated by
+      // reqId like fs.req. `set` values arrive here and go to the CLI on stdin.
+      const reqId = typeof msg.reqId === 'string' ? msg.reqId : '';
+      if (!reqId) return;
+      handleSecretsReq(String(msg.op ?? ''), { key: msg.key, value: msg.value }).then((res) => {
+        safeSend(res.ok ? { type: 'secrets.res', reqId, ok: true, data: res.data } : { type: 'secrets.res', reqId, ok: false, error: res.error });
       });
       return;
     }

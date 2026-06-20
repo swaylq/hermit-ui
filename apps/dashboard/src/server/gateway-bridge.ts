@@ -80,7 +80,38 @@ export function requestFs(
   });
 }
 
-// Called by server.ts for every fs.res frame a gateway sends.
+// Send a secrets.req to a machine's gateway and await its secrets.res. Same
+// request/response plumbing as requestFs (shared pending map; server.ts routes
+// secrets.res frames through resolveFsResponse too) — the gateway decrypts the
+// store locally because the age master key lives in ITS Keychain, not the VPS.
+export function requestSecrets(
+  machineId: string,
+  op: string,
+  args: Record<string, unknown> = {},
+  timeoutMs = 20_000,
+): Promise<FsResponse> {
+  const b = bridge();
+  const sock = b.gateways.get(machineId) as (WSWebSocket & { readyState: number }) | undefined;
+  if (!sock || sock.readyState !== WS_OPEN) return Promise.resolve({ ok: false, error: 'gateway 离线' });
+  b.seq = (b.seq + 1) % 1_000_000_000;
+  const reqId = `sec_${b.seq.toString(36)}_${Date.now().toString(36)}`;
+  return new Promise<FsResponse>((resolve) => {
+    const timer = setTimeout(() => {
+      b.pending.delete(reqId);
+      resolve({ ok: false, error: 'gateway 超时' });
+    }, timeoutMs);
+    b.pending.set(reqId, { resolve, timer });
+    try {
+      sock.send(JSON.stringify({ type: 'secrets.req', reqId, op, ...args }));
+    } catch {
+      clearTimeout(timer);
+      b.pending.delete(reqId);
+      resolve({ ok: false, error: 'gateway 发送失败' });
+    }
+  });
+}
+
+// Called by server.ts for every fs.res / secrets.res frame a gateway sends.
 export function resolveFsResponse(msg: { reqId?: string; ok?: boolean; data?: unknown; error?: unknown }): void {
   const b = bridge();
   const reqId = typeof msg?.reqId === 'string' ? msg.reqId : '';

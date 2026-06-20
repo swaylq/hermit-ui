@@ -10,6 +10,7 @@ import { marketRouter } from './market';
 import { fileStationRouter } from './fileStation';
 import { fileManagerRouter } from './fileManager';
 import { globalMemoryRouter } from './globalMemory';
+import { secretsRouter } from './secrets';
 
 export const appRouter = router({
   machines: machinesRouter,
@@ -23,6 +24,7 @@ export const appRouter = router({
   fileStation: fileStationRouter,
   fileManager: fileManagerRouter,
   globalMemory: globalMemoryRouter,
+  secrets: secretsRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -152,8 +152,9 @@ app.prepare().then(() => {
       let msg: any;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (!msg || typeof msg !== 'object') return;
-      // File-manager response (reqId-correlated, no termId) — hand to the bridge.
-      if (msg.type === 'fs.res') {
+      // File-manager + secrets responses (reqId-correlated, no termId) — both use
+      // the same pending map in the bridge, so resolve them the same way.
+      if (msg.type === 'fs.res' || msg.type === 'secrets.res') {
         resolveFsResponse(msg);
         return;
       }

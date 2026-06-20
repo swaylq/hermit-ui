@@ -11,6 +11,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { SettingsTabs } from '@/components/settings-tabs';
 import { GlobalMemoryFiles } from '@/components/global-memory-files';
+import { SecretsSection } from '@/components/secrets-section';
 
 export default function GlobalMemoryPage() {
   const utils = trpc.useUtils();
@@ -67,6 +68,9 @@ export default function GlobalMemoryPage() {
           <section className="flex flex-1 min-h-[460px] flex-col gap-2">
             <GlobalMemoryFiles />
           </section>
+
+          {/* Encrypted secrets store (secrets.age) — list / reveal / add / delete. */}
+          <SecretsSection />
         </div>
       </div>
     </div>
