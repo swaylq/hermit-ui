@@ -18,7 +18,7 @@ model Machine {
   id        String    @id @default(cuid())
   name      String    @unique
   hostname  String?
-  alias     String?   // user-set display name shown in the dashboard (workspace switcher); falls back to name
+  alias     String? // user-set display name shown in the dashboard (workspace switcher); falls back to name
   keyHash   String
   keyPrefix String
   createdAt DateTime  @default(now())
@@ -41,6 +41,28 @@ model Machine {
   fileTransfers       FileTransfer[]
   planUsage           PlanUsage?
   globalMemory        GlobalMemory?
+  shareLinks          AgentShareLink[]
+}
+
+// A per-agent share link: a scoped credential that grants access to ONLY this
+// agent (chat / files / detail / loop·cron / terminal) and hides every other
+// agent + all machine-global management. The token is bcrypt-hashed like a
+// Machine key (keyHash + an indexed keyPrefix for fast lookup); its plaintext
+// (`shr_…`) is shown to the owner ONCE at generate time. Revoke = delete the
+// row; regenerate = overwrite the hash. One active link per (machine, agent).
+model AgentShareLink {
+  id         String    @id @default(cuid())
+  machineId  String
+  agentName  String
+  keyHash    String
+  keyPrefix  String
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@unique([machineId, agentName])
+  @@index([keyPrefix])
 }
 
 // File Station: a large file the dashboard uploaded for delivery to a machine at
@@ -288,18 +310,18 @@ model ChatMessage {
 // until the user clicks a button (interaction.resolve writes `decision`). Whoever
 // is blocked reads `decision` and continues — no TUI ever renders.
 model Interaction {
-  id        String      @id @default(cuid())
-  sessionId String
-  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  kind      String // "permission" | "question"
+  id         String      @id @default(cuid())
+  sessionId  String
+  session    ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  kind       String // "permission" | "question"
   // permission: { tool, input, cwd, claudeSessionId }
   // question:   { question, options: [{label, description?}], multiSelect }
-  payload   Json
-  status    String      @default("pending") // pending | resolved | canceled
+  payload    Json
+  status     String      @default("pending") // pending | resolved | canceled
   // permission: { behavior: "allow" | "deny", reason? }
   // question:   { answers: string[] }   (custom free-text answer ⇒ answers:[text])
-  decision  Json?
-  createdAt DateTime    @default(now())
+  decision   Json?
+  createdAt  DateTime    @default(now())
   resolvedAt DateTime?
 
   @@index([sessionId, status])
@@ -328,27 +350,27 @@ model UsageWindow {
 // state (no pid, no alive, no ctx). Runtime lives on each ChatSession that
 // targets this agent (each gets its own claude inside `hermit-<sessionId>`).
 model Agent {
-  id        String   @id @default(cuid())
-  machineId String
-  machine   Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  name      String
-  directory String? // absolute path on the gateway's host
+  id                   String    @id @default(cuid())
+  machineId            String
+  machine              Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  name                 String
+  directory            String? // absolute path on the gateway's host
   // The machine's orchestrator ("义脑" / brain): at most one per machine
   // (app-enforced via agents.setOrchestrator). Unlocks the brain-only MCP tools —
   // the gateway sets HERMIT_BRAIN on this agent's sessions so mcp-stub registers
   // roster/agent_activity/dispatch/... A plain dashboard flag; no on-disk effect.
-  isOrchestrator Boolean @default(false)
+  isOrchestrator       Boolean   @default(false)
   // For the orchestrator only: which BRAIN_TEMPLATE_VERSION its machine-managed
   // files (the `dreaming` skill) were last overlaid at. ensureBrain re-overlays +
   // re-stamps when this is behind, so a brain scaffolded by an older template
   // converges on gateway startup. 0 = pre-versioning / non-brain.
-  brainTemplateVersion Int @default(0)
+  brainTemplateVersion Int       @default(0)
   // Soft-delete / recycle bin. Set when the agent is moved to trash; cleared on
   // restore. The gateway mv's the dir to AGENTS_ROOT/.hermit-trash/ on delete,
   // back on restore, and rm -rf's it on purge. agents.list hides rows where this
   // is non-null; the trash view lists exactly those.
-  trashedAt DateTime?
-  updatedAt DateTime @updatedAt
+  trashedAt            DateTime?
+  updatedAt            DateTime  @updatedAt
 
   // Static-metadata blob pushed by the gateway every ~5 min. The detail
   // sheet renders each text as markdown; `skillNames` is a chip list.
@@ -442,19 +464,19 @@ model UsageHourly {
 // this dashboard. See docs/marketplace-design.md.
 
 model MarketSkill {
-  id                   String   @id @default(cuid())
-  slug                 String   @unique // install handle == .claude/skills/<slug>
+  id                   String               @id @default(cuid())
+  slug                 String               @unique // install handle == .claude/skills/<slug>
   displayName          String
-  description          String?  @db.Text
-  origin               String   @default("uploaded") // uploaded | github | master-skill.org | manual
+  description          String?              @db.Text
+  origin               String               @default("uploaded") // uploaded | github | master-skill.org | manual
   originUrl            String?
   category             String?
-  tags                 String[] @default([])
+  tags                 String[]             @default([])
   latestVersion        String
   publishedByMachineId String?
   publishedByAgent     String?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
   versions             MarketSkillVersion[]
 }
 
@@ -475,17 +497,17 @@ model MarketSkillVersion {
 }
 
 model MarketTemplate {
-  id                   String   @id @default(cuid())
-  slug                 String   @unique
+  id                   String                  @id @default(cuid())
+  slug                 String                  @unique
   displayName          String
-  description          String?  @db.Text
-  basePersona          String?  @db.Text
-  origin               String   @default("uploaded") // uploaded(from-agent) | manual
+  description          String?                 @db.Text
+  basePersona          String?                 @db.Text
+  origin               String                  @default("uploaded") // uploaded(from-agent) | manual
   publishedByMachineId String?
   sourceAgent          String?
   latestVersion        String
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
   versions             MarketTemplateVersion[]
 }
 
@@ -496,7 +518,7 @@ model MarketTemplateVersion {
   version          String
   changelog        String?        @db.Text
   files            Json           @default("[]") // Array<{ path, content }> — stripped template tree
-  includedSkills   String[]       @default([])   // market skill slugs the template installs
+  includedSkills   String[]       @default([]) // market skill slugs the template installs
   createdAt        DateTime       @default(now())
 
   @@unique([marketTemplateId, version])
