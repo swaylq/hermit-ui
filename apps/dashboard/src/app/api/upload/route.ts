@@ -26,7 +26,7 @@ import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { prisma } from '@/server/db';
-import { resolveMachine } from '../sync/route';
+import { resolveKey } from '@/server/auth';
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const SAFE_LONG_EDGE = 2000;
@@ -136,8 +136,11 @@ function resizeSafe(inPath: string, outPath: string): boolean {
 }
 
 export async function POST(req: NextRequest) {
-  const machine = await resolveMachine(req);
-  if (!machine) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  // resolveKey accepts a machine key OR an agent share token; a scoped token can
+  // only attach to ITS agent's session (enforced in the session lookup below).
+  const scope = await resolveKey(req.headers.get('x-asst-key') ?? '');
+  if (!scope) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const machine = scope.machine;
 
   let form: FormData;
   try {
@@ -156,9 +159,10 @@ export async function POST(req: NextRequest) {
   const mime = (file.type || '').toLowerCase();
   const isImage = ALLOWED_MIME.has(mime);
 
-  // Confirm the session belongs to this machine — prevents cross-tenant writes.
+  // Confirm the session belongs to this machine (and, for a scoped share key, to
+  // its agent) — prevents cross-tenant / cross-agent writes.
   const session = await prisma.chatSession.findFirst({
-    where: { id: sessionId, machineId: machine.id },
+    where: { id: sessionId, machineId: machine.id, ...(scope.scopedAgent ? { agentName: scope.scopedAgent } : {}) },
     select: { id: true },
   });
   if (!session) return NextResponse.json({ error: 'session not found' }, { status: 404 });
