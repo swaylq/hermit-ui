@@ -12,6 +12,7 @@ import { fileManagerRouter } from './fileManager';
 import { globalMemoryRouter } from './globalMemory';
 import { secretsRouter } from './secrets';
 import { shareRouter } from './share';
+import { notificationsRouter } from './notifications';
 
 export const appRouter = router({
   machines: machinesRouter,
@@ -27,6 +28,7 @@ export const appRouter = router({
   globalMemory: globalMemoryRouter,
   secrets: secretsRouter,
   share: shareRouter,
+  notifications: notificationsRouter,
 });
 
 export type AppRouter = typeof appRouter;

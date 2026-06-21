@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, MenuIcon, Plus,
-  Trash2, RotateCcw, ChevronDown, Check, X, Store, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, type LucideIcon,
+  Trash2, RotateCcw, ChevronDown, Check, X, Store, Bell, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -87,6 +87,14 @@ const BRAIN_NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/brain/dispatch', label: 'Dispatches', icon: Send },
 ];
 
+// Notifications mode: filter the unread inbox by source. Counts come from
+// notifications.counts; the page filters the already-loaded feed client-side.
+const NOTIF_FILTERS: Array<{ key: 'all' | 'chat' | 'cron'; href: string; label: string; icon: LucideIcon }> = [
+  { key: 'all', href: '/notifications', label: 'All', icon: Bell },
+  { key: 'chat', href: '/notifications?filter=chat', label: 'Chat', icon: MessageSquare },
+  { key: 'cron', href: '/notifications?filter=cron', label: 'Cron', icon: Clock },
+];
+
 // The hermit-crab button in the sidebar header → the dedicated 义脑 / Brain panel
 // (/brain). The orchestrator lives there, kept out of the worker agent lists. The
 // icon is the monochrome woodcut crab (CSS mask, bg-current) so it tints like the
@@ -123,6 +131,37 @@ function BrainButton({ collapsed }: { collapsed: boolean }) {
           )}
         />
       </span>
+    </Link>
+  );
+}
+
+// The bell button in the sidebar header → the Notifications inbox (/notifications).
+// Sits right beside the Brain button. Carries a small rose badge with the total
+// unread roll-up (chat sessions + cron runs) so the user sees pending items
+// without entering. Mirrors BrainButton's active/hover treatment.
+function NotificationsButton({ collapsed, count }: { collapsed: boolean; count: number }) {
+  const pathname = usePathname();
+  const active = pathname.startsWith('/notifications');
+  return (
+    <Link
+      href="/notifications"
+      title="Notifications"
+      aria-label="Notifications"
+      className={cn(
+        'group relative inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer shrink-0',
+        active ? 'bg-sidebar-accent text-sidebar-foreground' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground',
+        collapsed && 'lg:hidden',
+      )}
+    >
+      <Bell className="h-4 w-4" />
+      {count > 0 && (
+        <span
+          aria-hidden="true"
+          className="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-rose-500 text-white text-[8px] font-mono tabular-nums leading-none"
+        >
+          {count > 99 ? '99+' : count}
+        </span>
+      )}
     </Link>
   );
 }
@@ -327,6 +366,12 @@ export function AppSidebar() {
   const onBrain = pathname.startsWith('/brain');
   const onBrainChat = pathname === '/brain'; // the Chat view (no sub-route; ?session= keeps this path)
   const onBrainDispatch = pathname.startsWith('/brain/dispatch'); // dispatch list lives in the sidebar too
+  const onNotifications = pathname.startsWith('/notifications');
+  // Unread roll-up for the bell badge + the notifications-mode filter counts. A
+  // machineProcedure → only ever runs for the owner (scoped keys get ScopedSidebar,
+  // never this component), so it's safe to call unconditionally.
+  const notifCounts = trpc.notifications.counts.useQuery(undefined, { refetchInterval: 5_000 }).data ?? { chat: 0, cron: 0, total: 0 };
+  const notifFilter = onNotifications ? (search.get('filter') ?? 'all') : 'all';
   // When viewing a chat session, point the Agents nav at THAT session's agent, so
   // entering Agents from a session lands on its agent instead of the default
   // first-agent. Reuses RecentSessions' listSessions query (same key → deduped).
@@ -522,6 +567,20 @@ export function AppSidebar() {
                 <span className="text-sm font-semibold text-sidebar-foreground">Brain</span>
               </Link>
             </>
+          ) : onNotifications ? (
+            <>
+              <Link
+                href="/chat"
+                title="Back to dashboard"
+                aria-label="back to dashboard"
+                className="inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </Link>
+              <div className={cn('flex-1 min-w-0', collapsed && 'lg:hidden')}>
+                <span className="px-1 text-sm font-semibold text-sidebar-foreground">Notifications</span>
+              </div>
+            </>
           ) : (
             <>
               {/* "Hermit" wordmark on the left (Cochin PNG → CSS mask filled with
@@ -547,6 +606,7 @@ export function AppSidebar() {
                 />
               </Link>
               <BrainButton collapsed={collapsed} />
+              <NotificationsButton collapsed={collapsed} count={notifCounts.total} />
               <Link
                 href="/market/skills"
                 title="Public marketplace"
@@ -633,6 +693,46 @@ export function AppSidebar() {
             ) : (
               <div className="flex-1" />
             )}
+          </>
+        ) : onNotifications ? (
+          /* Notifications mode: All / Chat / Cron filters with unread counts. The
+             list + "Mark all read" live on the page; this is just the source filter. */
+          <>
+            <nav className="px-2 pt-2 space-y-0.5">
+              {NOTIF_FILTERS.map((f) => {
+                const active = notifFilter === f.key;
+                const Icon = f.icon;
+                const count = f.key === 'all' ? notifCounts.total : f.key === 'chat' ? notifCounts.chat : notifCounts.cron;
+                return (
+                  <Link
+                    key={f.key}
+                    href={f.href}
+                    title={f.label}
+                    className={cn(
+                      'flex items-center gap-2.5 rounded-lg h-8 text-sm transition-colors cursor-pointer',
+                      collapsed ? 'lg:justify-center lg:px-0 px-3' : 'px-3',
+                      active
+                        ? 'bg-sidebar-accent text-sidebar-foreground font-medium'
+                        : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className={cn('truncate flex-1', collapsed && 'lg:hidden')}>{f.label}</span>
+                    {count > 0 && (
+                      <span
+                        className={cn(
+                          'shrink-0 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-mono tabular-nums leading-none',
+                          collapsed && 'lg:hidden',
+                        )}
+                      >
+                        {count}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
+            </nav>
+            <div className="flex-1" />
           </>
         ) : (
           <>

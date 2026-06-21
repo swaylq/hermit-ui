@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Clock, Play, Trash2, Pencil, Check, X, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -257,6 +257,8 @@ function CronDetail({ id }: { id: string }) {
   const utils = trpc.useUtils();
   const router = useRouter();
   const q = trpc.cron.get.useQuery({ id }, { refetchInterval: 5_000 });
+  // ?run=<id> deep-link (from the notifications inbox) → auto-expand that run.
+  const autoRunId = useSearchParams().get('run');
   const update = trpc.cron.update.useMutation({
     onSuccess: () => { utils.cron.get.invalidate({ id }); utils.cron.list.invalidate(); setEditing(false); },
   });
@@ -457,7 +459,7 @@ function CronDetail({ id }: { id: string }) {
             ) : (
               <ul className="space-y-1">
                 {runs.map((r) => (
-                  <CronRunRow key={r.id} run={r} onRead={() => markRunRead.mutate({ runId: r.id })} />
+                  <CronRunRow key={r.id} run={r} autoOpen={r.id === autoRunId} onRead={() => markRunRead.mutate({ runId: r.id })} />
                 ))}
               </ul>
             )}
@@ -471,20 +473,33 @@ function CronDetail({ id }: { id: string }) {
 function CronRunRow({
   run,
   onRead,
+  autoOpen = false,
 }: {
   run: { id: string; firedAt: Date | string; status: string; durationMs: number | null; readAt: Date | string | null };
   onRead: () => void;
+  autoOpen?: boolean;
 }) {
   // Unread = finished run not yet expanded. A transparent dot keeps the row
   // height/alignment identical whether read or unread.
   const unread = !run.readAt && run.status !== 'running';
   // Output is lazy — fetched only when this row is expanded (kept out of cron.get's
   // 5s-polled payload). staleTime keeps it cached so re-expanding doesn't refetch.
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(autoOpen);
   const out = trpc.cron.runOutput.useQuery({ runId: run.id }, { enabled: open, staleTime: 60_000 });
+  const ref = useRef<HTMLDetailsElement>(null);
+  // Deep-linked from a notification (?run=…): open the row, mark it read, and
+  // scroll it into view. Fires once for the targeted row.
+  useEffect(() => {
+    if (!autoOpen) return;
+    if (unread) onRead();
+    ref.current?.scrollIntoView({ block: 'center' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpen]);
   return (
     <li>
       <details
+        ref={ref}
+        open={open}
         className="group rounded-md border border-border"
         onToggle={(e) => { const o = e.currentTarget.open; setOpen(o); if (o && unread) onRead(); }}
       >
