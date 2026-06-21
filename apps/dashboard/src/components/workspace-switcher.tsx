@@ -36,6 +36,15 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
+  // Removing a machine is a two-tap confirm (id armed for deletion) so a stray
+  // tap on phones — where the action icons can't hide behind hover — can't wipe a
+  // workspace by accident.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+
+  // Reset any armed delete / open rename when the menu closes.
+  useEffect(() => {
+    if (!open) { setConfirmingId(null); setEditingId(null); }
+  }, [open]);
 
   useEffect(() => {
     setList(getKeyring());
@@ -176,17 +185,42 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                     maxLength={40}
                     className="flex-1 min-w-0 rounded bg-background border border-sidebar-border px-1.5 py-0.5 text-[13px] outline-none focus:border-sidebar-foreground/40"
                   />
-                  <button type="submit" disabled={savingId === e.id} aria-label="save alias" className="text-emerald-500 hover:text-emerald-400 cursor-pointer shrink-0 disabled:opacity-50">
+                  <button type="submit" disabled={savingId === e.id} aria-label="save alias" className="shrink-0 rounded p-1.5 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10 cursor-pointer disabled:opacity-50">
                     {savingId === e.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                   </button>
-                  <button type="button" onClick={() => setEditingId(null)} aria-label="cancel" className="text-muted-foreground hover:text-sidebar-foreground cursor-pointer shrink-0">
+                  <button type="button" onClick={() => setEditingId(null)} aria-label="cancel rename" className="shrink-0 rounded p-1.5 text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent cursor-pointer">
                     <X className="h-3.5 w-3.5" />
                   </button>
                 </form>
+              ) : confirmingId === e.id ? (
+                // Armed for removal: explicit confirm so a mis-tap can't wipe a workspace.
+                <div
+                  key={e.id}
+                  className="flex items-center gap-1 rounded-md px-2 py-1.5 bg-rose-500/5"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-rose-400/70" aria-hidden />
+                  <span className="flex-1 min-w-0 text-[13px] text-rose-500 truncate">Remove {displayName(e)}?</span>
+                  <button
+                    type="button"
+                    onClick={() => { setConfirmingId(null); drop(e.id); }}
+                    aria-label={`confirm remove ${displayName(e)}`}
+                    className="shrink-0 rounded p-1.5 text-rose-500 hover:bg-rose-500/10 cursor-pointer"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingId(null)}
+                    aria-label="cancel remove"
+                    className="shrink-0 rounded p-1.5 text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent cursor-pointer"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               ) : (
                 <div
                   key={e.id}
-                  className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-sidebar-accent"
+                  className="group flex items-center gap-1 rounded-md px-2 py-1.5 hover:bg-sidebar-accent"
                 >
                   <span
                     className={cn(
@@ -198,7 +232,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                   <button
                     type="button"
                     onClick={() => pick(e.id)}
-                    className="flex-1 min-w-0 text-left cursor-pointer"
+                    className="flex-1 min-w-0 text-left cursor-pointer py-0.5 pr-1"
                   >
                     <span className="block text-[13px] truncate text-sidebar-foreground">{displayName(e)}</span>
                     {e.hostname && (
@@ -207,20 +241,22 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setEditingId(e.id); setDraft(e.alias ?? ''); }}
+                    onClick={() => { setConfirmingId(null); setEditingId(e.id); setDraft(e.alias ?? ''); }}
                     aria-label={`rename ${displayName(e)}`}
-                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-sidebar-foreground cursor-pointer shrink-0"
+                    className="shrink-0 rounded p-1.5 text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent cursor-pointer opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
                   >
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
                   {e.id === active?.id ? (
-                    <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                    <span className="shrink-0 p-1.5" title="current machine" aria-label="current machine">
+                      <Check className="h-3.5 w-3.5 text-emerald-500" />
+                    </span>
                   ) : (
                     <button
                       type="button"
-                      onClick={() => drop(e.id)}
+                      onClick={() => { setEditingId(null); setConfirmingId(e.id); }}
                       aria-label={`remove ${displayName(e)}`}
-                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-rose-400 cursor-pointer shrink-0"
+                      className="shrink-0 rounded p-1.5 text-muted-foreground hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
