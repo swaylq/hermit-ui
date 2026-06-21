@@ -125,7 +125,14 @@ function CodeBlock({
       <pre
         ref={preRef}
         {...preProps}
-        className="!my-0 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 text-zinc-100 px-3 py-2.5 text-[12px] leading-relaxed"
+        // A fenced block WITHOUT a language gets no `language-` class, so the code
+        // renderer below treats it as INLINE and gives it the `bg-muted` chip
+        // style — which is a near-white box in light mode, and its inline display
+        // paints one light bar PER wrapped line with the (inherited light) text
+        // invisible on top. Neutralize any direct code child back to a bare block
+        // so the zinc-950 surface + light text show through. No-op for a
+        // language-tagged block (its <code class="hljs …"> has none of these).
+        className="!my-0 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 text-zinc-100 px-3 py-2.5 text-[12px] leading-relaxed [&>code]:block [&>code]:border-0 [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit"
       >
         {children}
       </pre>
@@ -207,7 +214,12 @@ export const Markdown = memo(function Markdown({ children }: { children: string 
                 );
               }
               return (
-                <code className="rounded border border-border bg-muted px-1 py-px text-[11px] break-words" {...rest}>
+                // Explicit text-foreground (not inherited): in a USER bubble (dark
+                // surface, light inherited text) the bg-muted chip is near-white in
+                // light mode, so inherited light text vanished. text-foreground is
+                // a token — dark in light mode, light in dark mode — so the chip
+                // reads on its muted background in every bubble × theme combo.
+                <code className="rounded border border-border bg-muted text-foreground px-1 py-px text-[11px] break-words" {...rest}>
                   {codeChildren}
                 </code>
               );
