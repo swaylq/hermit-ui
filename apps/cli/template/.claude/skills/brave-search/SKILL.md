@@ -5,9 +5,9 @@ description: "Search the web via Brave Search API. Use when you need to search f
 
 # Brave Search API
 
-Search the web using the Brave Search API. Read the API key from `.claude/settings.local.json` (`env.BRAVE_API_KEY`) or the `BRAVE_API_KEY` environment variable.
+Search the web using the Brave Search API. The key is `BRAVE_API_KEY` in the `secret` store — run the curl under `secret exec BRAVE_API_KEY -- …` so it arrives in `$BRAVE_API_KEY`. (Falls back to `.claude/settings.local.json` `env.BRAVE_API_KEY` if the store isn't set up.)
 
-**If the key is empty**, the skill is unavailable — tell the user to add a key at https://brave.com/search/api/ and fill it into `.claude/settings.local.json`.
+**If the key is missing**, the skill is unavailable — tell the user to grab one at https://brave.com/search/api/, then store it with `secret set BRAVE_API_KEY`.
 
 ## Endpoints
 
@@ -24,7 +24,8 @@ Base URL: `https://api.search.brave.com/res/v1`
 ## Authentication
 
 ```bash
-KEY=$(jq -r '.env.BRAVE_API_KEY // empty' .claude/settings.local.json)
+# run under: secret exec BRAVE_API_KEY -- bash <script>   (env var wins; settings.local.json is the fallback)
+KEY="${BRAVE_API_KEY:-$(jq -r '.env.BRAVE_API_KEY // empty' .claude/settings.local.json 2>/dev/null)}"
 [ -z "$KEY" ] && echo "No BRAVE_API_KEY configured" && exit 1
 
 curl -s -H "Accept: application/json" \

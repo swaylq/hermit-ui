@@ -77,15 +77,14 @@ Rules:
 5. Any recursive search running > 60s with no progress: KILL and rethink.
 6. Once wedged, external kill of the child isn't enough — `kill -9` the claude main process + `restart.sh`.
 
-## Token Safety — HARD RULE
+## Credentials — HARD RULE
 
-Credentials live at well-known paths documented in `TOOLS.md`. Reference by path; never crawl the filesystem for them.
+All tokens / passwords / API keys live in one encrypted store, read via the `secret` CLI — never plaintext files, never hard-coded.
 
-1. **Never grep or find the filesystem for tokens, API keys, secrets, `.env*`, `api_key`, `ghp_`, `sk-`, `Bearer`.** If you don't know where a credential lives, check `TOOLS.md` or ask {{USER_NAME}}.
-2. **Never echo / print / log a token value.** Report HTTP status / response metadata, never the token itself.
-3. **Never pass a token on the command line.** `curl -H "Authorization: Bearer $TOKEN"` exposes it in `ps auxwww`. Use `--header @file`, stdin, or an env var the callee already has.
-4. **Never commit credentials.** `.gitignore` ships with `.env*` and secrets paths. Diff before `git add`.
-5. **Historical leaks** get redacted in place: `[REDACTED YYYY-MM-DD — <why>]`. Don't wait for rotation.
+1. **Read with `secret`.** `secret list` shows key names (no values); `secret exec KEY [KEY...] -- <cmd>` injects the value(s) into the command's env — never into stdout, argv, or your transcript. Let the command read `$KEY` itself; don't splice `$KEY` into the command string (it leaks to `ps`). `secret get` / `secret load` print plaintext — {{USER_NAME}}-only, never in an agent turn.
+2. **Never grep / find the filesystem** for tokens, keys, `.env*`, `ghp_`, `sk-`, `Bearer`. Unsure a credential exists? `secret list`, or ask {{USER_NAME}} — never crawl for it.
+3. **Never echo / print / log a value.** To prove one works, run a command with it and report the HTTP status — never the value.
+4. **Never commit credentials.** Diff before `git add`.
 
 ## Cron / Scheduled Tasks — HARD RULE
 
@@ -96,11 +95,12 @@ Credentials live at well-known paths documented in `TOOLS.md`. Reference by path
 
 ## Dashboard Chat
 
-{{USER_NAME}} talks to you via the hermit-ui dashboard. Every chat turn is a real interactive Claude Code turn — slash commands, sub-agents, `/compact` all work normally. Three things to internalize:
+{{USER_NAME}} talks to you via the hermit-ui dashboard. Every chat turn is a real interactive Claude Code turn — slash commands, sub-agents, `/compact` all work normally. Four things to internalize:
 
 1. **Markdown renders correctly.** The dashboard parses GFM. Use code blocks, bold, lists.
 2. **Never call `AskUserQuestion`.** That tool renders a TUI modal to the local pane only — {{USER_NAME}} on the web can't see it, so the turn hangs. To pose a choice, write a numbered list in your reply and end the turn — {{USER_NAME}} answers in the next inbound. A PreToolUse hook (`scripts/hook-block-askuserquestion.sh`) blocks the call defensively.
 3. **Image upload works.** {{USER_NAME}} can paste/drag images into the composer. They arrive in your prompt as `Read <local cache path>` — pass through `scripts/safe-image.sh` first.
+4. **{{USER_NAME}} can't see this machine's files — send them.** {{USER_NAME}} is on the web; a local path like `/Users/…/report.pdf` is invisible to them, so "saved it to X" hands over nothing. To deliver a file or image, attach it: `mcp__hermit__attach_image` for a PNG/JPEG/GIF/WebP (renders inline; auto-resized, safe even for full-page screenshots) and `mcp__hermit__attach_file` for text/code/PDF/CSV/office/archive (shows as a download chip under its real filename). Both take an absolute path plus an optional caption.
 
 ## Reporting Style
 

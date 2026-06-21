@@ -1,6 +1,6 @@
 # TOOLS.md — Local Notes
 
-_Technical configs, API keys (by path, not value), tool settings, accounts._
+_Technical configs, tool settings, accounts. Credentials are handled by the `secret` CLI (see AGENTS.md) — never inline values._
 
 ## Dashboard Chat
 
@@ -36,11 +36,7 @@ _Technical configs, API keys (by path, not value), tool settings, accounts._
 
 ### Brave Search API _(optional)_
 
-If `env.BRAVE_API_KEY` is set in `.claude/settings.local.json`, the `brave-search` skill is usable.
-
-- Base URL: `https://api.search.brave.com/res/v1`
-- Auth: `X-Subscription-Token` header
-- Key: _(set during init or add later — see `.claude/settings.local.json`)_
+The `brave-search` skill needs `BRAVE_API_KEY` — keep it in the `secret` store (`secret list` to confirm). Base URL `https://api.search.brave.com/res/v1`, auth header `X-Subscription-Token`.
 
 _(Add repos, APIs, services this agent uses regularly below.)_
 
@@ -48,7 +44,7 @@ _(Add repos, APIs, services this agent uses regularly below.)_
 
 ## Accounts
 
-_Per-site account identifiers (email, handle) and status — NEVER passwords. Passwords go in the browser profile or a password manager._
+_Per-site account identifiers (email, handle) and status — NEVER passwords (those live in the `secret` store)._
 
 No accounts logged yet.
 
