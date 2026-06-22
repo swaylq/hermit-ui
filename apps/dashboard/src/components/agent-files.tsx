@@ -1,6 +1,6 @@
 'use client';
 
-// Per-agent file manager (the "文件" tab of the agent detail) — a classic
+// Per-agent file manager (the "Files" tab of the agent detail) — a classic
 // two-pane explorer: a lazy file TREE on the left, the selected file's content
 // (inline, no modal) on the right. Browses the agent's on-disk directory LIVE
 // over the gateway control-channel (snappy — see server/gateway-bridge.ts).
@@ -51,12 +51,12 @@ function uploadXhr(file: File, destPath: string, onProgress: (p: number) => void
       if (xhr.status >= 200 && xhr.status < 300) {
         try { resolve(JSON.parse(xhr.responseText)); } catch { resolve({ id: '' }); }
       } else {
-        let msg = `上传失败 (${xhr.status})`;
+        let msg = `Upload failed (${xhr.status})`;
         try { msg = JSON.parse(xhr.responseText).error || msg; } catch { /* keep */ }
         reject(new Error(msg));
       }
     };
-    xhr.onerror = () => reject(new Error('网络错误'));
+    xhr.onerror = () => reject(new Error('Network error'));
     xhr.send(file);
   });
 }
@@ -77,12 +77,12 @@ async function fetchPreparedBlob(
     const s = await utils.fileManager.downloadStatus.fetch({ id });
     if (s.status === 'ready') {
       const res = await fetch(`/api/file-manager/download/${encodeURIComponent(id)}`, { headers: { 'x-asst-key': getActiveKey() } });
-      if (!res.ok) throw new Error(`加载失败 (${res.status})`);
+      if (!res.ok) throw new Error(`Load failed (${res.status})`);
       return { blob: await res.blob(), filename: s.filename };
     }
-    if (s.status === 'error') throw new Error(s.error || '准备失败');
+    if (s.status === 'error') throw new Error(s.error || 'Prepare failed');
   }
-  throw new Error('超时');
+  throw new Error('Timed out');
 }
 
 // Save a prepared download to disk (synthetic anchor — the key can't ride <a>).
@@ -112,7 +112,7 @@ export function AgentFiles({ agentName, directory }: { agentName: string; direct
   const [error, setError] = useState<string | null>(null);
 
   if (!directory) {
-    return <p className="text-xs text-muted-foreground py-4">agent 目录未知（尚未被网关扫描到），暂无法浏览文件。</p>;
+    return <p className="text-xs text-muted-foreground py-4">Agent directory unknown (not yet scanned by the gateway) — can&rsquo;t browse files yet.</p>;
   }
 
   const toggleExpand = (path: string, force?: boolean) =>
@@ -187,7 +187,7 @@ function Toolbar({
     onError(null);
     if (!f) return;
     if (f.size > MAX_UPLOAD) {
-      onError(`文件 ${fmtSize(f.size)} 超过 100MB 上限`);
+      onError(`File ${fmtSize(f.size)} exceeds the 100 MB limit`);
       if (fileRef.current) fileRef.current.value = '';
       return;
     }
@@ -211,13 +211,13 @@ function Toolbar({
       <div className="flex items-center gap-1.5">
         <input ref={fileRef} type="file" className="hidden" onChange={(e) => onPick(e.target.files?.[0] ?? null)} />
         <Button size="sm" variant="outline" disabled={pct !== null} onClick={() => fileRef.current?.click()}>
-          {pct !== null ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Upload className="h-3.5 w-3.5 mr-1" />} 上传
+          {pct !== null ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Upload className="h-3.5 w-3.5 mr-1" />} Upload
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => setMkdirOpen((v) => !v)} title="新建文件夹">
-          <FolderPlus className="h-3.5 w-3.5 mr-1" /> 新建文件夹
+        <Button size="sm" variant="ghost" onClick={() => setMkdirOpen((v) => !v)} title="New folder">
+          <FolderPlus className="h-3.5 w-3.5 mr-1" /> New folder
         </Button>
         <span className="text-[11px] text-muted-foreground/70 font-mono truncate min-w-0">→ {agentName}{activeDir ? `/${activeDir}` : ''}</span>
-        <Button size="icon-sm" variant="ghost" onClick={onRefresh} title="刷新" className="ml-auto shrink-0">
+        <Button size="icon-sm" variant="ghost" onClick={onRefresh} title="Refresh" className="ml-auto shrink-0">
           <RotateCw className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -227,7 +227,7 @@ function Toolbar({
           <div className="h-1.5 rounded-full bg-muted overflow-hidden">
             <div className="h-full bg-sky-500 transition-all" style={{ width: `${Math.round(pct * 100)}%` }} />
           </div>
-          <div className="text-[11px] text-muted-foreground">上传中… {Math.round(pct * 100)}%</div>
+          <div className="text-[11px] text-muted-foreground">Uploading… {Math.round(pct * 100)}%</div>
         </div>
       )}
 
@@ -237,7 +237,7 @@ function Toolbar({
             value={folderName}
             onChange={(e) => setFolderName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && folderName.trim()) mkdir.mutate({ agentName, path: joinPath(activeDir, folderName.trim()) }); }}
-            placeholder={`在 ${activeDir || agentName} 下新建文件夹`}
+            placeholder={`New folder in ${activeDir || agentName}`}
             autoFocus
             className="h-8 flex-1 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-foreground/30"
           />
@@ -268,7 +268,7 @@ function TreeChildren({
   }
   const entries = (list.data?.entries ?? []) as Entry[];
   if (entries.length === 0) {
-    return <div style={{ paddingLeft: indent + 16 }} className="py-1 text-[11px] text-muted-foreground/50">空</div>;
+    return <div style={{ paddingLeft: indent + 16 }} className="py-1 text-[11px] text-muted-foreground/50">empty</div>;
   }
   return (
     <ul>
@@ -280,7 +280,7 @@ function TreeChildren({
         />
       ))}
       {list.data?.truncated && (
-        <li style={{ paddingLeft: indent + 16 }} className="py-1 text-[11px] text-amber-600">…目录过大，已截断</li>
+        <li style={{ paddingLeft: indent + 16 }} className="py-1 text-[11px] text-amber-600">…directory too large, truncated</li>
       )}
     </ul>
   );
@@ -361,7 +361,7 @@ function FilePane({
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-center px-6 text-muted-foreground">
         <FileText className="h-9 w-9 mb-2 opacity-25" />
-        <p className="text-xs">在左侧选择文件查看内容，或选择文件夹进行操作。</p>
+        <p className="text-xs">Select a file on the left to view it, or a folder to act on.</p>
       </div>
     );
   }
@@ -382,7 +382,7 @@ function FilePane({
   }
   function doDelete() {
     if (!selected) return;
-    if (!confirm(`删除${isDir ? '文件夹' : '文件'}「${selected.name}」${isDir ? '及其全部内容' : ''}？此操作不可撤销。`)) return;
+    if (!confirm(`Delete ${isDir ? 'folder' : 'file'} "${selected.name}"${isDir ? ' and all its contents' : ''}? This cannot be undone.`)) return;
     remove.mutate({ agentName, path: selected.path });
   }
   function commitRename() {
@@ -410,16 +410,16 @@ function FilePane({
         )}
         {renaming ? (
           <>
-            <button onClick={commitRename} className="p-1 text-muted-foreground hover:text-foreground" title="保存"><Check className="h-4 w-4" /></button>
-            <button onClick={() => setRenaming(false)} className="p-1 text-muted-foreground hover:text-foreground" title="取消"><X className="h-4 w-4" /></button>
+            <button onClick={commitRename} className="p-1 text-muted-foreground hover:text-foreground" title="Save"><Check className="h-4 w-4" /></button>
+            <button onClick={() => setRenaming(false)} className="p-1 text-muted-foreground hover:text-foreground" title="Cancel"><X className="h-4 w-4" /></button>
           </>
         ) : (
           <>
-            <button onClick={doDownload} disabled={downloading} className="p-1 text-muted-foreground hover:text-foreground" title={isDir ? '打包下载' : '下载'}>
+            <button onClick={doDownload} disabled={downloading} className="p-1 text-muted-foreground hover:text-foreground" title={isDir ? 'Download as zip' : 'Download'}>
               {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
             </button>
-            <button onClick={() => { setDraft(selected.name); setRenaming(true); }} className="p-1 text-muted-foreground hover:text-foreground" title="重命名"><Pencil className="h-4 w-4" /></button>
-            <button onClick={doDelete} disabled={remove.isPending} className="p-1 text-muted-foreground hover:text-rose-500" title="删除">
+            <button onClick={() => { setDraft(selected.name); setRenaming(true); }} className="p-1 text-muted-foreground hover:text-foreground" title="Rename"><Pencil className="h-4 w-4" /></button>
+            <button onClick={doDelete} disabled={remove.isPending} className="p-1 text-muted-foreground hover:text-rose-500" title="Delete">
               {remove.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
             </button>
           </>
@@ -430,8 +430,8 @@ function FilePane({
       <div className="flex-1 min-h-0 overflow-auto">
         {isDir ? (
           <div className="p-4 text-xs text-muted-foreground space-y-1">
-            <p className="font-mono text-foreground/70 break-all">{selected.path || '(根目录)'}</p>
-            <p>文件夹 — 在左侧展开浏览，或用上方按钮打包下载 / 重命名 / 删除。</p>
+            <p className="font-mono text-foreground/70 break-all">{selected.path || '(root)'}</p>
+            <p>Folder — expand it on the left to browse, or use the buttons above to download as zip / rename / delete.</p>
           </div>
         ) : (
           <FileContent agentName={agentName} path={selected.path} size={selected.size} onDownload={doDownload} downloading={downloading} />
@@ -444,7 +444,7 @@ function FilePane({
 function DownloadBtn({ onDownload, downloading }: { onDownload: () => void; downloading: boolean }) {
   return (
     <Button size="sm" variant="outline" onClick={onDownload} disabled={downloading}>
-      {downloading ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1" />} 下载文件
+      {downloading ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1" />} Download file
     </Button>
   );
 }
@@ -464,7 +464,7 @@ function FileContent({
       {isImg ? (
         size > PREVIEW_IMG_MAX ? (
           <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
-            <p>图片较大（{fmtSize(size)}），不自动预览。</p>
+            <p>Large image ({fmtSize(size)}) — not auto-previewed.</p>
             <DownloadBtn onDownload={onDownload} downloading={downloading} />
           </div>
         ) : (
@@ -528,7 +528,7 @@ function ImagePreview({
   if (state.error) {
     return (
       <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
-        <p>预览失败：{state.error}</p>
+        <p>Preview failed: {state.error}</p>
         <DownloadBtn onDownload={onDownload} downloading={downloading} />
       </div>
     );
@@ -536,7 +536,7 @@ function ImagePreview({
   if (!state.url) {
     return (
       <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> 加载预览…
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading preview…
       </div>
     );
   }
