@@ -1748,7 +1748,7 @@ function LoopBar({
               className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
             >
               <span className="text-emerald-500" aria-hidden="true">↻</span>
-              开启循环任务
+              Start a loop
             </button>
           )}
           {!disabled && (
@@ -1758,7 +1758,7 @@ function LoopBar({
               className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
             >
               <span className="text-sky-500" aria-hidden="true">⏰</span>
-              开启定时任务
+              Schedule a task
             </button>
           )}
           {schedules.length > 0 && (

@@ -122,7 +122,7 @@ function AgentMissing({ name }: { name: string }) {
   return <div className="p-4 sm:p-6 text-sm text-muted-foreground">agent not found.</div>;
 }
 
-// The "详情 / 文件" tab strip — settings-strip styling (icon+label pills, see
+// The "详情 / 文件" tab strip — settings-strip styling (icon-only pills, see
 // components/settings-tabs.tsx). Rendered in the parent's header row (page
 // header / SheetHeader) so it shares the line with the title + actions.
 export function AgentDetailTabs({ tab, setTab }: { tab: DetailTab; setTab: (t: DetailTab) => void }) {
@@ -133,11 +133,11 @@ export function AgentDetailTabs({ tab, setTab }: { tab: DetailTab; setTab: (t: D
     );
   return (
     <div className="flex items-center gap-1">
-      <button type="button" onClick={() => setTab('detail')} className={pill(tab === 'detail')}>
-        <Info className="h-3.5 w-3.5" /> Detail
+      <button type="button" onClick={() => setTab('detail')} className={pill(tab === 'detail')} aria-label="Detail" title="Detail">
+        <Info className="h-4 w-4" />
       </button>
-      <button type="button" onClick={() => setTab('files')} className={pill(tab === 'files')}>
-        <Folder className="h-3.5 w-3.5" /> Files
+      <button type="button" onClick={() => setTab('files')} className={pill(tab === 'files')} aria-label="Files" title="Files">
+        <Folder className="h-4 w-4" />
       </button>
     </div>
   );
@@ -364,7 +364,7 @@ function CronsSection({ agentName }: { agentName: string }) {
         <Skeleton className="h-10" />
       ) : list.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          no scheduled tasks. create one with “开启定时任务” in a chat.
+          no scheduled tasks. create one with “Schedule a task” in a chat.
         </p>
       ) : (
         <ul className="space-y-1.5">

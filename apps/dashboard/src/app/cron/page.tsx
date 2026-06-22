@@ -85,7 +85,7 @@ function CronPageInner() {
         <div className="flex-1 flex flex-col items-center justify-center text-center px-4 text-muted-foreground">
           <Clock className="h-10 w-10 mb-3 opacity-30" aria-hidden="true" />
           <p className="text-sm">{(crons.data?.length ?? 0) === 0 ? 'No scheduled tasks yet.' : 'Pick a cron from the sidebar.'}</p>
-          <p className="mt-1 text-xs">Create one with “New cron”, or “开启定时任务” in a chat.</p>
+          <p className="mt-1 text-xs">Create one with “New cron”, or “Schedule a task” in a chat.</p>
         </div>
       </>
     );
