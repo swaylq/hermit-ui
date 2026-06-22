@@ -58,6 +58,9 @@ const SAFE_FILE_EXT_SET = new Set<string>([
   // office docs — binary; the gateway relay hands the agent a "convert via Bash"
   // instruction (textutil / python+pandas / unzip), never a raw Read.
   'docx','xlsx','pptx','doc','xls','ppt','odt','ods','odp',
+  // audio — binary; the gateway relay hands the agent a "transcribe via Bash"
+  // instruction (whisper / ffmpeg), never a raw Read.
+  'mp3','m4a','wav','ogg','flac','aac',
 ]);
 
 function uploadRoot(): string {

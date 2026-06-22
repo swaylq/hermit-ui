@@ -2432,6 +2432,8 @@ const SAFE_FILE_EXTS = [
   'zip','tar','gz','tgz','bz2','tbz2','xz','txz','7z','rar','zst',
   // office docs — converted agent-side via Bash (textutil / python / unzip)
   'docx','xlsx','pptx','doc','xls','ppt','odt','ods','odp',
+  // audio — stored as-is; the agent transcribes / inspects via Bash (whisper / ffmpeg)
+  'mp3','m4a','wav','ogg','flac','aac',
 ] as const;
 const SAFE_FILE_EXT_SET = new Set<string>(SAFE_FILE_EXTS);
 // `<input accept>` value: `image/*` + every whitelisted file extension.

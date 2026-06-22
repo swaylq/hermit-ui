@@ -523,6 +523,10 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // actually usable. Everything else flows through the normal `Read <path>`.
   const ARCHIVE_EXTS = new Set(['zip', 'tar', 'gz', 'tgz', 'bz2', 'tbz2', 'xz', 'txz', '7z', 'rar', 'zst']);
   const isArchive = (p: string) => ARCHIVE_EXTS.has((p.split('.').pop() || '').toLowerCase());
+  // Audio is binary too — Read'ing it is gibberish. Tell claude to transcribe /
+  // inspect it via Bash (whisper for speech, ffmpeg to inspect/convert) instead.
+  const AUDIO_EXTS = new Set(['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac']);
+  const isAudio = (p: string) => AUDIO_EXTS.has((p.split('.').pop() || '').toLowerCase());
   // Office docs are binary too (zip+XML for the modern formats) — Read'ing them
   // is gibberish. Hand claude a per-type "convert via Bash" instruction so an
   // uploaded .docx/.xlsx/.pptx is actually usable. Tools confirmed on the macOS
@@ -559,6 +563,13 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
         `An uploaded archive is at ${p} — it is binary, so do NOT Read it directly. ` +
           `Run \`file ${p}\` to confirm the type, then extract it into a fresh temp directory ` +
           `(unzip / tar -xf / gunzip / 7z as appropriate) and inspect the extracted files.`,
+      );
+    } else if (isAudio(p)) {
+      promptParts.push(
+        `An uploaded audio file is at ${p} — it is binary, so do NOT Read it directly. ` +
+          `Inspect it with \`ffmpeg -i ${p}\` (format / duration). For speech, transcribe via Bash ` +
+          `with whisper / whisper-cpp if installed (\`command -v whisper whisper-cpp ffmpeg\` first); ` +
+          `if no transcriber is available, tell the user what to install.`,
       );
     } else if (office) {
       promptParts.push(office);
