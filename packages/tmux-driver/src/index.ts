@@ -222,6 +222,30 @@ export async function confirmSubmitted(sessionId: string, tries = 40, gapMs = 50
   return composerStatus(name) === 'clear';
 }
 
+/** Public read of a pane's composer state (tri-state; see composerStatus). */
+export function readComposer(sessionId: string): 'text' | 'clear' | 'unknown' {
+  return composerStatus(paneName(sessionId));
+}
+
+/**
+ * Wait until the pane's REPL has rendered its composer prompt (the `❯` line is
+ * visible) — i.e. claude is up and able to accept typed input. Typing BEFORE this
+ * is the cold-start race that silently drops a session's first message: the keys
+ * (and the submit Enter) land in a not-yet-ready Ink TUI and vanish, the composer
+ * stays empty, and an empty composer otherwise reads as "submitted". Returns true
+ * once the composer is readable, false on timeout / dead pane.
+ */
+export async function waitForReplReady(sessionId: string, timeoutMs = 45_000, gapMs = 500): Promise<boolean> {
+  const name = paneName(sessionId);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!hasSession(name)) return false;
+    if (composerStatus(name) !== 'unknown') return true; // ❯ visible → REPL ready
+    await sleep(gapMs);
+  }
+  return composerStatus(name) !== 'unknown';
+}
+
 /**
  * `claude --resume` on a LARGE session blocks on an in-pane prompt before the
  * REPL loads:
@@ -361,6 +385,24 @@ function listJsonlUuids(projectDir: string): string[] {
   return readdirSync(projectDir)
     .filter((f) => f.endsWith('.jsonl'))
     .map((f) => f.slice(0, -'.jsonl'.length));
+}
+
+/**
+ * Every JSONL transcript in an agent's project dir, with size + mtime. Used to
+ * detect + recover claude-session-uuid DRIFT: when a pane's claude was respawned
+ * without `--session-id` and minted a uuid the gateway never recorded, the gateway
+ * tails a `<recorded-uuid>.jsonl` that never appears. The caller finds the live
+ * transcript here (newest non-empty, excluding uuids owned by sibling sessions that
+ * share this project dir) and adopts it.
+ */
+export function listTranscripts(cwd: string): Array<{ uuid: string; size: number; mtimeMs: number }> {
+  const projectDir = encodedProjectDir(cwd);
+  const out: Array<{ uuid: string; size: number; mtimeMs: number }> = [];
+  for (const uuid of listJsonlUuids(projectDir)) {
+    const st = safeStat(join(projectDir, `${uuid}.jsonl`));
+    if (st) out.push({ uuid, size: Number(st.size), mtimeMs: Number(st.mtimeMs) });
+  }
+  return out;
 }
 
 // ── Transcript watcher ───────────────────────────────────────────────────────

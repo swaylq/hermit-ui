@@ -19,6 +19,7 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   ensureSession,
@@ -32,6 +33,9 @@ import {
   watchTranscript,
   encodedProjectDir,
   tmuxSessionExists,
+  readComposer,
+  waitForReplReady,
+  listTranscripts,
 } from '@hermit-ui/tmux-driver';
 import { paneIsWorking, WORK_MARKER_RE } from './pane';
 
@@ -596,36 +600,28 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   );
 
   try {
-    sendKeys(session.id, promptText);
-    // Slash commands print to claude's TUI panel but never touch the JSONL
-    // we tail — so the dashboard would have no idea what `/status` etc.
-    // produced. Stream the pane back via `streamSlashOutput`: repeated
-    // `capture-pane` + upsert (same externalId) so the user watches the
-    // output land live and sees a "done" marker when it settles.
     const trimmed = textPart.trim();
     if (trimmed.startsWith('/')) {
+      // Slash commands print to claude's TUI panel but never touch the JSONL we
+      // tail, so the dashboard wouldn't see `/status` etc. output. Send the command,
+      // then stream the pane back via `streamSlashOutput` (repeated `capture-pane` +
+      // upsert on the same externalId) so the user watches the output land live.
+      sendKeys(session.id, promptText);
       const cmd = trimmed.split(/\s+/)[0];
       // Pane name matches tmux-driver's `paneName()`: last-12 of the session
       // id (cuids are 25 chars; the entropic suffix is what we keep).
       const paneN = `hermit-${session.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-12)}`;
       void streamSlashOutput({ sessionId: session.id, cmd, paneN });
     } else {
-      // Make sure the message actually submitted. claude's TUI drops the submit
-      // Enter while it's still settling — most often right after a long turn (the
-      // pane reads idle so we deliver, but claude is still rendering that turn's
-      // output and swallows Enters); a multi-line text + `Read <image>` paste makes
-      // it likelier. confirmSubmitted re-sends Enter, polling until the composer
-      // clears. Slash commands skip this — streamSlashOutput drives the pane (incl.
-      // Escape to dismiss modals) and a stray Enter could interfere.
-      // A cold start gets a much longer confirm window (60s vs the default 12s):
-      // the text is already in the composer, so re-pressing Enter until claude
-      // finishes booting submits it — instead of giving up at 12s and leaving it
-      // stranded. deliverMessages is fire-and-forget (chatTick never awaits it),
-      // so the longer wait blocks nothing; confirmSubmitted returns the instant
-      // the composer clears, so a fast spawn pays no penalty.
-      const submitted = await confirmSubmitted(session.id, freshSpawn ? 120 : 40);
-      if (!submitted) {
-        console.warn(`[chat] ${session.id.slice(0, 8)}: composer still holds text after confirm — message may be unsent`);
+      // robustSubmit OWNS the keystrokes for normal messages: it waits for the `❯`
+      // composer on a cold start, sends, confirms a turn actually started (the
+      // transcript grew), and re-types once if a not-yet-ready TUI dropped the first
+      // prompt (issue #2 — otherwise a dropped first message strands the chat on
+      // "starting" forever). So we do NOT sendKeys here. It returns false only if no
+      // turn ever started after all retries.
+      const delivered = await robustSubmit(session, state, promptText, freshSpawn);
+      if (!delivered) {
+        console.warn(`[chat] ${session.id.slice(0, 8)}: message never started a turn after retries — likely unsent`);
         await api
           .syncChatMessages([
             {
@@ -676,8 +672,38 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
   let waitForResumeUuid = false;
 
   if (paneAlive && session.claudeSessionId) {
-    // Already running — trust the DB.
+    // Already running — trust the DB's recorded claude uuid…
     claudeUuid = session.claudeSessionId;
+    // …but guard against uuid DRIFT (issue #3): if a pane's claude was respawned
+    // WITHOUT `--session-id` (an idle-reap / external restart), it minted its own
+    // uuid while the DB still points at the recorded one — so the watcher tails a
+    // `<recorded>.jsonl` that never appears and replies silently stop, with no
+    // self-heal. If the recorded uuid has no transcript on disk but the pane is
+    // writing a different one, adopt that live transcript. Exclude uuids owned by
+    // OTHER live sessions (an agent's chat sessions all share one project dir) so we
+    // never cross-wire two chats onto the same transcript. onTranscriptEvent then
+    // re-stamps claudeSessionId once we tail the right file → self-healing + durable.
+    const transcripts = listTranscripts(cwd);
+    const recorded = transcripts.find((t) => t.uuid === claudeUuid);
+    if (!recorded || recorded.size === 0) {
+      const claimed = new Set<string>();
+      for (const [sid, st] of sessionStates) if (sid !== session.id) claimed.add(st.claudeUuid);
+      // Require a RECENTLY-written transcript — the live pane's claude is actively
+      // writing, whereas a stale OLD session's transcript is not. This also stops us
+      // adopting an old transcript if a just-spawned session is reattached before its
+      // own first write (recorded size 0 but not actually drift).
+      const FRESH_MS = 5 * 60_000;
+      const live = transcripts
+        .filter((t) => t.size > 0 && t.uuid !== claudeUuid && !claimed.has(t.uuid) && Date.now() - t.mtimeMs < FRESH_MS)
+        .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+      if (live) {
+        console.warn(
+          `[chat] ${session.id.slice(0, 8)}: claude-session uuid drift — recorded ${claudeUuid.slice(0, 8)} ` +
+            `has no transcript; adopting live ${live.uuid.slice(0, 8)}`,
+        );
+        claudeUuid = live.uuid;
+      }
+    }
   } else if (session.claudeSessionId && !paneAlive) {
     // Resume: claude --resume forks into a brand-new JSONL with full prior
     // history (per happy's findings). Sniff the new uuid after spawn.
@@ -844,6 +870,64 @@ function onTranscriptEvent(chatSessionId: string, ev: any, state: SessionState) 
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────────
+
+// Current byte size of a transcript file (0 if it doesn't exist yet). GROWTH is
+// the ground-truth signal that a sent message actually reached claude and a turn
+// started — distinguishing a real submit from a DROPPED message, which leaves the
+// composer just as empty as a submitted one does.
+function transcriptSize(p: string): number {
+  try { return statSync(p).size; } catch { return 0; }
+}
+
+/**
+ * Robust first-turn / cold-start delivery (issue #2). On a fresh or just-respawned
+ * pane the Ink TUI may not be ready when we type, silently dropping the prompt AND
+ * its submit Enter — leaving the composer EMPTY. An empty composer otherwise reads
+ * as "submitted", so the lost message would never retry and the chat sticks on
+ * "starting" forever. Three defenses:
+ *   1. wait for the `❯` composer to render before the first keystroke (+ a short
+ *      settle — Ink can still drop the very first keys right after `❯` appears);
+ *   2. confirm a turn actually STARTED (the transcript grew) before trusting it — a
+ *      cleared composer is ambiguous (submitted vs never-landed look identical);
+ *   3. if no turn started and the composer is empty, the text was dropped → re-send
+ *      once (cold start only). If the composer still HOLDS text, only re-press Enter
+ *      (never re-type → never a duplicate turn).
+ * Returns true once a turn started. Happy path is unchanged: a clean send grows the
+ * transcript within a second and it returns immediately.
+ */
+async function robustSubmit(session: PendingSession, state: SessionState, promptText: string, freshSpawn: boolean): Promise<boolean> {
+  const nap = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  // Warm pane: the composer is already up, so the cold-start drop can't happen here.
+  // Send + confirm submission exactly as before (a cleared composer reliably means
+  // submitted) — no transcript poll, no re-type — so the common path is unchanged.
+  if (!freshSpawn) {
+    sendKeys(session.id, promptText);
+    return confirmSubmitted(session.id, 40);
+  }
+
+  // Cold / fresh spawn: the Ink TUI may not be ready, so use the robust path.
+  const base = transcriptSize(state.jsonlPath);
+  const started = () => transcriptSize(state.jsonlPath) > base;
+  await waitForReplReady(session.id, 45_000);
+  await nap(800); // settle: Ink can drop the very first keys right after `❯` renders
+
+  for (let send = 0; send < 2; send++) {
+    sendKeys(session.id, promptText);            // type + submit
+    await confirmSubmitted(session.id, 120);      // re-press Enter until the composer clears
+    for (let i = 0; i < 30 && !started(); i++) await nap(500); // ≤15s for the turn's first line
+    if (started()) return true;
+    // No turn ran. If text is still buffered it only needs more Enter (hammer it,
+    // never re-type → no duplicate). If the composer is empty, it was dropped → re-send.
+    if (readComposer(session.id) === 'text') {
+      await confirmSubmitted(session.id, 120);
+      for (let i = 0; i < 30 && !started(); i++) await nap(500);
+      return started();
+    }
+    // composer empty + nothing started → dropped → loop re-sends once
+  }
+  return started();
+}
 
 function extractText(content: unknown): string {
   if (typeof content === 'string') return content;
