@@ -700,6 +700,12 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     // invisible TUI prompt can hang the chat. Revert this flag to restore gating.
     claudeArgs.push('--dangerously-skip-permissions');
     claudeArgs.push('--mcp-config', buildMcpConfigArg(session.id, session.isOrchestrator ?? false));
+    // Default dashboard chat sessions to the highest reasoning effort. settings.json's
+    // `effortLevel` only accepts low/medium/high, so `max` (top of low/medium/high/xhigh/
+    // max) must come from the launch flag. Applies to fresh AND --resume spawns; an
+    // already-running pane keeps its effort until it respawns. An unknown value would
+    // just warn + fall back to default, so this can never break the launch.
+    claudeArgs.push('--effort', 'max');
   }
 
   const { created, preExistingUuids } = ensureSession({

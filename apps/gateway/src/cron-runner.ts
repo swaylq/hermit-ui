@@ -132,7 +132,12 @@ async function fire(c: Cron): Promise<void> {
     // The orchestrator (Brain) runs its crons (e.g. the daily dream) WITH the
     // brain MCP so they can roster()/agent_activity()/dispatch(). Other agents'
     // crons stay headless (no MCP). The stub keys on this run's id.
-    const claudeArgs = c.isOrchestrator ? ['--mcp-config', buildMcpConfigArg(runSessionId, true)] : [];
+    // `--effort max`: cron turns also run at the highest reasoning effort (settings.json
+    // `effortLevel` maxes at 'high', so max comes from the flag). Brain's crons additionally
+    // get the brain MCP; other agents' crons stay headless.
+    const claudeArgs = c.isOrchestrator
+      ? ['--effort', 'max', '--mcp-config', buildMcpConfigArg(runSessionId, true)]
+      : ['--effort', 'max'];
     ensureSession({
       sessionId: runSessionId,
       cwd,
