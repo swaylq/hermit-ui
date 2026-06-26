@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, MenuIcon, Plus,
-  Trash2, RotateCcw, ChevronDown, Check, X, Store, Bell, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, type LucideIcon,
+  Trash2, RotateCcw, RotateCw, FoldVertical, ChevronDown, Check, X, Store, Bell, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -1298,6 +1298,30 @@ function RecentSessions() {
     onSettled: () => { void utils.chat.listSessions.invalidate(); },
   });
 
+  // The three big chat actions (compact / restart / delete) also live in an open
+  // chat's header; surfaced here on the right-click menu so you can run them on
+  // ANY session without opening it. Compact just injects `/compact` (benign →
+  // straight through); restart + delete are disruptive so they confirm first,
+  // matching the header's two-step and the cron / skill delete confirms.
+  const compactSession = trpc.chat.send.useMutation({
+    onSuccess: (_d, vars) => {
+      void utils.chat.listMessages.invalidate({ sessionId: vars.sessionId });
+      void utils.chat.listSessions.invalidate();
+    },
+  });
+  const restartSession = trpc.chat.requestSessionRestart.useMutation({
+    onSuccess: () => { void utils.chat.listSessions.invalidate(); },
+  });
+  const deleteSession = trpc.chat.deleteSession.useMutation({
+    onSuccess: (_d, vars) => {
+      // Deleting the session you're viewing: hard-nav to /chat (the Next 16
+      // custom-server router strands you on the dead URL — see the chat page's
+      // delete note). A background session: just refresh so its row vanishes.
+      if (vars.id === activeId) { window.location.href = '/chat'; return; }
+      void utils.chat.listSessions.invalidate();
+    },
+  });
+
   // Local agent filter — persisted in sessionStorage so it survives reloads
   // but doesn't pollute the URL. "" means "all agents".
   const [filter, setFilter] = useState<string>('');
@@ -1387,6 +1411,28 @@ function RecentSessions() {
                 onClick: () => setHidden.mutate({ id: menu.id, hidden: !isHidden }),
               };
             })(),
+            {
+              label: 'Compact',
+              icon: <FoldVertical className="h-3.5 w-3.5" />,
+              onClick: () => compactSession.mutate({ sessionId: menu.id, text: '/compact', images: [], files: [] }),
+            },
+            {
+              label: 'Restart',
+              icon: <RotateCw className="h-3.5 w-3.5" />,
+              onClick: () => {
+                if (confirm('Restart this session? Its tmux pane is killed; your next message respawns claude with history preserved (--resume).'))
+                  restartSession.mutate({ id: menu.id });
+              },
+            },
+            {
+              label: 'Delete',
+              icon: <Trash2 className="h-3.5 w-3.5" />,
+              danger: true,
+              onClick: () => {
+                if (confirm('Delete this session and all its messages? This cannot be undone.'))
+                  deleteSession.mutate({ id: menu.id });
+              },
+            },
           ]}
         />
       )}
