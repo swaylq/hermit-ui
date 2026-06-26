@@ -1192,10 +1192,13 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
               )}
             </div>
             <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground truncate">
-              <span className="text-foreground/70">{session?.agentName}</span>
+              {/* Agent name is hidden on mobile (sidebar / session list already
+                  shows it) to keep the cramped header clean; its leading
+                  separator hides with it so status doesn't start with an orphan "·". */}
+              <span className="hidden sm:inline text-foreground/70">{session?.agentName}</span>
               {session && (
                 <>
-                  <span className="text-muted-foreground/40">·</span>
+                  <span className="hidden sm:inline text-muted-foreground/40">·</span>
                   <span>{status.label}</span>
                   <span className="text-muted-foreground/40">·</span>
                   <CtxBar tokens={session.contextTokens} />
