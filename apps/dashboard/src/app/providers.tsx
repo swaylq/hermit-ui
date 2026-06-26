@@ -7,6 +7,7 @@ import { httpBatchLink, loggerLink } from '@trpc/client';
 import superjson from 'superjson';
 import { trpc } from '@/lib/trpc';
 import { getActiveKey } from '@/lib/keyring';
+import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 
 // Key storage moved to lib/keyring (multi-machine browser keyring). Re-export
 // the active-key getter so any importer of `@/app/providers` keeps working.
@@ -110,7 +111,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     // light/dark. next-themes toggles the `.dark` class on <html> (no flash).
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <trpc.Provider client={trpcClient} queryClient={queryClient}>
-        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+        <QueryClientProvider client={queryClient}>
+          <ConfirmProvider>{children}</ConfirmProvider>
+        </QueryClientProvider>
       </trpc.Provider>
     </ThemeProvider>
   );

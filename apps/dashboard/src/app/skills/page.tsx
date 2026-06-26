@@ -7,6 +7,7 @@ import { Boxes, Package, GitBranch, Plug, FileText, Trash2, Plus, Download, Arro
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
@@ -202,6 +203,7 @@ function NewSkillForm() {
 // ── Skill detail ──────────────────────────────────────────────────────────────
 function SkillDetail({ name }: { name: string }) {
   const utils = trpc.useUtils();
+  const confirm = useConfirm();
   const q = trpc.skills.get.useQuery({ name }, { refetchInterval: 8_000 });
   // SKILL.md body + bundle ref files are split out of the 8s metadata poll —
   // fetched once (they only change on edit/pull, which invalidate this).
@@ -299,7 +301,7 @@ function SkillDetail({ name }: { name: string }) {
               variant="ghost"
               className="shrink-0 text-muted-foreground hover:text-rose-500"
               disabled={del.isPending}
-              onClick={() => { if (confirm(`Delete the global skill "${skill.name}"? This removes ~/.claude/skills/${skill.name}/.`)) del.mutate({ name: skill.name }); }}
+              onClick={async () => { if (await confirm({ title: 'Delete skill', message: `Delete the global skill "${skill.name}"? This removes ~/.claude/skills/${skill.name}/.`, confirmLabel: 'Delete', danger: true })) del.mutate({ name: skill.name }); }}
               title="delete skill"
             >
               <Trash2 className="size-3.5" />

@@ -17,6 +17,7 @@ import { isSessionUnread } from '@/lib/session-read';
 import { useLiveWorking } from '@/lib/session-live';
 import { usePins, togglePin } from '@/lib/session-pins';
 import { ContextMenu } from '@/components/ui/context-menu';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLongPress } from '@/lib/use-long-press';
 
 // ── Sidebar open/collapse state, shared so a page header can drop a hamburger ──
@@ -1271,6 +1272,7 @@ function RecentSessions() {
   const orchestratorsQ = trpc.agents.list.useQuery(undefined, { staleTime: 60_000 });
   const orchestratorName = (orchestratorsQ.data ?? []).find((a) => a.isOrchestrator)?.name;
   const utils = trpc.useUtils();
+  const confirm = useConfirm();
   const liveWorkingSince = useLiveWorking();
   const pins = usePins();
   // Custom right-click menu: viewport coords + the session it targets, or null.
@@ -1414,23 +1416,42 @@ function RecentSessions() {
             {
               label: 'Compact',
               icon: <FoldVertical className="h-3.5 w-3.5" />,
-              onClick: () => compactSession.mutate({ sessionId: menu.id, text: '/compact', images: [], files: [] }),
+              onClick: async () => {
+                const id = menu.id;
+                if (await confirm({
+                  title: 'Compact session',
+                  message: "Run /compact to summarize the conversation and shrink the agent's context window? Continuity is kept.",
+                  confirmLabel: 'Compact',
+                }))
+                  compactSession.mutate({ sessionId: id, text: '/compact', images: [], files: [] });
+              },
             },
             {
               label: 'Restart',
               icon: <RotateCw className="h-3.5 w-3.5" />,
-              onClick: () => {
-                if (confirm('Restart this session? Its tmux pane is killed; your next message respawns claude with history preserved (--resume).'))
-                  restartSession.mutate({ id: menu.id });
+              onClick: async () => {
+                const id = menu.id;
+                if (await confirm({
+                  title: 'Restart session',
+                  message: "Kill this session's tmux pane? Your next message respawns claude with history preserved (--resume).",
+                  confirmLabel: 'Restart',
+                }))
+                  restartSession.mutate({ id });
               },
             },
             {
               label: 'Delete',
               icon: <Trash2 className="h-3.5 w-3.5" />,
               danger: true,
-              onClick: () => {
-                if (confirm('Delete this session and all its messages? This cannot be undone.'))
-                  deleteSession.mutate({ id: menu.id });
+              onClick: async () => {
+                const id = menu.id;
+                if (await confirm({
+                  title: 'Delete session',
+                  message: 'Delete this session and all its messages? This cannot be undone.',
+                  confirmLabel: 'Delete',
+                  danger: true,
+                }))
+                  deleteSession.mutate({ id });
               },
             },
           ]}

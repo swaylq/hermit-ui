@@ -7,6 +7,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { trpc } from '@/lib/trpc';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
@@ -260,6 +261,7 @@ function SessionsSection({
   loading: boolean;
 }) {
   const utils = trpc.useUtils();
+  const confirm = useConfirm();
   const deleteSession = trpc.chat.deleteSession.useMutation({
     onSuccess: () => {
       // Invalidate every listSessions variant so the row also vanishes from the
@@ -319,15 +321,20 @@ function SessionsSection({
                       variant="ghost"
                       className="shrink-0 text-muted-foreground hover:text-rose-500"
                       disabled={deleting}
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        if (confirm('删除这个会话及其聊天记录？此操作不可撤销。')) {
+                        if (await confirm({
+                          title: 'Delete session',
+                          message: 'Delete this session and its chat history? This cannot be undone.',
+                          confirmLabel: 'Delete',
+                          danger: true,
+                        })) {
                           deleteSession.mutate({ id: s.id });
                         }
                       }}
                       aria-label="delete session"
-                      title="删除会话（连同聊天记录，不可撤销）"
+                      title="Delete session (with chat history — cannot be undone)"
                     >
                       <Trash2 className={cn('size-3.5', deleting && 'animate-pulse')} />
                     </Button>
@@ -765,6 +772,7 @@ function UpdateSkillButton({ agentName, slug, latest }: { agentName: string; slu
 // drop any market binding. Works on any skill, not only market-installed ones.
 function UninstallSkillButton({ agentName, skillName }: { agentName: string; skillName: string }) {
   const utils = trpc.useUtils();
+  const confirm = useConfirm();
   const un = trpc.market.uninstallAgentSkill.useMutation({
     onSuccess: () => {
       // Drop it from the view immediately; the gateway rm's the dir + re-syncs
@@ -781,9 +789,15 @@ function UninstallSkillButton({ agentName, skillName }: { agentName: string; ski
       title="uninstall skill"
       aria-label="uninstall skill"
       disabled={un.isPending}
-      onClick={(e) => {
+      onClick={async (e) => {
         e.stopPropagation();
-        if (confirm(`Uninstall "${skillName}" from ${agentName}? Removes .claude/skills/${skillName}/.`)) un.mutate({ agentName, skillName });
+        if (await confirm({
+          title: 'Uninstall skill',
+          message: `Uninstall "${skillName}" from ${agentName}? Removes .claude/skills/${skillName}/.`,
+          confirmLabel: 'Uninstall',
+          danger: true,
+        }))
+          un.mutate({ agentName, skillName });
       }}
     >
       <Trash2 className="size-3.5" />

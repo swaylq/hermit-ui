@@ -18,6 +18,7 @@ import { getActiveKey } from '@/lib/keyring';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 const MAX_UPLOAD = 100 * 1024 * 1024; // 100 MB per the spec
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
@@ -339,6 +340,7 @@ function FilePane({
   agentName: string; selected: Selected; onSelect: (s: Selected) => void; onError: (e: string | null) => void;
 }) {
   const utils = trpc.useUtils();
+  const confirm = useConfirm();
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState('');
   const [downloading, setDownloading] = useState(false);
@@ -380,9 +382,14 @@ function FilePane({
       setDownloading(false);
     }
   }
-  function doDelete() {
+  async function doDelete() {
     if (!selected) return;
-    if (!confirm(`Delete ${isDir ? 'folder' : 'file'} "${selected.name}"${isDir ? ' and all its contents' : ''}? This cannot be undone.`)) return;
+    if (!(await confirm({
+      title: `Delete ${isDir ? 'folder' : 'file'}`,
+      message: `Delete ${isDir ? 'folder' : 'file'} "${selected.name}"${isDir ? ' and all its contents' : ''}? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     remove.mutate({ agentName, path: selected.path });
   }
   function commitRename() {

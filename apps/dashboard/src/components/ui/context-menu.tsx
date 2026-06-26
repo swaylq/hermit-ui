@@ -83,7 +83,7 @@ export function ContextMenu({
             onClose();
           }}
           className={cn(
-            'flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-accent',
+            'flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors cursor-pointer hover:bg-accent',
             it.danger && 'text-rose-500',
           )}
         >

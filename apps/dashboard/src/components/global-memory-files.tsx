@@ -19,6 +19,7 @@ import { getActiveKey } from '@/lib/keyring';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
 const PREVIEW_IMG_MAX = 25 * 1024 * 1024;
@@ -380,6 +381,7 @@ function FilePane({
   onSelect: (s: Selected) => void; onError: (e: string | null) => void;
 }) {
   const utils = trpc.useUtils();
+  const confirm = useConfirm();
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState('');
   const [downloading, setDownloading] = useState(false);
@@ -423,9 +425,14 @@ function FilePane({
       setDownloading(false);
     }
   }
-  function doDelete() {
+  async function doDelete() {
     if (!selected) return;
-    if (!confirm(`Delete ${isDir ? 'folder' : 'file'} “${selected.name}”${isDir ? ' and all its contents' : ''}? This cannot be undone.`)) return;
+    if (!(await confirm({
+      title: `Delete ${isDir ? 'folder' : 'file'}`,
+      message: `Delete ${isDir ? 'folder' : 'file'} “${selected.name}”${isDir ? ' and all its contents' : ''}? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     remove.mutate({ globalMemory: true, path: selected.path });
   }
   function commitRename() {

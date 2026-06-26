@@ -11,12 +11,14 @@ import { useEffect, useRef, useState } from 'react';
 import { Eye, EyeOff, Trash2, Plus, Loader2, KeyRound } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 
 const AUTO_HIDE_MS = 8_000;
 
 export function SecretsSection() {
   const utils = trpc.useUtils();
+  const confirm = useConfirm();
   const list = trpc.secrets.list.useQuery(undefined, { retry: false, refetchOnWindowFocus: false });
   const reveal = trpc.secrets.reveal.useMutation();
   const setSecret = trpc.secrets.set.useMutation({ onSuccess: () => utils.secrets.list.invalidate() });
@@ -148,8 +150,13 @@ export function SecretsSection() {
                 className="text-muted-foreground hover:text-destructive"
                 title="delete"
                 disabled={remove.isPending}
-                onClick={() => {
-                  if (confirm(`Delete secret "${key}"? This removes it from the encrypted store.`)) remove.mutate({ key });
+                onClick={async () => {
+                  if (await confirm({
+                    title: 'Delete secret',
+                    message: `Delete secret "${key}"? This removes it from the encrypted store.`,
+                    confirmLabel: 'Delete',
+                    danger: true,
+                  })) remove.mutate({ key });
                 }}
               >
                 <Trash2 className="size-3.5" />

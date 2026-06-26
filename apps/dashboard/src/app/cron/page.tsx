@@ -6,6 +6,7 @@ import { Clock, Play, Trash2, Pencil, Check, X, ChevronDown } from 'lucide-react
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -255,6 +256,7 @@ function NewCronForm() {
 
 function CronDetail({ id }: { id: string }) {
   const utils = trpc.useUtils();
+  const confirm = useConfirm();
   const router = useRouter();
   const q = trpc.cron.get.useQuery({ id }, { refetchInterval: 5_000 });
   // ?run=<id> deep-link (from the notifications inbox) → auto-expand that run.
@@ -370,7 +372,7 @@ function CronDetail({ id }: { id: string }) {
             variant="ghost"
             className="text-muted-foreground hover:text-rose-500"
             disabled={del.isPending}
-            onClick={() => { if (confirm('Delete this cron and its run history?')) del.mutate({ id }); }}
+            onClick={async () => { if (await confirm({ title: 'Delete cron', message: 'Delete this cron and its run history?', confirmLabel: 'Delete', danger: true })) del.mutate({ id }); }}
             title="delete cron"
           >
             <Trash2 className="size-3.5" />
