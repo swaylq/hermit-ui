@@ -1007,21 +1007,26 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
     { sessionId },
     { refetchInterval: (q) => (isInFlight || (q.state.data?.length ?? 0) > 0 ? 2_000 : false) },
   );
-  // A message sent to an IDLE session is the imminent ACTIVE turn, not a queued
-  // item — yet it lingers in queue.data (deliveredAt=null) for the ~2s until the
-  // gateway picks it up, so it would flash in the QueueBar. Capture its id at send
-  // time (when no turn was in flight) and hide just that one. Messages sent while
-  // a turn IS running were never starters, so they stay as the real queue. No
-  // cleanup needed: each idle send overwrites the id, and filtering an id that's
-  // no longer in queue.data is a harmless no-op.
-  const [activeStarterId, setActiveStarterId] = useState<string | null>(null);
+  // A message sent while NO prior turn is in flight is the imminent ACTIVE turn,
+  // not a queued item — yet it lingers in queue.data (deliveredAt=null) for the
+  // ~2s until the gateway picks it up, so it would flash through the QueueBar.
+  // Capture each such id at send time (see onSend's `wasIdle`) and hide them: the
+  // QueueBar should only show messages waiting BEHIND an in-flight turn.
+  // - A Set, not a single id, so two quick sends to an idle pane don't expose the
+  //   first when the second's id overwrites it.
+  // - Keyed on isWaitingAssistant (a delivered, still-unanswered message), NOT the
+  //   broader isInFlight: isInFlight also counts streamingTailId's ~1.8s decay tail
+  //   that lingers after a reply visibly ends, which used to misclassify a quick
+  //   reply-after-reply send as "queued" and flash it. That was the stutter.
+  // Pruned to delivered-only by the effect below so it can't grow unbounded.
+  const [starterIds, setStarterIds] = useState<Set<string>>(() => new Set());
   // Optimistic queue overlay: a message sent while a turn is running IS a queue
   // item, but the real row only surfaces after the ~2s queue poll. Stubs pushed
   // here on send (see onSend) show instantly; pruned when the real queued row
   // lands (effect below, keyed on queue.data) or on send error. Deduped by text
   // against the real queue so the hand-off doesn't double-count.
   const [optimisticQueue, setOptimisticQueue] = useState<Array<{ id: string; content: { type: 'text'; text: string }[] }>>([]);
-  const realQueue = (queue.data ?? []).filter((m) => m.id !== activeStarterId);
+  const realQueue = (queue.data ?? []).filter((m) => !starterIds.has(m.id));
   const realQueueTexts = new Set(realQueue.map((m) => msgText(m.content)));
   const displayQueue = [
     ...realQueue,
@@ -1043,6 +1048,18 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
     setOptimisticQueue((q) => {
       const next = q.filter((x) => !queued.has(msgText(x.content)));
       return next.length === q.length ? q : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue.data]);
+  // Drop starter ids once their message has been delivered (left queue.data), so
+  // the Set stays bounded across a long session. A still-undelivered starter stays
+  // hidden; an id no longer in the queue is gone for good.
+  useEffect(() => {
+    if (starterIds.size === 0) return;
+    const live = new Set((queue.data ?? []).map((m) => m.id));
+    setStarterIds((s) => {
+      const next = new Set([...s].filter((id) => live.has(id)));
+      return next.size === s.size ? s : next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue.data]);
@@ -1368,10 +1385,14 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
               // Sending always re-pins to the bottom (even if the user had
               // scrolled up) so their message + the reply scroll into view.
               scrollToBottom('auto');
-              // Was a turn already running BEFORE this send? If not, this message
-              // IS the active turn (not a queue item) — remember it so the QueueBar
-              // doesn't flash it while the gateway picks it up (see activeStarterId).
-              const wasIdle = !isInFlight;
+              // Is a prior turn already in flight BEFORE this send? If not, this
+              // message IS the imminent active turn (not a queue item) — record it
+              // so the QueueBar doesn't flash it while the gateway picks it up (see
+              // starterIds). Gate on isWaitingAssistant, NOT isInFlight: the latter
+              // also counts streamingTailId's ~1.8s decay tail, so a quick send
+              // right after a reply visibly ends was misread as "queued" and
+              // stuttered through the QueueBar before being pushed out.
+              const wasIdle = !isWaitingAssistant;
               // Optimistically flip this session's sidebar dot to "working" the
               // instant we send — the gateway snapshot that sets the real `state`
               // is ~8s behind. The sidebar reconciles it against snapshotAt and it
@@ -1401,7 +1422,7 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
                 { sessionId, text, images, files },
                 {
                   onSuccess: (msg) => {
-                    if (wasIdle) setActiveStarterId(msg.id);
+                    if (wasIdle) setStarterIds((s) => { const n = new Set(s); n.add(msg.id); return n; });
                   },
                   onError: () => {
                     setPending((p) => p.filter((x) => x.id !== optimisticId));
