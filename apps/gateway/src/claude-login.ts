@@ -372,12 +372,17 @@ async function logoutClaudeWeb(d: LoginDriver, report: LoginReport): Promise<voi
 }
 
 // ── 171mail code / magic-link retrieval (in the 'mail' tab) ────────────────────
-async function fetchLoginCode(d: LoginDriver, token: string, report: LoginReport): Promise<{ code?: string; magicLink?: string }> {
+async function fetchLoginCode(
+  d: LoginDriver,
+  token: string,
+  report: LoginReport,
+): Promise<{ code?: string; magicLink?: string; opened?: boolean }> {
   await d.navigate(`https://b.171mail.com/#/home/code?type=claude&token=${encodeURIComponent(token)}`, 'mail');
-  await report({ line: '打开 171mail，点「获取」等登录链接…' });
-  // ONLY ever click the "获取" button on this page — nothing else. On a failure
-  // notice, re-click it (repeatedly) until the link shows up.
-  const clickGet = () => d.clickByText('获取验证码|获取|get ?code', 'mail').catch(() => false);
+  await report({ line: '打开 171mail，点「获取验证码」…' });
+  // On this page ONLY click 「获取验证码」 (to fetch) and 「打开链接」 (to open the secure
+  // login link) — never anything else. Re-click 获取验证码 until the link arrives.
+  const clickGet = () => d.clickByText('获取验证码', 'mail').catch(() => false);
+  const OPEN_LINK = 'button[title="打开链接"], [title="打开链接"]';
   await clickGet();
 
   const deadline = Date.now() + CODE_WAIT_MS;
@@ -387,25 +392,41 @@ async function fetchLoginCode(d: LoginDriver, token: string, report: LoginReport
     checkAbort();
     const links = await d.inputValues('mail').catch(() => [] as string[]);
     const body = await d.bodyText('mail').catch(() => '');
+
+    // (a) the link sits in the readonly code-input — read it directly (no popup,
+    // deterministic). It's the only https value on the page besides 171mail's.
+    const httpsVals = links.filter((v) => /^https?:\/\//i.test(v));
     const magic =
-      links.find((v) => /claude\.ai\/magic-link/i.test(v)) ||
-      body.match(/https:\/\/claude\.ai\/magic-link[^\s"'<>]*/i)?.[0];
+      httpsVals.find((v) => /claude/i.test(v)) ||
+      httpsVals.find((v) => !/171mail/i.test(v)) ||
+      body.match(/https:\/\/[^\s"'<>]*claude\.ai[^\s"'<>]*/i)?.[0];
     if (magic) {
-      await report({ line: '收到登录链接。' });
+      await report({ line: '拿到登录链接。' });
       return { magicLink: magic };
     }
+
+    // (b) link arrived (success alert) but not readable → click 「打开链接」.
+    const linkReady = /secure link|log ?in to claude|登录链接|magic-link/i.test(body);
+    if (linkReady && (await d.exists(OPEN_LINK, 'mail'))) {
+      await report({ line: '检测到登录链接，点「打开链接」…' });
+      await d.click(OPEN_LINK, 'mail').catch(() => false);
+      return { opened: true };
+    }
+
+    // (c) plain 6-digit code fallback.
     const m = body.match(/(?<!\d)(\d{6})(?!\d)/);
     if (m) {
       await report({ line: '收到 6 位验证码。' });
       return { code: m[1] };
     }
-    // Failure / "no mail yet" → re-fetch right away; otherwise re-fetch every ~6s.
-    const failed = /失败|重试|未获取|获取失败|无数据|没有(邮件|数据)|稍后|fail|error|not found/i.test(body);
+
+    // nothing yet / failure → re-click 「获取验证码」 (only this button).
+    const failed = /失败|重试|未获取|获取失败|无数据|暂无|没有(邮件|数据)|稍后|fail|error|not ?found/i.test(body);
     if (failed || Date.now() - lastClick > 6_000) {
       await clickGet();
       lastClick = Date.now();
       if (failed && Date.now() - lastNote > 8_000) {
-        await report({ line: '171mail 提示失败，再点「获取」重试…' });
+        await report({ line: '171mail 还没到，继续点「获取验证码」…' });
         lastNote = Date.now();
       }
     }
@@ -701,10 +722,15 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
 
     // 3. 171mail → wait for the login link (or 6-digit code)
     const got = await fetchLoginCode(d, mailToken, report);
-    await d.closeTab('mail');
     if (got.magicLink) {
-      await report({ line: '用 magic-link 登录…' });
+      await report({ line: '用登录链接登录…' });
       await d.navigate(got.magicLink);
+    } else if (got.opened) {
+      // 「打开链接」 opened the secure link → the profile session is now set;
+      // refresh the login tab to pick it up.
+      await report({ line: '已点「打开链接」，确认登录…' });
+      await sleep(3_000);
+      await d.navigate('https://claude.ai/new');
     } else if (got.code) {
       await report({ line: '填入验证码并验证…' });
       await d.fill(CODE_SEL, got.code);
@@ -712,6 +738,7 @@ export async function runClaudeLogin(input: ClaudeLoginInput): Promise<ClaudeLog
         await d.pressEnter(CODE_SEL);
       }
     }
+    await d.closeTab('mail');
     await until(d, report, () => loggedIntoClaude(d), {
       humanMsg: '请在 Chrome 里完成 claude.ai 登录（到达对话界面）。',
       softMs: 40_000,
