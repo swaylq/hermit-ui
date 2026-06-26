@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { useSidebar } from '@/components/app-sidebar';
 import { getKeyring, getActiveEntry, removeMachine } from '@/lib/keyring';
+import { AddMachine } from './add-machine';
 
 export function ScopedSidebar({ agentName }: { agentName: string }) {
   const { mobileOpen, setMobileOpen } = useSidebar();
@@ -115,9 +116,13 @@ export function ScopedSidebar({ agentName }: { agentName: string }) {
           )}
         </div>
 
-        {/* Exit — only when there's another workspace to return to */}
-        {canExit && (
-          <div className="border-t border-sidebar-border p-2 shrink-0">
+        {/* Footer: add a machine key (upgrade to full access) + exit if possible.
+            A pure recipient (only this share) otherwise has no way to reach the
+            login screen — the AddMachine button lets them paste a machine key and
+            jump to the full app. The server still 403s scoped tokens. */}
+        <div className="border-t border-sidebar-border p-2 shrink-0 space-y-0.5">
+          <AddMachine onAdded={() => { window.location.href = '/chat'; }} label="Add a machine key" />
+          {canExit && (
             <button
               type="button"
               onClick={exit}
@@ -125,8 +130,8 @@ export function ScopedSidebar({ agentName }: { agentName: string }) {
             >
               <LogOut className="h-4 w-4 shrink-0" /> Exit shared view
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </aside>
     </>
   );

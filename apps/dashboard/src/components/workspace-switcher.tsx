@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronsUpDown, Plus, Trash2, Loader2, Pencil, X } from 'lucide-react';
+import { Check, ChevronsUpDown, Trash2, Loader2, Pencil, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   getKeyring,
@@ -17,6 +17,7 @@ import {
   isOnline,
   type KeyringEntry,
 } from '@/lib/keyring';
+import { AddMachine } from './add-machine';
 
 const initials = (s: string) => (s || '?').slice(0, 2).toUpperCase();
 // Switching machines is a hard reload: rebuilds the tRPC client with the new
@@ -270,59 +271,5 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
           document.body,
         )}
     </div>
-  );
-}
-
-function AddMachine({ onAdded }: { onAdded: () => void }) {
-  const [adding, setAdding] = useState(false);
-  const [key, setKey] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!key) return;
-    setBusy(true);
-    setErr('');
-    const m = await fetchMachineByKey(key).catch(() => null);
-    setBusy(false);
-    if (!m) {
-      setErr('invalid key');
-      return;
-    }
-    addMachine({ id: m.id, name: m.name, key, hostname: m.hostname, alias: m.alias });
-    onAdded();
-  };
-
-  if (!adding) {
-    return (
-      <button
-        type="button"
-        onClick={() => setAdding(true)}
-        className="flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground cursor-pointer"
-      >
-        <Plus className="h-3.5 w-3.5" /> Add machine
-      </button>
-    );
-  }
-  return (
-    <form onSubmit={submit} className="p-1 space-y-1">
-      <input
-        autoFocus
-        type="password"
-        value={key}
-        onChange={(e) => setKey(e.target.value)}
-        placeholder="X-Asst-Key"
-        className="w-full rounded-md bg-background border border-sidebar-border px-2 py-1 text-xs font-mono outline-none focus:border-sidebar-foreground/40"
-      />
-      {err && <p className="text-[10px] text-rose-400 px-1">{err}</p>}
-      <button
-        type="submit"
-        disabled={busy || !key}
-        className="flex items-center justify-center gap-1 w-full rounded-md bg-sidebar-accent px-2 py-1 text-xs disabled:opacity-50 cursor-pointer"
-      >
-        {busy && <Loader2 className="h-3 w-3 animate-spin" />} Add
-      </button>
-    </form>
   );
 }
