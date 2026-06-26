@@ -2,25 +2,24 @@
 
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Boxes, BarChart3, Wrench, KeyRound, HardDriveUpload, Brain, SunMoon } from 'lucide-react';
+import { Boxes, BarChart3, Wrench, HardDriveUpload, Brain, SunMoon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 
-// Settings sub-nav: Skills + Usage + Operations + Account login + File Station as
-// tabs. Each tab is its own route but they read as one "Settings" area — the
-// sidebar's single Settings nav entry highlights for all. Rendered as a thin
-// strip above each page's own header.
+// Settings sub-nav: Skills + Usage + Operations + File Station as tabs. Each tab
+// is its own route but they read as one "Settings" area — the sidebar's single
+// Settings nav entry highlights for all. Rendered as a thin strip above each
+// page's own header.
 const TABS = [
   { key: 'skills', label: 'Global Skills', href: '/skills', Icon: Boxes },
   { key: 'memory', label: 'Global Memory', href: '/global-memory', Icon: Brain },
   { key: 'usage', label: 'Usage', href: '/usage', Icon: BarChart3 },
   { key: 'ops', label: 'Operations', href: '/ops', Icon: Wrench },
-  { key: 'login', label: 'Account Login', href: '/login-claude', Icon: KeyRound },
   { key: 'files', label: 'File Station', href: '/file-station', Icon: HardDriveUpload },
   { key: 'appearance', label: 'Appearance', href: '/appearance', Icon: SunMoon },
 ] as const;
 
-export function SettingsTabs({ active }: { active: 'skills' | 'memory' | 'usage' | 'ops' | 'login' | 'files' | 'appearance' }) {
+export function SettingsTabs({ active }: { active: 'skills' | 'memory' | 'usage' | 'ops' | 'files' | 'appearance' }) {
   const activeRef = useRef<HTMLAnchorElement>(null);
   useEffect(() => {
     // On a phone the four tabs don't fit, so the strip scrolls horizontally —

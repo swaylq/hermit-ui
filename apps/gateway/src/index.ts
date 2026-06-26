@@ -28,9 +28,8 @@ import { api } from './api';
 import { tick as cronTick } from './cron-runner';
 import { chatTick, chatCancelTick, chatRestartTick, shutdownChatRunner } from './chat-runner';
 import { agentRequestTick } from './agent-lifecycle';
-import { machineRequestTick, loginCancelTick } from './machine-requests';
+import { machineRequestTick } from './machine-requests';
 import { startLoginBridge } from './login-bridge';
-import { startExtensionLoginListener } from './claude-login';
 import { fileTransferTick } from './file-station';
 import { pushGlobalSkills, globalSkillRequestTick } from './global-skills';
 import { globalMemoryTick } from './global-memory';
@@ -168,11 +167,10 @@ function loop(fn: () => Promise<void>, ms: number) {
 // terminal feature. Fires-and-reconnects-forever; no loop needed.
 startControlChannel();
 
-// Localhost WS server the Chrome login extension connects to (real-browser
-// driver for the account-login flow). No-op until the extension connects.
+// Localhost WS server the Chrome extension connects to — a generic command
+// channel to drive the user's real Chrome for browser automation. No-op until
+// the extension connects. (The account auto-login feature was removed.)
 startLoginBridge();
-// Let the extension popup paste an account string and self-drive the login.
-startExtensionLoginListener();
 
 loop(pushAgents, 5 * 60_000);
 loop(ensureBrainTick, 5 * 60_000); // fallback for brains created/updated between restarts
@@ -183,7 +181,6 @@ loop(pushChatCancelTick, 1_500);
 loop(pushChatRestartTick, 2_000);
 loop(() => safe('agent-requests', agentRequestTick), 3_000);
 loop(() => safe('machine-requests', machineRequestTick), 3_000);
-loop(() => safe('login-cancel', loginCancelTick), 3_000);
 loop(() => safe('file-transfers', fileTransferTick), 4_000);
 loop(pushGlobalSkillsTick, 60_000);
 loop(globalSkillReqTick, 3_000);

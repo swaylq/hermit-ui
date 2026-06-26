@@ -196,34 +196,6 @@ export const api = {
     if (!r.ok) throw new Error(`ackMachineRequest → ${r.status}`);
   },
 
-  // Read-once claim of a login request's sanitized account payload. The dashboard
-  // NULLs it server-side in the same call, so this returns the secrets exactly
-  // once. null ⇒ nothing to claim (already wiped / not a login request).
-  claimLoginPayload: async (
-    id: string,
-  ): Promise<{ email: string; mailToken: string; emailPassword: string | null } | null> => {
-    const url = `${DASHBOARD_URL}/api/trpc/machines.claimLoginPayload?batch=1`;
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
-      body: JSON.stringify({ '0': { json: { id } } }),
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-    });
-    if (!r.ok) throw new Error(`claimLoginPayload → ${r.status}`);
-    const j = (await r.json()) as any;
-    return j[0]?.result?.data?.json ?? null;
-  },
-
-  // Latest login row for this machine — the cancel tick reads it to notice a
-  // dashboard-side manual reset (status flipped to error/done out from under us).
-  loginStatus: async (): Promise<{ id: string; status: string } | null> => {
-    const r = await get<any>(
-      '/api/trpc/machines.loginStatus?batch=1&input=' +
-        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
-    );
-    return r[0]?.result?.data?.json ?? null;
-  },
-
   // ── File Station (large-file delivery) round-trip ───────────────────────────
   pollFileTransfers: async (): Promise<
     Array<{ id: string; filename: string; destPath: string; size: number; unzip: boolean }>
