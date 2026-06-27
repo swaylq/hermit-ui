@@ -25,6 +25,8 @@ const Item = z.object({
   // Opaque JSON written by the agent's cron skill — dashboard treats it as
   // a black box (renders a count chip + an expandable detail dropdown).
   loopState: z.any().nullable().optional(),
+  // Process-tree RSS of the session's pane, MB (resource governance).
+  rssMb: z.number().int().nullable().optional(),
 });
 const Body = z.object({ items: z.array(Item) });
 
@@ -63,6 +65,10 @@ export async function POST(req: NextRequest) {
     // flickers to "—" between turns. Only advance when we actually have a number.
     if (it.contextTokens != null) data.contextTokens = it.contextTokens;
     if (it.outputTokens != null) data.outputTokens = it.outputTokens;
+    // rssMb: clear when the pane is dead (memory freed); while alive, advance only
+    // on a real number so a transient `ps` miss doesn't flicker the readout to null.
+    if (it.alive === false) data.rssMb = null;
+    else if (it.rssMb != null) data.rssMb = it.rssMb;
 
     const r = await prisma.chatSession.updateMany({
       where: { id: it.sessionId, machineId: machine.id },

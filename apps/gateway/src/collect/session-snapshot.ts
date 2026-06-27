@@ -47,6 +47,49 @@ export interface SessionSnapshot {
   // Whatever JSON the agent's cron skill left in <AGENT_DIR>/.loop-state.json.
   // Opaque to the gateway — dashboard renders it.
   loopState: unknown | null;
+  // Process-tree RSS (claude + mcp-stub + any Task children) of this session's
+  // pane, in MB. null when the pane is dead or ps is unavailable. Drives the
+  // Host-health panel's per-session memory + the reaper's "biggest first" order.
+  rssMb: number | null;
+}
+
+// One `ps` snapshot per collection → a pid→children + pid→rssKb map, so each
+// session's memory is the sum over its pane-pid subtree. RSS over-counts shared
+// pages, but it's a fine relative "which session is biggest" signal (the incident
+// report estimated per-process RSS the same way). `ps rss` is in KB on macOS+Linux.
+interface PsTree {
+  children: Map<number, number[]>;
+  rssKb: Map<number, number>;
+}
+
+async function collectPsTree(): Promise<PsTree> {
+  const children = new Map<number, number[]>();
+  const rssKb = new Map<number, number>();
+  const out = await run('ps', ['-axo', 'pid=,ppid=,rss=']);
+  if (out == null) return { children, rssKb };
+  for (const line of out.split('\n')) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)$/);
+    if (!m) continue;
+    const pid = Number(m[1]), ppid = Number(m[2]), rss = Number(m[3]);
+    rssKb.set(pid, rss);
+    const arr = children.get(ppid);
+    if (arr) arr.push(pid); else children.set(ppid, [pid]);
+  }
+  return { children, rssKb };
+}
+
+function subtreeRssMb(rootPid: number, tree: PsTree): number {
+  let kb = 0;
+  const stack = [rootPid];
+  const seen = new Set<number>();
+  while (stack.length) {
+    const pid = stack.pop()!;
+    if (seen.has(pid)) continue; // guard against a pid-reuse cycle
+    seen.add(pid);
+    kb += tree.rssKb.get(pid) ?? 0;
+    for (const c of tree.children.get(pid) ?? []) stack.push(c);
+  }
+  return Math.round(kb / 1024);
 }
 
 // Async exec → stdout, or null on non-zero exit / timeout / buffer overflow.
@@ -158,6 +201,7 @@ async function probe(
   agentName: string,
   agentDirectory: string | null,
   claudeSessionId: string | null,
+  psTree: PsTree,
 ): Promise<SessionSnapshot> {
   // DB-leader: prefer the agent's stored directory (works for imported agents
   // whose path lives outside AGENTS_ROOT). Fall back to the old AGENTS_ROOT
@@ -168,7 +212,7 @@ async function probe(
   const empty = {
     sessionId, pid: null, contextTokens: null, outputTokens: null,
     lastActivity: null, transcriptPath: null, lastUserPrompt: null,
-    lastAssistantText: null, loopState,
+    lastAssistantText: null, loopState, rssMb: null,
   };
 
   const alive = await paneAlive(sessionId);
@@ -183,8 +227,9 @@ async function probe(
     tp ? tailLines(tp) : Promise.resolve<string[]>([]),
   ]);
   const state = working ? 'working' : 'idle';
+  const rssMb = pid != null ? subtreeRssMb(pid, psTree) : null;
 
-  if (!tp) return { ...empty, alive, pid, state: 'starting' };
+  if (!tp) return { ...empty, alive, pid, state: 'starting', rssMb };
 
   let lastActivityMs = 0;
   let contextTokens: number | null = null;
@@ -247,6 +292,7 @@ async function probe(
     lastUserPrompt: lastUser,
     lastAssistantText: lastAssistant,
     loopState,
+    rssMb,
   };
 }
 
@@ -264,8 +310,11 @@ export async function collectSessionSnapshots(): Promise<SessionSnapshot[]> {
   // guards) must not blank EVERY session's status for the tick — drop only the
   // one that failed and push the rest, so the fleet's status degrades by one
   // session instead of going dark.
+  // One ps snapshot for the whole tick → every session's pane-subtree RSS is
+  // summed from the same map (no per-session ps fork).
+  const psTree = await collectPsTree();
   const settled = await Promise.allSettled(
-    pending.sessions.map((s) => probe(s.id, s.agentName, s.agentDirectory, s.claudeSessionId)),
+    pending.sessions.map((s) => probe(s.id, s.agentName, s.agentDirectory, s.claudeSessionId, psTree)),
   );
   const out: SessionSnapshot[] = [];
   for (const r of settled) {

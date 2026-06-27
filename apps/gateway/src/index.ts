@@ -21,6 +21,7 @@
 
 import { collectAgentsFromList } from './collect/agents';
 import { collectSessionSnapshots } from './collect/session-snapshot';
+import { collectHostStat } from './collect/host-stat';
 import { collectUsage } from './collect/usage';
 import { collectUsageWindows } from './collect/window';
 import { collectPlanUsage } from './collect/plan-usage';
@@ -100,6 +101,12 @@ async function pushSessionSnapshots() {
   });
 }
 
+async function pushHostStat() {
+  await safe('host-stat', async () => {
+    await api.syncHostStat(await collectHostStat());
+  });
+}
+
 async function pushUsage() {
   await safe('usage', async () => {
     const items = await collectUsage(35);
@@ -157,6 +164,7 @@ function loop(fn: () => Promise<void>, ms: number) {
   await pushGlobalSkillsTick();
   await safe('global-memory', globalMemoryTick);
   await pushSessionSnapshots();
+  await pushHostStat();
   await pushUsage();
   await pushUsageWindows();
   await pushCronTick();
@@ -175,6 +183,7 @@ startLoginBridge();
 loop(pushAgents, 5 * 60_000);
 loop(ensureBrainTick, 5 * 60_000); // fallback for brains created/updated between restarts
 loop(pushSessionSnapshots, 8_000);
+loop(pushHostStat, 30_000); // host RAM/swap/load → HostStat (resource governance)
 loop(pushCronTick, 15_000);
 loop(pushChatTick, 2_000);
 loop(pushChatCancelTick, 1_500);

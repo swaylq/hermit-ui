@@ -31,6 +31,8 @@ async function get<T>(path: string): Promise<T> {
 export const api = {
   syncAgents: (agents: any[]) => post('/api/sync/agents', { agents }),
   syncSessionSnapshots: (items: any[]) => post('/api/sync/session-snapshot', { items }),
+  // Host-level RAM/swap/load/cpu snapshot → upserts HostStat (resource governance).
+  syncHostStat: (stat: any) => post('/api/sync/host-stat', { stat }),
   syncUsage: (items: any[]) => post('/api/sync/usage', { items }),
   syncUsageWindows: (items: any[]) => post('/api/sync/usage-window', { items }),
   // Real Claude Max plan consumption scraped from `claude /usage` (the only
