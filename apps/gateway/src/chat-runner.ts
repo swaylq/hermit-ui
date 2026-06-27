@@ -531,6 +531,12 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // inspect it via Bash (whisper for speech, ffmpeg to inspect/convert) instead.
   const AUDIO_EXTS = new Set(['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac']);
   const isAudio = (p: string) => AUDIO_EXTS.has((p.split('.').pop() || '').toLowerCase());
+  // Video is binary too, and Claude can't ingest it natively — Read'ing it is
+  // gibberish. Tell claude to inspect with ffprobe, extract frames → Read them as
+  // images, and/or transcribe the audio track via Bash. ffmpeg/ffprobe are on the
+  // macOS agent host.
+  const VIDEO_EXTS = new Set(['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'mpeg', 'mpg', '3gp', 'wmv']);
+  const isVideo = (p: string) => VIDEO_EXTS.has((p.split('.').pop() || '').toLowerCase());
   // Office docs are binary too (zip+XML for the modern formats) — Read'ing them
   // is gibberish. Hand claude a per-type "convert via Bash" instruction so an
   // uploaded .docx/.xlsx/.pptx is actually usable. Tools confirmed on the macOS
@@ -573,6 +579,17 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
         `An uploaded audio file is at ${p} — it is binary, so do NOT Read it directly. ` +
           `Inspect it with \`ffmpeg -i ${p}\` (format / duration). For speech, transcribe via Bash ` +
           `with whisper / whisper-cpp if installed (\`command -v whisper whisper-cpp ffmpeg\` first); ` +
+          `if no transcriber is available, tell the user what to install.`,
+      );
+    } else if (isVideo(p)) {
+      promptParts.push(
+        `An uploaded video file is at ${p} — it is binary, so do NOT Read it directly. ` +
+          `First inspect it with \`ffprobe -hide_banner ${p}\` (duration / resolution / streams). ` +
+          `To see the visuals, extract frames into a temp dir and Read those images — e.g. ` +
+          `\`mkdir -p /tmp/vframes && ffmpeg -i ${p} -vf "fps=1,scale=-2:720" /tmp/vframes/f_%03d.jpg\` ` +
+          `(1 fps, 720p — lower the fps for long clips so Read doesn't wedge on too many frames). ` +
+          `For speech, extract the audio (\`ffmpeg -i ${p} -vn -ac 1 /tmp/vaudio.wav\`) and transcribe with ` +
+          `whisper / whisper-cpp if installed (\`command -v ffmpeg ffprobe whisper whisper-cpp\` first); ` +
           `if no transcriber is available, tell the user what to install.`,
       );
     } else if (office) {

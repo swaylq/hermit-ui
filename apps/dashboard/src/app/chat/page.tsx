@@ -2458,6 +2458,8 @@ const SAFE_FILE_EXTS = [
   'docx','xlsx','pptx','doc','xls','ppt','odt','ods','odp',
   // audio — stored as-is; the agent transcribes / inspects via Bash (whisper / ffmpeg)
   'mp3','m4a','wav','ogg','flac','aac',
+  // video — stored as-is; the agent inspects / extracts frames / transcribes via Bash (ffmpeg / ffprobe)
+  'mp4','mov','m4v','webm','mkv','avi','mpeg','mpg','3gp','wmv',
 ] as const;
 const SAFE_FILE_EXT_SET = new Set<string>(SAFE_FILE_EXTS);
 // `<input accept>` value: `image/*` + every whitelisted file extension.

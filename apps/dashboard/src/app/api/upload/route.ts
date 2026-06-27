@@ -29,6 +29,11 @@ import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
 
 const MAX_BYTES = 25 * 1024 * 1024;
+// Video files are large; allow a higher cap than the 25 MB image/file default.
+// (This route buffers the whole upload in memory, so this is a deliberate ceiling.)
+const VIDEO_MAX_BYTES = 200 * 1024 * 1024;
+const VIDEO_EXTS = ['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'mpeg', 'mpg', '3gp', 'wmv'];
+const VIDEO_EXT_SET = new Set<string>(VIDEO_EXTS);
 const SAFE_LONG_EDGE = 2000;
 const ALLOWED_MIME = new Set([
   'image/png',
@@ -61,6 +66,9 @@ const SAFE_FILE_EXT_SET = new Set<string>([
   // audio — binary; the gateway relay hands the agent a "transcribe via Bash"
   // instruction (whisper / ffmpeg), never a raw Read.
   'mp3','m4a','wav','ogg','flac','aac',
+  // video — binary; the gateway relay hands the agent an "ffmpeg/ffprobe via
+  // Bash" instruction (extract frames → Read as images, or transcribe), not a Read.
+  ...VIDEO_EXTS,
 ]);
 
 function uploadRoot(): string {
@@ -157,7 +165,10 @@ export async function POST(req: NextRequest) {
   if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 });
   if (!(file instanceof Blob)) return NextResponse.json({ error: 'file blob required' }, { status: 400 });
   if (file.size === 0) return NextResponse.json({ error: 'empty file' }, { status: 400 });
-  if (file.size > MAX_BYTES) return NextResponse.json({ error: `file too large (>${MAX_BYTES} bytes)` }, { status: 413 });
+  // Per-type cap: video gets a higher ceiling than the 25 MB image/file default.
+  const uploadExt = extname((file as File).name || '').replace(/^\./, '').toLowerCase();
+  const cap = VIDEO_EXT_SET.has(uploadExt) ? VIDEO_MAX_BYTES : MAX_BYTES;
+  if (file.size > cap) return NextResponse.json({ error: `file too large (>${cap} bytes)` }, { status: 413 });
 
   const mime = (file.type || '').toLowerCase();
   const isImage = ALLOWED_MIME.has(mime);
