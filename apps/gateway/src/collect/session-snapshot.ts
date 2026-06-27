@@ -117,9 +117,14 @@ async function paneAlive(sessionId: string): Promise<boolean> {
 }
 
 async function tmuxPanePid(sessionId: string): Promise<number | null> {
-  const out = await run('tmux', ['display', '-p', '-t', `=${tmuxPaneName(sessionId)}`, '#{pane_pid}'], TMUX_TIMEOUT_MS);
+  // `display -p -t =session '#{pane_pid}'` resolves the target as a CLIENT and
+  // returns EMPTY when no client is attached (the gateway never attaches) — so
+  // this silently yielded null for every session. `list-panes` resolves the
+  // session directly and reliably prints the pane pid.
+  const out = await run('tmux', ['list-panes', '-t', `=${tmuxPaneName(sessionId)}`, '-F', '#{pane_pid}'], TMUX_TIMEOUT_MS);
   if (out == null) return null;
-  const n = Number(out.trim());
+  const first = out.split('\n').map((l) => l.trim()).find(Boolean);
+  const n = Number(first);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
