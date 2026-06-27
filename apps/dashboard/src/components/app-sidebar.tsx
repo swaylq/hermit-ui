@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import { HostHealthChip } from './host-health-panel';
 import { relTime } from '@/lib/format';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
@@ -608,6 +609,7 @@ export function AppSidebar() {
               </Link>
               <BrainButton collapsed={collapsed} />
               <NotificationsButton collapsed={collapsed} count={notifCounts.total} />
+              <HostHealthChip collapsed={collapsed} />
               <Link
                 href="/market/skills"
                 title="Public marketplace"

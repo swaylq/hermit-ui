@@ -72,6 +72,10 @@ export const chatRouter = router({
           contextTokens: true,
           snapshotAt: true,
           loopState: true,
+          // Resource governance: per-session memory + hibernation state, read by
+          // the sidebar rows (rss + 💤) and the Host-health panel.
+          rssMb: true,
+          hibernatedAt: true,
           // Dropped claudeSessionId / pid / outputTokens / lastActivity: no UI
           // consumer reads them, and this payload (~900B × every session) polls
           // every 5s on every page. The gateway still gets them via its own routes.
