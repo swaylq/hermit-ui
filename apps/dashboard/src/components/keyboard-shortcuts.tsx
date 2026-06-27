@@ -1,7 +1,7 @@
 'use client';
 
 // Global keyboard shortcuts — ACTIVE ONLY IN THE INSTALLED PWA (isStandalone).
-// ⌘K focus search · ⌘⇧N new chat · ⌘1-6 navigate · ? (or ⌘/) shortcuts overlay ·
+// ⌘K focus search · ⌘⇧N new chat · ⌘1-6 navigate · ? shortcuts overlay ·
 // Esc close. Mounted once in providers; the listener lives for the app's lifetime.
 // The ? overlay + the Settings → Help tab both render from lib/shortcuts SHORTCUTS.
 
@@ -37,8 +37,9 @@ export function KeyboardShortcuts() {
         input?.select();
         return;
       }
-      // ? / ⌘/ — toggle the shortcuts overlay (? only when not typing).
-      if ((!typing && e.key === '?') || (e.metaKey && e.key === '/')) {
+      // ? — toggle the shortcuts overlay (not while typing). NB: ⌘/ is taken — the
+      // chat page uses it to focus the composer — so ? is the sole overlay trigger.
+      if (!typing && e.key === '?') {
         e.preventDefault();
         setOverlay((v) => !v);
         return;
