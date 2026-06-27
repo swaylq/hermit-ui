@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
+import { hostHealth } from '@/lib/host-health';
 import { resolveMachine } from '../route';
 
 const Stat = z.object({
@@ -30,7 +31,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'bad body', detail: String(e) }, { status: 400 });
   }
 
-  const data = { ...body.stat, sampledAt: new Date() };
+  // Red-crossing detection: stamp redAlertAt only when health goes non-red → red
+  // (so a sustained red doesn't re-alert every 30s); clear it on recovery. Leave
+  // alertReadAt untouched here (only the inbox read mutations move it).
+  const prev = await prisma.hostStat.findUnique({ where: { machineId: machine.id } });
+  const newHealth = hostHealth(body.stat);
+  const prevHealth = prev ? hostHealth(prev) : 'green';
+  let redAlertAt = prev?.redAlertAt ?? null;
+  if (newHealth === 'red' && prevHealth !== 'red') redAlertAt = new Date();
+  else if (newHealth !== 'red') redAlertAt = null;
+
+  const data = { ...body.stat, sampledAt: new Date(), redAlertAt };
   await prisma.hostStat.upsert({
     where: { machineId: machine.id },
     create: { machineId: machine.id, ...data },

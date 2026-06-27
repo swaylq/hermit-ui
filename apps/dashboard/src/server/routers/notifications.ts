@@ -10,6 +10,15 @@
 
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
+import { fmtGB } from '@/lib/host-health';
+
+// A host's red-pressure alert is "pending" (show in the inbox) iff it was raised
+// (redAlertAt set, on a red crossing) and not yet read past that raise. Recovery
+// clears redAlertAt in the sync route, so this also goes false on recovery.
+function hostAlertPending(s: { redAlertAt: Date | null; alertReadAt: Date | null } | null | undefined): boolean {
+  if (!s?.redAlertAt) return false;
+  return !s.alertReadAt || s.alertReadAt.getTime() < s.redAlertAt.getTime();
+}
 
 // Unread = lastMessageAt > lastReadAt — a column-to-column comparison Prisma can't
 // express in a `where`, so (exactly like isSessionUnread on the client) we pull the
@@ -50,7 +59,7 @@ export const notificationsRouter = router({
   // The full feed: unread chat sessions + unread cron runs, merged newest-first.
   feed: machineProcedure.query(async ({ ctx }) => {
     const machineId = ctx.machine.id;
-    const [sessionRows, cronRuns] = await Promise.all([
+    const [sessionRows, cronRuns, hostStat] = await Promise.all([
       prisma.chatSession.findMany({
         where: { machineId },
         orderBy: { lastMessageAt: 'desc' },
@@ -78,6 +87,7 @@ export const notificationsRouter = router({
           cron: { select: { id: true, title: true, prompt: true, agentName: true } },
         },
       }),
+      prisma.hostStat.findUnique({ where: { machineId } }),
     ]);
 
     const chatItems = sessionRows.filter(isUnread).map((s) => {
@@ -106,7 +116,18 @@ export const notificationsRouter = router({
       runId: r.id,
     }));
 
-    const items = [...chatItems, ...cronItems].sort((a, b) => b.at.getTime() - a.at.getTime());
+    const hostItems = hostAlertPending(hostStat)
+      ? [{
+          kind: 'host' as const,
+          key: `host:${machineId}`,
+          agentName: ctx.machine.alias || ctx.machine.name,
+          title: 'Host under memory pressure',
+          preview: `free ${fmtGB(hostStat!.ramFreeMb)} GB · load ${hostStat!.loadAvg1?.toFixed(1) ?? '—'} · ${hostStat!.cpuCount ?? '—'} cores`,
+          at: hostStat!.redAlertAt as Date,
+        }]
+      : [];
+
+    const items = [...hostItems, ...chatItems, ...cronItems].sort((a, b) => b.at.getTime() - a.at.getTime());
     return { items, counts: { chat: chatItems.length, cron: cronItems.length, total: items.length } };
   }),
 
@@ -114,7 +135,7 @@ export const notificationsRouter = router({
   // globally while the dashboard is open, so it stays bounded and select-light.
   counts: machineProcedure.query(async ({ ctx }) => {
     const machineId = ctx.machine.id;
-    const [sessionRows, cron] = await Promise.all([
+    const [sessionRows, cron, hostStat] = await Promise.all([
       prisma.chatSession.findMany({
         where: { machineId },
         orderBy: { lastMessageAt: 'desc' },
@@ -122,9 +143,11 @@ export const notificationsRouter = router({
         select: { id: true, lastMessageAt: true, lastReadAt: true },
       }),
       prisma.cronRun.count({ where: { cron: { machineId }, readAt: null, status: { not: 'running' } } }),
+      prisma.hostStat.findUnique({ where: { machineId } }),
     ]);
     const chat = sessionRows.filter(isUnread).length;
-    return { chat, cron, total: chat + cron };
+    const host = hostAlertPending(hostStat) ? 1 : 0;
+    return { chat, cron, total: chat + cron + host };
   }),
 
   // Clear the whole inbox: stamp lastReadAt on every currently-unread session and
@@ -143,6 +166,12 @@ export const notificationsRouter = router({
         data: { readAt: now },
       }),
     ]);
+    // Ack a pending host alert too — stamp alertReadAt past redAlertAt so it drops
+    // from the feed until the next red crossing.
+    const hostStat = await prisma.hostStat.findUnique({ where: { machineId } });
+    if (hostAlertPending(hostStat)) {
+      await prisma.hostStat.update({ where: { machineId }, data: { alertReadAt: now } });
+    }
     return { ok: true, chat: chatRes.count, cron: cronRes.count };
   }),
 });

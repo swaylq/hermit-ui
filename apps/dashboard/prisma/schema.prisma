@@ -65,6 +65,14 @@ model HostStat {
   cpuCount    Int?
   sampledAt   DateTime?
 
+  // Red-pressure alert (A4). redAlertAt is stamped when the host CROSSES into red
+  // (set once, not every tick) and cleared on recovery to ≤amber; alertReadAt is
+  // stamped when the user reads the inbox. The notifications feed shows a host
+  // alert iff redAlertAt != null AND (alertReadAt == null OR alertReadAt <
+  // redAlertAt) — so a sustained red shows once, a new episode re-alerts.
+  redAlertAt  DateTime?
+  alertReadAt DateTime?
+
   machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
 }
 

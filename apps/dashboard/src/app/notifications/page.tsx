@@ -10,14 +10,14 @@
 
 import { Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Bell, MessageSquare, Clock, CheckCheck, AlertTriangle } from 'lucide-react';
+import { Bell, MessageSquare, Clock, CheckCheck, AlertTriangle, Activity } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 
 type FeedItem = {
-  kind: 'chat' | 'cron';
+  kind: 'chat' | 'cron' | 'host';
   key: string;
   agentName: string;
   title: string;
@@ -43,6 +43,12 @@ function NotificationsInner() {
   const feed = trpc.notifications.feed.useQuery(undefined, { refetchInterval: 5_000 });
   const markChat = trpc.chat.markRead.useMutation();
   const markRun = trpc.cron.markRunRead.useMutation();
+  const ackHost = trpc.hosts.ackAlert.useMutation({
+    onSettled: () => {
+      utils.notifications.feed.invalidate();
+      utils.notifications.counts.invalidate();
+    },
+  });
   const markAll = trpc.notifications.markAllRead.useMutation({
     onMutate: async () => {
       // Optimistic: empty the feed + zero the counts so the list clears this frame.
@@ -69,6 +75,10 @@ function NotificationsInner() {
     } else if (item.kind === 'cron' && item.cronId && item.runId) {
       markRun.mutate({ runId: item.runId });
       window.location.href = `/cron?id=${encodeURIComponent(item.cronId)}&run=${encodeURIComponent(item.runId)}`;
+    } else if (item.kind === 'host') {
+      // No detail page — clicking a host alert just acknowledges it (the chip +
+      // panel are where the live numbers live).
+      ackHost.mutate();
     }
   }
 
@@ -108,7 +118,7 @@ function NotificationsInner() {
                   className="group w-full text-left flex gap-3 px-3 py-2.5 rounded-lg hover:bg-accent/60 transition-colors cursor-pointer"
                 >
                   <span className="mt-0.5 shrink-0 text-muted-foreground">
-                    {item.kind === 'chat' ? <MessageSquare className="h-4 w-4" /> : <Clock className="h-4 w-4" />}
+                    {item.kind === 'chat' ? <MessageSquare className="h-4 w-4" /> : item.kind === 'host' ? <Activity className="h-4 w-4 text-rose-500" /> : <Clock className="h-4 w-4" />}
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 text-[11px] text-muted-foreground">

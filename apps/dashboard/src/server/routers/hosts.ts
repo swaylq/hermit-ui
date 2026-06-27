@@ -12,6 +12,16 @@ export const hostsRouter = router({
     return prisma.hostStat.findUnique({ where: { machineId: ctx.machine.id } });
   }),
 
+  // Read (dismiss) a pending red-pressure alert from the notifications inbox —
+  // stamps alertReadAt so the host item drops until the next red crossing.
+  ackAlert: machineProcedure.mutation(async ({ ctx }) => {
+    await prisma.hostStat.updateMany({
+      where: { machineId: ctx.machine.id, redAlertAt: { not: null } },
+      data: { alertReadAt: new Date() },
+    });
+    return { ok: true };
+  }),
+
   // This machine's open chat sessions, heaviest first — the panel's "Top memory
   // sessions" list. Deliberately light (no message-preview subquery, unlike
   // chat.listSessions) since it polls alongside the panel. Includes hibernated
