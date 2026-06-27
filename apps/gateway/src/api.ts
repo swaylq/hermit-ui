@@ -125,6 +125,36 @@ export const api = {
     if (!r.ok) throw new Error(`ackSessionRestart → ${r.status}`);
   },
 
+  // ── Hibernation (resource governance) ───────────────────────────────────────
+  // Manual hibernate requests (context-menu Hibernate). Kill pane → ackHibernated.
+  pollHibernations: async (): Promise<Array<{ id: string }>> => {
+    const r = await get<any>(
+      '/api/trpc/chat.pollHibernations?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+
+  // Idle sessions the dashboard deems safe to auto-reap (empty if idleReapHours
+  // is null). The gateway re-checks the live pane (working/exists) before killing.
+  pollReapCandidates: async (): Promise<Array<{ id: string }>> => {
+    const r = await get<any>(
+      '/api/trpc/chat.pollReapCandidates?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+
+  ackHibernated: async (sessionIds: string[]) => {
+    if (sessionIds.length === 0) return;
+    const url = `${DASHBOARD_URL}/api/trpc/chat.ackHibernated?batch=1`;
+    const body = { '0': { json: { sessionIds } } };
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`ackHibernated → ${r.status}`);
+  },
+
   // ── Agent lifecycle (create/delete/edit) round-trip ─────────────────────
   // Returns one row per pending AgentRequest, joined with the agent's stored
   // directory (null if the agent doesn't exist yet — only happens between

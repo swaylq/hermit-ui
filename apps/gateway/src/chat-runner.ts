@@ -181,6 +181,86 @@ export async function chatRestartTick() {
   }
 }
 
+// ── Hibernation (resource governance) ─────────────────────────────────────────
+// In-flight guard like restartingSessions: the kill takes up to 2s and ticks
+// don't await each other.
+const hibernatingSessions = new Set<string>();
+
+// Hibernate one session: tear down in-memory state + kill the pane to free its
+// ~500MB claude process. No "[restarted]" banner — the session is idle (reaper
+// guards / user intent) and the 💤 badge explains it. claudeSessionId + transcript
+// survive, so the next message respawns via --resume (the reattach loop skips the
+// dead pane, so it stays asleep until the user sends). Returns false if already
+// mid-hibernate so the caller skips acking it.
+export async function hibernateOneSession(sessionId: string): Promise<boolean> {
+  if (hibernatingSessions.has(sessionId)) return false;
+  hibernatingSessions.add(sessionId);
+  try {
+    const state = sessionStates.get(sessionId);
+    if (state) {
+      try { state.stopWatcher(); } catch {}
+      sessionStates.delete(sessionId);
+    }
+    await killTmuxSession(sessionId, 2_000);
+    console.log(`[hibernate] killed session=${sessionId.slice(0, 8)}`);
+    return true;
+  } finally {
+    hibernatingSessions.delete(sessionId);
+  }
+}
+
+// Manual hibernate requests (context-menu Hibernate). Mirrors chatRestartTick.
+export async function chatHibernateTick() {
+  let rows: Awaited<ReturnType<typeof api.pollHibernations>>;
+  try {
+    rows = await api.pollHibernations();
+  } catch (e) {
+    console.error('[hibernate] poll failed:', e);
+    return;
+  }
+  if (rows.length === 0) return;
+  const ackIds: string[] = [];
+  for (const row of rows) {
+    const did = await hibernateOneSession(row.id);
+    if (did) ackIds.push(row.id);
+  }
+  try {
+    await api.ackHibernated(ackIds);
+  } catch (e) {
+    console.error('[hibernate] ack failed:', e);
+  }
+}
+
+// Auto-reaper: the dashboard returns idle sessions safe to hibernate; we re-check
+// the LIVE pane (exists + not working) right before killing, since the snapshot
+// state it judged on can be a few seconds stale. Resident `claude-<name>` agents
+// are never ChatSessions, so they're never candidates.
+export async function reaperTick() {
+  let rows: Awaited<ReturnType<typeof api.pollReapCandidates>>;
+  try {
+    rows = await api.pollReapCandidates();
+  } catch (e) {
+    console.error('[reaper] poll failed:', e);
+    return;
+  }
+  if (rows.length === 0) return;
+  const ackIds: string[] = [];
+  for (const row of rows) {
+    // No pane → nothing to free; the snapshot tick corrects alive=false and it
+    // drops out of the candidate set. Working since the poll → leave it alone.
+    if (!tmuxSessionExists(row.id)) continue;
+    if (await paneIsWorking(row.id)) continue;
+    const did = await hibernateOneSession(row.id);
+    if (did) ackIds.push(row.id);
+  }
+  try {
+    await api.ackHibernated(ackIds);
+  } catch (e) {
+    console.error('[reaper] ack failed:', e);
+  }
+  if (ackIds.length > 0) console.log(`[reaper] hibernated ${ackIds.length} idle session(s)`);
+}
+
 export async function chatCancelTick() {
   let rows: Awaited<ReturnType<typeof api.pollChatCancellations>>;
   try {

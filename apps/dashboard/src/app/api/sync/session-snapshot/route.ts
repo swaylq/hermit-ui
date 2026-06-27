@@ -69,6 +69,9 @@ export async function POST(req: NextRequest) {
     // on a real number so a transient `ps` miss doesn't flicker the readout to null.
     if (it.alive === false) data.rssMb = null;
     else if (it.rssMb != null) data.rssMb = it.rssMb;
+    // Wake: a hibernated session whose pane is back up (user sent → --resume
+    // respawn) is no longer hibernated. alive=true ⟺ not hibernated.
+    if (it.alive === true) data.hibernatedAt = null;
 
     const r = await prisma.chatSession.updateMany({
       where: { id: it.sessionId, machineId: machine.id },

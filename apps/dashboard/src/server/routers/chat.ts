@@ -39,6 +39,14 @@ const ContentBlock = z.union([
 // all four so they can never drift apart.
 const USER_QUEUE_FILTER = { role: 'user', deliveredAt: null, externalId: null } as const;
 
+// A session is "looping" when its loopState carries a loop with status 'running'
+// (the loop skill runs autonomous turns in the session) — the reaper must never
+// hibernate such a session out from under its loop.
+function hasRunningLoop(loopState: unknown): boolean {
+  const loops = (loopState as { loops?: Array<{ status?: string }> } | null)?.loops;
+  return Array.isArray(loops) && loops.some((l) => l?.status === 'running');
+}
+
 export const chatRouter = router({
   listSessions: agentProcedure
     // Tolerate a `null` input (some client paths serialize an omitted/undefined
@@ -569,6 +577,75 @@ export const chatRouter = router({
       const r = await prisma.chatSession.updateMany({
         where: { id: { in: input.sessionIds }, machineId: ctx.machine.id },
         data: { restartRequestedAt: null },
+      });
+      return { ok: true, updated: r.count };
+    }),
+
+  // ── Hibernation (resource governance) ───────────────────────────────────────
+  // Manual hibernate from the session context menu: kill the ~500MB claude pane
+  // to free memory, keeping claudeSessionId + transcript so the next message
+  // respawns via --resume. Sets hibernateRequestedAt; the gateway's hibernate
+  // tick does the kill + stamps hibernatedAt. Mirrors requestSessionRestart.
+  requestHibernate: agentProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
+      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
+      await prisma.chatSession.update({ where: { id: input.id }, data: { hibernateRequestedAt: new Date() } });
+      return { ok: true };
+    }),
+
+  // Gateway polls for manual hibernate requests (kill pane → ackHibernated).
+  pollHibernations: machineProcedure.query(async ({ ctx }) => {
+    return prisma.chatSession.findMany({
+      where: { machineId: ctx.machine.id, hibernateRequestedAt: { not: null } },
+      select: { id: true },
+    });
+  }),
+
+  // Auto-reaper: the idle dashboard sessions safe to hibernate, computed here so
+  // the gateway just kills + acks. Returns [] when this machine has auto-reap
+  // disabled (idleReapHours null). A session qualifies only if ALL hold: alive
+  // (a pane to free), not closed / already-hibernated, not 'working', no running
+  // loop, no undelivered user message, and idle (no message OR pane activity)
+  // past the TTL. The gateway re-checks 'working' on the live pane before killing.
+  pollReapCandidates: machineProcedure.query(async ({ ctx }) => {
+    const reapHours = ctx.machine.idleReapHours;
+    if (reapHours == null) return [];
+    const cutoff = Date.now() - reapHours * 3_600_000;
+    const rows = await prisma.chatSession.findMany({
+      where: { machineId: ctx.machine.id, closedAt: null, hibernatedAt: null, alive: true },
+      select: { id: true, lastMessageAt: true, lastActivity: true, startedAt: true, state: true, loopState: true },
+    });
+    if (rows.length === 0) return [];
+    const queued = await prisma.chatMessage.findMany({
+      where: { sessionId: { in: rows.map((r) => r.id) }, ...USER_QUEUE_FILTER },
+      select: { sessionId: true },
+      distinct: ['sessionId'],
+    });
+    const queuedSet = new Set(queued.map((q) => q.sessionId));
+    const out = rows.filter((r) => {
+      if (r.state === 'working') return false;
+      if (queuedSet.has(r.id)) return false;
+      if (hasRunningLoop(r.loopState)) return false;
+      const last = Math.max(r.lastMessageAt?.getTime() ?? 0, r.lastActivity?.getTime() ?? 0, r.startedAt.getTime());
+      return last < cutoff;
+    });
+    return out.map((r) => ({ id: r.id }));
+  }),
+
+  // Gateway acks a kill (auto-reap OR manual hibernate): mark hibernated + dead +
+  // clear the manual request flag. claudeSessionId + transcript are kept, so the
+  // next user message respawns with --resume (the snapshot route clears
+  // hibernatedAt once the pane is back up).
+  ackHibernated: machineProcedure
+    .input(z.object({ sessionIds: z.array(z.string()) }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.sessionIds.length === 0) return { ok: true, updated: 0 };
+      const r = await prisma.chatSession.updateMany({
+        where: { id: { in: input.sessionIds }, machineId: ctx.machine.id },
+        data: { hibernatedAt: new Date(), alive: false, hibernateRequestedAt: null },
       });
       return { ok: true, updated: r.count };
     }),

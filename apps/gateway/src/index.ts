@@ -27,7 +27,7 @@ import { collectUsageWindows } from './collect/window';
 import { collectPlanUsage } from './collect/plan-usage';
 import { api } from './api';
 import { tick as cronTick } from './cron-runner';
-import { chatTick, chatCancelTick, chatRestartTick, shutdownChatRunner } from './chat-runner';
+import { chatTick, chatCancelTick, chatRestartTick, chatHibernateTick, reaperTick, shutdownChatRunner } from './chat-runner';
 import { agentRequestTick } from './agent-lifecycle';
 import { machineRequestTick } from './machine-requests';
 import { startLoginBridge } from './login-bridge';
@@ -188,6 +188,8 @@ loop(pushCronTick, 15_000);
 loop(pushChatTick, 2_000);
 loop(pushChatCancelTick, 1_500);
 loop(pushChatRestartTick, 2_000);
+loop(() => safe('hibernate-tick', chatHibernateTick), 3_000); // manual hibernate requests
+loop(() => safe('reaper', reaperTick), 10 * 60_000); // auto-reap idle sessions (resource governance)
 loop(() => safe('agent-requests', agentRequestTick), 3_000);
 loop(() => safe('machine-requests', machineRequestTick), 3_000);
 loop(() => safe('file-transfers', fileTransferTick), 4_000);
