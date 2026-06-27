@@ -1,6 +1,15 @@
 # Host Resource Governance — Design Spec
 
-**Status:** approved 2026-06-28 · **Scope:** observability (A) + session lifecycle/reaping (B)
+**Status:** implemented + verified on Mac 2026-06-28 (commits 7a0e6e8…7ccdbc7); macmini
+gateway rollout pending. · **Scope:** observability (A) + session lifecycle/reaping (B)
+
+> **Done & live (Mac + VPS dashboard):** all 5 phases shipped. HostStat + per-session
+> rssMb collectors verified (fixed a latent `tmuxPanePid` bug — `display` → `list-panes`).
+> Host-health chip/panel, red-pressure inbox alert, reaper (idleReapHours seeded 72, idle
+> computed from max(lastMessageAt, lastActivity, startedAt)), manual Hibernate + 💤, wake-on-send.
+> Full hibernate→sleep→send→`--resume` wake cycle verified end-to-end.
+> **Pending:** `git pull && pm2 restart hermit-ui-gateway && pm2 save` on sway003-macmini +
+> macmini003 so their gateways push HostStat/rssMb and run the reaper (Mac gateway already on it).
 
 ## Background
 
