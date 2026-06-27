@@ -2,6 +2,7 @@
 // Both procedures are machineProcedure (owner-only; scoped share keys rejected)
 // and return data for the caller's authenticated machine.
 
+import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 
@@ -21,6 +22,19 @@ export const hostsRouter = router({
     });
     return { ok: true };
   }),
+
+  // Auto-reap TTL for this machine (null = disabled). Panel config control.
+  reapConfig: machineProcedure.query(async ({ ctx }) => {
+    return { idleReapHours: ctx.machine.idleReapHours };
+  }),
+
+  // Set/clear the auto-reap TTL (null disables the reaper for this machine).
+  setIdleReapHours: machineProcedure
+    .input(z.object({ hours: z.number().int().positive().max(8760).nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      await prisma.machine.update({ where: { id: ctx.machine.id }, data: { idleReapHours: input.hours } });
+      return { ok: true };
+    }),
 
   // This machine's open chat sessions, heaviest first — the panel's "Top memory
   // sessions" list. Deliberately light (no message-preview subquery, unlike

@@ -47,6 +47,34 @@ function hasRunningLoop(loopState: unknown): boolean {
   return Array.isArray(loops) && loops.some((l) => l?.status === 'running');
 }
 
+// Shared by the auto-reaper (pollReapCandidates) and the panel's bulk reap
+// (reapIdleNow): the alive idle dashboard sessions safe to hibernate at a given
+// TTL. Guards: not closed/hibernated/working, no running loop, no queued message;
+// idle = no user message OR pane activity past the cutoff.
+async function reapCandidateIds(machineId: string, reapHours: number): Promise<string[]> {
+  const cutoff = Date.now() - reapHours * 3_600_000;
+  const rows = await prisma.chatSession.findMany({
+    where: { machineId, closedAt: null, hibernatedAt: null, alive: true },
+    select: { id: true, lastMessageAt: true, lastActivity: true, startedAt: true, state: true, loopState: true },
+  });
+  if (rows.length === 0) return [];
+  const queued = await prisma.chatMessage.findMany({
+    where: { sessionId: { in: rows.map((r) => r.id) }, ...USER_QUEUE_FILTER },
+    select: { sessionId: true },
+    distinct: ['sessionId'],
+  });
+  const queuedSet = new Set(queued.map((q) => q.sessionId));
+  return rows
+    .filter((r) => {
+      if (r.state === 'working') return false;
+      if (queuedSet.has(r.id)) return false;
+      if (hasRunningLoop(r.loopState)) return false;
+      const last = Math.max(r.lastMessageAt?.getTime() ?? 0, r.lastActivity?.getTime() ?? 0, r.startedAt.getTime());
+      return last < cutoff;
+    })
+    .map((r) => r.id);
+}
+
 export const chatRouter = router({
   listSessions: agentProcedure
     // Tolerate a `null` input (some client paths serialize an omitted/undefined
@@ -613,27 +641,25 @@ export const chatRouter = router({
   pollReapCandidates: machineProcedure.query(async ({ ctx }) => {
     const reapHours = ctx.machine.idleReapHours;
     if (reapHours == null) return [];
-    const cutoff = Date.now() - reapHours * 3_600_000;
-    const rows = await prisma.chatSession.findMany({
-      where: { machineId: ctx.machine.id, closedAt: null, hibernatedAt: null, alive: true },
-      select: { id: true, lastMessageAt: true, lastActivity: true, startedAt: true, state: true, loopState: true },
-    });
-    if (rows.length === 0) return [];
-    const queued = await prisma.chatMessage.findMany({
-      where: { sessionId: { in: rows.map((r) => r.id) }, ...USER_QUEUE_FILTER },
-      select: { sessionId: true },
-      distinct: ['sessionId'],
-    });
-    const queuedSet = new Set(queued.map((q) => q.sessionId));
-    const out = rows.filter((r) => {
-      if (r.state === 'working') return false;
-      if (queuedSet.has(r.id)) return false;
-      if (hasRunningLoop(r.loopState)) return false;
-      const last = Math.max(r.lastMessageAt?.getTime() ?? 0, r.lastActivity?.getTime() ?? 0, r.startedAt.getTime());
-      return last < cutoff;
-    });
-    return out.map((r) => ({ id: r.id }));
+    const ids = await reapCandidateIds(ctx.machine.id, reapHours);
+    return ids.map((id) => ({ id }));
   }),
+
+  // Immediate bulk reap from the Host-health panel: flag every idle candidate at
+  // the given TTL for hibernation (the gateway's hibernate tick kills them within
+  // ~3s). Same guardrails as the auto-reaper; `hours` lets the panel offer e.g.
+  // "hibernate idle > 24h now" independent of the machine's auto-reap setting.
+  reapIdleNow: machineProcedure
+    .input(z.object({ hours: z.number().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const ids = await reapCandidateIds(ctx.machine.id, input.hours);
+      if (ids.length === 0) return { ok: true, count: 0 };
+      await prisma.chatSession.updateMany({
+        where: { id: { in: ids }, machineId: ctx.machine.id },
+        data: { hibernateRequestedAt: new Date() },
+      });
+      return { ok: true, count: ids.length };
+    }),
 
   // Gateway acks a kill (auto-reap OR manual hibernate): mark hibernated + dead +
   // clear the manual request flag. claudeSessionId + transcript are kept, so the

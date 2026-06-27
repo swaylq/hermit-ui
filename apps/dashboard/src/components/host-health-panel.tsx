@@ -74,6 +74,15 @@ function Bar({ usedPct, tone }: { usedPct: number; tone: string }) {
 function HostHealthPanel({ onClose }: { onClose: () => void }) {
   const stat = trpc.hosts.stat.useQuery(undefined, { refetchInterval: 10_000 }).data;
   const sessions = trpc.hosts.topSessions.useQuery(undefined, { refetchInterval: 10_000 }).data ?? [];
+  const reapConfig = trpc.hosts.reapConfig.useQuery().data;
+  const utils = trpc.useUtils();
+  const invalidate = () => {
+    void utils.hosts.topSessions.invalidate();
+    void utils.chat.listSessions.invalidate();
+  };
+  const hibernate = trpc.chat.requestHibernate.useMutation({ onSuccess: invalidate });
+  const reapNow = trpc.chat.reapIdleNow.useMutation({ onSuccess: invalidate });
+  const setReap = trpc.hosts.setIdleReapHours.useMutation({ onSuccess: () => void utils.hosts.reapConfig.invalidate() });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -158,12 +167,49 @@ function HostHealthPanel({ onClose }: { onClose: () => void }) {
                     <span className="font-medium">{s.agentName}</span>
                     {s.title ? <span className="text-muted-foreground"> · {s.title}</span> : null}
                   </span>
-                  {hibernated && <Moon className="h-3 w-3 shrink-0 text-muted-foreground" />}
+                  {hibernated ? (
+                    <Moon className="h-3 w-3 shrink-0 text-muted-foreground" aria-label="hibernated" />
+                  ) : s.alive ? (
+                    <button
+                      type="button"
+                      title="Hibernate — free memory; wakes on send"
+                      onClick={() => hibernate.mutate({ id: s.id })}
+                      className="shrink-0 rounded p-0.5 text-muted-foreground/50 hover:bg-muted hover:text-foreground cursor-pointer"
+                    >
+                      <Moon className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
                   <span className="w-8 shrink-0 text-right tabular-nums text-muted-foreground">{fmtIdle(s.lastMessageAt)}</span>
                 </div>
               );
             })}
           </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 border-t border-border px-4 py-2.5 text-xs">
+          <label className="flex items-center gap-1.5 text-muted-foreground">
+            Auto-reap idle &gt;
+            <input
+              type="number"
+              min={1}
+              key={reapConfig?.idleReapHours ?? 'off'}
+              defaultValue={reapConfig?.idleReapHours ?? ''}
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                setReap.mutate({ hours: v ? Math.max(1, Math.round(Number(v))) : null });
+              }}
+              className="w-12 rounded border border-border bg-background px-1.5 py-0.5 text-right text-foreground tabular-nums"
+            />
+            h
+          </label>
+          <button
+            type="button"
+            onClick={() => reapNow.mutate({ hours: reapConfig?.idleReapHours ?? 24 })}
+            disabled={reapNow.isPending}
+            className="rounded-md border border-border px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer disabled:opacity-50"
+          >
+            {reapNow.isPending ? 'Hibernating…' : reapNow.data ? `Slept ${reapNow.data.count}` : 'Hibernate idle now'}
+          </button>
         </div>
       </div>
     </div>,

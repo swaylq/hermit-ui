@@ -1316,6 +1316,9 @@ function RecentSessions() {
   const restartSession = trpc.chat.requestSessionRestart.useMutation({
     onSuccess: () => { void utils.chat.listSessions.invalidate(); },
   });
+  const hibernateSession = trpc.chat.requestHibernate.useMutation({
+    onSuccess: () => { void utils.chat.listSessions.invalidate(); },
+  });
   const deleteSession = trpc.chat.deleteSession.useMutation({
     onSuccess: (_d, vars) => {
       // Deleting the session you're viewing: hard-nav to /chat (the Next 16
@@ -1441,6 +1444,25 @@ function RecentSessions() {
                   restartSession.mutate({ id });
               },
             },
+            ...(() => {
+              // Hibernate only makes sense for a live session (a pane to free);
+              // a sleeping one wakes on send, no menu action needed.
+              const s = (sessions.data ?? []).find((x) => x.id === menu.id);
+              if (!s?.alive || s.hibernatedAt) return [];
+              return [{
+                label: 'Hibernate',
+                icon: <Moon className="h-3.5 w-3.5" />,
+                onClick: async () => {
+                  const id = menu.id;
+                  if (await confirm({
+                    title: 'Hibernate session',
+                    message: "Kill this session's pane to free its memory? It sleeps until your next message, which wakes it with full history (--resume).",
+                    confirmLabel: 'Hibernate',
+                  }))
+                    hibernateSession.mutate({ id });
+                },
+              }];
+            })(),
             {
               label: 'Delete',
               icon: <Trash2 className="h-3.5 w-3.5" />,
@@ -1560,6 +1582,7 @@ function RecentSessions() {
                       active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
                       s.closedAt && 'opacity-60',
                       s.hiddenAt && 'opacity-50',
+                      s.hibernatedAt && !s.closedAt && 'opacity-60',
                     )}
                     title={s.title || s.preview || s.agentName}
                   >
@@ -1578,6 +1601,9 @@ function RecentSessions() {
                           )}
                           {s.hiddenAt && (
                             <EyeOff className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hidden" />
+                          )}
+                          {s.hibernatedAt && (
+                            <Moon className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hibernated — wakes on send" />
                           )}
                           <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
                             {relTime(s.lastMessageAt ?? s.startedAt)}
