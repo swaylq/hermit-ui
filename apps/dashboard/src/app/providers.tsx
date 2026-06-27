@@ -8,6 +8,7 @@ import superjson from 'superjson';
 import { trpc } from '@/lib/trpc';
 import { getActiveKey } from '@/lib/keyring';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
+import { KeyboardShortcuts } from '@/components/keyboard-shortcuts';
 
 // Key storage moved to lib/keyring (multi-machine browser keyring). Re-export
 // the active-key getter so any importer of `@/app/providers` keeps working.
@@ -112,7 +113,10 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <trpc.Provider client={trpcClient} queryClient={queryClient}>
         <QueryClientProvider client={queryClient}>
-          <ConfirmProvider>{children}</ConfirmProvider>
+          <ConfirmProvider>
+            {children}
+            <KeyboardShortcuts />
+          </ConfirmProvider>
         </QueryClientProvider>
       </trpc.Provider>
     </ThemeProvider>

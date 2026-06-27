@@ -9,7 +9,6 @@ import {
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { HostHealthChip } from './host-health-panel';
 import { relTime } from '@/lib/format';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
@@ -609,7 +608,6 @@ export function AppSidebar() {
               </Link>
               <BrainButton collapsed={collapsed} />
               <NotificationsButton collapsed={collapsed} count={notifCounts.total} />
-              <HostHealthChip collapsed={collapsed} />
               <Link
                 href="/market/skills"
                 title="Public marketplace"
@@ -809,6 +807,7 @@ function SidebarFindInput({ value, onChange, placeholder, label }: {
       <div className="relative">
         <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" aria-hidden="true" />
         <input
+          data-sidebar-search
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Escape') onChange(''); }}
@@ -1487,6 +1486,7 @@ function RecentSessions() {
           <div className="relative flex-1 min-w-0">
             <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" aria-hidden="true" />
             <input
+              data-sidebar-search
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }}
