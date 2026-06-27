@@ -29,6 +29,11 @@ model Machine {
   fiveHourLimitUsd Float?
   weeklyLimitUsd   Float?
 
+  // Idle-TTL for the session reaper: a dashboard (hermit-*) session idle longer
+  // than this is hibernated (pane killed; --resume on next message). null = auto-
+  // reap disabled. See docs/resource-governance-design.md.
+  idleReapHours Int?
+
   agents              Agent[]
   crons               Cron[]
   usageHourly         UsageHourly[]
@@ -42,6 +47,25 @@ model Machine {
   planUsage           PlanUsage?
   globalMemory        GlobalMemory?
   shareLinks          AgentShareLink[]
+  hostStat            HostStat?
+}
+
+// Latest host-resource snapshot for a machine — RAM / swap / load / cpu, pushed by
+// the gateway host-stat tick (~30s) and upserted (one row per machine, no history).
+// Drives the dashboard Host-health panel + the red-pressure notification. Health
+// colour keys on free-RAM + load, NOT swap-used: macOS lazily reclaims swapfiles so
+// swap-used stays stale after pressure clears (macmini1 incident report §3).
+model HostStat {
+  machineId   String    @id
+  ramTotalMb  Int?
+  ramFreeMb   Int?
+  swapUsedMb  Int?
+  swapTotalMb Int?
+  loadAvg1    Float?
+  cpuCount    Int?
+  sampledAt   DateTime?
+
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
 }
 
 // A per-agent share link: a scoped credential that grants access to ONLY this
@@ -263,6 +287,21 @@ model ChatSession {
   // a small chip in the chat header from it.
   loopState         Json?
   snapshotAt        DateTime?
+
+  // ── Resource governance (docs/resource-governance-design.md) ──
+  // Process-tree RSS (claude + mcp-stub + any children) of this session's pane,
+  // in MB, latest snapshot. Pushed by the session-snapshot tick; drives the
+  // Host-health panel's per-session memory + the reaper's "biggest first" order.
+  rssMb                Int?
+  // Hibernation: the reaper (idle-TTL) or a manual Hibernate killed this session's
+  // pane to free its ~500MB claude process. claudeSessionId + the transcript are
+  // kept, so the next user message respawns with `--resume` (history preserved).
+  // Distinct from closedAt (user-ended): a hibernated session is "asleep, wakes on
+  // send". Cleared by the gateway when it respawns the session.
+  hibernatedAt         DateTime?
+  // User-requested manual hibernate. Set by chat.requestHibernate; gateway kills
+  // the pane + sets hibernatedAt, then clears this (mirrors restartRequestedAt).
+  hibernateRequestedAt DateTime?
 
   messages     ChatMessage[]
   interactions Interaction[]
