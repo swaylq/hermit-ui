@@ -1,6 +1,6 @@
 // Shared keyboard-shortcut definitions — the single source for the global handler
-// (components/keyboard-shortcuts.tsx), the ? overlay, and the Help tab's table.
-// Active only in the installed PWA (standalone display-mode); see isStandalone().
+// (components/keyboard-shortcuts.tsx) and the Help dialog's shortcuts table.
+// Shortcuts are active only in the installed PWA (standalone); see isStandalone().
 
 export type ShortcutGroup = 'Navigation' | 'Actions' | 'General';
 
@@ -21,9 +21,18 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'nav-notifications', keys: ['⌘', '4'], label: 'Go to Notifications', group: 'Navigation', href: '/notifications' },
   { id: 'nav-brain', keys: ['⌘', '5'], label: 'Go to Brain', group: 'Navigation', href: '/brain' },
   { id: 'nav-settings', keys: ['⌘', '6'], label: 'Go to Settings', group: 'Navigation', href: '/skills' },
-  { id: 'help', keys: ['?'], label: 'Show keyboard shortcuts', group: 'General' },
+  { id: 'help', keys: ['?'], label: 'Open Help', group: 'General' },
   { id: 'close', keys: ['Esc'], label: 'Close dialog / overlay', group: 'General' },
 ];
+
+// The Help dialog (sidebar Help button + the ? shortcut) is toggled via a window
+// event so the trigger and the dialog (mounted in providers) stay decoupled —
+// dispatch toggleHelp() from anywhere; <HelpDialog/> listens. Lives here (pure,
+// no JSX) so both keyboard-shortcuts and help-dialog import it without a cycle.
+export const HELP_EVENT = 'hermit:toggle-help';
+export function toggleHelp() {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(HELP_EVENT));
+}
 
 // True only in an installed PWA window (standalone display-mode). The user scoped
 // shortcuts to "PWA mode"; gating here also avoids ⌘1-6 clashing with the browser's

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Boxes, BarChart3, Wrench, HardDriveUpload, Brain, SunMoon, Activity, HelpCircle } from 'lucide-react';
+import { Boxes, BarChart3, Wrench, HardDriveUpload, Brain, SunMoon, Activity } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 
@@ -18,10 +18,9 @@ const TABS = [
   { key: 'system', label: 'System', href: '/system', Icon: Activity },
   { key: 'files', label: 'File Station', href: '/file-station', Icon: HardDriveUpload },
   { key: 'appearance', label: 'Appearance', href: '/appearance', Icon: SunMoon },
-  { key: 'help', label: 'Help', href: '/help', Icon: HelpCircle },
 ] as const;
 
-export function SettingsTabs({ active }: { active: 'skills' | 'memory' | 'usage' | 'ops' | 'system' | 'files' | 'appearance' | 'help' }) {
+export function SettingsTabs({ active }: { active: 'skills' | 'memory' | 'usage' | 'ops' | 'system' | 'files' | 'appearance' }) {
   const activeRef = useRef<HTMLAnchorElement>(null);
   useEffect(() => {
     // On a phone the four tabs don't fit, so the strip scrolls horizontally —

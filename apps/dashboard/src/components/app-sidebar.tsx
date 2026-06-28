@@ -5,10 +5,11 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, MenuIcon, Plus,
-  Trash2, RotateCcw, RotateCw, FoldVertical, ChevronDown, Check, X, Store, Bell, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, type LucideIcon,
+  Trash2, RotateCcw, RotateCw, FoldVertical, ChevronDown, Check, X, Store, Bell, HelpCircle, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import { toggleHelp } from '@/lib/shortcuts';
 import { relTime } from '@/lib/format';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
@@ -133,6 +134,26 @@ function BrainButton({ collapsed }: { collapsed: boolean }) {
         />
       </span>
     </Link>
+  );
+}
+
+// The Help button in the sidebar header → opens the Help popup (usage guide +
+// keyboard shortcuts) via toggleHelp(). Sits right beside the Brain button. A plain
+// button (no navigation); mirrors the sibling header icons' active/hover treatment.
+function HelpButton({ collapsed }: { collapsed: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={() => toggleHelp()}
+      title="Help"
+      aria-label="Help"
+      className={cn(
+        'inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0',
+        collapsed && 'lg:hidden',
+      )}
+    >
+      <HelpCircle className="h-4 w-4" />
+    </button>
   );
 }
 
@@ -607,6 +628,7 @@ export function AppSidebar() {
                 />
               </Link>
               <BrainButton collapsed={collapsed} />
+              <HelpButton collapsed={collapsed} />
               <NotificationsButton collapsed={collapsed} count={notifCounts.total} />
               <Link
                 href="/market/skills"

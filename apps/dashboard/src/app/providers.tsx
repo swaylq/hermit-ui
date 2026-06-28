@@ -9,6 +9,7 @@ import { trpc } from '@/lib/trpc';
 import { getActiveKey } from '@/lib/keyring';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { KeyboardShortcuts } from '@/components/keyboard-shortcuts';
+import { HelpDialog } from '@/components/help-dialog';
 
 // Key storage moved to lib/keyring (multi-machine browser keyring). Re-export
 // the active-key getter so any importer of `@/app/providers` keeps working.
@@ -116,6 +117,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
           <ConfirmProvider>
             {children}
             <KeyboardShortcuts />
+            <HelpDialog />
           </ConfirmProvider>
         </QueryClientProvider>
       </trpc.Provider>
