@@ -642,7 +642,11 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
       setStreamConnected(true);
       (async () => {
         try {
-          const res = await fetch(`/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}`, {
+          // skipInitial=1: the listMessages query above already loaded this exact
+          // window, so the stream primes its change-signal WITHOUT re-pushing the
+          // same ~60 rows on connect (was an open-time double-fetch). Subsequent
+          // changes still stream; the fallback poll covers any reconnect gap.
+          const res = await fetch(`/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}&skipInitial=1`, {
             headers: { 'x-asst-key': getActiveKey() },
             signal: myCtrl.signal,
           });

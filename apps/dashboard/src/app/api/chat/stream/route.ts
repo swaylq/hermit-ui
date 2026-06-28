@@ -43,6 +43,12 @@ export async function GET(req: NextRequest) {
     ? Math.min(MAX_LIMIT, Math.max(1, Math.floor(limitParam)))
     : DEFAULT_LIMIT;
 
+  // The client passes skipInitial=1 right after it loaded this window via tRPC
+  // chat.listMessages — so we PRIME the change-signal without re-emitting the same
+  // rows, eliminating the open-time double-fetch (tRPC + SSE both shipping the
+  // newest ~60). Genuine post-open changes still emit on the next tick.
+  const skipInitial = req.nextUrl.searchParams.get('skipInitial') === '1';
+
   // Ownership check up front — the per-tick query also scopes by machine, but
   // this gives a clean 404 instead of an empty stream.
   const session = await prisma.chatSession.findFirst({
@@ -102,7 +108,21 @@ export async function GET(req: NextRequest) {
         }
       };
 
-      await tick(); // initial snapshot ASAP
+      if (skipInitial) {
+        // Prime lastSig to the current state WITHOUT emitting — the client already
+        // has this window from tRPC. If the probe fails, lastSig stays '' and the
+        // first interval tick emits normally (safe fallback).
+        try {
+          const agg = await prisma.chatMessage.aggregate({
+            where: { sessionId, session: { machineId: machine.id } },
+            _max: { updatedAt: true },
+          });
+          lastSig = `${agg._max.updatedAt?.getTime() ?? 0}`;
+          lastEmit = Date.now();
+        } catch { /* fall through — first tick will emit */ }
+      } else {
+        await tick(); // initial snapshot ASAP
+      }
       const interval = setInterval(tick, POLL_MS);
 
       const shutdown = () => {
