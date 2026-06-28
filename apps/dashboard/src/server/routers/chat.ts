@@ -115,25 +115,14 @@ export const chatRouter = router({
           // Dropped claudeSessionId / pid / outputTokens / lastActivity: no UI
           // consumer reads them, and this payload (~900B × every session) polls
           // every 5s on every page. The gateway still gets them via its own routes.
-          // First user message → "preview" shown in the sidebar so two
-          // untitled sessions for the same agent are distinguishable. Limit
-          // to one row per session via Prisma's nested `take`.
-          messages: {
-            where: { role: 'user' },
-            orderBy: { createdAt: 'asc' },
-            take: 1,
-            select: { content: true },
-          },
+          // Sidebar preview is now a denormalized column (set by chat.send + a
+          // one-time backfill) instead of a per-session first-user-message
+          // subquery — that subquery (40 sessions × pulling each first message's
+          // full content to slice 120 chars) was the ~0.5–0.9s listSessions cost.
+          preview: true,
         },
       });
-      return rows.map((s) => {
-        const firstUserBlock = (s.messages[0]?.content as Array<{ type?: string; text?: string }> | undefined)?.find(
-          (b) => b?.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0,
-        );
-        const preview = firstUserBlock?.text?.replace(/\s+/g, ' ').trim().slice(0, 120) ?? null;
-        const { messages: _drop, ...rest } = s;
-        return { ...rest, preview };
-      });
+      return rows;
     }),
 
   // Single-session meta for the chat HEADER (title / agentName / state / preview /
@@ -170,16 +159,10 @@ export const chatRouter = router({
           loopState: true,
           rssMb: true,
           hibernatedAt: true,
-          messages: { where: { role: 'user' }, orderBy: { createdAt: 'asc' }, take: 1, select: { content: true } },
+          preview: true,
         },
       });
-      if (!s) return null;
-      const firstUserBlock = (s.messages[0]?.content as Array<{ type?: string; text?: string }> | undefined)?.find(
-        (b) => b?.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0,
-      );
-      const preview = firstUserBlock?.text?.replace(/\s+/g, ' ').trim().slice(0, 120) ?? null;
-      const { messages: _drop, ...rest } = s;
-      return { ...rest, preview };
+      return s;
     }),
 
   // Mark a session read = now. Was browser localStorage (per-device); now a DB
@@ -482,7 +465,14 @@ export const chatRouter = router({
       // turn isn't immediately killed by the gateway.
       await prisma.chatSession.update({
         where: { id: input.sessionId },
-        data: { lastMessageAt: new Date(), cancelRequestedAt: null },
+        data: {
+          lastMessageAt: new Date(),
+          cancelRequestedAt: null,
+          // Populate the denormalized sidebar preview from the first user text,
+          // set once (listSessions/getSession read this column instead of a
+          // first-user-message subquery). Existing sessions are backfilled.
+          ...(text && !s.preview ? { preview: text.replace(/\s+/g, ' ').trim().slice(0, 120) } : {}),
+        },
       });
       return msg;
     }),

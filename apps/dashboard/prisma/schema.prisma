@@ -246,6 +246,12 @@ model ChatSession {
   machine           Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
   agentName         String
   title             String?
+  // Denormalized sidebar preview: the first user message's first text block,
+  // whitespace-collapsed + sliced to 120 chars. Set once by chat.send (+ a one-time
+  // backfill) so listSessions/getSession read a column instead of a per-session
+  // first-user-message subquery (was ~0.5–0.9s for 40 sessions). NULL = not yet
+  // derived (image-only first message, or pre-backfill) → UI falls back to agentName.
+  preview           String?
   // How this session was created. 'dispatch' = opened by Brain's MCP `dispatch`
   // tool (one-shot delegation to another agent); NULL = a normal user-opened
   // chat. The /brain/dispatch page filters on this structural marker instead of
