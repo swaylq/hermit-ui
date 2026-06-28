@@ -575,7 +575,14 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
   // froze at page-load value until you touched the sidebar. Same query key as the
   // sidebar, so React Query shares the cache (no double payload when both mount).
   const sessionMeta = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
-  const session = sessionMeta.data?.find((s) => s.id === sessionId);
+  // Fast early paint: a single-row getSession resolves the header + enables the
+  // composer in tens of ms, instead of waiting on listSessions (~0.5–0.9s for 40
+  // sessions × a per-row preview subquery) — which otherwise leaves the title
+  // showing the raw id and the composer disabled. Once the list loads it takes
+  // over (every existing sessionMeta.refetch keeps the header fresh), so this is
+  // just the gap-filler and one fetch suffices (staleTime, no extra polling).
+  const sessionOne = trpc.chat.getSession.useQuery({ sessionId }, { enabled: !!sessionId, staleTime: 30_000 });
+  const session = sessionMeta.data?.find((s) => s.id === sessionId) ?? sessionOne.data ?? undefined;
   // Live updates arrive via SSE (/api/chat/stream), written straight into this
   // query's cache. The poll below is only a fallback for when the stream isn't
   // connected (the gateway flushes block-level rows into Postgres either way).

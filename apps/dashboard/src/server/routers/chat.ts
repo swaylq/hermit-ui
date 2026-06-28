@@ -136,6 +136,52 @@ export const chatRouter = router({
       });
     }),
 
+  // Single-session meta for the chat HEADER (title / agentName / state / preview /
+  // closedAt flags). Split out from listSessions so opening a session resolves the
+  // header AND enables the composer from a fast single-row PK lookup, instead of
+  // waiting on the whole list (40 sessions × a per-row preview subquery measured at
+  // ~0.5–0.9s). The chat page uses this for early paint and falls back to the list.
+  // Same row shape as a listSessions entry (incl. derived `preview`). Returns null
+  // for unknown / cross-tenant ids (a scoped key only matches its own agent).
+  getSession: agentProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findFirst({
+        where: {
+          id: input.sessionId,
+          machineId: ctx.machine.id,
+          ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}),
+        },
+        select: {
+          id: true,
+          agentName: true,
+          title: true,
+          origin: true,
+          startedAt: true,
+          lastMessageAt: true,
+          lastReadAt: true,
+          closedAt: true,
+          hiddenAt: true,
+          restartRequestedAt: true,
+          alive: true,
+          state: true,
+          contextTokens: true,
+          snapshotAt: true,
+          loopState: true,
+          rssMb: true,
+          hibernatedAt: true,
+          messages: { where: { role: 'user' }, orderBy: { createdAt: 'asc' }, take: 1, select: { content: true } },
+        },
+      });
+      if (!s) return null;
+      const firstUserBlock = (s.messages[0]?.content as Array<{ type?: string; text?: string }> | undefined)?.find(
+        (b) => b?.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0,
+      );
+      const preview = firstUserBlock?.text?.replace(/\s+/g, ' ').trim().slice(0, 120) ?? null;
+      const { messages: _drop, ...rest } = s;
+      return { ...rest, preview };
+    }),
+
   // Mark a session read = now. Was browser localStorage (per-device); now a DB
   // stamp so the red "unread" dot clears on every device (the chat pane fires
   // this on open + on each new message while open; other devices reconcile on
