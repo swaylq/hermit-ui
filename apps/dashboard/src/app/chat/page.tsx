@@ -2287,7 +2287,7 @@ function ComposeBar({
               ? 'border-rose-500/40'
               : dragHover
               ? 'border-foreground/40'
-              : 'border-border focus-within:border-foreground/40 focus-within:shadow-md',
+              : 'border-border focus-within:shadow-md',
           )}
         >
           {slashOpen && (
