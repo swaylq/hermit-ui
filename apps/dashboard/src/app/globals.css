@@ -131,6 +131,18 @@
   }
 }
 
+/* Chrome/Edge make any OVERFLOWING scroll container keyboard-focusable (so it can
+   be scrolled with arrow keys) and draw the platform `outline: auto` ring — a dark
+   "black box" — around it on Tab / keyboard nav. Our conversation list, the agent /
+   cron lists, and the message timeline are all such scrollers; they're scroll
+   regions, not controls, so drop that ring. Interactive items inside (session rows,
+   buttons, links) keep their own focus-visible styles. */
+.overflow-y-auto:focus-visible,
+.overflow-auto:focus-visible,
+.overflow-y-scroll:focus-visible {
+  outline: none;
+}
+
 /* "thinking" indicator: a single solid dot that gently breathes — ChatGPT
    style. Scale + opacity oscillate so it reads as "alive", not bouncing. */
 @keyframes breathe {
