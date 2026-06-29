@@ -19,11 +19,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, ZoomIn, ZoomOut, ExternalLink, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, ExternalLink, ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { saveFile } from '@/lib/save-file';
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 6;
+const SWIPE_MIN = 45;       // px of horizontal travel that counts as a navigation swipe
+const LONG_PRESS_MS = 500;  // touch-hold that summons the save menu
 
 type View = { scale: number; tx: number; ty: number };
 
@@ -56,6 +59,12 @@ export function ImageLightbox({
   // the arrows at all). Both are no-ops without `siblingSelector`.
   const [currentUrl, setCurrentUrl] = useState(url);
   const [galleryCount, setGalleryCount] = useState(0);
+
+  // Long-press (touch) → a small save menu at the press point. The PWA suppresses
+  // the native "Save Image" callout (select-none), so this is the way to save there.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const longPressTimer = useRef<number | null>(null);
+  const longPressed = useRef(false);
 
   // Active touch/mouse pointers, plus the in-progress pinch / drag gesture.
   const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
@@ -144,17 +153,31 @@ export function ImageLightbox({
       if (urls.length < 2) return;
       const i = urls.indexOf(currentUrl);
       const next = i < 0 ? 0 : (i + dir + urls.length) % urls.length;
-      if (urls[next]) setCurrentUrl(urls[next]);
+      if (urls[next]) { setCurrentUrl(urls[next]); setMenu(null); }
     },
     [siblingSelector, currentUrl],
   );
 
-  // On open, snap to the clicked image and count the gallery (drives the arrows).
+  const clearLongPress = useCallback(() => {
+    if (longPressTimer.current != null) { clearTimeout(longPressTimer.current); longPressTimer.current = null; }
+  }, []);
+
+  // Save the image currently shown — reuses chat's touch-vs-desktop share/download
+  // gate, so it lands in the iOS share sheet ("Save Image" / "Save to Files").
+  const saveImage = useCallback(() => {
+    let name = 'image';
+    try { name = decodeURIComponent(currentUrl.split('/').pop()?.split('?')[0] || '') || 'image'; } catch { /* keep default */ }
+    void saveFile(currentUrl, name).catch(() => { /* fetch failed or share cancelled */ });
+  }, [currentUrl]);
+
+  // On open, snap to the clicked image, count the gallery (drives the arrows), and
+  // clear any stale menu. On close, drop the menu + any pending long-press timer.
   useEffect(() => {
-    if (!open) return;
+    if (!open) { clearLongPress(); setMenu(null); return; }
     setCurrentUrl(url);
+    setMenu(null);
     setGalleryCount(siblingSelector ? document.querySelectorAll(siblingSelector).length : 0);
-  }, [open, url, siblingSelector]);
+  }, [open, url, siblingSelector, clearLongPress]);
 
   // Fresh image (fresh open OR ← / → navigation) → start fit-to-screen, centered.
   useEffect(() => {
@@ -201,17 +224,30 @@ export function ImageLightbox({
   }, [open, zoomAround]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
+    // Pointers that start on a control (close · arrows · zoom bar · save menu) are
+    // the control's own — don't capture or run pan/tap/close, or the container eats
+    // the tap (the "buttons do nothing on touch" bug).
+    if ((e.target as Element)?.closest?.('[data-lightbox-control]')) return;
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     moved.current = false;
+    clearLongPress();
     if (pointers.current.size === 2) {
       const [a, b] = [...pointers.current.values()];
       pinch.current = { dist: Math.hypot(a.x - b.x, a.y - b.y) };
       drag.current = null;
     } else {
       drag.current = { x: e.clientX, y: e.clientY, tx: view.current.tx, ty: view.current.ty };
+      // Touch long-press on the image → save menu (PWA suppresses the native one).
+      if (e.pointerType === 'touch' && imgRef.current?.contains(e.target as Node)) {
+        const px = e.clientX, py = e.clientY;
+        longPressed.current = false;
+        longPressTimer.current = window.setTimeout(() => {
+          if (!moved.current) { longPressed.current = true; setMenu({ x: px, y: py }); }
+        }, LONG_PRESS_MS);
+      }
     }
-  }, []);
+  }, [clearLongPress]);
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -225,24 +261,39 @@ export function ImageLightbox({
         zoomAround(view.current.scale * (dist / (pinch.current.dist || dist)), cx, cy);
         pinch.current = { dist };
         moved.current = true;
+        clearLongPress();
       } else if (drag.current) {
         const dx = e.clientX - drag.current.x;
         const dy = e.clientY - drag.current.y;
-        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved.current = true;
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) { moved.current = true; clearLongPress(); }
         set({ scale: view.current.scale, tx: drag.current.tx + dx, ty: drag.current.ty + dy });
       }
     },
-    [set, zoomAround],
+    [set, zoomAround, clearLongPress],
   );
 
   const onPointerUp = useCallback(
     (e: React.PointerEvent) => {
+      if ((e.target as Element)?.closest?.('[data-lightbox-control]')) return; // control's own tap
       const wasMoved = moved.current;
+      const start = drag.current;
       pointers.current.delete(e.pointerId);
       if (pointers.current.size < 2) pinch.current = null;
       if (pointers.current.size > 0) return;
       drag.current = null;
-      if (wasMoved) return; // a drag/pinch, not a tap — don't toggle or close
+      clearLongPress();
+      if (longPressed.current) { longPressed.current = false; return; } // the press that opened the menu
+      if (menu) { setMenu(null); return; }                              // any later tap dismisses the menu
+      // Swipe to navigate — only when not zoomed (a zoomed drag pans instead).
+      if (wasMoved && view.current.scale <= 1.01 && start) {
+        const dx = e.clientX - start.x;
+        const dy = e.clientY - start.y;
+        if (Math.abs(dx) > SWIPE_MIN && Math.abs(dx) > Math.abs(dy) * 1.4) {
+          navigate(dx < 0 ? 1 : -1); // swipe left → next, right → previous
+          return;
+        }
+      }
+      if (wasMoved) return; // a pan / pinch, not a tap — don't toggle or close
       const onImage = imgRef.current?.contains(e.target as Node);
       if (!onImage) {
         onOpenChange(false); // tapped the backdrop area
@@ -256,7 +307,7 @@ export function ImageLightbox({
         zoomAround(2.5, e.clientX, e.clientY); // fit → zoom toward the tap
       }
     },
-    [onOpenChange, reset, zoomAround],
+    [onOpenChange, reset, zoomAround, navigate, menu, clearLongPress],
   );
 
   if (!open || typeof document === 'undefined') return null;
@@ -299,6 +350,7 @@ export function ImageLightbox({
       <div className="pointer-events-none absolute inset-0">
         <button
           type="button"
+          data-lightbox-control
           aria-label="close"
           onClick={() => onOpenChange(false)}
           className="pointer-events-auto absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70 hover:text-white"
@@ -312,6 +364,7 @@ export function ImageLightbox({
           <>
             <button
               type="button"
+              data-lightbox-control
               aria-label="previous image"
               onClick={() => navigate(-1)}
               className="pointer-events-auto absolute left-2 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70 hover:text-white sm:left-3"
@@ -320,6 +373,7 @@ export function ImageLightbox({
             </button>
             <button
               type="button"
+              data-lightbox-control
               aria-label="next image"
               onClick={() => navigate(1)}
               className="pointer-events-auto absolute right-2 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70 hover:text-white sm:right-3"
@@ -329,7 +383,7 @@ export function ImageLightbox({
           </>
         )}
 
-        <div className="pointer-events-auto absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-black/45 p-1 text-white/90 backdrop-blur-sm">
+        <div data-lightbox-control className="pointer-events-auto absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-black/45 p-1 text-white/90 backdrop-blur-sm">
           <button
             type="button"
             aria-label="zoom out"
@@ -357,6 +411,14 @@ export function ImageLightbox({
             <ZoomIn className="h-4 w-4" />
           </button>
           <span className="mx-0.5 h-4 w-px bg-white/20" />
+          <button
+            type="button"
+            aria-label="save image"
+            onClick={saveImage}
+            className="flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-white/15"
+          >
+            <Download className="h-4 w-4" />
+          </button>
           <a
             href={currentUrl}
             target="_blank"
@@ -369,6 +431,36 @@ export function ImageLightbox({
           </a>
         </div>
       </div>
+
+      {/* Long-press save menu (touch). Marked data-lightbox-control so the
+          container's pointer handlers leave its taps to the buttons. */}
+      {menu && (
+        <div
+          data-lightbox-control
+          className="pointer-events-auto fixed z-[110] min-w-[168px] overflow-hidden rounded-xl border border-white/10 bg-zinc-800/95 text-white shadow-2xl backdrop-blur"
+          style={{
+            left: Math.max(8, Math.min(menu.x, (typeof window === 'undefined' ? 9999 : window.innerWidth) - 176)),
+            top: Math.max(8, Math.min(menu.y, (typeof window === 'undefined' ? 9999 : window.innerHeight) - 104)),
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => { setMenu(null); saveImage(); }}
+            className="flex w-full items-center gap-2.5 px-4 py-3 text-left text-sm hover:bg-white/10"
+          >
+            <Download className="h-4 w-4 shrink-0" /> Save image
+          </button>
+          <a
+            href={currentUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => setMenu(null)}
+            className="flex w-full items-center gap-2.5 border-t border-white/10 px-4 py-3 text-left text-sm hover:bg-white/10"
+          >
+            <ExternalLink className="h-4 w-4 shrink-0" /> Open original
+          </a>
+        </div>
+      )}
     </div>,
     document.body,
   );

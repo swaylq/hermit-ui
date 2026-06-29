@@ -15,6 +15,7 @@ import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { relTime } from '@/lib/format';
 import { Markdown } from '@/components/markdown';
 import { ImageLightbox } from '@/components/ui/image-lightbox';
+import { isTouchPrimary, saveFile } from '@/lib/save-file';
 import { Overlay } from '@/components/overlay';
 import { CtxBar } from '@/components/ctx-bar';
 import { sessionStatusView } from '@/lib/session-status';
@@ -44,16 +45,9 @@ function isSameDay(a: Date | string, b: Date | string): boolean {
   return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
 }
 
-// Touch-primary device (phone/tablet): the soft-keyboard return key should
-// insert a newline, not send — there's a dedicated send button. Desktop (a
-// fine pointer ⇒ physical keyboard) keeps Enter-to-send / Shift+Enter-newline.
-// `(pointer: coarse)` reflects the PRIMARY pointer, so a touchscreen laptop
-// with a trackpad still reads as fine (desktop behaviour).
-function isTouchPrimary(): boolean {
-  return typeof window !== 'undefined'
-    && typeof window.matchMedia === 'function'
-    && window.matchMedia('(pointer: coarse)').matches;
-}
+// isTouchPrimary (phone/tablet vs desktop) lives in @/lib/save-file — the
+// soft-keyboard return key inserts a newline there (a dedicated send button
+// handles sending), and the same gate drives the share-vs-download save path.
 
 // Initial message window: the newest N messages loaded on open. Kept small so a
 // session opens fast — less JSON over the wire + far fewer markdown/highlight
@@ -2890,39 +2884,9 @@ function ChatImage({ url, width, height }: { url: string; width: number | null; 
   );
 }
 
-// Save an attached file WITHOUT ever navigating the PWA away. iOS standalone has
-// no back chrome and ignores `<a download>` for renderable types (html / pdf /
-// text) — a plain link there navigates the whole app to the file with no way
-// back (the "发个 html 预览就回不来了" trap). So: fetch → Blob → the native share
-// sheet where it can take files (iOS/Android → "Save to Files"), else a
-// programmatic object-URL download (desktop). Neither touches the top frame.
-async function saveAttachment(url: string, name: string, mimeType: string | null) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const blob = await res.blob();
-  const file = new File([blob], name || 'file', { type: mimeType || blob.type || 'application/octet-stream' });
-  const nav = typeof navigator !== 'undefined' ? navigator : undefined;
-  // Touch / iOS-standalone ONLY: there `<a download>` is ignored and a plain link
-  // navigates the PWA away with no way back, so the share sheet is the only safe
-  // path — and we stay on it even on cancel (no link fallthrough = no trap).
-  // DESKTOP also reports canShare({files})=true (macOS Safari/Chrome), but routing
-  // a download click into the OS share sheet means a normal click never downloads,
-  // and share() after the awaited fetch can silently throw on lost user-activation
-  // (the "点击不会下载" bug). So gate share to touch; desktop falls through to the
-  // reliable object-URL download below.
-  if (isTouchPrimary() && nav?.canShare?.({ files: [file] })) {
-    try { await nav.share({ files: [file] }); } catch { /* cancelled / unsupported */ }
-    return;
-  }
-  const obj = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = obj;
-  a.download = name || 'file';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(obj), 4000);
-}
+// saveAttachment → saveFile (@/lib/save-file): fetch → Blob → native share sheet
+// on touch (iOS/Android "Save to Files"), else object-URL download on desktop —
+// never navigating the PWA away. Shared with the image lightbox's Save action.
 
 // File extensions a browser renders inline (→ would navigate the PWA on a plain
 // link). These get an in-app preview overlay instead of a download.
@@ -3014,7 +2978,7 @@ function ChatFile({ url, name, mimeType }: { url: string; name: string; mimeType
 
   const save = useCallback(async () => {
     setSaving(true);
-    try { await saveAttachment(url, name, mimeType); }
+    try { await saveFile(url, name, mimeType); }
     catch { /* swallow — rare; the user can retry */ }
     finally { setSaving(false); }
   }, [url, name, mimeType]);
