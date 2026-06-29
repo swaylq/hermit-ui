@@ -19,7 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, ZoomIn, ZoomOut, ExternalLink } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, ExternalLink, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const MIN_SCALE = 1;
@@ -32,11 +32,17 @@ export function ImageLightbox({
   onOpenChange,
   url,
   alt,
+  // When set, ← / → (and the on-screen arrows) step through every element on the
+  // page matching this selector that carries a `data-lightbox-src` attribute —
+  // i.e. all chat images — turning the viewer into a gallery. Omit it for a
+  // single-image viewer (e.g. composer attachment previews).
+  siblingSelector,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   url: string;
   alt?: string;
+  siblingSelector?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -44,6 +50,12 @@ export function ImageLightbox({
   // Mirror of `view.scale` used only for UI (cursor + percentage label). The
   // live transform is driven by the ref, not this, so pans don't re-render.
   const [scale, setScale] = useState(1);
+
+  // Gallery: the image actually shown (starts at the clicked `url`, then ← / →
+  // walk the siblings), plus how many siblings exist (to decide whether to show
+  // the arrows at all). Both are no-ops without `siblingSelector`.
+  const [currentUrl, setCurrentUrl] = useState(url);
+  const [galleryCount, setGalleryCount] = useState(0);
 
   // Active touch/mouse pointers, plus the in-progress pinch / drag gesture.
   const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
@@ -121,29 +133,59 @@ export function ImageLightbox({
 
   const reset = useCallback(() => set({ scale: 1, tx: 0, ty: 0 }), [set]);
 
-  // Fresh image / fresh open → start fit-to-screen, centered.
+  // Step to the previous / next gallery image (wraps around). Reads the live DOM
+  // each call so the set always reflects what's actually rendered in the timeline.
+  const navigate = useCallback(
+    (dir: 1 | -1) => {
+      if (!siblingSelector) return;
+      const urls = Array.from(document.querySelectorAll<HTMLElement>(siblingSelector))
+        .map((el) => el.getAttribute('data-lightbox-src') || '')
+        .filter(Boolean);
+      if (urls.length < 2) return;
+      const i = urls.indexOf(currentUrl);
+      const next = i < 0 ? 0 : (i + dir + urls.length) % urls.length;
+      if (urls[next]) setCurrentUrl(urls[next]);
+    },
+    [siblingSelector, currentUrl],
+  );
+
+  // On open, snap to the clicked image and count the gallery (drives the arrows).
+  useEffect(() => {
+    if (!open) return;
+    setCurrentUrl(url);
+    setGalleryCount(siblingSelector ? document.querySelectorAll(siblingSelector).length : 0);
+  }, [open, url, siblingSelector]);
+
+  // Fresh image (fresh open OR ← / → navigation) → start fit-to-screen, centered.
   useEffect(() => {
     if (!open) return;
     view.current = { scale: 1, tx: 0, ty: 0 };
     setScale(1);
     const id = requestAnimationFrame(apply);
     return () => cancelAnimationFrame(id);
-  }, [open, url, apply]);
+  }, [open, currentUrl, apply]);
 
-  // Escape closes; the page underneath is scroll-locked while open.
+  // Keyboard: Escape closes; ← / → walk the gallery. Kept separate from the
+  // scroll-lock effect so re-subscribing on each navigation (navigate changes
+  // with currentUrl) doesn't thrash the body's overflow.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onOpenChange(false);
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); navigate(-1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); navigate(1); }
     };
     document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onOpenChange, navigate]);
+
+  // Scroll-lock the page underneath while open.
+  useEffect(() => {
+    if (!open) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [open, onOpenChange]);
+    return () => { document.body.style.overflow = prevOverflow; };
+  }, [open]);
 
   // Wheel zoom. Attached natively (not via React's onWheel, which is passive and
   // would swallow preventDefault) so the trackpad can't bounce the page.
@@ -244,7 +286,7 @@ export function ImageLightbox({
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         ref={imgRef}
-        src={url}
+        src={currentUrl}
         alt={alt ?? 'image'}
         draggable={false}
         onLoad={() => set(view.current)}
@@ -263,6 +305,29 @@ export function ImageLightbox({
         >
           <X className="h-5 w-5" />
         </button>
+
+        {/* Gallery prev/next — shown only when there's more than one chat image.
+            Mirrors the close button's pattern (pointer-events-auto + onClick). */}
+        {galleryCount > 1 && (
+          <>
+            <button
+              type="button"
+              aria-label="previous image"
+              onClick={() => navigate(-1)}
+              className="pointer-events-auto absolute left-2 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70 hover:text-white sm:left-3"
+            >
+              <ChevronLeft className="h-6 w-6" />
+            </button>
+            <button
+              type="button"
+              aria-label="next image"
+              onClick={() => navigate(1)}
+              className="pointer-events-auto absolute right-2 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70 hover:text-white sm:right-3"
+            >
+              <ChevronRight className="h-6 w-6" />
+            </button>
+          </>
+        )}
 
         <div className="pointer-events-auto absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-black/45 p-1 text-white/90 backdrop-blur-sm">
           <button
@@ -293,7 +358,7 @@ export function ImageLightbox({
           </button>
           <span className="mx-0.5 h-4 w-px bg-white/20" />
           <a
-            href={url}
+            href={currentUrl}
             target="_blank"
             rel="noopener noreferrer"
             aria-label="open original in a new tab"

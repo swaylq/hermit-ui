@@ -2877,6 +2877,7 @@ function ChatImage({ url, width, height }: { url: string; width: number | null; 
     <>
       <button
         type="button"
+        data-lightbox-src={url}
         onClick={() => setOpen(true)}
         aria-label="view image"
         className="inline-block cursor-zoom-in overflow-hidden rounded border border-border align-bottom transition-opacity hover:opacity-90"
@@ -2884,7 +2885,7 @@ function ChatImage({ url, width, height }: { url: string; width: number | null; 
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={url} alt={alt} className="max-h-[320px] max-w-[320px]" loading="lazy" />
       </button>
-      <ImageLightbox open={open} onOpenChange={setOpen} url={url} alt={alt} />
+      <ImageLightbox open={open} onOpenChange={setOpen} url={url} alt={alt} siblingSelector="[data-lightbox-src]" />
     </>
   );
 }
