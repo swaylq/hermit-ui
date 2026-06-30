@@ -83,6 +83,14 @@ export function HostHealthView() {
               <span className="text-muted-foreground">Load (1m)</span>
               <span className="tabular-nums">{stat.loadAvg1?.toFixed(2) ?? '—'} / {stat.cpuCount ?? '—'} cores</span>
             </div>
+            {stat.chromeRssMb != null && (
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Chrome (agents)</span>
+                <span className="tabular-nums text-muted-foreground">
+                  {fmtGB(stat.chromeRssMb)} GB{stat.chromeCount != null ? ` · ${stat.chromeCount} live` : ''}
+                </span>
+              </div>
+            )}
             {stale && <p className="text-xs text-amber-500">Last sample is stale — the gateway may be down.</p>}
           </div>
         )}

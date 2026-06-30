@@ -17,6 +17,8 @@ const Stat = z.object({
   swapTotalMb: z.number().int().nullable().optional(),
   loadAvg1: z.number().nullable().optional(),
   cpuCount: z.number().int().nullable().optional(),
+  chromeCount: z.number().int().nullable().optional(),
+  chromeRssMb: z.number().int().nullable().optional(),
 });
 const Body = z.object({ stat: Stat });
 

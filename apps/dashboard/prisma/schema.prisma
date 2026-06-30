@@ -63,6 +63,10 @@ model HostStat {
   swapTotalMb Int?
   loadAvg1    Float?
   cpuCount    Int?
+  // Per-agent Chrome footprint (resource governance): chromeCount = main browser
+  // processes (≈ one per agent), chromeRssMb = total RSS of all Chrome procs.
+  chromeCount Int?
+  chromeRssMb Int?
   sampledAt   DateTime?
 
   // Red-pressure alert (A4). redAlertAt is stamped when the host CROSSES into red
