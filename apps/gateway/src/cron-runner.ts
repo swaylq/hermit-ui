@@ -17,6 +17,7 @@ import {
   sendKeys,
   awaitTranscript,
   watchTranscript,
+  listTranscripts,
   encodedProjectDir,
   kill as killSession,
 } from '@hermit-ui/tmux-driver';
@@ -44,6 +45,9 @@ type Cron = {
 };
 
 const running = new Set<string>();
+// claude-session uuids pinned by an in-flight fire — so the uuid-drift self-heal
+// never adopts a SIBLING cron's live transcript (agents share one project dir).
+const pinnedUuids = new Set<string>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -124,11 +128,21 @@ async function fire(c: Cron): Promise<void> {
   console.log('[cron] fire', c.id.slice(0, 8), c.agentName, 'in', cwd);
 
   let output = '';
-  let status: 'ok' | 'fail' = 'fail';
+  // Status = what the gateway OBSERVED about the turn, not a guess at whether the
+  // scheduled work succeeded (only the work knows that — that's its own RESULT
+  // signal's job). ok = clean idle settle WITH final text; no_output = settled but
+  // no text (claude exited silently / undetected drift); timeout = hit
+  // RUN_TIMEOUT_MS or the host was suspended past the deadline (un-observable ≠
+  // failed); error = exception thrown. We no longer emit a bare 'fail' — every old
+  // 'fail' was really one of {timeout, no_output, error}.
+  let status: 'ok' | 'no_output' | 'timeout' | 'error' = 'error';
   let stop: () => void = () => {};
+  // Pinned transcript uuid. Hoisted out of the try so `finally` can unpin it
+  // however we exit.
+  const claudeUuid = randomUUID();
+  pinnedUuids.add(claudeUuid);
 
   try {
-    const claudeUuid = randomUUID();
     // The orchestrator (Brain) runs its crons (e.g. the daily dream) WITH the
     // brain MCP so they can roster()/agent_activity()/dispatch(). Other agents'
     // crons stay headless (no MCP). The stub keys on this run's id.
@@ -144,8 +158,27 @@ async function fire(c: Cron): Promise<void> {
       claudeArgs,
       claudeSessionUuid: claudeUuid,
     });
-    const jsonlPath = path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`);
-    await awaitTranscript(jsonlPath).catch(() => {});
+    let jsonlPath = path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`);
+    // We pinned --session-id <claudeUuid>, so claude should write exactly this
+    // transcript. If it didn't honor the flag (respawn / version quirk) the pinned
+    // file never appears and we'd tail an empty path forever → a real run
+    // misreported as no_output. Parity with chat-runner's drift self-heal: when the
+    // pinned transcript doesn't show up, adopt the newest transcript written during
+    // THIS fire that isn't pinned by another in-flight cron. watchTranscript tails
+    // `-n +1` so the adopted file replays from line 1 — no early text is lost.
+    const appeared = await awaitTranscript(jsonlPath).then(() => true).catch(() => false);
+    if (!appeared) {
+      const live = listTranscripts(cwd)
+        .filter((t) => t.size > 0 && !pinnedUuids.has(t.uuid) && t.mtimeMs >= startedAt - 2_000)
+        .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+      if (live) {
+        console.warn(
+          `[cron] ${c.id.slice(0, 8)}: session uuid drift — pinned ${claudeUuid.slice(0, 8)} ` +
+            `has no transcript; adopting live ${live.uuid.slice(0, 8)}`,
+        );
+        jsonlPath = path.join(encodedProjectDir(cwd), `${live.uuid}.jsonl`);
+      }
+    }
 
     let lastText = '';
     let lastEventAt = Date.now();
@@ -184,6 +217,10 @@ async function fire(c: Cron): Promise<void> {
     // producing some text, or the hard timeout trips.
     const deadline = startedAt + RUN_TIMEOUT_MS;
     let sawAssistant = false;
+    let settled = false; // true ⇒ the turn went genuinely idle (clean completion).
+                         // Still false at loop exit ⇒ we fell through the deadline:
+                         // the real 2h cap OR the host was suspended and wall-clock
+                         // jumped past it. Either way un-observable, NOT a failure.
     while (Date.now() < deadline) {
       await sleep(1_000);
       if (lastText) sawAssistant = true;
@@ -194,14 +231,31 @@ async function fire(c: Cron): Promise<void> {
       // which the transcript-idle heuristic alone mistook for "done" and cut the
       // report off. Finish only after the pane has truly been idle for IDLE_DONE_MS.
       if (toolsOut > toolsBack || (await paneIsWorking(runSessionId))) lastEventAt = Date.now();
-      if (sawAssistant && Date.now() - lastEventAt > IDLE_DONE_MS) break;
+      if (sawAssistant && Date.now() - lastEventAt > IDLE_DONE_MS) { settled = true; break; }
     }
     output = lastText;
-    status = lastText ? 'ok' : 'fail';
+    // Classify by WHY the loop ended, not by text presence alone. The old
+    // `lastText ? ok : fail` reported every timeout / suspended / silent run as a
+    // hard failure — the fleet-wide false-FAIL on the status light. (false-OK, the
+    // reverse, is NOT the gateway's to judge — that's the work's own RESULT signal.)
+    if (settled) {
+      status = lastText ? 'ok' : 'no_output';
+      if (!lastText)
+        output =
+          '[cron-runner] turn went idle but produced no final text (claude may have exited silently, or an undetected transcript-uuid drift).';
+    } else {
+      status = 'timeout';
+      if (!lastText)
+        output =
+          `[cron-runner] no final text captured before the ${Math.round(RUN_TIMEOUT_MS / 60_000)}min cap — ` +
+          `a frozen/suspended host looks exactly like this. The scheduled work itself may have completed; ` +
+          `check the agent's own result log.`;
+    }
   } catch (e) {
     output = `[cron-runner] ${String(e)}`;
-    status = 'fail';
+    status = 'error';
   } finally {
+    pinnedUuids.delete(claudeUuid);
     try { stop(); } catch {}
     await killSession(runSessionId).catch(() => {});
   }

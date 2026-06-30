@@ -34,9 +34,14 @@ function CronStatusBadge({ status, enabled }: { status?: string | null; enabled:
     text = 'off';
   } else if (status === 'ok') {
     cls = 'text-emerald-500 bg-emerald-500/10 border-emerald-500/25';
-  } else if (status === 'fail') {
+  } else if (status === 'fail' || status === 'error') {
+    // error = the gateway caught an exception running the turn; fail = legacy rows.
     cls = 'text-rose-500 bg-rose-500/10 border-rose-500/25';
   } else if (status === 'running') {
+    cls = 'text-amber-500 bg-amber-500/10 border-amber-500/25';
+  } else if (status === 'timeout' || status === 'no_output') {
+    // Inconclusive — the gateway couldn't confirm completion (hit the 2h cap / host
+    // suspended, or the turn settled but produced no text). NOT a failure.
     cls = 'text-amber-500 bg-amber-500/10 border-amber-500/25';
   }
   return (

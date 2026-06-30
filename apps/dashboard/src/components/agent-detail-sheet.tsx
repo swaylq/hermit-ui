@@ -378,13 +378,15 @@ function CronsSection({ agentName }: { agentName: string }) {
           {list.map((c) => {
             const dot = !c.enabled
               ? 'bg-zinc-500'
-              : c.lastStatus === 'fail'
+              : c.lastStatus === 'fail' || c.lastStatus === 'error'
                 ? 'bg-rose-500'
                 : c.lastStatus === 'running'
                   ? 'bg-amber-500'
                   : c.lastStatus === 'ok'
                     ? 'bg-emerald-500'
-                    : 'bg-zinc-400';
+                    : c.lastStatus === 'timeout' || c.lastStatus === 'no_output'
+                      ? 'bg-amber-500' // inconclusive, not a failure
+                      : 'bg-zinc-400';
             const running = c.enabled && c.lastStatus === 'running';
             return (
               <li key={c.id}>

@@ -1143,11 +1143,13 @@ function RecentCrons() {
               const active = activeId === c.id;
               const dot = !c.enabled
                 ? 'border border-muted-foreground/40'
-                : c.lastStatus === 'fail'
+                : c.lastStatus === 'fail' || c.lastStatus === 'error'
                   ? 'bg-rose-500'
                   : c.lastStatus === 'running'
                     ? 'bg-amber-500'
-                    : 'bg-emerald-500';
+                    : c.lastStatus === 'timeout' || c.lastStatus === 'no_output'
+                      ? 'bg-amber-500' // inconclusive, not a failure
+                      : 'bg-emerald-500';
               return (
                 <li key={c.id}>
                   <Link
