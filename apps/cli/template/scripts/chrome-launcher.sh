@@ -69,6 +69,24 @@ sibling_owns_port() {
   return 1
 }
 
+# ─── Host admission control (concurrent-Chrome cap) ───
+# Each Chrome instance is ~1GB resident; N agents each launching their own OOMs a
+# shared box (2026-06-30 macmini1 incident — gateway + 8-agent fleet killed by
+# jetsam). Cap the number of LIVE sibling Chromes; default 3, override with
+# HERMIT_CHROME_CAP. Counts every agent's chrome.json that has a live PID.
+CHROME_CAP="${HERMIT_CHROME_CAP:-3}"
+
+count_live_chromes() {
+  local agents_root cj pid n=0
+  agents_root="$(cd "$AGENT_DIR/.." && pwd)"
+  for cj in "$agents_root"/*/browser/chrome.json; do
+    [ -f "$cj" ] || continue
+    pid=$(python3 -c "import json; print(json.load(open('$cj')).get('pid') or '')" 2>/dev/null || true)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && n=$((n + 1))
+  done
+  echo "$n"
+}
+
 find_free_port() {
   # Linear fallback for when the deterministic port is taken (hash collision,
   # external process, etc). Skip ports owned by live sibling agents even if
@@ -109,6 +127,19 @@ start_chrome() {
     echo "✅ Chrome already running (PID: $pid, CDP: $port)"
     return 0
   fi
+
+  # Admission control: if the host is already at the Chrome cap, wait briefly for
+  # a slot (ephemeral tasks release theirs fast), then give up rather than OOM.
+  local waited=0
+  while [ "$(count_live_chromes)" -ge "$CHROME_CAP" ]; do
+    if [ "$waited" -ge 30 ]; then
+      echo "❌ Chrome cap reached ($CHROME_CAP live). Not launching — retry shortly or raise HERMIT_CHROME_CAP." >&2
+      exit 1
+    fi
+    echo "⏳ $CHROME_CAP Chromes already live; waiting for a free slot… (${waited}s)" >&2
+    sleep 5
+    waited=$((waited + 5))
+  done
 
   mkdir -p "$USER_DATA_DIR" "$BROWSER_DIR"
 

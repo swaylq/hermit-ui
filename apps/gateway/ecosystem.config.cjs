@@ -25,7 +25,10 @@ module.exports = {
       },
       autorestart: true,
       max_restarts: 50,
-      restart_delay: 5000,
+      // Exponential backoff instead of a fixed 5s loop: a gateway that exits on a
+      // config error (e.g. missing ASST_KEY) should slow its retries, not hammer
+      // every 5s spamming logs + churning CPU (2026-06-30 macmini1 incident).
+      exp_backoff_restart_delay: 5000,
       out_file: path.join(__dirname, 'logs/out.log'),
       error_file: path.join(__dirname, 'logs/err.log'),
       merge_logs: true,

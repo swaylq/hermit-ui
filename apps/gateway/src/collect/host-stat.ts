@@ -16,6 +16,11 @@ export interface HostStatSample {
   swapTotalMb: number | null;
   loadAvg1: number | null;
   cpuCount: number | null;
+  // Per-agent Chrome footprint — the dominant swing factor in host RAM and what
+  // OOM'd macmini1 (each instance ~1GB across helpers). chromeCount = main
+  // browser processes (≈ one per agent); chromeRssMb = total RSS of all Chrome.
+  chromeCount: number | null;
+  chromeRssMb: number | null;
 }
 
 const MB = 1024 * 1024;
@@ -70,6 +75,25 @@ async function linuxStat(): Promise<Partial<HostStatSample>> {
   return out;
 }
 
+// Per-agent Chrome is the dominant swing factor in host RAM (each instance ~1GB
+// across its helper procs) and the thing that OOM'd macmini1. Sum RSS of every
+// Chrome/Chromium process; count the MAIN browser processes (a CDP port and no
+// --type= → ≈ one per agent instance) so the host-health view can account for it.
+async function chromeCensus(): Promise<{ count: number; rssMb: number } | null> {
+  const out = await run('ps', ['-Axo', 'rss,command']);
+  if (!out) return null;
+  let rssKb = 0;
+  let count = 0;
+  for (const line of out.split('\n')) {
+    if (!/Google Chrome|chrom(e|ium)/i.test(line)) continue;
+    const m = line.match(/^\s*(\d+)\s+(.*)$/);
+    if (!m) continue;
+    rssKb += Number(m[1]);
+    if (m[2].includes('--remote-debugging-port') && !m[2].includes('--type=')) count++;
+  }
+  return { count, rssMb: Math.round(rssKb / 1024) };
+}
+
 export async function collectHostStat(): Promise<HostStatSample> {
   // Portable baseline from node:os; the platform probes refine ramFree + swap.
   const base: HostStatSample = {
@@ -79,6 +103,8 @@ export async function collectHostStat(): Promise<HostStatSample> {
     swapTotalMb: null,
     loadAvg1: os.loadavg()[0] ?? null,
     cpuCount: os.cpus().length || null,
+    chromeCount: null,
+    chromeRssMb: null,
   };
   try {
     const extra =
@@ -89,6 +115,15 @@ export async function collectHostStat(): Promise<HostStatSample> {
     Object.assign(base, extra);
   } catch {
     /* keep the portable baseline */
+  }
+  try {
+    const c = await chromeCensus();
+    if (c) {
+      base.chromeCount = c.count;
+      base.chromeRssMb = c.rssMb;
+    }
+  } catch {
+    /* leave Chrome stats null */
   }
   return base;
 }

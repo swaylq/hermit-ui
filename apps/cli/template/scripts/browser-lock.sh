@@ -26,6 +26,12 @@ AGENT_NAME="$(basename "$AGENT_DIR")"
 LOCK_FILE="/tmp/hermit-browser-${AGENT_NAME}.lock"
 DEFAULT_TIMEOUT=300
 
+# When THIS invocation auto-starts Chrome, remember it so we can stop it again
+# after the task (ephemeral mode). Each Chrome is ~1GB resident; leaving idle
+# ones around piles up until the host OOMs (2026-06-30 macmini1 incident). Set
+# HERMIT_BROWSER_EPHEMERAL=0 to keep Chrome resident across tasks.
+STARTED_CHROME=0
+
 write_lock() {
   echo "$$ $(date +%s)" > "$LOCK_FILE"
 }
@@ -61,6 +67,7 @@ acquire() {
   if ! curl -s --max-time 2 "http://127.0.0.1:$CDP_PORT/json/version" &>/dev/null; then
     echo "🚀 Chrome not running, starting..."
     "$SCRIPT_DIR/chrome-launcher.sh" start
+    STARTED_CHROME=1
     if [ -f "$CHROME_JSON" ]; then
       CDP_PORT=$(python3 -c "import json; print(json.load(open('$CHROME_JSON')).get('cdp_port', '$CDP_PORT'))" 2>/dev/null || echo "$CDP_PORT")
     fi
@@ -118,6 +125,13 @@ run_script() {
   wait "$watchdog_pid" 2>/dev/null || true
 
   release
+
+  # Ephemeral Chrome: if we started it for this task, stop it so it doesn't sit
+  # idle eating ~1GB. (HERMIT_BROWSER_EPHEMERAL=0 keeps it resident across tasks.)
+  if [ "${HERMIT_BROWSER_EPHEMERAL:-1}" != "0" ] && [ "$STARTED_CHROME" = "1" ]; then
+    echo "🌙 Stopping the Chrome we started (ephemeral mode)…"
+    "$SCRIPT_DIR/chrome-launcher.sh" stop >/dev/null 2>&1 || true
+  fi
 
   [ $exit_code -ne 0 ] && echo "❌ Script exited with code $exit_code"
   return $exit_code

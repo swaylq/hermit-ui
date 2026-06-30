@@ -34,6 +34,7 @@ import { startLoginBridge } from './login-bridge';
 import { fileTransferTick } from './file-station';
 import { pushGlobalSkills, globalSkillRequestTick } from './global-skills';
 import { globalMemoryTick } from './global-memory';
+import { chromeReaperTick } from './chrome-reaper';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 
 console.log('[gateway] starting');
@@ -190,6 +191,7 @@ loop(pushChatCancelTick, 1_500);
 loop(pushChatRestartTick, 2_000);
 loop(() => safe('hibernate-tick', chatHibernateTick), 3_000); // manual hibernate requests
 loop(() => safe('reaper', reaperTick), 10 * 60_000); // auto-reap idle sessions (resource governance)
+loop(() => safe('chrome-reaper', chromeReaperTick), 5 * 60_000); // reap idle per-agent Chrome (~1GB each) the session-reaper leaves orphaned
 loop(() => safe('agent-requests', agentRequestTick), 3_000);
 loop(() => safe('machine-requests', machineRequestTick), 3_000);
 loop(() => safe('file-transfers', fileTransferTick), 4_000);
