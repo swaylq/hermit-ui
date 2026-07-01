@@ -211,12 +211,16 @@ function ConfirmDeleteButton({
 function AddAgentPane({ initialMode, onClose }: { initialMode: 'new' | 'import'; onClose: () => void }) {
   const [mode, setMode] = useState<'new' | 'import'>(initialMode);
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex flex-1 flex-col min-h-0">
       <header className="h-12 px-3 flex items-center gap-2 border-b border-border shrink-0">
         <SidebarMobileToggle />
         <span className="text-sm font-medium text-foreground">Add agent</span>
       </header>
-      <div className="flex-1 flex flex-col items-center justify-center gap-4 p-4 sm:p-6">
+      {/* Scroll the form when it's taller than the pane — the dashboard shell locks
+          root scroll, so without this the Create button below the fold is unreachable.
+          min-h-full keeps it vertically centered when the form DOES fit. */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="min-h-full flex flex-col items-center justify-center gap-4 p-4 sm:p-6">
         <div role="tablist" aria-label="creation method" className="inline-flex rounded-lg border border-border bg-card p-0.5 text-[13px] font-medium">
           {([['new', 'New'], ['import', 'Import']] as const).map(([m, label]) => (
             <button
@@ -235,6 +239,7 @@ function AddAgentPane({ initialMode, onClose }: { initialMode: 'new' | 'import';
           ))}
         </div>
         {mode === 'new' ? <NewAgentForm onClose={onClose} /> : <ImportAgentForm onClose={onClose} />}
+        </div>
       </div>
     </div>
   );
