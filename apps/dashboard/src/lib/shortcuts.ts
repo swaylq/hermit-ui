@@ -2,6 +2,8 @@
 // (components/keyboard-shortcuts.tsx) and the Help page's shortcuts table.
 // Shortcuts are active only in the installed PWA (standalone); see isStandalone().
 
+import { SETTINGS_ENTRY_HREF } from '@/lib/settings-nav';
+
 export type ShortcutGroup = 'Navigation' | 'Actions' | 'General';
 
 export interface Shortcut {
@@ -20,7 +22,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'nav-cron', keys: ['⌘', '3'], label: 'Go to Cron', group: 'Navigation', href: '/cron' },
   { id: 'nav-notifications', keys: ['⌘', '4'], label: 'Go to Notifications', group: 'Navigation', href: '/notifications' },
   { id: 'nav-brain', keys: ['⌘', '5'], label: 'Go to Brain', group: 'Navigation', href: '/brain' },
-  { id: 'nav-settings', keys: ['⌘', '6'], label: 'Go to Settings', group: 'Navigation', href: '/skills' },
+  { id: 'nav-settings', keys: ['⌘', '6'], label: 'Go to Settings', group: 'Navigation', href: SETTINGS_ENTRY_HREF },
   { id: 'help', keys: ['?'], label: 'Open Help', group: 'General' },
   { id: 'close', keys: ['Esc'], label: 'Close dialog / overlay', group: 'General' },
 ];

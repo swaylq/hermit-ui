@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { SETTINGS_HREFS, SETTINGS_TABS } from '@/lib/settings-nav';
+import { SETTINGS_HREFS, SETTINGS_TABS, SETTINGS_ENTRY_HREF } from '@/lib/settings-nav';
 import { relTime } from '@/lib/format';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
@@ -145,7 +145,7 @@ function SettingsButton({ collapsed }: { collapsed: boolean }) {
   const active = SETTINGS_HREFS.some((h) => pathname === h || pathname.startsWith(h + '/'));
   return (
     <Link
-      href="/skills"
+      href={SETTINGS_ENTRY_HREF}
       title="Settings"
       aria-label="Settings"
       className={cn(
