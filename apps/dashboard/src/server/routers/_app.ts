@@ -10,6 +10,7 @@ import { marketRouter } from './market';
 import { fileStationRouter } from './fileStation';
 import { fileManagerRouter } from './fileManager';
 import { globalMemoryRouter } from './globalMemory';
+import { knowledgeRouter } from './knowledge';
 import { secretsRouter } from './secrets';
 import { shareRouter } from './share';
 import { notificationsRouter } from './notifications';
@@ -27,6 +28,7 @@ export const appRouter = router({
   fileStation: fileStationRouter,
   fileManager: fileManagerRouter,
   globalMemory: globalMemoryRouter,
+  knowledge: knowledgeRouter,
   secrets: secretsRouter,
   share: shareRouter,
   notifications: notificationsRouter,

@@ -48,6 +48,7 @@ model Machine {
   globalMemory        GlobalMemory?
   shareLinks          AgentShareLink[]
   hostStat            HostStat?
+  knowledgeBases      KnowledgeBase[]
 }
 
 // Latest host-resource snapshot for a machine — RAM / swap / load / cpu, pushed by
@@ -216,6 +217,77 @@ model GlobalMemory {
   content   String   @default("") @db.Text
   enabled   Boolean  @default(true) // off = the gateway drops the block; agents stop loading it (content kept)
   updatedAt DateTime @updatedAt
+}
+
+// A knowledge base — a per-MACHINE library entry. `intro` is the always-loaded
+// summary (→ materialized SKILL.md `description`); `docs` are markdown files read on
+// demand. Attached to agents via AgentKnowledgeBase; the gateway materializes each
+// attached KB as a Claude Code skill under <agent>/.claude/skills/kb-<slug>/.
+// See docs/knowledge-base-design.md.
+model KnowledgeBase {
+  id               String   @id @default(cuid())
+  machineId        String
+  machine          Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  slug             String // dir name → .claude/skills/kb-<slug>/
+  name             String
+  intro            String   @default("") @db.Text // always-loaded summary → SKILL.md description
+  autoIntro        Boolean  @default(true) // Brain's dream may rewrite intro when true
+  introUpdatedAt   DateTime @default(now()) // bumped when intro changes
+  contentUpdatedAt DateTime @default(now()) // bumped on any doc create/update/delete/reorder
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  docs        KnowledgeDoc[]
+  attachments AgentKnowledgeBase[]
+
+  @@unique([machineId, slug])
+}
+
+// One markdown document inside a knowledge base. `filename` is the stable on-disk
+// name under kb-<slug>/docs/, assigned at creation and unchanged by title edits.
+model KnowledgeDoc {
+  id              String        @id @default(cuid())
+  knowledgeBaseId String
+  knowledgeBase   KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  title           String
+  filename        String // <filename>.md within kb-<slug>/docs/, unique per KB
+  content         String        @default("") @db.Text // markdown
+  sortOrder       Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([knowledgeBaseId, filename])
+}
+
+// Attachment: which agent has which knowledge base. Mirrors AgentSkillInstall.
+// Deleting the KB (or its machine, transitively) cascades these away.
+model AgentKnowledgeBase {
+  machineId       String
+  agentName       String
+  knowledgeBaseId String
+  knowledgeBase   KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  createdAt       DateTime      @default(now())
+
+  @@id([machineId, agentName, knowledgeBaseId])
+  @@index([machineId, agentName])
+}
+
+// DB→disk materialization queue (mirrors GlobalSkillRequest). The dashboard enqueues
+// a request; the machine's gateway polls, writes/removes <agent>/.claude/skills/
+// kb-<slug>/, then acks. `payload` carries the full KB snapshot for `materialize`.
+model KnowledgeBaseRequest {
+  id         String    @id @default(cuid())
+  machineId  String
+  agentName  String // whose .claude/skills/ to write
+  slug       String // kb-<slug>
+  kind       String // "materialize" | "remove"
+  payload    Json? // { name, intro, docs: [{ filename, title, content }] }
+  status     String    @default("pending") // pending | done | error
+  error      String?   @db.Text
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  @@index([machineId, status])
 }
 
 // Machine-level ops the dashboard queues for the gateway to run on its host:
