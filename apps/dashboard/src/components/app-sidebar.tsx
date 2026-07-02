@@ -648,7 +648,6 @@ export function AppSidebar() {
                 />
               </Link>
               <BrainButton collapsed={collapsed} />
-              <SettingsButton collapsed={collapsed} />
               <NotificationsButton collapsed={collapsed} count={notifCounts.total} />
               <Link
                 href="/market/skills"
@@ -661,6 +660,7 @@ export function AppSidebar() {
               >
                 <Store className="h-4 w-4" />
               </Link>
+              <SettingsButton collapsed={collapsed} />
             </>
           )}
           <button
