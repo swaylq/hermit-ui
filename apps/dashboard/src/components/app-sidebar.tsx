@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { SETTINGS_HREFS } from '@/lib/settings-nav';
+import { SETTINGS_HREFS, SETTINGS_TABS } from '@/lib/settings-nav';
 import { relTime } from '@/lib/format';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
@@ -383,6 +383,9 @@ export function AppSidebar() {
   const onAgents = pathname.startsWith('/agents');
   const onCron = pathname.startsWith('/cron');
   const onSkills = pathname.startsWith('/skills');
+  // Any Settings route → the sidebar switches to Settings mode (its own vertical nav
+  // of the settings tabs), mirroring Market / Brain mode.
+  const onSettings = SETTINGS_HREFS.some((h) => pathname === h || pathname.startsWith(h + '/'));
   const onMarket = pathname.startsWith('/market');
   const onBrain = pathname.startsWith('/brain');
   const onBrainChat = pathname === '/brain'; // the Chat view (no sub-route; ?session= keeps this path)
@@ -602,6 +605,20 @@ export function AppSidebar() {
                 <span className="px-1 text-sm font-semibold text-sidebar-foreground">Notifications</span>
               </div>
             </>
+          ) : onSettings ? (
+            <>
+              <Link
+                href="/chat"
+                title="Back to dashboard"
+                aria-label="back to dashboard"
+                className="inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </Link>
+              <div className={cn('flex-1 min-w-0', collapsed && 'lg:hidden')}>
+                <span className="px-1 text-sm font-semibold text-sidebar-foreground">Settings</span>
+              </div>
+            </>
           ) : (
             <>
               {/* "Hermit" wordmark on the left (Cochin PNG → CSS mask filled with
@@ -750,6 +767,34 @@ export function AppSidebar() {
                         {count}
                       </span>
                     )}
+                  </Link>
+                );
+              })}
+            </nav>
+            <div className="flex-1" />
+          </>
+        ) : onSettings ? (
+          /* Settings mode: the settings tabs as a vertical nav (back in the header). */
+          <>
+            <nav className="px-2 pt-2 space-y-0.5">
+              {SETTINGS_TABS.map((t) => {
+                const active = pathname === t.href || pathname.startsWith(t.href + '/');
+                const Icon = t.Icon;
+                return (
+                  <Link
+                    key={t.href}
+                    href={t.href}
+                    title={t.label}
+                    className={cn(
+                      'flex items-center gap-2.5 rounded-lg h-8 text-sm transition-colors cursor-pointer',
+                      collapsed ? 'lg:justify-center lg:px-0 px-3' : 'px-3',
+                      active
+                        ? 'bg-sidebar-accent text-sidebar-foreground font-medium'
+                        : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className={cn('truncate', collapsed && 'lg:hidden')}>{t.label}</span>
                   </Link>
                 );
               })}
