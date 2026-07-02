@@ -338,11 +338,60 @@ export const knowledgeRouter = router({
   }),
 
   // ── Gateway endpoints ──────────────────────────────────────────────────────
+  // Full attached-KB snapshot for this machine — the gateway's startup reconcile
+  // materializes each and prunes orphan kb-* dirs. Joined with the agent directory.
+  materializationForMachine: machineProcedure.query(async ({ ctx }) => {
+    const rows = await prisma.agentKnowledgeBase.findMany({
+      where: { machineId: ctx.machine.id },
+      select: {
+        agentName: true,
+        knowledgeBase: {
+          select: {
+            slug: true,
+            name: true,
+            intro: true,
+            docs: { orderBy: { sortOrder: 'asc' }, select: { filename: true, title: true, content: true } },
+          },
+        },
+      },
+    });
+    const names = [...new Set(rows.map((r) => r.agentName))];
+    const agents = names.length
+      ? await prisma.agent.findMany({ where: { machineId: ctx.machine.id, name: { in: names } }, select: { name: true, directory: true } })
+      : [];
+    const dirByName = new Map(agents.map((a) => [a.name, a.directory]));
+    return rows.map((r) => ({
+      agentName: r.agentName,
+      agentDirectory: dirByName.get(r.agentName) ?? null,
+      slug: r.knowledgeBase.slug,
+      name: r.knowledgeBase.name,
+      intro: r.knowledgeBase.intro,
+      docs: r.knowledgeBase.docs,
+    }));
+  }),
+
+  // Pending materialize/remove requests, joined with each agent's on-disk directory
+  // (like chat.pollPending) so the gateway knows where to write. Gateway polls ~3s.
   pollRequests: machineProcedure.query(async ({ ctx }) => {
-    return prisma.knowledgeBaseRequest.findMany({
+    const reqs = await prisma.knowledgeBaseRequest.findMany({
       where: { machineId: ctx.machine.id, status: 'pending' },
       orderBy: { createdAt: 'asc' },
     });
+    if (reqs.length === 0) return [];
+    const names = [...new Set(reqs.map((r) => r.agentName))];
+    const agents = await prisma.agent.findMany({
+      where: { machineId: ctx.machine.id, name: { in: names } },
+      select: { name: true, directory: true },
+    });
+    const dirByName = new Map(agents.map((a) => [a.name, a.directory]));
+    return reqs.map((r) => ({
+      id: r.id,
+      agentName: r.agentName,
+      slug: r.slug,
+      kind: r.kind,
+      payload: r.payload,
+      agentDirectory: dirByName.get(r.agentName) ?? null,
+    }));
   }),
 
   ackRequest: machineProcedure

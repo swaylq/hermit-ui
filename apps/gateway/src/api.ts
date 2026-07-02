@@ -280,6 +280,39 @@ export const api = {
     if (!r.ok) throw new Error(`ackGlobalSkillRequest → ${r.status}`);
   },
 
+  // ── Knowledge bases (materialize attached KBs as skills) ─────────────────────
+  // Pending materialize/remove requests joined with each agent's directory; the
+  // gateway writes <agent>/.claude/skills/kb-<slug>/, then acks. Polled ~3s.
+  pollKnowledgeRequests: async (): Promise<
+    Array<{ id: string; agentName: string; slug: string; kind: string; payload: any; agentDirectory: string | null }>
+  > => {
+    const r = await get<any>(
+      '/api/trpc/knowledge.pollRequests?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+
+  // Full attached-KB snapshot for the startup reconcile (materialize all + prune orphans).
+  listKnowledgeMaterialization: async (): Promise<
+    Array<{ agentName: string; agentDirectory: string | null; slug: string; name: string; intro: string; docs: Array<{ filename: string; title: string; content: string }> }>
+  > => {
+    const r = await get<any>(
+      '/api/trpc/knowledge.materializationForMachine?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+
+  ackKnowledgeRequest: async (body: { id: string; status: 'done' | 'error'; error?: string }) => {
+    const url = `${DASHBOARD_URL}/api/trpc/knowledge.ackRequest?batch=1`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
+      body: JSON.stringify({ '0': { json: body } }),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+    if (!r.ok) throw new Error(`ackKnowledgeRequest → ${r.status}`);
+  },
+
   syncChatMessages: async (
     items: Array<{
       sessionId: string;

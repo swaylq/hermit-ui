@@ -33,6 +33,7 @@ import { machineRequestTick } from './machine-requests';
 import { startLoginBridge } from './login-bridge';
 import { fileTransferTick } from './file-station';
 import { pushGlobalSkills, globalSkillRequestTick } from './global-skills';
+import { knowledgeRequestTick, reconcileKnowledgeOnStartup } from './knowledge';
 import { globalMemoryTick } from './global-memory';
 import { chromeReaperTick } from './chrome-reaper';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
@@ -163,6 +164,7 @@ function loop(fn: () => Promise<void>, ms: number) {
   await pushAgents();
   await ensureBrainTick(); // after pushAgents: the brain's directory is fresh
   await pushGlobalSkillsTick();
+  await safe('knowledge-reconcile', reconcileKnowledgeOnStartup); // converge attached KBs disk↔DB
   await safe('global-memory', globalMemoryTick);
   await pushSessionSnapshots();
   await pushHostStat();
@@ -197,6 +199,7 @@ loop(() => safe('machine-requests', machineRequestTick), 3_000);
 loop(() => safe('file-transfers', fileTransferTick), 4_000);
 loop(pushGlobalSkillsTick, 60_000);
 loop(globalSkillReqTick, 3_000);
+loop(() => safe('knowledge-requests', knowledgeRequestTick), 3_000);
 loop(() => safe('global-memory', globalMemoryTick), 30_000);
 // Real plan % via `claude /usage` scrape — every 12 min (initial run is the last
 // step of the startup IIFE above, so it isn't starved by the ccusage block).

@@ -38,13 +38,24 @@ function safeRead(p: string, maxBytes = MAX_TEXT_BYTES): string | null {
   }
 }
 
+// A materialized knowledge base (kb-<slug>/ carrying hermit_kind: knowledge) is not
+// a skill — it's managed in the Knowledge Base UI. Skip it in the skill collectors
+// so it never shows in the agent's skill list. The marker (not the kb- name) is the
+// authority: a human skill named kb-* without it stays a real skill.
+function isKnowledgeBaseSkill(skillDir: string): boolean {
+  const head = safeRead(path.join(skillDir, 'SKILL.md'), 2048);
+  if (!head) return false;
+  const fm = head.match(/^---\n([\s\S]*?)\n---/);
+  return !!fm && /(^|\n)hermit_kind:\s*knowledge\s*(\r?\n|$)/.test(fm[1]);
+}
+
 function listSkills(agentDir: string): string[] {
   const skillsDir = path.join(agentDir, '.claude', 'skills');
   if (!fs.existsSync(skillsDir)) return [];
   try {
     return fs
       .readdirSync(skillsDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
+      .filter((d) => d.isDirectory() && !isKnowledgeBaseSkill(path.join(skillsDir, d.name)))
       .map((d) => d.name)
       .sort();
   } catch {

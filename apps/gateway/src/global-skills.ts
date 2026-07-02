@@ -44,15 +44,15 @@ function safeRead(p: string, maxBytes = MAX_TEXT_BYTES): string | null {
 
 // Pull `name`/`description` from a SKILL.md YAML frontmatter block. Handles a
 // single-line value (optionally quoted) and a `>`/`|` block scalar. Best-effort.
-function parseFrontmatter(md: string): { name?: string; description?: string } {
+function parseFrontmatter(md: string): { name?: string; description?: string; hermit_kind?: string } {
   const m = md.match(/^---\n([\s\S]*?)\n---/);
   if (!m) return {};
   const lines = m[1].split('\n');
-  const out: { name?: string; description?: string } = {};
+  const out: { name?: string; description?: string; hermit_kind?: string } = {};
   for (let i = 0; i < lines.length; i++) {
-    const fm = lines[i].match(/^(name|description):\s*(.*)$/);
+    const fm = lines[i].match(/^(name|description|hermit_kind):\s*(.*)$/);
     if (!fm) continue;
-    const key = fm[1] as 'name' | 'description';
+    const key = fm[1] as 'name' | 'description' | 'hermit_kind';
     let val = fm[2];
     if (val === '>' || val === '|' || val === '>-' || val === '|-') {
       const parts: string[] = [];
@@ -152,6 +152,7 @@ function probe(dir: string, name: string): GlobalSkillRow | null {
   if (fs.existsSync(skillMd)) {
     const content = safeRead(skillMd) ?? '';
     const fm = parseFrontmatter(content);
+    if (fm.hermit_kind === 'knowledge') return null; // a materialized knowledge base, not a skill
     return {
       name,
       description: fm.description ?? null,
