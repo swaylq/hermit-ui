@@ -1,122 +1,119 @@
 'use client';
 
-// Knowledge — the per-machine library of knowledge bases. Each KB holds markdown
-// documents and gets attached to agents from their detail view (like skills), where
-// the gateway materializes it as a Claude Code skill for progressive loading.
+// The right-hand detail pane for /knowledge with no base selected: an empty state
+// + a create form. The list of bases is the sidebar (KnowledgeSidebarList in
+// app-sidebar), so this route is the master-detail "nothing selected" placeholder —
+// the same way /chat with no ?session shows a start-a-chat panel.
 
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { BookOpen, Plus, FileText, Users } from 'lucide-react';
+import { BookOpen, Plus, X } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 
-function goToBase(slug: string) {
-  window.location.href = `/knowledge/${encodeURIComponent(slug)}`;
-}
-
-function NewBaseForm() {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-  const params = useSearchParams();
-  const create = trpc.knowledge.createBase.useMutation({ onSuccess: (r) => goToBase(r.slug) });
-
-  useEffect(() => {
-    if (params.get('new') === '1') setOpen(true);
-  }, [params]);
-
-  const submit = () => {
-    const n = name.trim();
-    if (n) create.mutate({ name: n });
-  };
-
-  if (!open) {
-    return (
-      <Button size="sm" onClick={() => setOpen(true)}>
-        <Plus className="h-4 w-4 mr-1" /> New knowledge base
-      </Button>
-    );
-  }
-  return (
-    <div className="flex items-center gap-2">
-      <Input
-        autoFocus
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') submit();
-          if (e.key === 'Escape') { setOpen(false); setName(''); }
-        }}
-        placeholder="Knowledge base name"
-        className="h-8 w-56 text-sm"
-      />
-      <Button size="sm" disabled={!name.trim() || create.isPending} onClick={submit}>
-        Create
-      </Button>
-      <Button size="sm" variant="ghost" onClick={() => { setOpen(false); setName(''); }}>
-        Cancel
-      </Button>
-    </div>
-  );
-}
-
-function KnowledgeList() {
-  const bases = trpc.knowledge.listBases.useQuery();
+export default function KnowledgeIndexPage() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
-      <header className="h-12 px-3 sm:px-4 flex items-center justify-between gap-2 border-b border-border shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <SidebarMobileToggle />
-          <span className="text-sm font-semibold text-foreground">Knowledge</span>
-        </div>
-        <NewBaseForm />
+      <header className="h-12 px-3 sm:px-4 flex items-center gap-2 border-b border-border shrink-0">
+        <SidebarMobileToggle />
+        <span className="text-sm font-semibold text-foreground">Knowledge</span>
       </header>
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="max-w-3xl w-full mx-auto p-4 sm:p-6">
-          {bases.isLoading && <div className="text-xs text-muted-foreground">loading…</div>}
-          {!bases.isLoading && (bases.data?.length ?? 0) === 0 && (
-            <div className="text-sm text-muted-foreground">
-              No knowledge bases yet. Create one, add markdown documents, then attach it to an agent
-              from the agent&apos;s detail view — the agent loads only the intro and reads the docs on demand.
-            </div>
-          )}
-          <div className="grid gap-2 sm:grid-cols-2">
-            {(bases.data ?? []).map((b) => (
-              <button
-                key={b.id}
-                type="button"
-                onClick={() => goToBase(b.slug)}
-                className="text-left rounded-lg border border-border bg-card hover:bg-accent/40 transition-colors p-3.5 cursor-pointer"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <BookOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="text-sm font-medium truncate">{b.name}</span>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground line-clamp-2 min-h-[2rem]">
-                  {b.intro || 'No intro yet.'}
-                </p>
-                <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground/70">
-                  <span className="inline-flex items-center gap-1">
-                    <FileText className="h-3 w-3" /> {b.docCount} doc{b.docCount === 1 ? '' : 's'}
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <Users className="h-3 w-3" /> {b.attachedAgentCount} agent{b.attachedAgentCount === 1 ? '' : 's'}
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+      <Suspense fallback={<div className="flex-1" />}>
+        <EmptyPane />
+      </Suspense>
     </div>
   );
 }
 
-export default function KnowledgePage() {
+function EmptyPane() {
+  const params = useSearchParams();
+  const [creating, setCreating] = useState(false);
+  // The sidebar's "New knowledge base" CTA lands here with ?new=1.
+  useEffect(() => {
+    if (params.get('new') === '1') setCreating(true);
+  }, [params]);
+
   return (
-    <Suspense fallback={null}>
-      <KnowledgeList />
-    </Suspense>
+    <div className="flex-1 min-h-0 flex items-center justify-center p-6">
+      {creating ? (
+        <NewBaseForm onCancel={() => setCreating(false)} />
+      ) : (
+        <div className="flex flex-col items-center gap-3 text-center max-w-sm">
+          <div className="grid h-12 w-12 place-items-center rounded-xl bg-muted text-muted-foreground">
+            <BookOpen className="h-6 w-6" />
+          </div>
+          <div className="space-y-1">
+            <h2 className="text-sm font-semibold text-foreground">Knowledge bases</h2>
+            <p className="text-xs text-muted-foreground">
+              Durable reference docs an agent loads as an always-on intro and reads on demand. Pick a base from the list, or create one.
+            </p>
+          </div>
+          <Button size="sm" onClick={() => setCreating(true)}>
+            <Plus className="h-4 w-4 mr-1" /> New knowledge base
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NewBaseForm({ onCancel }: { onCancel: () => void }) {
+  const [name, setName] = useState('');
+  const [intro, setIntro] = useState('');
+  const create = trpc.knowledge.createBase.useMutation({
+    onSuccess: (r) => { window.location.href = `/knowledge/${encodeURIComponent(r.slug)}`; },
+  });
+  const submit = () => {
+    const n = name.trim();
+    if (n) create.mutate({ name: n, intro: intro.trim() || undefined });
+  };
+  return (
+    <div className="w-full max-w-sm space-y-3 rounded-xl border border-border bg-card p-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-foreground">New knowledge base</h2>
+        <button
+          type="button"
+          onClick={onCancel}
+          aria-label="cancel"
+          className="h-6 w-6 inline-flex items-center justify-center rounded text-muted-foreground hover:bg-accent cursor-pointer"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-foreground">Name</label>
+        <Input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit();
+            if (e.key === 'Escape') onCancel();
+          }}
+          placeholder="e.g. Payments API"
+          className="h-9"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-foreground">
+          Intro <span className="text-muted-foreground font-normal">(optional)</span>
+        </label>
+        <Textarea
+          value={intro}
+          onChange={(e) => setIntro(e.target.value)}
+          rows={3}
+          placeholder="One or two sentences: what it holds + when to consult it. Leave empty to let the Brain summarize it from the docs."
+          className="text-sm"
+        />
+      </div>
+      {create.error && <div className="text-[11px] text-rose-500">{create.error.message}</div>}
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
+        <Button size="sm" disabled={!name.trim() || create.isPending} onClick={submit}>Create</Button>
+      </div>
+    </div>
   );
 }

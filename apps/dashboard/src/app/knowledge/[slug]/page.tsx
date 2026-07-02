@@ -18,7 +18,12 @@ type Doc = { id: string; title: string; filename: string; sortOrder: number };
 
 export default function KnowledgeBaseEditorPage() {
   const params = useParams<{ slug: string }>();
-  const slug = params.slug;
+  // Key by slug so switching bases in the sidebar remounts the editor cleanly —
+  // no stale selected-doc / draft state carried from the previously-open base.
+  return <KnowledgeBaseEditor key={params.slug} slug={params.slug} />;
+}
+
+function KnowledgeBaseEditor({ slug }: { slug: string }) {
   const utils = trpc.useUtils();
   const base = trpc.knowledge.getBase.useQuery({ slug });
   const refresh = () => utils.knowledge.getBase.invalidate({ slug });
