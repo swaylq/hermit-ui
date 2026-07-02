@@ -1,17 +1,18 @@
 'use client';
 
 // The knowledge-base editor: name + intro (Auto = maintained by the Brain's dream,
-// Manual = you own it) on top, a document master-detail below (list left, markdown
-// editor right). Every save re-materializes the KB for attached agents server-side.
+// Manual = you own it) on top, then the document list. Documents open in a MODAL to
+// view/edit their markdown. Every save re-materializes the KB for attached agents.
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { ArrowLeft, Plus, Trash2, ChevronUp, ChevronDown, Sparkles, Pencil } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronUp, ChevronDown, Sparkles, Pencil, FileText, X } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { Overlay } from '@/components/overlay';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 
 type Doc = { id: string; title: string; filename: string; sortOrder: number };
@@ -19,7 +20,7 @@ type Doc = { id: string; title: string; filename: string; sortOrder: number };
 export default function KnowledgeBaseEditorPage() {
   const params = useParams<{ slug: string }>();
   // Key by slug so switching bases in the sidebar remounts the editor cleanly —
-  // no stale selected-doc / draft state carried from the previously-open base.
+  // no stale draft state carried from the previously-open base.
   return <KnowledgeBaseEditor key={params.slug} slug={params.slug} />;
 }
 
@@ -28,12 +29,9 @@ function KnowledgeBaseEditor({ slug }: { slug: string }) {
   const base = trpc.knowledge.getBase.useQuery({ slug });
   const refresh = () => utils.knowledge.getBase.invalidate({ slug });
 
-  const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
+  // null = closed; { docId: null } = new document; { docId } = edit that document.
+  const [modalDoc, setModalDoc] = useState<{ docId: string | null } | null>(null);
   const docs: Doc[] = base.data?.docs ?? [];
-  useEffect(() => {
-    if (docs.length === 0) { setSelectedDocId(null); return; }
-    if (!selectedDocId || !docs.some((d) => d.id === selectedDocId)) setSelectedDocId(docs[0].id);
-  }, [docs, selectedDocId]);
 
   if (base.isLoading) {
     return <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">loading…</div>;
@@ -66,23 +64,26 @@ function KnowledgeBaseEditor({ slug }: { slug: string }) {
       </header>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="max-w-4xl w-full mx-auto p-4 sm:p-6 space-y-5">
+        <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 space-y-5">
           <IntroEditor id={kb.id} intro={kb.intro} autoIntro={kb.autoIntro} onSaved={refresh} />
-
-          <div className="grid gap-4 sm:grid-cols-[220px_1fr]">
-            <DocList baseId={kb.id} docs={docs} selectedId={selectedDocId} onSelect={setSelectedDocId} onChanged={refresh} />
-            <div className="min-w-0">
-              {selectedDocId ? (
-                <DocEditor key={selectedDocId} docId={selectedDocId} onChanged={refresh} />
-              ) : (
-                <div className="rounded-lg border border-dashed border-border p-8 text-center text-xs text-muted-foreground">
-                  No document selected. Add one on the left.
-                </div>
-              )}
-            </div>
-          </div>
+          <DocsSection
+            baseId={kb.id}
+            docs={docs}
+            onOpen={(docId) => setModalDoc({ docId })}
+            onNew={() => setModalDoc({ docId: null })}
+            onChanged={refresh}
+          />
         </div>
       </div>
+
+      {modalDoc && (
+        <DocModal
+          baseId={kb.id}
+          docId={modalDoc.docId}
+          onClose={() => setModalDoc(null)}
+          onChanged={refresh}
+        />
+      )}
     </div>
   );
 }
@@ -195,21 +196,18 @@ function IntroEditor({ id, intro, autoIntro, onSaved }: { id: string; intro: str
   );
 }
 
-function DocList({
-  baseId, docs, selectedId, onSelect, onChanged,
+// The document list. Rows open the editor MODAL (view/edit); reorder + delete live
+// inline on hover. "New document" opens the modal in create mode.
+function DocsSection({
+  baseId, docs, onOpen, onNew, onChanged,
 }: {
   baseId: string;
   docs: Doc[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
+  onOpen: (docId: string) => void;
+  onNew: () => void;
   onChanged: () => void;
 }) {
   const confirm = useConfirm();
-  const [adding, setAdding] = useState(false);
-  const [title, setTitle] = useState('');
-  const create = trpc.knowledge.createDoc.useMutation({
-    onSuccess: (r) => { setAdding(false); setTitle(''); onChanged(); onSelect(r.id); },
-  });
   const del = trpc.knowledge.deleteDoc.useMutation({ onSuccess: onChanged });
   const reorder = trpc.knowledge.reorderDocs.useMutation({ onSuccess: onChanged });
 
@@ -222,104 +220,140 @@ function DocList({
   };
 
   return (
-    <div className="space-y-1.5">
+    <section className="space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-foreground">Documents</span>
-        <button
-          type="button"
-          onClick={() => setAdding((v) => !v)}
-          className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline cursor-pointer"
-        >
-          <Plus className="h-3 w-3" /> add
-        </button>
+        <Button size="sm" variant="ghost" onClick={onNew}>
+          <Plus className="h-3.5 w-3.5 mr-1" /> New document
+        </Button>
       </div>
-      {adding && (
-        <div className="flex items-center gap-1.5">
-          <Input
-            autoFocus
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && title.trim()) create.mutate({ baseId, title: title.trim() });
-              if (e.key === 'Escape') { setAdding(false); setTitle(''); }
-            }}
-            placeholder="Document title"
-            className="h-7 text-xs"
-          />
+      {docs.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border p-8 text-center text-xs text-muted-foreground">
+          No documents yet. Add one — the agent reads these on demand, only when relevant.
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {docs.map((d, i) => (
+            <div
+              key={d.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onOpen(d.id)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(d.id); } }}
+              className="group flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 cursor-pointer hover:bg-accent/40 transition-colors"
+            >
+              <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+              <span className="flex-1 truncate text-sm">{d.title}</span>
+              <span className="flex items-center opacity-0 group-hover:opacity-100">
+                <button type="button" title="Move up" onClick={(e) => { e.stopPropagation(); move(i, -1); }} className="p-0.5 hover:text-foreground disabled:opacity-30 cursor-pointer" disabled={i === 0}>
+                  <ChevronUp className="h-3.5 w-3.5" />
+                </button>
+                <button type="button" title="Move down" onClick={(e) => { e.stopPropagation(); move(i, 1); }} className="p-0.5 hover:text-foreground disabled:opacity-30 cursor-pointer" disabled={i === docs.length - 1}>
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  title="Delete document"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (await confirm({ title: 'Delete document', message: `Delete "${d.title}"?`, confirmLabel: 'Delete', danger: true })) del.mutate({ id: d.id });
+                  }}
+                  className="p-0.5 hover:text-rose-500 cursor-pointer"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            </div>
+          ))}
         </div>
       )}
-      <div className="space-y-0.5">
-        {docs.length === 0 && !adding && <div className="text-[11px] text-muted-foreground py-1">No documents yet.</div>}
-        {docs.map((d, i) => (
-          <div
-            key={d.id}
-            className={
-              'group flex items-center gap-1 rounded-md px-2 py-1.5 text-sm cursor-pointer ' +
-              (d.id === selectedId ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50')
-            }
-            onClick={() => onSelect(d.id)}
-          >
-            <span className="flex-1 truncate">{d.title}</span>
-            <span className="flex items-center opacity-0 group-hover:opacity-100">
-              <button type="button" title="Move up" onClick={(e) => { e.stopPropagation(); move(i, -1); }} className="p-0.5 hover:text-foreground disabled:opacity-30 cursor-pointer" disabled={i === 0}>
-                <ChevronUp className="h-3.5 w-3.5" />
-              </button>
-              <button type="button" title="Move down" onClick={(e) => { e.stopPropagation(); move(i, 1); }} className="p-0.5 hover:text-foreground disabled:opacity-30 cursor-pointer" disabled={i === docs.length - 1}>
-                <ChevronDown className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                title="Delete document"
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  if (await confirm({ title: 'Delete document', message: `Delete "${d.title}"?`, confirmLabel: 'Delete', danger: true })) del.mutate({ id: d.id });
-                }}
-                className="p-0.5 hover:text-rose-500 cursor-pointer"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
+    </section>
   );
 }
 
-function DocEditor({ docId, onChanged }: { docId: string; onChanged: () => void }) {
-  const doc = trpc.knowledge.docContent.useQuery({ docId });
+// Modal editor — create (docId=null) or edit an existing document. Backdrop/Esc are
+// blocked while there are unsaved changes (interceptClose); Cancel/X discard.
+function DocModal({
+  baseId, docId, onClose, onChanged,
+}: {
+  baseId: string;
+  docId: string | null;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const isNew = docId == null;
+  const doc = trpc.knowledge.docContent.useQuery({ docId: docId ?? '' }, { enabled: !isNew });
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [dirty, setDirty] = useState(false);
   useEffect(() => {
-    if (doc.data) { setTitle(doc.data.title); setContent(doc.data.content); setDirty(false); }
-  }, [doc.data]);
-  const update = trpc.knowledge.updateDoc.useMutation({ onSuccess: () => { setDirty(false); onChanged(); } });
+    if (!isNew && doc.data) { setTitle(doc.data.title); setContent(doc.data.content); setDirty(false); }
+  }, [isNew, doc.data]);
 
-  if (doc.isLoading) return <div className="text-xs text-muted-foreground">loading…</div>;
-  if (!doc.data) return <div className="text-xs text-muted-foreground">Document not found.</div>;
+  const create = trpc.knowledge.createDoc.useMutation();
+  const update = trpc.knowledge.updateDoc.useMutation();
+  const saving = create.isPending || update.isPending;
+  const err = create.error?.message || update.error?.message;
+  const loading = !isNew && doc.isLoading;
+  const notFound = !isNew && !doc.isLoading && !doc.data;
 
   return (
-    <div className="space-y-2">
-      <Input
-        value={title}
-        onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
-        placeholder="Document title"
-        className="h-8 text-sm font-medium"
-      />
-      <Textarea
-        value={content}
-        onChange={(e) => { setContent(e.target.value); setDirty(true); }}
-        rows={20}
-        placeholder="Markdown content…"
-        className="text-sm font-mono leading-relaxed"
-      />
-      <div className="flex items-center gap-2">
-        <Button size="sm" disabled={!dirty || !title.trim() || update.isPending} onClick={() => update.mutate({ id: docId, title: title.trim(), content })}>
-          Save document
-        </Button>
-        {dirty && <span className="text-[11px] text-muted-foreground">Unsaved changes</span>}
-      </div>
-    </div>
+    <Overlay
+      onClose={onClose}
+      interceptClose={() => dirty}
+      panelClassName="w-full max-w-2xl max-h-[88vh] flex flex-col rounded-xl border border-border bg-background shadow-2xl"
+    >
+      {(close) => {
+        const save = () => {
+          const t = title.trim();
+          if (!t) return;
+          const onSuccess = () => { setDirty(false); onChanged(); close(); };
+          if (docId == null) create.mutate({ baseId, title: t, content }, { onSuccess });
+          else update.mutate({ id: docId, title: t, content }, { onSuccess });
+        };
+        return (
+          <>
+            <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5 shrink-0">
+              <span className="text-sm font-medium">{isNew ? 'New document' : 'Edit document'}</span>
+              <button type="button" onClick={close} aria-label="close" className="h-7 w-7 inline-flex items-center justify-center rounded text-muted-foreground hover:bg-accent cursor-pointer">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-auto p-4 space-y-2">
+              {loading ? (
+                <div className="text-xs text-muted-foreground">loading…</div>
+              ) : notFound ? (
+                <div className="text-xs text-muted-foreground">Document not found.</div>
+              ) : (
+                <>
+                  <Input
+                    autoFocus={isNew}
+                    value={title}
+                    onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
+                    placeholder="Document title"
+                    className="h-9 text-sm font-medium"
+                  />
+                  <Textarea
+                    value={content}
+                    onChange={(e) => { setContent(e.target.value); setDirty(true); }}
+                    rows={18}
+                    placeholder="Markdown content…"
+                    className="text-sm font-mono leading-relaxed"
+                  />
+                </>
+              )}
+              {err && <div className="text-[11px] text-rose-500">{err}</div>}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-2.5 shrink-0">
+              {dirty && <span className="mr-auto text-[11px] text-muted-foreground">Unsaved changes</span>}
+              <Button size="sm" variant="ghost" onClick={close}>Cancel</Button>
+              <Button size="sm" disabled={loading || notFound || !title.trim() || saving} onClick={save}>
+                {isNew ? 'Create' : 'Save'}
+              </Button>
+            </div>
+          </>
+        );
+      }}
+    </Overlay>
   );
 }
