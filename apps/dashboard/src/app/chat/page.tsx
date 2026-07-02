@@ -621,11 +621,26 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     let ctrl: AbortController | null = null;
     let cancelled = false;
+    let reconnectTimer: number | null = null;
+    let attempts = 0;              // consecutive (re)connect attempts → backoff index
+    let started = false;           // first connect skips the initial emit; reconnects don't
+    let lastActivity = Date.now(); // last byte (data OR 15s ping) seen on the stream
 
-    const connect = () => {
+    // Server pings every 15s; if nothing arrives for this long the connection is a
+    // silently-dropped zombie (half-open TCP after sleep / network switch / proxy
+    // idle-kill) — reader.read() hangs forever with streamConnected still true,
+    // freezing the chat AND suppressing the fallback poll. Abort → reconnect.
+    const IDLE_DEAD_MS = 35_000;
+    const BACKOFFS = [1_000, 2_000, 5_000];
+
+    // Function decl (not const arrow) so the reconnect in `finally` can self-refer.
+    function connect() {
       if (cancelled || document.hidden || ctrl) return; // hidden, or already streaming
       const myCtrl = new AbortController();
       ctrl = myCtrl;
+      const isReconnect = started;
+      started = true;
+      lastActivity = Date.now();
       // Optimistically mark connected the instant we START connecting, so the
       // fallback poll (refetchInterval — 600ms during an active turn) does NOT
       // hammer the server with redundant full-window listMessages refetches
@@ -636,22 +651,25 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
       setStreamConnected(true);
       (async () => {
         try {
-          // skipInitial=1: the listMessages query above already loaded this exact
-          // window, so the stream primes its change-signal WITHOUT re-pushing the
-          // same ~60 rows on connect (was an open-time double-fetch). Subsequent
-          // changes still stream; the fallback poll covers any reconnect gap.
-          const res = await fetch(`/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}&skipInitial=1`, {
+          // Initial connect skips the initial emit — listMessages already loaded
+          // this window (avoids the open-time double-fetch). A RECONNECT does NOT
+          // skip: it emits the current window once to catch up on anything that
+          // landed during the disconnect gap.
+          const res = await fetch(`/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}${isReconnect ? '' : '&skipInitial=1'}`, {
             headers: { 'x-asst-key': getActiveKey() },
             signal: myCtrl.signal,
           });
           if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
           setStreamConnected(true);
+          lastActivity = Date.now();
+          attempts = 0; // a good connect resets the backoff
           const reader = res.body.getReader();
           const dec = new TextDecoder();
           let buf = '';
           for (;;) {
             const { done, value } = await reader.read();
             if (done || cancelled) break;
+            lastActivity = Date.now(); // any byte — data frame OR keep-alive ping
             buf += dec.decode(value, { stream: true });
             let idx: number;
             while ((idx = buf.indexOf('\n\n')) >= 0) {
@@ -666,31 +684,54 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
             }
           }
         } catch {
-          /* network error or abort — the fallback poll takes over */
+          /* network error / abort / zombie-kill — reconnect below takes over */
         } finally {
           if (ctrl === myCtrl) ctrl = null;
-          if (!cancelled) setStreamConnected(false);
+          if (!cancelled) {
+            setStreamConnected(false);
+            // Reconnect with backoff so a transient drop restores instant push
+            // instead of degrading to the 2s fallback poll forever. Skipped while
+            // hidden — onVisibility reconnects on return.
+            if (!document.hidden && reconnectTimer == null) {
+              const delay = BACKOFFS[Math.min(attempts, BACKOFFS.length - 1)];
+              attempts += 1;
+              reconnectTimer = window.setTimeout(() => { reconnectTimer = null; connect(); }, delay);
+            }
+          }
         }
       })();
-    };
+    }
 
     const disconnect = () => {
+      if (reconnectTimer != null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       const c = ctrl;
       ctrl = null;
       c?.abort();
       setStreamConnected(false);
     };
 
-    // Pause the stream while the tab is hidden: otherwise a backgrounded chat
-    // keeps the server polling Postgres every POLL_MS indefinitely. Reopen on
-    // return. (The fallback listMessages poll is already paused in the
-    // background by react-query's refetchIntervalInBackground:false default.)
-    const onVisibility = () => { if (document.hidden) disconnect(); else connect(); };
+    // Zombie watchdog: abort a connection gone silent past IDLE_DEAD_MS so the
+    // finally schedules a reconnect. Cheap — a timestamp compare every 10s, no
+    // network; in steady state the 15s ping keeps lastActivity fresh so it's a no-op.
+    const watchdog = window.setInterval(() => {
+      if (!document.hidden && ctrl && Date.now() - lastActivity > IDLE_DEAD_MS) ctrl.abort();
+    }, 10_000);
+
+    // Pause the stream while the tab is hidden: otherwise a backgrounded chat keeps
+    // the server polling Postgres every POLL_MS indefinitely. Reopen (and catch up)
+    // on return. (The fallback listMessages poll is already paused in the background
+    // by react-query's refetchIntervalInBackground:false default.)
+    const onVisibility = () => {
+      if (document.hidden) disconnect();
+      else { attempts = 0; connect(); }
+    };
 
     connect();
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       cancelled = true;
+      clearInterval(watchdog);
+      if (reconnectTimer != null) clearTimeout(reconnectTimer);
       document.removeEventListener('visibilitychange', onVisibility);
       ctrl?.abort();
       setStreamConnected(false);
