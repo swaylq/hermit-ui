@@ -96,7 +96,15 @@ sharper than it found it — context discipline is the entire point.
    the few you might still reuse. (When you DO dispatch, prefer reusing an idle
    session on the target over opening a new one — \`dispatch\` with reuseSessionId.)
 
-6. **Prune (the important part).** Walk your memory and TRIM:
+6. **Refresh knowledge-base intros.** \`kb_list()\` the machine's knowledge bases.
+   For each with \`autoIntro\` true AND \`contentUpdatedAt\` newer than
+   \`introUpdatedAt\` (its docs changed since the intro was last written),
+   \`kb_read_docs(id)\` and then \`kb_set_intro(id, intro)\` with a tight 1–3 sentence
+   summary: what the base contains + when an agent should consult it. That intro is
+   the ONLY part always resident in an attached agent's context — keep it lean. Skip
+   bases with no docs; leave \`Manual\` (autoIntro false) bases alone.
+
+7. **Prune (the important part).** Walk your memory and TRIM:
    - Any file past ~40 lines → compress to its essence.
    - \`memory/dispatch-log.md\` → keep recent/open dispatches; summarize the rest
      into a count.
@@ -104,7 +112,7 @@ sharper than it found it — context discipline is the entire point.
      into the dossiers/roster, then delete them.
    - Update \`MEMORY.md\` so its index reflects the trimmed state.
 
-7. **Stamp.** Record the dream time (in \`MEMORY.md\` or \`memory/.last-dream\`) so the
+8. **Stamp.** Record the dream time (in \`MEMORY.md\` or \`memory/.last-dream\`) so the
    next dream is incremental.
 
 ## The rule
@@ -121,8 +129,10 @@ export const BRAIN_DREAM_PROMPT =
 // ensureBrain re-overlays them onto brains scaffolded by an older template. The
 // stamp lives on Agent.brainTemplateVersion (bumped when the gateway acks the
 // overlay). v1 = ships the `dreaming` skill + Daily dream cron. v2 = the dreaming
-// skill now reaps stale dispatch sessions (so existing brains pick that up).
-export const BRAIN_TEMPLATE_VERSION = 2;
+// skill now reaps stale dispatch sessions (so existing brains pick that up). v3 =
+// the dreaming skill now refreshes knowledge-base intros (kb_list / kb_read_docs /
+// kb_set_intro) for autoIntro bases whose docs changed.
+export const BRAIN_TEMPLATE_VERSION = 3;
 
 // Brain-owned files re-overlaid on every version bump. NEVER includes IDENTITY.md
 // or anything under memory/ — those are user-editable and must never be clobbered

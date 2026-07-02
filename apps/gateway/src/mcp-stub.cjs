@@ -356,6 +356,35 @@ const BRAIN_TOOLS = [
       required: ['sessionId'],
     },
   },
+  {
+    name: 'kb_list',
+    description:
+      "List every knowledge base on this machine: { id, name, slug, intro, autoIntro, docCount, introUpdatedAt, contentUpdatedAt }. Use it in your daily dream to refresh intros — for each base with autoIntro true AND contentUpdatedAt newer than introUpdatedAt, read its docs and rewrite the intro.",
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'kb_read_docs',
+    description:
+      "Read a knowledge base's documents in full: { name, intro, docs: [{ title, filename, content }] }. Use it before rewriting an intro so your summary reflects the actual content.",
+    inputSchema: {
+      type: 'object',
+      properties: { baseId: { type: 'string', description: 'The knowledge base id (from kb_list).' } },
+      required: ['baseId'],
+    },
+  },
+  {
+    name: 'kb_set_intro',
+    description:
+      "Write a knowledge base's intro — a concise 1-3 sentence summary of what it contains and when an agent should consult it. This is the ONLY part always kept in an agent's context, so keep it tight. Preserves the autoIntro flag; re-materializes the base for attached agents.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        baseId: { type: 'string', description: 'The knowledge base id (from kb_list).' },
+        intro: { type: 'string', description: 'The new intro text (1-3 sentences).' },
+      },
+      required: ['baseId', 'intro'],
+    },
+  },
 ];
 const BRAIN_TOOL_NAMES = new Set(BRAIN_TOOLS.map((t) => t.name));
 
@@ -504,6 +533,25 @@ async function dispatchBrainTool(name, args) {
     if (s.origin !== 'dispatch') throw new Error('not a dispatch session — dispatch_close only reaps dispatches');
     await trpcMutate('chat.deleteSession', { id: sessionId });
     return JSON.stringify({ ok: true, closed: sessionId, agent: s.agentName });
+  }
+  if (name === 'kb_list') {
+    const bases = (await trpcQuery('knowledge.listBases', null)) || [];
+    return JSON.stringify({ knowledgeBases: bases });
+  }
+  if (name === 'kb_read_docs') {
+    const baseId = args?.baseId;
+    if (typeof baseId !== 'string' || !baseId) throw new Error('baseId required');
+    const kb = await trpcQuery('knowledge.baseDocs', { baseId });
+    if (!kb) throw new Error('knowledge base not found');
+    return JSON.stringify(kb);
+  }
+  if (name === 'kb_set_intro') {
+    const baseId = args?.baseId;
+    const intro = args?.intro;
+    if (typeof baseId !== 'string' || !baseId) throw new Error('baseId required');
+    if (typeof intro !== 'string') throw new Error('intro required');
+    await trpcMutate('knowledge.setIntro', { id: baseId, intro });
+    return JSON.stringify({ ok: true, baseId });
   }
   throw new Error(`unknown brain tool: ${name}`);
 }
