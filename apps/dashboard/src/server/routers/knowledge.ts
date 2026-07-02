@@ -139,7 +139,8 @@ export const knowledgeRouter = router({
     return { id: doc.id, title: doc.title, content: doc.content };
   }),
 
-  // All docs WITH content — single call for the Brain's kb_read_docs.
+  // All docs WITH content — single call for the Brain's kb_read_docs and the
+  // knowledge-base-editor skill's `read` (which needs doc ids to edit/delete).
   baseDocs: machineProcedure.input(z.object({ baseId: z.string() })).query(async ({ ctx, input }) => {
     const base = await prisma.knowledgeBase.findUnique({
       where: { id: input.baseId },
@@ -147,11 +148,11 @@ export const knowledgeRouter = router({
         machineId: true,
         name: true,
         intro: true,
-        docs: { orderBy: { sortOrder: 'asc' }, select: { title: true, filename: true, content: true } },
+        docs: { orderBy: { sortOrder: 'asc' }, select: { id: true, title: true, filename: true, content: true } },
       },
     });
     if (!base || base.machineId !== ctx.machine.id) return null;
-    return { name: base.name, intro: base.intro, docs: base.docs };
+    return { id: input.baseId, name: base.name, intro: base.intro, docs: base.docs };
   }),
 
   createBase: machineProcedure
