@@ -2,25 +2,15 @@
 
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Boxes, BarChart3, Wrench, HardDriveUpload, Brain, SunMoon, Activity } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
+import { SETTINGS_TABS, type SettingsTabKey } from '@/lib/settings-nav';
 
-// Settings sub-nav: Skills + Usage + Operations + File Station as tabs. Each tab
-// is its own route but they read as one "Settings" area — the sidebar's single
-// Settings nav entry highlights for all. Rendered as a thin strip above each
-// page's own header.
-const TABS = [
-  { key: 'skills', label: 'Global Skills', href: '/skills', Icon: Boxes },
-  { key: 'memory', label: 'Global Memory', href: '/global-memory', Icon: Brain },
-  { key: 'usage', label: 'Usage', href: '/usage', Icon: BarChart3 },
-  { key: 'ops', label: 'Operations', href: '/ops', Icon: Wrench },
-  { key: 'system', label: 'System', href: '/system', Icon: Activity },
-  { key: 'files', label: 'File Station', href: '/file-station', Icon: HardDriveUpload },
-  { key: 'appearance', label: 'Appearance', href: '/appearance', Icon: SunMoon },
-] as const;
-
-export function SettingsTabs({ active }: { active: 'skills' | 'memory' | 'usage' | 'ops' | 'system' | 'files' | 'appearance' }) {
+// Settings sub-nav: each tab (Skills / Memory / Usage / Operations / System / File
+// Station / Appearance / Help) is its own route but they read as one "Settings"
+// area — the sidebar's single Settings entry highlights for all. Rendered as a thin
+// strip above each page's own header. The tab list lives in lib/settings-nav.
+export function SettingsTabs({ active }: { active: SettingsTabKey }) {
   const activeRef = useRef<HTMLAnchorElement>(null);
   useEffect(() => {
     // On a phone the four tabs don't fit, so the strip scrolls horizontally —
@@ -38,7 +28,7 @@ export function SettingsTabs({ active }: { active: 'skills' | 'memory' | 'usage'
         <span className="px-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 hidden sm:inline">
           Settings
         </span>
-        {TABS.map((t) => (
+        {SETTINGS_TABS.map((t) => (
           <Link
             key={t.key}
             href={t.href}

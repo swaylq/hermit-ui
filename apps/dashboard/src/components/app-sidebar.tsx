@@ -5,11 +5,11 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, MenuIcon, Plus,
-  Trash2, RotateCcw, RotateCw, FoldVertical, ChevronDown, Check, X, Store, Bell, HelpCircle, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, type LucideIcon,
+  Trash2, RotateCcw, RotateCw, FoldVertical, ChevronDown, Check, X, Store, Bell, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { toggleHelp } from '@/lib/shortcuts';
+import { SETTINGS_HREFS } from '@/lib/settings-nav';
 import { relTime } from '@/lib/format';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
@@ -69,9 +69,8 @@ const NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/chat', label: 'Chat', icon: MessageSquare },
   { href: '/agents', label: 'Agents', icon: Bot },
   { href: '/cron', label: 'Cron', icon: Clock },
-  // Skills + Usage live under one "Settings" entry → /skills (Skills tab); the
-  // SettingsTabs strip on those pages switches between the two.
-  { href: '/skills', label: 'Settings', icon: Settings },
+  // Settings' entry lives in the sidebar HEADER now (the gear next to Brain), not
+  // in this list — see SettingsButton.
 ];
 
 // Market mode replaces the dashboard nav when the route is under /market.
@@ -137,23 +136,25 @@ function BrainButton({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-// The Help button in the sidebar header → opens the Help popup (usage guide +
-// keyboard shortcuts) via toggleHelp(). Sits right beside the Brain button. A plain
-// button (no navigation); mirrors the sibling header icons' active/hover treatment.
-function HelpButton({ collapsed }: { collapsed: boolean }) {
+// The Settings button in the sidebar header → the Settings area (/skills, its first
+// tab). Sits right beside the Brain button, where Help used to be (Help is now a
+// Settings sub-page). Highlights on any Settings route. Mirrors BrainButton's look.
+function SettingsButton({ collapsed }: { collapsed: boolean }) {
+  const pathname = usePathname();
+  const active = SETTINGS_HREFS.some((h) => pathname === h || pathname.startsWith(h + '/'));
   return (
-    <button
-      type="button"
-      onClick={() => toggleHelp()}
-      title="Help"
-      aria-label="Help"
+    <Link
+      href="/skills"
+      title="Settings"
+      aria-label="Settings"
       className={cn(
-        'inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0',
+        'inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer shrink-0',
+        active ? 'bg-sidebar-accent text-sidebar-foreground' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground',
         collapsed && 'lg:hidden',
       )}
     >
-      <HelpCircle className="h-4 w-4" />
-    </button>
+      <Settings className="h-4 w-4" />
+    </Link>
   );
 }
 
@@ -382,8 +383,6 @@ export function AppSidebar() {
   const onAgents = pathname.startsWith('/agents');
   const onCron = pathname.startsWith('/cron');
   const onSkills = pathname.startsWith('/skills');
-  const onUsage = pathname.startsWith('/usage');
-  const onOps = pathname.startsWith('/ops');
   const onMarket = pathname.startsWith('/market');
   const onBrain = pathname.startsWith('/brain');
   const onBrainChat = pathname === '/brain'; // the Chat view (no sub-route; ?session= keeps this path)
@@ -628,7 +627,7 @@ export function AppSidebar() {
                 />
               </Link>
               <BrainButton collapsed={collapsed} />
-              <HelpButton collapsed={collapsed} />
+              <SettingsButton collapsed={collapsed} />
               <NotificationsButton collapsed={collapsed} count={notifCounts.total} />
               <Link
                 href="/market/skills"
@@ -770,7 +769,7 @@ export function AppSidebar() {
             {/* Primary nav */}
             <nav className="px-2 pt-2 space-y-0.5">
               {NAV.map((n) => {
-                const active = n.href === '/chat' ? onChat : n.href === '/skills' ? (onSkills || onUsage || onOps) : pathname.startsWith(n.href);
+                const active = n.href === '/chat' ? onChat : pathname.startsWith(n.href);
                 const Icon = n.icon;
                 // From a chat session, the Agents entry deep-links to that session's agent.
                 const href = n.href === '/agents' && currentSessionAgent

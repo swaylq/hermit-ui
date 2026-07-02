@@ -1,14 +1,11 @@
 'use client';
 
-// Help popup — opened by the sidebar Help button (next to Brain) and the ?
-// shortcut (PWA). Bare createPortal modal (not base-ui — see overlay-quirks memory),
-// mounted once in providers; it listens for the HELP_EVENT toggle. Contains the
-// hermit-ui usage guide + the keyboard-shortcuts table (from lib/shortcuts).
+// Settings → Help: the hermit-ui usage guide + the keyboard-shortcuts table. Was a
+// popup (help-dialog.tsx); now a Settings sub-page reached from the Settings area
+// or the ? shortcut (PWA). Shortcut data comes from lib/shortcuts.
 
-import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { X } from 'lucide-react';
-import { SHORTCUTS, HELP_EVENT, type ShortcutGroup } from '@/lib/shortcuts';
+import { SHORTCUTS, type ShortcutGroup } from '@/lib/shortcuts';
+import { SettingsTabs } from '@/components/settings-tabs';
 
 const GROUPS: ShortcutGroup[] = ['Navigation', 'Actions', 'General'];
 
@@ -90,47 +87,17 @@ function ShortcutKeys({ keys }: { keys: string[] }) {
   );
 }
 
-export function HelpDialog() {
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    const toggle = () => setOpen((v) => !v);
-    window.addEventListener(HELP_EVENT, toggle);
-    return () => window.removeEventListener(HELP_EVENT, toggle);
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    window.addEventListener('keydown', onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prev;
-    };
-  }, [open]);
-
-  if (!open) return null;
-  return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 p-4" onClick={() => setOpen(false)}>
-      <div
-        className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
-          <span className="text-sm font-semibold">Help</span>
-          <button onClick={() => setOpen(false)} className="rounded-md p-1 text-muted-foreground hover:bg-muted cursor-pointer" aria-label="Close">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="space-y-5 overflow-y-auto px-4 py-4">
+export default function HelpPage() {
+  return (
+    <div className="flex flex-1 flex-col min-h-0">
+      <SettingsTabs active="help" />
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 space-y-6">
           <div>
-            <h3 className="text-sm font-semibold text-foreground">Using hermit-ui</h3>
-            <p className="text-xs text-muted-foreground">A dashboard to chat with and manage your Claude agents across machines.</p>
+            <h2 className="text-sm font-semibold text-foreground">Using hermit-ui</h2>
+            <p className="text-xs text-muted-foreground mt-1">
+              A dashboard to chat with and manage your Claude agents across machines.
+            </p>
           </div>
 
           <div className="space-y-3">
@@ -149,11 +116,11 @@ export function HelpDialog() {
             ))}
           </div>
 
-          <div className="border-t border-border pt-4">
+          <div className="border-t border-border pt-5">
             <h3 className="text-sm font-semibold text-foreground">Keyboard shortcuts</h3>
             <p className="mb-2.5 text-xs text-muted-foreground">
               Active in the installed app (PWA) on desktop; ignored while you are typing. Press{' '}
-              <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 text-xs font-mono">?</kbd> anywhere to open this.
+              <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 text-xs font-mono">?</kbd> in the installed app to jump here.
             </p>
             <div className="space-y-3">
               {GROUPS.map((g) => (
@@ -173,7 +140,6 @@ export function HelpDialog() {
           </div>
         </div>
       </div>
-    </div>,
-    document.body,
+    </div>
   );
 }

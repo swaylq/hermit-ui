@@ -1,13 +1,12 @@
 'use client';
 
 // Global keyboard shortcuts — ACTIVE ONLY IN THE INSTALLED PWA (isStandalone).
-// ⌘K focus search · ⌘⇧N new chat · ⌘1-6 navigate · ? open Help.
-// Listener-only (renders nothing); mounted once in providers. The ? key and the
-// sidebar Help button both toggle <HelpDialog/> via toggleHelp().
+// ⌘K focus search · ⌘⇧N new chat · ⌘1-6 navigate · ? open Help (→ /help).
+// Listener-only (renders nothing); mounted once in providers.
 
 import { useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { SHORTCUTS, isStandalone, toggleHelp } from '@/lib/shortcuts';
+import { SHORTCUTS, isStandalone } from '@/lib/shortcuts';
 
 function isTypingTarget(el: EventTarget | null): boolean {
   const t = el as HTMLElement | null;
@@ -30,11 +29,11 @@ export function KeyboardShortcuts() {
         input?.select();
         return;
       }
-      // ? — open the Help dialog (not while typing). NB: ⌘/ is taken — the chat
+      // ? — jump to the Help page (not while typing). NB: ⌘/ is taken — the chat
       // page uses it to focus the composer — so ? is the sole Help trigger here.
       if (!typing && e.key === '?') {
         e.preventDefault();
-        toggleHelp();
+        router.push('/help');
         return;
       }
       if (!e.metaKey) return;
