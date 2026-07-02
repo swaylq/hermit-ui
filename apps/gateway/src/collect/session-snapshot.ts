@@ -226,9 +226,12 @@ async function probe(
   const tp = claudeSessionId ? transcriptPath(claudeSessionId, agentDir) : null;
 
   // Independent shell-outs run concurrently — none blocks the event loop.
+  // paneIsWorking gets `tp` so a mid-tool-call turn on a NARROW pane (where Claude
+  // Code truncates "esc to interrupt" off the mode line) still reads working off
+  // its live transcript, instead of falsely flipping the session to idle/ready.
   const [pid, working, lines] = await Promise.all([
     tmuxPanePid(sessionId),
-    paneIsWorking(sessionId),
+    paneIsWorking(sessionId, tp),
     tp ? tailLines(tp) : Promise.resolve<string[]>([]),
   ]);
   const state = working ? 'working' : 'idle';

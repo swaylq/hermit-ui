@@ -7,7 +7,9 @@
 // think. Used by the session-snapshot collector, the chat dispatch gate, and the
 // cron-runner. spawn is async so it never blocks the event loop.
 import { spawn } from 'node:child_process';
-import { tmuxPaneName } from '@hermit-ui/tmux-driver';
+import fs from 'node:fs';
+import path from 'node:path';
+import { tmuxPaneName, encodedProjectDir } from '@hermit-ui/tmux-driver';
 
 // Claude Code's in-flight turn renders a spinner status line like
 //   "✶ Considering… (6m 44s · thinking)"  /  "✽ Warping… (10m 46s · ↓ 43.1k tokens)"
@@ -32,7 +34,54 @@ import { tmuxPaneName } from '@hermit-ui/tmux-driver';
 //      showing a dismissable modal no longer reads as working.
 export const WORK_MARKER_RE = /(?:…|\.\.\.)\s*\((?:\d+m\s*)?\d+s\s*[·•∙]|\besc(?:ape)?\s+to\s+interrupt\b/i;
 
-export function paneIsWorking(sessionId: string): Promise<boolean> {
+// ── Width-independent second signal: transcript freshness ────────────────────
+// The pane marker above is the ground truth, but it FAILS on NARROW panes: at
+// ≤~60 cols Claude Code truncates the bottom mode line to "· …", cutting off
+// "esc to interrupt" — so a working pane looks identical to an idle one, and if
+// the turn is mid-tool-call (no model spinner-timer on screen) there's nothing
+// left to match → a live turn reads idle. A live turn is still APPENDING to its
+// JSONL transcript (tool_use / tool_result / assistant blocks), so a freshly
+// written transcript is a width-independent "in flight" signal. We OR the two:
+//   - tool executing on a narrow pane → transcript fresh → working (was the bug)
+//   - long SILENT think → transcript quiet, BUT the spinner-timer is on the pane
+//     (it survives narrow truncation) → the marker catches it. This is exactly
+//     why we DON'T use transcript freshness ALONE — it goes stale mid-think, the
+//     original reason pane-scraping was chosen.
+// The window sits just above the 8s snapshot cadence so a write in the last tick
+// still reads busy. Cost: a session reads "working" for up to ~10s after its turn
+// actually ends (the final write's mtime lingers) — a deliberate bias toward
+// "busy", the SAFE direction for every caller (never deliver into / reap / flip a
+// still-running turn to ready).
+const TRANSCRIPT_FRESH_MS = 10_000;
+
+// The Claude Code JSONL transcript path for a session, or null when unknown (no
+// claude session id yet / no agent dir). Same layout the session-snapshot uses.
+export function sessionTranscriptPath(
+  claudeSessionId: string | null | undefined,
+  agentDir: string | null | undefined,
+): string | null {
+  if (!claudeSessionId || !agentDir) return null;
+  return path.join(encodedProjectDir(agentDir), `${claudeSessionId}.jsonl`);
+}
+
+function transcriptFresh(transcriptPath: string | null | undefined): boolean {
+  if (!transcriptPath) return false;
+  try {
+    return Date.now() - fs.statSync(transcriptPath).mtimeMs < TRANSCRIPT_FRESH_MS;
+  } catch {
+    return false; // missing / unreadable → no signal, fall through to the pane
+  }
+}
+
+// `transcriptPath` (optional) enables the width-independent freshness check; pass
+// it wherever you have the session's claude transcript (snapshot, delivery gate).
+// Omitted → pure pane-marker behaviour (reaper / cron / machine-requests).
+export function paneIsWorking(sessionId: string, transcriptPath?: string | null): Promise<boolean> {
+  // Cheap, width-independent check first: an actively-writing transcript means a
+  // turn is in flight — and short-circuits the tmux shell-out during active turns.
+  // Falls through to the pane marker for the quiet phases (a long silent think
+  // writes nothing but shows the spinner-timer, which survives narrow truncation).
+  if (transcriptFresh(transcriptPath)) return Promise.resolve(true);
   return new Promise((resolve) => {
     let child;
     try {

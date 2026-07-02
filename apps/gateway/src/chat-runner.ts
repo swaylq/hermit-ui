@@ -37,7 +37,7 @@ import {
   waitForReplReady,
   listTranscripts,
 } from '@hermit-ui/tmux-driver';
-import { paneIsWorking, WORK_MARKER_RE } from './pane';
+import { paneIsWorking, WORK_MARKER_RE, sessionTranscriptPath } from './pane';
 
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
@@ -521,9 +521,17 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // 400ms on the hold path costs no user-visible latency — the batch would stay
   // queued either way. (This kills the "sent to an idle agent, briefly queued"
   // case that survives the tightened WORK_MARKER_RE in pane.ts.)
-  if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id))) {
+  // Pass the transcript so a mid-tool-call turn on a narrow pane (truncated
+  // "esc to interrupt") is still seen as working — otherwise we'd deliver the
+  // queued batch INTO a running turn (tmux-inject mid-flight). Erring toward
+  // "busy" here just holds the batch for the next ~2s chatTick; safe.
+  const tp = sessionTranscriptPath(
+    session.claudeSessionId,
+    session.agentDirectory ?? path.join(AGENTS_ROOT, session.agentName),
+  );
+  if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id, tp))) {
     await new Promise((r) => setTimeout(r, 400));
-    if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id))) return;
+    if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id, tp))) return;
   }
 
   // Ensure tmux pane + watcher are up.
