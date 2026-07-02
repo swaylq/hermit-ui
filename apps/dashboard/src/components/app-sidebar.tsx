@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, MenuIcon, Plus,
-  Trash2, RotateCcw, RotateCw, FoldVertical, ChevronDown, Check, X, Store, Bell, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, type LucideIcon,
+  Trash2, RotateCcw, RotateCw, FoldVertical, ChevronDown, Check, X, Store, Bell, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, BookOpen, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -69,6 +69,7 @@ const NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/chat', label: 'Chat', icon: MessageSquare },
   { href: '/agents', label: 'Agents', icon: Bot },
   { href: '/cron', label: 'Cron', icon: Clock },
+  { href: '/knowledge', label: 'Knowledge', icon: BookOpen },
   // Settings' entry lives in the sidebar HEADER now (the gear next to Brain), not
   // in this list — see SettingsButton.
 ];
@@ -382,6 +383,7 @@ export function AppSidebar() {
   const onChat = pathname.startsWith('/chat');
   const onAgents = pathname.startsWith('/agents');
   const onCron = pathname.startsWith('/cron');
+  const onKnowledge = pathname.startsWith('/knowledge');
   const onSkills = pathname.startsWith('/skills');
   // Any Settings route → the sidebar switches to Settings mode (its own vertical nav
   // of the settings tabs), mirroring Market / Brain mode.
@@ -410,9 +412,11 @@ export function AppSidebar() {
     ? { href: '/agents?new=1', label: 'New agent', Icon: Plus }
     : onCron
       ? { href: '/cron?new=1', label: 'New cron', Icon: Plus }
-      : onSkills
-        ? { href: '/skills?new=1', label: 'New skill', Icon: Plus }
-        : { href: '/chat?new=1', label: 'New chat', Icon: SquarePen };
+      : onKnowledge
+        ? { href: '/knowledge?new=1', label: 'New knowledge base', Icon: Plus }
+        : onSkills
+          ? { href: '/skills?new=1', label: 'New skill', Icon: Plus }
+          : { href: '/chat?new=1', label: 'New chat', Icon: SquarePen };
   // Shared chrome for the CTA-styled buttons (Market entry, Dashboard back, New-X).
   const ctaCls = cn(
     'flex items-center gap-2 rounded-lg h-9 text-sm font-medium transition-colors cursor-pointer',

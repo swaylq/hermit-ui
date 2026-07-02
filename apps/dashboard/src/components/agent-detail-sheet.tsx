@@ -17,6 +17,7 @@ import { Markdown } from './markdown';
 import { CtxBar } from './ctx-bar';
 import { PublishToMarketButton } from './publish-to-market-button';
 import { InstallSkillDialog } from './install-skill-dialog';
+import { AgentKnowledgeSection } from './agent-knowledge-section';
 import { PublishTemplateDialog } from './publish-template-dialog';
 import { Overlay } from './overlay';
 import { SkillFilesModal } from './skill-files-modal';
@@ -172,6 +173,7 @@ function AgentDetailContent({
             <SessionsSection agentName={name} sessions={sessions} loading={sessionsLoading} />
             <CronsSection agentName={name} />
             <SkillsAndTasks agent={agent} agentName={name} />
+            <AgentKnowledgeSection agentName={name} />
             <MarkdownSections agentName={name} />
             <TemplatePublishSection agentName={name} />
           </div>
