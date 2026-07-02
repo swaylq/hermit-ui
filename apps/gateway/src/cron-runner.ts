@@ -149,9 +149,15 @@ async function fire(c: Cron): Promise<void> {
     // `--effort max`: cron turns also run at the highest reasoning effort (settings.json
     // `effortLevel` maxes at 'high', so max comes from the flag). Brain's crons additionally
     // get the brain MCP; other agents' crons stay headless.
+    // `--dangerously-skip-permissions`: cron is UNATTENDED — a permission prompt
+    // (native, or the web-permission hook) can never be answered, so without this
+    // the turn hangs until RUN_TIMEOUT_MS (2h). Chat sessions already run bypass
+    // (chat-runner); a cron runs the agent's OWN stored prompt — same trust level.
+    // (A Claude Code update ~2026-06-26 began prompting for previously-allowed Bash,
+    // silently hanging every daily cron at the 2h cap until this was added.)
     const claudeArgs = c.isOrchestrator
-      ? ['--effort', 'max', '--mcp-config', buildMcpConfigArg(runSessionId, true)]
-      : ['--effort', 'max'];
+      ? ['--dangerously-skip-permissions', '--effort', 'max', '--mcp-config', buildMcpConfigArg(runSessionId, true)]
+      : ['--dangerously-skip-permissions', '--effort', 'max'];
     ensureSession({
       sessionId: runSessionId,
       cwd,
