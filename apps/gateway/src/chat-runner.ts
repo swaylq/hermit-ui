@@ -525,13 +525,11 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // "esc to interrupt") is still seen as working — otherwise we'd deliver the
   // queued batch INTO a running turn (tmux-inject mid-flight). Erring toward
   // "busy" here just holds the batch for the next ~2s chatTick; safe.
-  const tp = sessionTranscriptPath(
-    session.claudeSessionId,
-    session.agentDirectory ?? path.join(AGENTS_ROOT, session.agentName),
-  );
-  if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id, tp))) {
+  const agentDir = session.agentDirectory ?? path.join(AGENTS_ROOT, session.agentName);
+  const tp = sessionTranscriptPath(session.claudeSessionId, agentDir);
+  if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id, tp, agentDir, session.claudeSessionId))) {
     await new Promise((r) => setTimeout(r, 400));
-    if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id, tp))) return;
+    if (tmuxSessionExists(session.id) && (await paneIsWorking(session.id, tp, agentDir, session.claudeSessionId))) return;
   }
 
   // Ensure tmux pane + watcher are up.

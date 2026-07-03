@@ -231,7 +231,7 @@ async function probe(
   // its live transcript, instead of falsely flipping the session to idle/ready.
   const [pid, working, lines] = await Promise.all([
     tmuxPanePid(sessionId),
-    paneIsWorking(sessionId, tp),
+    paneIsWorking(sessionId, tp, agentDir, claudeSessionId),
     tp ? tailLines(tp) : Promise.resolve<string[]>([]),
   ]);
   const state = working ? 'working' : 'idle';

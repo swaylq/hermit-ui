@@ -73,10 +73,62 @@ function transcriptFresh(transcriptPath: string | null | undefined): boolean {
   }
 }
 
-// `transcriptPath` (optional) enables the width-independent freshness check; pass
-// it wherever you have the session's claude transcript (snapshot, delivery gate).
-// Omitted → pure pane-marker behaviour (reaper / cron / machine-requests).
-export function paneIsWorking(sessionId: string, transcriptPath?: string | null): Promise<boolean> {
+// ── Authoritative width-independent signal: the turn-state hook ──────────────
+// hook-session-state.sh (wired as UserPromptSubmit / PreToolUse / Stop hooks) keeps
+// <agentDir>/.claude/state/session-status.json: state "running" from prompt-submit
+// until Stop fires, with unix-second heartbeats. This is the ONLY signal that stays
+// true through a long, SILENT tool call on a narrow pane — where the mode-line marker
+// has truncated off AND the transcript has gone quiet (the residual gap the freshness
+// check alone couldn't close). Two guards keep it honest:
+//   • session_id — the file is agent-level (shared by every chat session of the
+//     agent), so it only speaks for the session that owns the current turn.
+//   • a staleness cap — a turn that died abnormally never fires Stop, so "running"
+//     would pin forever. Once the newest heartbeat is older than the cap we stop
+//     trusting it (self-heal). The cap only needs to exceed a single tool call's
+//     runtime; a normal multi-tool turn refreshes last_tool_ts on every PreToolUse.
+const HOOK_RUNNING_CAP_MS = 15 * 60_000;
+// Panes at least this wide render "esc to interrupt" WITHOUT truncating, so their
+// read is authoritative — the hook fallback is neither needed nor wanted there (it
+// must not override a genuinely-idle wide pane, e.g. right after an abnormal exit).
+// Below it the mode line collapses to "· …" and the hook state is the only way to
+// tell a live turn from an idle one. (52-col phone panes truncate; 152/200 don't.)
+const WIDE_PANE_COLS = 90;
+
+// Path to the turn-state file the hook writes, or null when the agent dir is unknown.
+export function sessionStatusPath(agentDir: string | null | undefined): string | null {
+  if (!agentDir) return null;
+  return path.join(agentDir, '.claude', 'state', 'session-status.json');
+}
+
+// Is the hook reporting THIS session mid-turn (and recently enough to trust)?
+function hookTurnActive(
+  agentDir: string | null | undefined,
+  claudeSessionId: string | null | undefined,
+): boolean {
+  const p = sessionStatusPath(agentDir);
+  if (!p || !claudeSessionId) return false;
+  try {
+    const s = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (s?.session_id !== claudeSessionId || s?.state !== 'running') return false;
+    // Stamps are unix SECONDS (`date +%s` in the hook).
+    const lastMs = Math.max(Number(s.last_user_prompt_ts) || 0, Number(s.last_tool_ts) || 0) * 1000;
+    return Date.now() - lastMs < HOOK_RUNNING_CAP_MS;
+  } catch {
+    return false; // missing / unparseable → no signal, fall through to the pane
+  }
+}
+
+// `transcriptPath` (optional) enables the freshness check; `agentDir` +
+// `claudeSessionId` (optional) enable the authoritative hook turn-state fallback,
+// used ONLY when the pane read is untrustworthy (a narrow pane). Callers with no
+// session context (reaper / cron / machine-requests) pass none → pure pane-marker
+// behaviour.
+export function paneIsWorking(
+  sessionId: string,
+  transcriptPath?: string | null,
+  agentDir?: string | null,
+  claudeSessionId?: string | null,
+): Promise<boolean> {
   // Cheap, width-independent check first: an actively-writing transcript means a
   // turn is in flight — and short-circuits the tmux shell-out during active turns.
   // Falls through to the pane marker for the quiet phases (a long silent think
@@ -98,7 +150,14 @@ export function paneIsWorking(sessionId: string, transcriptPath?: string | null)
       // Scan more rows than the bottom mode line alone — tool results, a periodic
       // "How is Claude doing?" feedback nag, and the composer can push the spinner
       // status line several rows up from the very bottom.
-      resolve(WORK_MARKER_RE.test(lines.slice(-12).join('\n')));
+      if (WORK_MARKER_RE.test(lines.slice(-12).join('\n'))) { resolve(true); return; }
+      // No marker. On a NARROW pane it may simply have truncated off — a long quiet
+      // tool call is invisible here — so defer to the authoritative hook state. On a
+      // WIDE pane the idle read is trustworthy and we DON'T override it. Widest
+      // rendered row ≈ pane width (the composer's full-width rules are always drawn).
+      const paneCols = lines.reduce((m, l) => (l.length > m ? l.length : m), 0);
+      if (paneCols < WIDE_PANE_COLS && hookTurnActive(agentDir, claudeSessionId)) { resolve(true); return; }
+      resolve(false);
     });
   });
 }
