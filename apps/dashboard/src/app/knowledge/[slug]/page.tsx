@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { ArrowLeft, Plus, Trash2, ChevronUp, ChevronDown, Sparkles, Pencil, FileText, X } from 'lucide-react';
+import { Plus, Trash2, ChevronUp, ChevronDown, Sparkles, Pencil, FileText, X } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,14 +50,6 @@ function KnowledgeBaseEditor({ slug }: { slug: string }) {
     <div className="flex flex-1 flex-col min-h-0">
       <header className="h-12 px-3 sm:px-4 flex items-center gap-2 border-b border-border shrink-0">
         <SidebarMobileToggle />
-        <a
-          href="/knowledge"
-          aria-label="back"
-          title="Back to Knowledge"
-          className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent cursor-pointer shrink-0"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </a>
         <NameEditor id={kb.id} name={kb.name} onSaved={refresh} />
         <div className="flex-1" />
         <DeleteBaseButton id={kb.id} name={kb.name} />

@@ -6,7 +6,7 @@
 // the same way /chat with no ?session shows a start-a-chat panel.
 
 import { Suspense, useEffect, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { BookOpen, Plus, X } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
@@ -30,11 +30,21 @@ export default function KnowledgeIndexPage() {
 
 function EmptyPane() {
   const params = useSearchParams();
-  const [creating, setCreating] = useState(false);
-  // The sidebar's "New knowledge base" CTA lands here with ?new=1.
+  const router = useRouter();
+  const bases = trpc.knowledge.listBases.useQuery();
+  const first = bases.data?.[0];
+  // ?new=1 (the sidebar CTA) opens the create form straight away.
+  const [creating, setCreating] = useState(params.get('new') === '1');
+
+  // Master-detail default: entering /knowledge with bases present opens the first
+  // one — unless you're creating a new base. With none, the empty state shows.
   useEffect(() => {
-    if (params.get('new') === '1') setCreating(true);
-  }, [params]);
+    if (!creating && first) router.replace(`/knowledge/${encodeURIComponent(first.slug)}`);
+  }, [creating, first, router]);
+
+  // Don't flash the empty state before the redirect resolves (loading, or a base
+  // exists and we're about to jump to it).
+  if (!creating && (bases.isLoading || first)) return <div className="flex-1" />;
 
   return (
     <div className="flex-1 min-h-0 flex items-center justify-center p-6">
@@ -48,7 +58,7 @@ function EmptyPane() {
           <div className="space-y-1">
             <h2 className="text-sm font-semibold text-foreground">Knowledge bases</h2>
             <p className="text-xs text-muted-foreground">
-              Durable reference docs an agent loads as an always-on intro and reads on demand. Pick a base from the list, or create one.
+              Durable reference docs an agent loads as an always-on intro and reads on demand. Create one to get started.
             </p>
           </div>
           <Button size="sm" onClick={() => setCreating(true)}>
