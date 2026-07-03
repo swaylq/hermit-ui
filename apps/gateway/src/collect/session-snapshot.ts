@@ -188,6 +188,31 @@ function hasToolResult(content: unknown): boolean {
   return Array.isArray(content) && content.some((b: any) => b?.type === 'tool_result');
 }
 
+// A single tool call writes an assistant `tool_use` event when the tool STARTS and a
+// user `tool_result` event when it returns. So a turn is mid-tool-call iff the newest
+// tool_use is newer than the newest tool_result. This is a width-independent, hook-free,
+// RETROACTIVE working signal: it catches a long quiet tool call on a narrow pane (where
+// the "esc to interrupt" / spinner marker has truncated off AND the transcript mtime has
+// gone stale) even for a session whose turn-state hook isn't wired / hasn't reloaded —
+// no session restart required. Capped so an abandoned tool_use (claude killed mid-tool,
+// so tool_result never lands) self-heals instead of pinning "working" forever. The
+// paneAlive short-circuit already handles the common crash case (dead pane → not working).
+const TOOL_RUNNING_CAP_MS = 20 * 60_000;
+export function transcriptToolRunning(lines: string[]): boolean {
+  let tuMax = 0, trMax = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (tuMax && trMax) break; // both newest-of-kind found (scanning newest-first)
+    let ev: any;
+    try { ev = JSON.parse(lines[i]); } catch { continue; }
+    const content = ev?.message?.content;
+    if (!Array.isArray(content)) continue;
+    const t = Date.parse(ev.timestamp || '') || 0;
+    if (!tuMax && ev.type === 'assistant' && content.some((b: any) => b?.type === 'tool_use')) tuMax = t;
+    if (!trMax && ev.type === 'user' && content.some((b: any) => b?.type === 'tool_result')) trMax = t;
+  }
+  return tuMax > 0 && tuMax > trMax && Date.now() - tuMax < TOOL_RUNNING_CAP_MS;
+}
+
 // Read the per-agent loop / scheduled-task state file the cron skill maintains.
 // Absent / unparseable returns null (dashboard hides the chip). Lives at the
 // agent dir level — multiple chat sessions on the same agent see the union.
@@ -234,7 +259,9 @@ async function probe(
     paneIsWorking(sessionId, tp, agentDir, claudeSessionId),
     tp ? tailLines(tp) : Promise.resolve<string[]>([]),
   ]);
-  const state = working ? 'working' : 'idle';
+  // OR in the transcript "tool in flight" signal: retroactively covers a long quiet
+  // tool call on a narrow, not-yet-hook-wired session that paneIsWorking would miss.
+  const state = (working || transcriptToolRunning(lines)) ? 'working' : 'idle';
   const rssMb = pid != null ? subtreeRssMb(pid, psTree) : null;
 
   if (!tp) return { ...empty, alive, pid, state: 'starting', rssMb };
