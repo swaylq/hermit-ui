@@ -236,7 +236,11 @@ function DocsSection({
             >
               <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
               <span className="flex-1 truncate text-sm">{d.title}</span>
-              <span className="flex items-center opacity-0 group-hover:opacity-100">
+              {/* Reveal on hover (desktop) but ALWAYS visible on touch: an
+                  opacity-0 control still captures taps, so on a hover-less device the
+                  invisible reorder/delete buttons stole taps meant to open the doc —
+                  the row reordered instead of opening the modal. */}
+              <span className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
                 <button type="button" title="Move up" onClick={(e) => { e.stopPropagation(); move(i, -1); }} className="p-0.5 hover:text-foreground disabled:opacity-30 cursor-pointer" disabled={i === 0}>
                   <ChevronUp className="h-3.5 w-3.5" />
                 </button>
