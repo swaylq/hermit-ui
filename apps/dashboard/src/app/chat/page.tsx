@@ -2249,6 +2249,9 @@ function ComposeBar({
   const submit = () => {
     const text = draft.trim();
     if (sending || disabled || queueFull) return;
+    // Hold the send until every attachment finishes uploading — otherwise the
+    // message goes out with the still-uploading files silently dropped.
+    if (uploadingCount > 0) return;
     if (!text && readyAttachments.length === 0) return;
     const images = readyAttachments
       .filter((a) => a.isImage)
@@ -2292,7 +2295,7 @@ function ComposeBar({
 
   // While the assistant is producing output, swap the send button for a stop.
   const showStop = inFlight && !disabled;
-  const canSend = !sending && !disabled && !awaitingInput && !queueFull && (draft.trim().length > 0 || readyAttachments.length > 0);
+  const canSend = !sending && !disabled && !awaitingInput && !queueFull && uploadingCount === 0 && (draft.trim().length > 0 || readyAttachments.length > 0);
 
   return (
     <form
@@ -2465,7 +2468,7 @@ function ComposeBar({
                   : 'bg-muted text-muted-foreground/40 cursor-not-allowed',
               )}
               aria-label={inFlight ? 'queue message' : 'send'}
-              title={inFlight ? 'queue (↵)' : canSend ? 'send (↵)' : 'type a message'}
+              title={inFlight ? 'queue (↵)' : canSend ? 'send (↵)' : uploadingCount > 0 ? 'uploading…' : 'type a message'}
             >
               {sending ? <span className="text-sm">…</span> : <ArrowUp className="h-5 w-5" />}
             </button>
