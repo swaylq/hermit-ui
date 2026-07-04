@@ -71,7 +71,7 @@ export function ContextMenu({
       ref={ref}
       role="menu"
       style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: 100 }}
-      className="min-w-[150px] overflow-hidden rounded-lg border border-border bg-popover py-1 text-[13px] text-popover-foreground shadow-lg"
+      className="min-w-[150px] origin-top-left animate-in fade-in-0 zoom-in-95 duration-150 overflow-hidden rounded-lg border border-border bg-popover py-1 text-[13px] text-popover-foreground shadow-lg"
     >
       {items.map((it, i) => (
         <button

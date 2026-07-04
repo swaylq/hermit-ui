@@ -167,7 +167,13 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
         createPortal(
           <div
             ref={menuRef}
-            className="fixed z-[60] max-h-[70vh] overflow-y-auto rounded-lg border border-sidebar-border bg-sidebar shadow-lg p-1"
+            className={cn(
+              'fixed z-[60] max-h-[70vh] overflow-y-auto rounded-lg border border-sidebar-border bg-sidebar shadow-lg p-1',
+              // subtle open transition, matching the base-ui Select popup; anchor the
+              // zoom to whichever edge the menu drops from (down → top, up → bottom).
+              'animate-in fade-in-0 zoom-in-95 duration-150',
+              pos.bottom != null ? 'origin-bottom' : 'origin-top',
+            )}
             style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width }}
           >
             {list.map((e) =>
