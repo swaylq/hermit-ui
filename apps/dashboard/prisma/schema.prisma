@@ -466,7 +466,7 @@ model UsageWindow {
   startTime   DateTime
   endTime     DateTime
   costUSD     Float
-  totalTokens Int      @default(0)
+  totalTokens BigInt   @default(0)
   isActive    Boolean  @default(false)
   updatedAt   DateTime @updatedAt
 
@@ -576,10 +576,10 @@ model UsageHourly {
   agentName           String
   hourBucket          DateTime // truncated to UTC hour
   cost                Float    @default(0)
-  inputTokens         Int      @default(0)
-  outputTokens        Int      @default(0)
-  cacheCreationTokens Int      @default(0)
-  cacheReadTokens     Int      @default(0)
+  inputTokens         BigInt   @default(0)
+  outputTokens        BigInt   @default(0)
+  cacheCreationTokens BigInt   @default(0)
+  cacheReadTokens     BigInt   @default(0)
   sessions            Int      @default(0)
 
   updatedAt DateTime @updatedAt

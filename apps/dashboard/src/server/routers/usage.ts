@@ -23,7 +23,9 @@ export const usageRouter = router({
       where: { machineId: ctx.machine.id },
       orderBy: { kind: 'asc' },
     });
-    return rows;
+    // totalTokens is BigInt (INT8) in the DB but always < 2^53 — hand the client a
+    // plain number so the wire type stays stable and no BigInt reaches the UI.
+    return rows.map((r) => ({ ...r, totalTokens: Number(r.totalTokens) }));
   }),
 
   // Real Claude Max plan consumption (5h session % + weekly %), scraped from
