@@ -19,7 +19,7 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   ensureSession,
@@ -27,7 +27,6 @@ import {
   confirmSubmitted,
   sendInterrupt,
   kill as killTmuxSession,
-  getClaudeSessionUuid,
   acceptResumePromptAsFull,
   awaitTranscript,
   watchTranscript,
@@ -754,6 +753,41 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
 
 // ── Session setup (spawn or reattach) ────────────────────────────────────────
 
+// claude `--resume <uuid>` used to fork a brand-new JSONL, but current versions APPEND to
+// the resumed session's OWN <uuid>.jsonl (observed: the recorded transcript grows in
+// place, no new file). Resolve the post-resume uuid by accepting EITHER a new
+// (non-preexisting) uuid transcript, OR the recorded uuid's transcript growing past its
+// captured pre-spawn size. getClaudeSessionUuid alone only matches a NEW uuid, so it hung
+// 90s on the reuse case → setupSession threw → the resumed pane ran untracked.
+export async function resolveResumedUuid(opts: {
+  cwd: string;
+  preExistingUuids: Set<string>;
+  recordedUuid: string;
+  baselineSize: number;
+  timeoutMs: number;
+}): Promise<string> {
+  const projectDir = encodedProjectDir(opts.cwd);
+  const recordedPath = path.join(projectDir, `${opts.recordedUuid}.jsonl`);
+  const deadline = Date.now() + opts.timeoutMs;
+  while (Date.now() < deadline) {
+    // (a) older behavior — a brand-new uuid transcript materialized
+    try {
+      for (const f of readdirSync(projectDir)) {
+        if (!f.endsWith('.jsonl')) continue;
+        const uuid = f.slice(0, -6);
+        if (opts.preExistingUuids.has(uuid)) continue;
+        if (statSync(path.join(projectDir, f)).size > 0) return uuid;
+      }
+    } catch { /* project dir not ready yet */ }
+    // (b) current behavior — claude resumed into the recorded uuid's own transcript
+    try {
+      if (statSync(recordedPath).size > opts.baselineSize) return opts.recordedUuid;
+    } catch { /* recorded transcript not present */ }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error(`Timed out waiting for resumed claude transcript in ${projectDir}`);
+}
+
 async function setupSession(session: PendingSession): Promise<SessionState> {
   // DB-leader: the agent's actual on-disk path lives on Agent.directory and the
   // dashboard joins it onto pollPending. Fall back to the old AGENTS_ROOT-based
@@ -773,6 +807,7 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
   const claudeArgs: string[] = [];
   let claudeUuid: string;
   let waitForResumeUuid = false;
+  let resumeBaselineSize = 0;
 
   if (paneAlive && session.claudeSessionId) {
     // Already running — trust the DB's recorded claude uuid…
@@ -808,11 +843,15 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
       }
     }
   } else if (session.claudeSessionId && !paneAlive) {
-    // Resume: claude --resume forks into a brand-new JSONL with full prior
-    // history (per happy's findings). Sniff the new uuid after spawn.
+    // Resume: older claude forked a brand-new JSONL, but current versions APPEND to the
+    // resumed session's OWN uuid transcript. Record its pre-spawn size so we can detect
+    // the resume either way (resolveResumedUuid). Sniff the uuid after spawn.
     claudeArgs.push('--resume', session.claudeSessionId);
     waitForResumeUuid = true;
     claudeUuid = ''; // filled in after spawn
+    try {
+      resumeBaselineSize = statSync(path.join(encodedProjectDir(cwd), `${session.claudeSessionId}.jsonl`)).size;
+    } catch { resumeBaselineSize = 0; }
   } else {
     // Fresh: pre-assign uuid via --session-id (added by ensureSession).
     claudeUuid = randomUUID();
@@ -860,7 +899,17 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     void acceptResumePromptAsFull(session.id).catch((e) =>
       console.error(`[resume-prompt] ${session.id.slice(0, 8)}:`, e),
     );
-    claudeUuid = await getClaudeSessionUuid({ cwd, preExistingUuids, timeoutMs: 90_000 });
+    // Accept a brand-new uuid (older claude) OR the recorded uuid's transcript growing
+    // past its pre-spawn size (current claude appends to it). Waiting only for a NEW uuid
+    // hung 90s on the reuse case → setup threw → the resumed pane ran untracked (replies
+    // never synced, queued messages stuck at "排队中").
+    claudeUuid = await resolveResumedUuid({
+      cwd,
+      preExistingUuids,
+      recordedUuid: session.claudeSessionId!,
+      baselineSize: resumeBaselineSize,
+      timeoutMs: 90_000,
+    });
   } else if (created) {
     // Pre-assigned uuid; just wait for claude to materialize the file.
     await awaitTranscript(path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`)).catch((e) => {
