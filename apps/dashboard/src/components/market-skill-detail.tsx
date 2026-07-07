@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Download } from 'lucide-react';
+import { Download, Pencil } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
@@ -46,6 +46,24 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
       setNewGroup(null);
     },
   });
+  // Inline display-name editor — rename the skill's human-visible title in place
+  // (pure market metadata; doesn't touch slug / the on-disk dir / installed copies).
+  // Same shape as the group editor above; the modal title + list card both refresh
+  // off the two invalidations.
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const rename = trpc.market.setSkillDisplayName.useMutation({
+    onSuccess: () => {
+      utils.market.getSkill.invalidate({ slug });
+      utils.market.listSkills.invalidate();
+      setEditingName(false);
+    },
+  });
+  function saveName() {
+    const n = nameDraft.trim();
+    if (n && skill && n !== skill.displayName) rename.mutate({ slug, displayName: n });
+    else setEditingName(false);
+  }
   // Download the selected version as a .zip. A plain <a download> can't carry
   // the x-asst-key header, so fetch with the key → blob → synthetic anchor.
   async function download() {
@@ -103,6 +121,38 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
             {dlError && <span className="text-xs text-rose-500">{dlError}</span>}
           </div>
           {skill.description && <p className="text-sm text-muted-foreground">{skill.description}</p>}
+          <div className="flex items-center gap-2 text-xs">
+            <span className="shrink-0 text-muted-foreground/70">Display name</span>
+            {editingName ? (
+              <input
+                autoFocus
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveName();
+                  if (e.key === 'Escape') setEditingName(false);
+                }}
+                onBlur={saveName}
+                maxLength={100}
+                placeholder="Display name — Enter to save, Esc to cancel"
+                className="h-7 min-w-0 flex-1 rounded border border-border bg-background px-2 outline-none transition-colors focus:border-foreground/30"
+              />
+            ) : (
+              <>
+                <span className="min-w-0 truncate font-medium text-foreground">{skill.displayName}</span>
+                <button
+                  type="button"
+                  onClick={() => { setNameDraft(skill.displayName); setEditingName(true); }}
+                  aria-label="Rename skill"
+                  className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              </>
+            )}
+            {rename.isPending && <span className="shrink-0 text-muted-foreground">Saving…</span>}
+            {rename.isError && <span className="shrink-0 text-rose-500">{rename.error.message}</span>}
+          </div>
           <div className="flex items-center gap-2 text-xs">
             <span className="shrink-0 text-muted-foreground/70">分组 Group</span>
             {newGroup === null ? (

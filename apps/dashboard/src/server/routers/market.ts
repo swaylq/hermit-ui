@@ -71,6 +71,23 @@ export const marketRouter = router({
       });
     }),
 
+  // Rename a skill's human-visible display name in place, without re-publishing.
+  // displayName is pure market-registry metadata — never written to disk, never a
+  // key, never copied into installed copies (GlobalSkill / AgentSkillInstall) — so
+  // a rename is a plain field update, same permissive model as setSkillCategory
+  // (any authed machine can tidy the shared registry). The on-disk skill dir and
+  // the SKILL.md `name:` frontmatter key on `slug`, which this deliberately leaves
+  // untouched.
+  setSkillDisplayName: machineProcedure
+    .input(z.object({ slug: z.string(), displayName: z.string().trim().min(1).max(100) }))
+    .mutation(async ({ input }) => {
+      return prisma.marketSkill.update({
+        where: { slug: input.slug },
+        data: { displayName: input.displayName },
+        select: { slug: true, displayName: true },
+      });
+    }),
+
   listTemplates: machineProcedure.query(async () => {
     return prisma.marketTemplate.findMany({
       orderBy: { updatedAt: 'desc' },
