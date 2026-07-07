@@ -901,14 +901,21 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     );
     // Accept a brand-new uuid (older claude) OR the recorded uuid's transcript growing
     // past its pre-spawn size (current claude appends to it). Waiting only for a NEW uuid
-    // hung 90s on the reuse case → setup threw → the resumed pane ran untracked (replies
-    // never synced, queued messages stuck at "排队中").
+    // hung on the reuse case → setup threw → the resumed pane ran untracked (replies never
+    // synced, queued messages stuck at "排队中").
+    //
+    // Timeout is generous (4 min): resuming a BIG session (answering the resume prompt +
+    // loading multi-MB history before the first transcript write) can take well over a
+    // minute — a zhinan-gitlab 2.1M session took ~90s and blew the old 90s window by a
+    // hair, so setup threw, the message got marked delivered but its keys never landed
+    // mid-load, and the user saw no reply ("发了消息没动静"). Only THIS session's setup
+    // waits; other sessions' ticks are unaffected.
     claudeUuid = await resolveResumedUuid({
       cwd,
       preExistingUuids,
       recordedUuid: session.claudeSessionId!,
       baselineSize: resumeBaselineSize,
-      timeoutMs: 90_000,
+      timeoutMs: 240_000,
     });
   } else if (created) {
     // Pre-assigned uuid; just wait for claude to materialize the file.
