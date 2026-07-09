@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, MenuIcon, Plus,
-  Trash2, RotateCcw, RotateCw, FoldVertical, ChevronDown, Check, X, Store, Bell, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, BookOpen, type LucideIcon,
+  Trash2, RotateCcw, RotateCw, FoldVertical, ChevronDown, Check, X, Store, Bell, ArrowLeft, Package, Search, Settings, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, BookOpen, Drama, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -84,6 +84,7 @@ const MARKET_NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
 const BRAIN_NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/brain', label: 'Chat', icon: MessageSquare },
   { href: '/brain/memory', label: 'Memory', icon: NotebookText },
+  { href: '/brain/persona', label: 'Persona', icon: Drama },
   { href: '/brain/dream', label: 'Dream', icon: Moon },
   { href: '/brain/files', label: 'Files', icon: Folder },
   { href: '/brain/dispatch', label: 'Dispatches', icon: Send },

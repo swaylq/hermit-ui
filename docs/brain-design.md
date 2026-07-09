@@ -197,6 +197,26 @@ happens to poll. Both are now closed:
   irreversible, spending money, touching infra/credentials, or uncertain is escalated
   to the human, never auto-approved.
 
+**Persona & decision style (built 2026-07-09).** An editable doc that shapes *how* the
+brain dispatches and *how* it helps a blocked agent decide — a character sheet, not new
+plumbing.
+- **Storage:** `PERSONA.md` in the brain's working dir (native, like `IDENTITY.md` /
+  `memory/`). Edited from the dashboard **Brain → Persona** tab (`/brain/persona`), a
+  textarea over the existing `fileManager.readText` / `writeText` bridge — no new
+  backend. Also visible under Files.
+- **Seeding:** a sensible default is laid down **write-once** — on create, and once onto
+  existing brains via the version-bump overlay. The gateway's `overlayTemplate` gained a
+  `writeOnce` flag (skip if the file exists) + `PERSONA.md` in its allow-list, so a
+  later re-overlay never clobbers the user's edits. (`BRAIN_SEED_FILES` /
+  `BRAIN_OVERLAY_FILES` in `brain-template.ts`; `BRAIN_TEMPLATE_VERSION` 4→5.)
+- **Injection:** the `dispatching` skill (reaches all brains) + IDENTITY (new brains)
+  both tell the brain to read `PERSONA.md` and apply it when dispatching / answering.
+- **Safety interaction (hard invariant):** the persona tunes voice + risk posture
+  **within** the safety floor only. It can make the brain *more* cautious, never less —
+  no `PERSONA.md` wording relaxes the "escalate destructive / irreversible / costly /
+  outward / uncertain" floor. This is stated in both the persona section and the safety
+  section of the `dispatching` skill, and in the seed doc itself.
+
 ---
 
 ## 4. Security / gating

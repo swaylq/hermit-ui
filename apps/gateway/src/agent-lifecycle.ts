@@ -70,12 +70,15 @@ function walkCopy(src: string, dst: string, subs: Record<string, string>) {
 function overlayTemplate(dir: string, files: unknown, subs: Record<string, string>) {
   if (!Array.isArray(files)) return;
   const root = path.resolve(dir);
-  const ALLOW = /^(IDENTITY\.md|AGENTS\.md|\.claude\/skills\/[a-z0-9][a-z0-9-]{0,30}\/SKILL\.md)$/;
-  for (const f of files as Array<{ path?: unknown; content?: unknown }>) {
+  const ALLOW = /^(IDENTITY\.md|AGENTS\.md|PERSONA\.md|\.claude\/skills\/[a-z0-9][a-z0-9-]{0,30}\/SKILL\.md)$/;
+  for (const f of files as Array<{ path?: unknown; content?: unknown; writeOnce?: unknown }>) {
     if (!f || typeof f.path !== 'string' || typeof f.content !== 'string') continue;
     if (f.path.includes('..') || !ALLOW.test(f.path)) continue;
     const dst = path.resolve(root, f.path);
     if (!dst.startsWith(root + path.sep)) continue;
+    // writeOnce seeds a file only when absent — a re-overlay (e.g. a later template
+    // version bump) must never clobber a file the user has since edited (PERSONA.md).
+    if (f.writeOnce === true && fs.existsSync(dst)) continue;
     fs.mkdirSync(path.dirname(dst), { recursive: true });
     fs.writeFileSync(dst, f.content.replace(/\{\{(\w+)\}\}/g, (m: string, k: string) => (k in subs ? subs[k] : m)));
   }

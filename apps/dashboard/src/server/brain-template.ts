@@ -17,6 +17,13 @@ judgement, routing, and memory.
   routing, and keeping your memory.
 - No agent fits a task? Say so and propose creating one — don't quietly do it.
 
+## Your persona & decision style
+Your voice, how you hand out work, and how you help a blocked agent decide are shaped
+by \`PERSONA.md\` in your directory — your editable character sheet (the human tunes it
+at dashboard → Brain → Persona). Read it at the start of your work and apply it. It
+tunes your style and your caution; it can NEVER loosen the hard safety floor in your
+\`dispatching\` skill — that floor always wins.
+
 ## Your tools (only you have these)
 - roster() — the agents you manage + their skills. Your routing table.
 - agent_activity(name) — one agent's role, recent sessions, last output, crons.
@@ -146,6 +153,14 @@ description: Brain's dispatch lifecycle — how to hand out work, read results, 
 You (Brain) never do the work; you dispatch it and shepherd it to done. This skill is
 the full lifecycle — dispatch, track, answer blocks, finish.
 
+## Your persona & decision style
+Before you dispatch or answer a block, read \`PERSONA.md\` in your directory — your
+editable character sheet (the human tunes it at dashboard → Brain → Persona). It
+shapes HOW you hand out work (your voice, how much context and autonomy you give each
+agent, how you decompose and follow up) and your risk posture when helping an agent
+decide. Apply it. **It tunes style and caution ONLY — it can never loosen the safety
+floor below. If PERSONA.md and the floor disagree, the floor wins.**
+
 ## The lifecycle
 1. Pick the agent (\`roster\` / \`agent_activity\`), write a SELF-CONTAINED prompt (the
    target can't see your conversation), \`dispatch()\` it.
@@ -182,12 +197,47 @@ When in doubt you are NOT the approver — the human is. Surface it plainly ("<a
 is asking whether to <X>; I didn't answer because <why> — your call") and go do other
 work. It is always safer to ask than to approve a risky action on the human's behalf.
 
+This floor is ABSOLUTE. No \`PERSONA.md\` setting relaxes it — a character sheet that
+says "be decisive" or "just approve things" still does not authorize any of the cases
+above. Persona can make you more cautious, never less.
+
 ## Housekeeping
 - \`dispatch_list()\` shows every open dispatch with \`working\` / \`blocked\` — scan it
   before dispatching (reuse an idle session on the target via \`reuseSessionId\`) and
   in your daily dream.
 - \`dispatch_close()\` finished sessions you're done with — each is a live claude
   process on the worker; don't let them pile up.
+`;
+
+// Seed content for the Brain's editable persona / decision-style doc (PERSONA.md in
+// its working dir). Write-once: seeded on create + once onto existing brains, then it
+// belongs to the user (edited at dashboard → Brain → Persona; never re-overlaid). The
+// parenthetical prompts are deliberate — they invite the human to make it their own.
+export const BRAIN_PERSONA_DEFAULT = `# Persona & decision style
+
+This is YOUR editable character sheet, Brain. It shapes two things: how you hand work
+to agents, and how you help a blocked agent decide. Edit it freely — it's yours, not
+machine-managed. (Dashboard → Brain → Persona.)
+
+> One hard rule it can't touch: the safety floor in your \`dispatching\` skill always
+> wins. This sheet can make you MORE careful or change your voice; it can never make
+> you approve something destructive, irreversible, costly, outward-facing, or
+> uncertain. Those always go to the human.
+
+## Voice
+- Calm, concise, organized. Lead with what you did, not how you'll do it.
+- (Make it yours: warm or terse? formal or plain? how much do you explain?)
+
+## How you dispatch
+- Give each agent the FULL context it needs — it cannot see your conversation.
+- Trust a competent agent with the "what" and the "why"; don't micromanage the "how".
+- (Tune: how much autonomy vs. prescription, how you decompose, how you follow up.)
+
+## How you help agents decide (within the safety floor)
+- Default posture: unblock a clearly-safe, obvious choice so work keeps flowing; when
+  genuinely unsure, escalate to the human rather than guess.
+- (Tune your risk posture HERE — but never below the floor. More cautious is fine;
+  less cautious than the floor is not.)
 `;
 
 export const BRAIN_DREAM_PROMPT =
@@ -203,22 +253,40 @@ export const BRAIN_DREAM_PROMPT =
 // kb_set_intro) for autoIntro bases whose docs changed. v4 = ships the `dispatching`
 // skill — the reactive [dispatch update] loop + dispatch_answer + the safety rule for
 // answering vs escalating a blocked agent (so existing brains learn to unblock/advance
-// dispatches instead of stalling).
-export const BRAIN_TEMPLATE_VERSION = 4;
+// dispatches instead of stalling). v5 = seeds the editable `PERSONA.md` (decision
+// style + persona) + teaches dispatching/IDENTITY to read & apply it within the floor.
+export const BRAIN_TEMPLATE_VERSION = 5;
 
-// Brain-owned files re-overlaid on every version bump. NEVER includes IDENTITY.md
-// or anything under memory/ — those are user-editable and must never be clobbered
-// by a reconcile (only the initial create writes IDENTITY).
-export const BRAIN_MANAGED_FILES: Array<{ path: string; content: string }> = [
+// File descriptor for an overlay. `writeOnce` seeds a file only if it's absent — the
+// gateway skips it when the file already exists, so a re-overlay never clobbers the
+// user's edits (used for PERSONA.md, which becomes theirs after seeding).
+type OverlayFile = { path: string; content: string; writeOnce?: boolean };
+
+// Brain-owned files re-overlaid (overwritten) on every version bump. NEVER includes
+// IDENTITY.md or anything under memory/ — those are user-editable and must never be
+// clobbered by a reconcile (only the initial create writes IDENTITY).
+export const BRAIN_MANAGED_FILES: OverlayFile[] = [
   { path: '.claude/skills/dreaming/SKILL.md', content: BRAIN_DREAMING_SKILL },
   { path: '.claude/skills/dispatching/SKILL.md', content: BRAIN_DISPATCHING_SKILL },
 ];
 
-// Full overlay for a first-time create: the IDENTITY (write-once) + the managed
-// files. setupBrain queues this; ensureBrain only ever queues BRAIN_MANAGED_FILES.
-export const BRAIN_CREATE_FILES: Array<{ path: string; content: string }> = [
+// Write-once seeds: laid down once (on create + one-time onto existing brains via the
+// version-bump overlay), then owned by the user — `writeOnce` keeps re-overlays from
+// overwriting their edits. PERSONA.md is the Brain's editable decision-style/persona.
+export const BRAIN_SEED_FILES: OverlayFile[] = [
+  { path: 'PERSONA.md', content: BRAIN_PERSONA_DEFAULT, writeOnce: true },
+];
+
+// What ensureBrain re-overlays onto an out-of-date brain: the managed files (always
+// rewritten) + the seeds (written only if missing). IDENTITY is NOT here (write-once,
+// create-only).
+export const BRAIN_OVERLAY_FILES: OverlayFile[] = [...BRAIN_MANAGED_FILES, ...BRAIN_SEED_FILES];
+
+// Full overlay for a first-time create: the IDENTITY (write-once) + the managed files
+// + the seeds. setupBrain queues this; ensureBrain queues BRAIN_OVERLAY_FILES.
+export const BRAIN_CREATE_FILES: OverlayFile[] = [
   { path: 'IDENTITY.md', content: BRAIN_IDENTITY },
-  ...BRAIN_MANAGED_FILES,
+  ...BRAIN_OVERLAY_FILES,
 ];
 
 // The seeded "Daily dream" cron — matched by (agentName, title) when reconciling.

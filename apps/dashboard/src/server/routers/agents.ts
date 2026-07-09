@@ -3,7 +3,7 @@ import { router, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 import {
   BRAIN_PERSONA, BRAIN_DREAM_PROMPT,
-  BRAIN_TEMPLATE_VERSION, BRAIN_MANAGED_FILES, BRAIN_CREATE_FILES, BRAIN_DREAM_CRON,
+  BRAIN_TEMPLATE_VERSION, BRAIN_OVERLAY_FILES, BRAIN_CREATE_FILES, BRAIN_DREAM_CRON,
 } from '../brain-template';
 
 // ── Brain reconciler (shared by setupBrain create + ensureBrain update) ──────
@@ -18,11 +18,12 @@ async function reconcileBrain(machineId: string): Promise<{ name: string | null 
   });
   if (!brain) return { name: null };
 
-  // (a) Re-overlay the machine-managed files (the `dreaming` skill — never
-  //     IDENTITY/memory) when the brain predates the current template version.
-  //     Gate on no pending overlay so a duplicate isn't queued each tick; the
-  //     version is stamped only when the gateway acks the overlay done (so a
-  //     failed overlay auto-retries on the next tick).
+  // (a) Re-overlay the brain's machine-owned files (the `dreaming`/`dispatching`
+  //     skills — always rewritten; plus write-once seeds like PERSONA.md — written
+  //     only if absent, so user edits survive; never IDENTITY/memory) when the brain
+  //     predates the current template version. Gate on no pending overlay so a
+  //     duplicate isn't queued each tick; the version is stamped only when the
+  //     gateway acks the overlay done (so a failed overlay auto-retries next tick).
   if (brain.brainTemplateVersion < BRAIN_TEMPLATE_VERSION) {
     const pendingOverlay = await prisma.agentRequest.findFirst({
       where: { machineId, agentName: brain.name, kind: 'overlay', status: 'pending' },
@@ -32,7 +33,7 @@ async function reconcileBrain(machineId: string): Promise<{ name: string | null 
       await prisma.agentRequest.create({
         data: {
           machineId, kind: 'overlay', agentName: brain.name,
-          content: JSON.stringify({ templateFiles: BRAIN_MANAGED_FILES, version: BRAIN_TEMPLATE_VERSION }),
+          content: JSON.stringify({ templateFiles: BRAIN_OVERLAY_FILES, version: BRAIN_TEMPLATE_VERSION }),
         },
       });
     }
