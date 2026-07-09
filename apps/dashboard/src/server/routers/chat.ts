@@ -195,10 +195,40 @@ export const chatRouter = router({
     }),
 
   createSession: agentProcedure
-    .input(z.object({ agentName: z.string().min(1).max(64), title: z.string().max(120).optional(), origin: z.string().max(32).optional() }))
+    .input(
+      z.object({
+        agentName: z.string().min(1).max(64),
+        title: z.string().max(120).optional(),
+        origin: z.string().max(32).optional(),
+        // Brain dispatch routing: the Brain chat session that opened this dispatch,
+        // so the gateway dispatch-watcher knows whom to poke on finish/block.
+        dispatchedBySessionId: z.string().max(64).optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       return prisma.chatSession.create({
-        data: { machineId: ctx.machine.id, agentName: input.agentName, title: input.title ?? null, origin: input.origin ?? null },
+        data: {
+          machineId: ctx.machine.id,
+          agentName: input.agentName,
+          title: input.title ?? null,
+          origin: input.origin ?? null,
+          dispatchedBySessionId: input.dispatchedBySessionId ?? null,
+        },
+      });
+    }),
+
+  // Point an existing dispatch session at the Brain session that (re)used it, so
+  // the dispatch-watcher pokes the CURRENT dispatcher — not whoever opened it
+  // first. Used by the `dispatch` MCP tool on the reuse path.
+  setDispatchOrigin: agentProcedure
+    .input(z.object({ id: z.string(), dispatchedBySessionId: z.string().max(64).nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
+      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
+      return prisma.chatSession.update({
+        where: { id: input.id },
+        data: { dispatchedBySessionId: input.dispatchedBySessionId },
       });
     }),
 
@@ -711,4 +741,114 @@ export const chatRouter = router({
       });
       return { ok: true, updated: r.count };
     }),
+
+  // ── Brain dispatch-watcher (docs/brain-design.md Phase 2) ──────────────────
+  // Called by the gateway on a slow tick. The Brain delegates work to other agents
+  // but only wakes on its own schedule, so it used to miss two things: a dispatched
+  // agent BLOCKING on a choice (can't continue without an answer) and a dispatched
+  // agent FINISHING (its result never gets pulled). This closes the loop
+  // reactively: for each open dispatch a Brain opened, compute the current
+  // "needs-Brain?" signature and, on a transition into blocked/finished, drop a
+  // `[dispatch update]` user message into the Brain's OWN chat session (the normal
+  // delivery pipeline types it into the Brain's pane). dispatchNotify dedups so
+  // each transition pokes exactly once — never every tick. A narrow filtered query
+  // + writes only on change → no full-table scan, no per-tick churn.
+  runDispatchWatch: machineProcedure.mutation(async ({ ctx }) => {
+    const rows = await prisma.chatSession.findMany({
+      where: {
+        machineId: ctx.machine.id,
+        origin: 'dispatch',
+        closedAt: null,
+        dispatchedBySessionId: { not: null },
+      },
+      select: { id: true, agentName: true, state: true, dispatchNotify: true, dispatchedBySessionId: true },
+    });
+    if (rows.length === 0) return { scanned: 0, poked: 0 };
+
+    let poked = 0;
+    for (const r of rows) {
+      // Oldest pending interaction = the choice this dispatch is parked on.
+      const pending = await prisma.interaction.findFirst({
+        where: { sessionId: r.id, status: 'pending' },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, kind: true, payload: true },
+      });
+
+      let sig: string;
+      let poke: string | null = null;
+      if (pending) {
+        sig = `blocked:${pending.id}`;
+        const pl = (pending.payload ?? {}) as Record<string, unknown>;
+        if (pending.kind === 'permission') {
+          const toolName = typeof pl.tool === 'string' ? pl.tool : '?';
+          poke =
+            `[dispatch update] ${r.agentName} is BLOCKED — it wants to run tool "${toolName}". ` +
+            `Answer with dispatch_answer({ sessionId: "${r.id}", approve: true|false }) if you can decide SAFELY from the task; ` +
+            `if it's destructive / irreversible / spends money / you're unsure, don't answer — tell the human.`;
+        } else {
+          const questionText = typeof pl.question === 'string' ? pl.question : '';
+          const rawOptions = Array.isArray(pl.options) ? pl.options : [];
+          const opts = rawOptions
+            .map((o) =>
+              typeof o === 'string'
+                ? o
+                : o && typeof o === 'object' && 'label' in o
+                  ? String((o as { label: unknown }).label)
+                  : '',
+            )
+            .filter(Boolean)
+            .slice(0, 12);
+          poke =
+            `[dispatch update] ${r.agentName} is BLOCKED on a question: "${questionText.slice(0, 300)}". ` +
+            (opts.length ? `Options: ${opts.join(' | ')}. ` : '') +
+            `Answer with dispatch_answer({ sessionId: "${r.id}", answer: "…" }) if the choice is safe/obvious; otherwise escalate to the human.`;
+        }
+      } else if (r.state !== 'working') {
+        // Settled (not mid-turn): if there's an assistant reply, treat the newest
+        // one as "finished this turn". Keyed on the message id so a stable reply
+        // doesn't re-poke, but a NEW reply (a later turn) does.
+        const lastA = await prisma.chatMessage.findFirst({
+          where: { sessionId: r.id, role: 'assistant' },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+        });
+        if (lastA) {
+          sig = `done:${lastA.id}`;
+          poke =
+            `[dispatch update] ${r.agentName} finished a turn (session ${r.id}). ` +
+            `Read it with dispatch_result({ sessionId: "${r.id}" }), then decide the next step or close it with dispatch_close.`;
+        } else {
+          sig = 'idle';
+        }
+      } else {
+        sig = 'working';
+      }
+
+      if (sig === r.dispatchNotify) continue; // no transition — nothing to do
+      // Record the new signature regardless, so non-notable flips (working/idle)
+      // don't re-fire and the NEXT notable transition is detected cleanly.
+      await prisma.chatSession.update({ where: { id: r.id }, data: { dispatchNotify: sig } });
+      if (!poke) continue; // working/idle: recorded only, no poke
+
+      // Deliver the poke into the Brain session that owns this dispatch — but only
+      // if it's still open (a closed Brain chat can't act on it).
+      const brain = await prisma.chatSession.findFirst({
+        where: { id: r.dispatchedBySessionId!, machineId: ctx.machine.id, closedAt: null },
+        select: { id: true },
+      });
+      if (!brain) continue;
+      await prisma.chatMessage.create({
+        data: {
+          sessionId: brain.id,
+          role: 'user',
+          content: [{ type: 'text', text: poke }] as unknown as Parameters<
+            typeof prisma.chatMessage.create
+          >[0]['data']['content'],
+        },
+      });
+      await prisma.chatSession.update({ where: { id: brain.id }, data: { lastMessageAt: new Date() } });
+      poked++;
+    }
+    return { scanned: rows.length, poked };
+  }),
 });

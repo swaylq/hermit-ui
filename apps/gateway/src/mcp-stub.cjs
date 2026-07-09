@@ -357,6 +357,21 @@ const BRAIN_TOOLS = [
     },
   },
   {
+    name: 'dispatch_answer',
+    description:
+      "Answer the choice a dispatched agent is BLOCKED on — the `blocked` a dispatch_result/dispatch_list surfaced (a permission the agent wants, or an AskUserQuestion). Resolves it so the target continues. For a PERMISSION block pass approve:true|false (+ optional reason). For a QUESTION block pass answer (an option label, free text, or an array of labels for multi-select). SAFETY: only answer what you can decide SAFELY from the task's own context; for anything destructive, irreversible, spending money, or that you're unsure about, do NOT answer — leave it and tell the human instead.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'The blocked dispatch session — its oldest pending choice is the one answered.' },
+        approve: { type: 'boolean', description: 'PERMISSION block only: true = allow, false = deny.' },
+        answer: { description: 'QUESTION block only: the answer — an option label, free text, or an array of labels for multi-select.' },
+        reason: { type: 'string', description: 'Optional note — the permission reason / your rationale.' },
+      },
+      required: ['sessionId'],
+    },
+  },
+  {
     name: 'kb_list',
     description:
       "List every knowledge base on this machine: { id, name, slug, intro, autoIntro, docCount, introUpdatedAt, contentUpdatedAt }. Use it in your daily dream to refresh intros — for each base with autoIntro true AND contentUpdatedAt newer than introUpdatedAt, read its docs and rewrite the intro.",
@@ -387,6 +402,44 @@ const BRAIN_TOOLS = [
   },
 ];
 const BRAIN_TOOL_NAMES = new Set(BRAIN_TOOLS.map((t) => t.name));
+
+// The choice a dispatch target is BLOCKED on (its oldest pending interaction),
+// shaped so the Brain can answer it with dispatch_answer — or null when it isn't
+// blocked. A pending interaction means the agent's turn is parked waiting for a
+// decision (its pane still reads "working", so this is the ONLY way to tell a
+// blocked dispatch from a busy one). permission payload = { tool, input, ... };
+// question payload = { question, options[], multiSelect }.
+async function blockedOn(sessionId) {
+  let pend;
+  try {
+    pend = await trpcQuery('interaction.listPending', { sessionId });
+  } catch {
+    return null;
+  }
+  const p = Array.isArray(pend) ? pend[0] : null;
+  if (!p) return null;
+  const pl = p.payload || {};
+  if (p.kind === 'permission') {
+    const inp = pl.input ? ' ' + JSON.stringify(pl.input).slice(0, 200) : '';
+    return {
+      interactionId: p.id,
+      kind: 'permission',
+      ask: `wants to run tool "${pl.tool || '?'}"${inp}`,
+      answerWith: 'dispatch_answer({ sessionId, approve: true|false, reason? })',
+    };
+  }
+  const options = Array.isArray(pl.options)
+    ? pl.options.map((o) => (typeof o === 'string' ? o : o && o.label)).filter(Boolean).slice(0, 12)
+    : [];
+  return {
+    interactionId: p.id,
+    kind: 'question',
+    ask: String(pl.question || '').slice(0, 600),
+    options,
+    multiSelect: !!pl.multiSelect,
+    answerWith: 'dispatch_answer({ sessionId, answer })',
+  };
+}
 
 async function dispatchBrainTool(name, args) {
   if (name === 'roster') {
@@ -467,22 +520,35 @@ async function dispatchBrainTool(name, args) {
     // them structurally (independent of the title; the title stays the caller's
     // label or the "Brain → <agent>" default).
     let sessionId = null;
+    let reused = false;
     const reuseId = typeof args?.reuseSessionId === 'string' ? args.reuseSessionId.trim() : '';
     if (reuseId) {
       const all = (await trpcQuery('chat.listSessions', {})) || [];
       const reuse = (Array.isArray(all) ? all : []).find(
         (s) => s.id === reuseId && s.agentName === agentName && s.origin === 'dispatch' && !s.closedAt,
       );
-      if (reuse) sessionId = reuse.id;
+      if (reuse) {
+        sessionId = reuse.id;
+        reused = true;
+        // Re-point the reused session at THIS brain session, so the dispatch-watcher
+        // pokes the current dispatcher on finish/block (not whoever first opened it).
+        if (SESSION_ID) await trpcMutate('chat.setDispatchOrigin', { id: sessionId, dispatchedBySessionId: SESSION_ID });
+      }
     }
     if (!sessionId) {
-      const sres = await trpcMutate('chat.createSession', { agentName, title: title || `Brain → ${agentName}`, origin: 'dispatch' });
+      const sres = await trpcMutate('chat.createSession', {
+        agentName,
+        title: title || `Brain → ${agentName}`,
+        origin: 'dispatch',
+        // stamp the dispatcher so the gateway can poke it back (Phase 2 routing)
+        ...(SESSION_ID ? { dispatchedBySessionId: SESSION_ID } : {}),
+      });
       const session = sres?.[0]?.result?.data?.json;
       if (!session?.id) throw new Error('failed to create a session on the target agent');
       sessionId = session.id;
     }
     await trpcMutate('chat.send', { sessionId, text: prompt.trim() });
-    return JSON.stringify({ ok: true, kind: 'oneshot', agent: agentName, sessionId, reused: !!reuseId && sessionId === reuseId });
+    return JSON.stringify({ ok: true, kind: 'oneshot', agent: agentName, sessionId, reused });
   }
   if (name === 'dispatch_result') {
     const sessionId = args?.sessionId;
@@ -490,13 +556,17 @@ async function dispatchBrainTool(name, args) {
     const waitMs = Math.min(Math.max(0, Number(args?.waitMs) || 0), 120_000);
     const deadline = Date.now() + waitMs;
     let msgs = [];
-    // Poll: stop once the newest message is an assistant turn (a reply landed),
-    // else keep checking until the wait window elapses.
+    let blocked = null;
+    // Settle once a reply landed OR the target is BLOCKED on a choice (a pending
+    // interaction — it can't progress until someone answers), else keep checking
+    // until the wait window elapses.
     for (;;) {
+      blocked = await blockedOn(sessionId);
       const got = (await trpcQuery('chat.listMessages', { sessionId, limit: 20 })) || [];
       msgs = Array.isArray(got) ? got : [];
       const last = msgs[msgs.length - 1];
-      if ((last && last.role === 'assistant' && textOf(last.content)) || Date.now() >= deadline) break;
+      const settled = !!blocked || (last && last.role === 'assistant' && textOf(last.content));
+      if (settled || Date.now() >= deadline) break;
       await sleep(3000);
     }
     const lastA = [...msgs].reverse().find((m) => m.role === 'assistant' && textOf(m.content));
@@ -506,23 +576,35 @@ async function dispatchBrainTool(name, args) {
       sessionId,
       alive: s?.alive ?? null,
       state: s?.state ?? null,
+      // real progress: working only when genuinely working AND not parked on a
+      // choice; blocked → answer it (dispatch_answer) or escalate to the human.
+      working: s?.state === 'working' && !blocked,
+      blocked,
       messageCount: msgs.length,
       lastAssistant: textOf(lastA?.content).slice(0, 2000) || null,
     });
   }
   if (name === 'dispatch_list') {
     const sessions = (await trpcQuery('chat.listSessions', {})) || [];
-    const list = (Array.isArray(sessions) ? sessions : [])
+    const open = (Array.isArray(sessions) ? sessions : [])
       .filter((s) => s.origin === 'dispatch' && !s.closedAt)
-      .sort((a, b) => new Date(b.lastMessageAt || b.startedAt).getTime() - new Date(a.lastMessageAt || a.startedAt).getTime())
-      .map((s) => ({
-        sessionId: s.id,
-        agent: s.agentName,
-        title: s.title || null,
-        working: !!s.alive,
-        lastActivity: s.lastMessageAt || s.startedAt || null,
-      }));
-    return JSON.stringify({ count: list.length, dispatches: list });
+      .sort((a, b) => new Date(b.lastMessageAt || b.startedAt).getTime() - new Date(a.lastMessageAt || a.startedAt).getTime());
+    // Per session: real working (from state, not just process-alive) + whether it's
+    // parked on a choice. The list is short by design, so the extra checks are cheap.
+    const dispatches = await Promise.all(
+      open.map(async (s) => {
+        const blocked = await blockedOn(s.id);
+        return {
+          sessionId: s.id,
+          agent: s.agentName,
+          title: s.title || null,
+          working: s.state === 'working' && !blocked,
+          blocked: blocked || undefined,
+          lastActivity: s.lastMessageAt || s.startedAt || null,
+        };
+      }),
+    );
+    return JSON.stringify({ count: dispatches.length, dispatches });
   }
   if (name === 'dispatch_close') {
     const sessionId = args?.sessionId;
@@ -533,6 +615,34 @@ async function dispatchBrainTool(name, args) {
     if (s.origin !== 'dispatch') throw new Error('not a dispatch session — dispatch_close only reaps dispatches');
     await trpcMutate('chat.deleteSession', { id: sessionId });
     return JSON.stringify({ ok: true, closed: sessionId, agent: s.agentName });
+  }
+  if (name === 'dispatch_answer') {
+    const sessionId = args?.sessionId;
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    // Confirm it's one of the brain's own dispatch sessions before touching it.
+    const sessions = (await trpcQuery('chat.listSessions', {})) || [];
+    const s = (Array.isArray(sessions) ? sessions : []).find((x) => x.id === sessionId);
+    if (!s) throw new Error('session not found');
+    if (s.origin !== 'dispatch') throw new Error('not a dispatch session — dispatch_answer only answers dispatches');
+    const pend = (await trpcQuery('interaction.listPending', { sessionId })) || [];
+    const p = Array.isArray(pend) ? pend[0] : null;
+    if (!p) throw new Error('that dispatch is not blocked on a choice right now (nothing to answer)');
+    let decision;
+    if (p.kind === 'permission') {
+      if (typeof args?.approve !== 'boolean') throw new Error('this is a PERMISSION block — pass approve:true|false');
+      decision = { behavior: args.approve ? 'allow' : 'deny', ...(args?.reason ? { reason: String(args.reason).slice(0, 2000) } : {}) };
+    } else {
+      const a = args?.answer;
+      const answers = Array.isArray(a)
+        ? a.map(String)
+        : a != null && String(a).trim()
+          ? [String(a)]
+          : null;
+      if (!answers || answers.length === 0) throw new Error('this is a QUESTION block — pass answer (an option label, free text, or an array)');
+      decision = { answers: answers.map((x) => x.slice(0, 4000)) };
+    }
+    await trpcMutate('interaction.resolve', { id: p.id, decision });
+    return JSON.stringify({ ok: true, sessionId, agent: s.agentName, kind: p.kind, decision });
   }
   if (name === 'kb_list') {
     const bases = (await trpcQuery('knowledge.listBases', null)) || [];

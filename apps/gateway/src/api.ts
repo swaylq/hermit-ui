@@ -155,6 +155,15 @@ export const api = {
     if (!r.ok) throw new Error(`ackHibernated → ${r.status}`);
   },
 
+  // ── Brain dispatch-watcher (docs/brain-design.md Phase 2) ───────────────────
+  // Heartbeat for the reactive dispatch loop: the dashboard owns all the data
+  // (session state, interactions, messages), so the whole watcher runs server-side
+  // as one filtered DB pass. We just tick it and log what it poked.
+  runDispatchWatch: async (): Promise<{ scanned: number; poked: number }> => {
+    const j = await post('/api/trpc/chat.runDispatchWatch?batch=1', { '0': { json: null } });
+    return j?.[0]?.result?.data?.json ?? { scanned: 0, poked: 0 };
+  },
+
   // ── Agent lifecycle (create/delete/edit) round-trip ─────────────────────
   // Returns one row per pending AgentRequest, joined with the agent's stored
   // directory (null if the agent doesn't exist yet — only happens between

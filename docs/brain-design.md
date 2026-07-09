@@ -174,9 +174,28 @@ You ──chat──▶ 义脑 agent ──dispatch──▶ chat.send / cron.cr
 on its own turn (gateway `chat.pollPending` → tmux). The brain cannot
 synchronously block for the result inside one turn in a clean way, so the v1 UX is:
 the brain replies *"dispatched to X"*, then reads the result back later via
-`dispatch_result` (next turn) or surfaces it in the next digest. A
-sub-agent→brain completion signal (so the brain can reply the moment a task
-finishes) is a **Phase 2** enhancement.
+`dispatch_result` (next turn) or surfaces it in the next digest.
+
+**Phase 2 — reactive dispatch loop (built 2026-07-09).** The pull-only v1 had two
+failure modes: a dispatched agent that BLOCKS on a choice (permission / question)
+stalls invisibly — the brain, waking only on its daily dream, never learns it's
+parked — and a dispatched agent that FINISHES is never advanced until the brain
+happens to poll. Both are now closed:
+- `dispatch_result` / `dispatch_list` surface each dispatch's real state: `working`
+  (from the pane's `state`, not just process-alive), and `blocked` (its oldest
+  pending `Interaction`, shaped with the exact answer call).
+- New brain tool **`dispatch_answer(sessionId, …)`** resolves a block — `approve`
+  for a permission, `answer` for a question — via `interaction.resolve`.
+- A gateway **dispatch-watcher** tick (`chat.runDispatchWatch`, ~30 s) computes a
+  per-dispatch signature (`blocked:<id>` | `done:<msgId>` | `working` | …) and, on a
+  transition into blocked/finished, drops a self-describing `[dispatch update]` user
+  message into the brain's OWN chat session (routed via new
+  `ChatSession.dispatchedBySessionId`; deduped via `ChatSession.dispatchNotify`, one
+  poke per transition). The brain reacts the moment a dispatch needs it — no polling.
+- The **safety rule** (taught in the new `dispatching` brain skill + inlined in every
+  poke): the brain answers ONLY safe, obvious choices; anything destructive,
+  irreversible, spending money, touching infra/credentials, or uncertain is escalated
+  to the human, never auto-approved.
 
 ---
 

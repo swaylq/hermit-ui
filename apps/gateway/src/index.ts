@@ -153,6 +153,16 @@ async function pushChatRestartTick() {
   });
 }
 
+// Brain dispatch-watcher: reactive loop that pokes the Brain when a dispatched
+// agent blocks on a choice or finishes a turn (docs/brain-design.md Phase 2).
+// All logic is server-side; we only tick it + log transitions.
+async function pushDispatchWatch() {
+  await safe('dispatch-watch', async () => {
+    const r = await api.runDispatchWatch();
+    if (r.poked > 0) console.log(`[dispatch-watch] poked brain about ${r.poked}/${r.scanned} dispatch(es)`);
+  });
+}
+
 function loop(fn: () => Promise<void>, ms: number) {
   setInterval(() => {
     fn().catch(() => {});
@@ -191,6 +201,7 @@ loop(pushCronTick, 15_000);
 loop(pushChatTick, 2_000);
 loop(pushChatCancelTick, 1_500);
 loop(pushChatRestartTick, 2_000);
+loop(pushDispatchWatch, 30_000); // reactive Brain poke on dispatch block/finish
 loop(() => safe('hibernate-tick', chatHibernateTick), 3_000); // manual hibernate requests
 loop(() => safe('reaper', reaperTick), 10 * 60_000); // auto-reap idle sessions (resource governance)
 loop(() => safe('chrome-reaper', chromeReaperTick), 5 * 60_000); // reap idle per-agent Chrome (~1GB each) the session-reaper leaves orphaned

@@ -393,6 +393,18 @@ model ChatSession {
   // the pane + sets hibernatedAt, then clears this (mirrors restartRequestedAt).
   hibernateRequestedAt DateTime?
 
+  // ── Brain dispatch routing (docs/brain-design.md Phase 2) ──
+  // When Brain's `dispatch` MCP tool opens this session, it stamps the Brain's
+  // OWN chat sessionId here so the gateway dispatch-watcher knows which session to
+  // poke when this dispatch finishes or blocks on a choice. NULL = not a Brain
+  // dispatch (or a legacy one from before this field existed).
+  dispatchedBySessionId String?
+  // Dedup marker for the dispatch-watcher: the signature of the last state it
+  // already poked the Brain about ("blocked:<interactionId>" | "done:<msgId>" |
+  // "working" | "none"). The watcher pokes only on a CHANGE, so it fires once per
+  // transition instead of every tick. NULL = never evaluated.
+  dispatchNotify        String?
+
   messages     ChatMessage[]
   interactions Interaction[]
 
