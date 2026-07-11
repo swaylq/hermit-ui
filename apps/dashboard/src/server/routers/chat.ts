@@ -426,7 +426,10 @@ export const chatRouter = router({
               height: z.number().int().nullable().optional(),
             }),
           )
-          .max(10)
+          // Up to 20 images per message (the composer enforces the same cap client-
+          // side, MAX_IMAGES). Anthropic accepts more per request; 20 keeps a single
+          // message's payload + the gateway's pane delivery sane.
+          .max(20)
           .optional(),
         files: z
           .array(

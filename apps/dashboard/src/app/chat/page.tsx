@@ -780,6 +780,10 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
   // text). Auto-cleared when the draft empties on send / Escape.
   useEffect(() => { saveDraft(sessionId, draft); }, [sessionId, draft]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Composer notice line: attachment-cap warnings (set in ComposeBar.addFiles) AND
+  // send failures (set in onSend's onError) — so a rejected send explains itself
+  // instead of silently restoring the draft.
+  const [composerNotice, setComposerNotice] = useState<string | null>(null);
   // Optimistic outbound messages — render the user's bubble instantly on send so
   // it doesn't wait for the send round-trip + SSE echo (~200ms). Kept in a SEPARATE
   // overlay (NOT the query cache): the SSE rewrites the cache via
@@ -1431,6 +1435,7 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
               // Sending always re-pins to the bottom (even if the user had
               // scrolled up) so their message + the reply scroll into view.
               scrollToBottom('auto');
+              setComposerNotice(null); // clear any stale cap/error notice on a fresh send
               // Is a prior turn already in flight BEFORE this send? If not, this
               // message IS the imminent active turn (not a queue item) — record it
               // so the QueueBar doesn't flash it while the gateway picks it up (see
@@ -1470,11 +1475,14 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
                   onSuccess: (msg) => {
                     if (wasIdle) setStarterIds((s) => { const n = new Set(s); n.add(msg.id); return n; });
                   },
-                  onError: () => {
+                  onError: (err) => {
                     setPending((p) => p.filter((x) => x.id !== optimisticId));
                     setOptimisticQueue((q) => q.filter((x) => x.id !== optimisticId));
                     setDraft(prevDraft);
                     setAttachments(prevAttachments);
+                    // Surface WHY (e.g. over the image cap) instead of silently
+                    // restoring the draft — the old behavior read as "send is dead".
+                    setComposerNotice(err.message || 'Failed to send — please try again.');
                   },
                 },
               );
@@ -1483,6 +1491,8 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
             setDraft={setDraft}
             attachments={attachments}
             setAttachments={setAttachments}
+            notice={composerNotice}
+            setNotice={setComposerNotice}
             taRef={taRef}
             history={sentHistory}
           />
@@ -2084,6 +2094,8 @@ function ComposeBar({
   setDraft,
   attachments,
   setAttachments,
+  notice,
+  setNotice,
   onSend,
   taRef,
   history,
@@ -2100,6 +2112,8 @@ function ComposeBar({
   setDraft: (s: string) => void;
   attachments: Attachment[];
   setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
+  notice: string | null;
+  setNotice: (s: string | null) => void;
   onSend: (
     text: string,
     images: Array<{ url: string; mimeType: string; width: number | null; height: number | null }>,
@@ -2156,9 +2170,36 @@ function ComposeBar({
   // Upload one or more files (image or otherwise) to /api/upload; track each via
   // an Attachment record so the UI shows a thumbnail/chip + spinner. Images get
   // an object-URL preview; other files get a generic chip.
-  const addFiles = useCallback(async (files: File[]) => {
-    if (files.length === 0) return;
-    for (const file of files) {
+  const addFiles = useCallback(async (incoming: File[]) => {
+    if (incoming.length === 0) return;
+    // Enforce the per-message caps up front so extras are skipped with a visible
+    // notice — instead of being accepted and then silently sinking the whole send
+    // (chat.send rejects if images > MAX_IMAGES or files > MAX_FILES). Count slots
+    // already taken (ready or still uploading; error chips don't occupy one).
+    const liveImg = attachments.filter((a) => (a.kind === 'ready' || a.kind === 'uploading') && a.isImage).length;
+    const liveFile = attachments.filter((a) => (a.kind === 'ready' || a.kind === 'uploading') && !a.isImage).length;
+    let imgSlots = MAX_IMAGES - liveImg;
+    let fileSlots = MAX_FILES - liveFile;
+    const accepted: File[] = [];
+    let droppedImg = 0;
+    let droppedFile = 0;
+    for (const file of incoming) {
+      if (file.type.startsWith('image/')) {
+        if (imgSlots > 0) { accepted.push(file); imgSlots -= 1; } else droppedImg += 1;
+      } else if (fileSlots > 0) { accepted.push(file); fileSlots -= 1; } else {
+        droppedFile += 1;
+      }
+    }
+    if (droppedImg || droppedFile) {
+      const parts: string[] = [];
+      if (droppedImg) parts.push(`${droppedImg} image${droppedImg > 1 ? 's' : ''} (max ${MAX_IMAGES} per message)`);
+      if (droppedFile) parts.push(`${droppedFile} file${droppedFile > 1 ? 's' : ''} (max ${MAX_FILES} per message)`);
+      setNotice(`Skipped ${parts.join(' and ')}.`);
+    } else {
+      setNotice(null);
+    }
+    if (accepted.length === 0) return;
+    for (const file of accepted) {
       const isImage = file.type.startsWith('image/');
       const id = (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
       const name = file.name || (isImage ? 'pasted-image' : 'file');
@@ -2191,7 +2232,7 @@ function ComposeBar({
         setAttachments((prev) => prev.map((a) => a.id === id ? { id, kind: 'error', name, error: e instanceof Error ? e.message : String(e) } : a));
       }
     }
-  }, [sessionId, setAttachments]);
+  }, [sessionId, setAttachments, attachments, setNotice]);
 
   const onPickFiles = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -2245,6 +2286,9 @@ function ComposeBar({
     [attachments],
   );
   const uploadingCount = attachments.filter((a) => a.kind === 'uploading').length;
+  // Occupied slots (ready or uploading; error chips don't count) for the caps caption.
+  const imgCount = attachments.filter((a) => (a.kind === 'ready' || a.kind === 'uploading') && a.isImage).length;
+  const fileCount = attachments.filter((a) => (a.kind === 'ready' || a.kind === 'uploading') && !a.isImage).length;
 
   const submit = () => {
     const text = draft.trim();
@@ -2309,11 +2353,35 @@ function ComposeBar({
           clear the home indicator (absorbed via max(), not stacked) so the input
           sits snug above it with no empty band. No-op in a normal browser tab. */}
       <div className="mx-auto w-full max-w-3xl px-3 pb-3 pt-1 pwa-pb-safe">
+        {notice && (
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            title="dismiss"
+            className="mb-2 flex w-full items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-left text-[12px] text-amber-700 dark:text-amber-400 cursor-pointer"
+          >
+            <span className="flex-1">{notice}</span>
+            <X className="h-3.5 w-3.5 shrink-0 opacity-60" />
+          </button>
+        )}
         {attachments.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-2">
-            {attachments.map((a) => (
-              <AttachmentChip key={a.id} attachment={a} onRemove={() => removeAttachment(a.id)} />
-            ))}
+          <div className="mb-2 space-y-1.5">
+            <div className="flex flex-wrap gap-2">
+              {attachments.map((a) => (
+                <AttachmentChip key={a.id} attachment={a} onRemove={() => removeAttachment(a.id)} />
+              ))}
+            </div>
+            {(imgCount > 0 || fileCount > 0) && (
+              <div className="px-0.5 text-[11px] tabular-nums text-muted-foreground/60">
+                {imgCount > 0 && (
+                  <span className={cn(imgCount >= MAX_IMAGES && 'text-amber-600 dark:text-amber-400')}>{imgCount}/{MAX_IMAGES} images</span>
+                )}
+                {imgCount > 0 && fileCount > 0 && <span> · </span>}
+                {fileCount > 0 && (
+                  <span className={cn(fileCount >= MAX_FILES && 'text-amber-600 dark:text-amber-400')}>{fileCount}/{MAX_FILES} files</span>
+                )}
+              </div>
+            )}
           </div>
         )}
         <div
@@ -2513,6 +2581,12 @@ const SAFE_FILE_EXTS = [
 const SAFE_FILE_EXT_SET = new Set<string>(SAFE_FILE_EXTS);
 // `<input accept>` value: `image/*` + every whitelisted file extension.
 const FILE_ACCEPT = 'image/*,' + SAFE_FILE_EXTS.map((e) => '.' + e).join(',');
+
+// Per-message attachment caps — MUST match the server's chat.send zod .max(...).
+// The composer enforces them so extras are skipped with a visible notice instead of
+// silently failing the send (chat.send rejects the whole message if either is over).
+const MAX_IMAGES = 20;
+const MAX_FILES = 10;
 
 function getExt(name: string): string {
   const i = name.lastIndexOf('.');
