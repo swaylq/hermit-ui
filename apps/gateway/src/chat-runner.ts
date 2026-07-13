@@ -830,9 +830,20 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
       // writing, whereas a stale OLD session's transcript is not. This also stops us
       // adopting an old transcript if a just-spawned session is reattached before its
       // own first write (recorded size 0 but not actually drift).
+      //
+      // …but that freshness bound applies ONLY to the size-0 case (recorded file exists,
+      // just hasn't been written yet). When the recorded transcript is MISSING ENTIRELY —
+      // pruned by Claude Code's retention, or the uuid stamp was lost so the DB points at a
+      // uuid that never got a file — there is no size-0 ambiguity: the newest unclaimed
+      // transcript IS the live pane's, at ANY age. Applying the 5-min bound there stranded
+      // sessions on "starting" forever when the recorded uuid was pruned AND the live pane
+      // had gone idle >5 min before the reattach — the drift never healed, so replies never
+      // synced (observed 2026-07-13: zhinan-dingding pinned to a pruned uuid, its real
+      // transcript last written ~10 min earlier → excluded by FRESH_MS → permanently stuck).
       const FRESH_MS = 5 * 60_000;
+      const maxAgeMs = recorded ? FRESH_MS : Infinity;
       const live = transcripts
-        .filter((t) => t.size > 0 && t.uuid !== claudeUuid && !claimed.has(t.uuid) && Date.now() - t.mtimeMs < FRESH_MS)
+        .filter((t) => t.size > 0 && t.uuid !== claudeUuid && !claimed.has(t.uuid) && Date.now() - t.mtimeMs < maxAgeMs)
         .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
       if (live) {
         console.warn(
@@ -974,7 +985,7 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
 const SYNC_BATCH_MAX = 25;
 const SYNC_DEBOUNCE_MS = 120;
 
-function flushSync(state: SessionState) {
+function flushSync(state: SessionState, attempt = 0) {
   if (state.syncTimer) {
     clearTimeout(state.syncTimer);
     state.syncTimer = null;
@@ -988,7 +999,26 @@ function flushSync(state: SessionState) {
     .then(() => {
       if (stamping) state.uuidStamped = true;
     })
-    .catch((e) => console.error('[chat] sync batch failed:', e));
+    .catch((e) => {
+      console.error('[chat] sync batch failed:', e);
+      // DON'T drop the batch. A transient failure — the dashboard 502-ing under a
+      // post-restart reattach-replay storm, a network blip — would otherwise strand
+      // these rows until the next full reattach replay, which `seenUuids` then dedupes
+      // away, so the content (and any claudeSessionId stamp riding it) is lost for good.
+      // That is the shared root of two observed wedges: a fresh-spawn uuid stamp eaten
+      // by a timeout (DB left pointing at a dead uuid → session unwakeable), and a full
+      // replay eaten by the restart storm (replies never surfaced → session stuck
+      // "starting"). Re-queue at the FRONT and retry with backoff — syncChatMessages
+      // upserts by externalId, so re-sending is idempotent; the backoff also spreads a
+      // reattach storm out over time instead of hammering the dashboard in lockstep.
+      if (attempt < 5) {
+        state.syncBuf = batch.concat(state.syncBuf);
+        if (state.syncTimer) clearTimeout(state.syncTimer);
+        state.syncTimer = setTimeout(() => flushSync(state, attempt + 1), Math.min(2000, 200 * 2 ** attempt));
+      } else {
+        console.error(`[chat] sync batch DROPPED after ${attempt} retries (${batch.length} rows) — re-syncs only on a fresh reattach`);
+      }
+    });
 }
 
 function queueSync(state: SessionState, item: SyncItem) {

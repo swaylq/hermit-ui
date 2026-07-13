@@ -69,12 +69,27 @@ export async function POST(req: NextRequest) {
     // the insert and silently drops the message. No-op (same ref) otherwise.
     const content = stripNulDeep(m.content);
 
-    // Stamp claudeSessionId once.
-    if (m.claudeSessionId && !session.claudeSessionId) {
+    // Stamp claudeSessionId whenever the gateway reports one that DIFFERS from what
+    // we hold — this both fills a null on the first sync AND corrects a stale pointer
+    // after uuid drift (a `--resume` forked a new uuid, or the recorded transcript was
+    // pruned by Claude Code's retention so the gateway drift-adopted the pane's live
+    // transcript). The gateway only sends a non-null claudeSessionId while its own
+    // `uuidStamped` flag is false — i.e. exactly when the DB needs reconciling — and
+    // stops once this write's sync succeeds, so this converges (not a write per message).
+    //
+    // The old `!session.claudeSessionId` guard (stamp ONLY when null) meant a drifted
+    // session's DB pointer stayed pinned to a DEAD uuid forever. The session-snapshot
+    // collector resolves the transcript from that DB uuid; a pruned uuid → no file →
+    // it reports state='starting' permanently, so the session was stuck showing
+    // "starting" in the UI with no way to self-heal (observed 2026-07-13: zhinan-dingding
+    // pinned to a pruned uuid; the gateway had already drift-adopted the live transcript
+    // in-memory, but this route refused to write the correction through).
+    if (m.claudeSessionId && m.claudeSessionId !== session.claudeSessionId) {
       await prisma.chatSession.update({
         where: { id: session.id },
         data: { claudeSessionId: m.claudeSessionId },
       });
+      session.claudeSessionId = m.claudeSessionId; // keep the per-batch cache coherent
     }
 
     // Dedup by (sessionId, externalId): a streaming partial assistant/tool row
