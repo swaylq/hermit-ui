@@ -19,7 +19,7 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   ensureSession,
@@ -842,10 +842,11 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
         claudeUuid = live.uuid;
       }
     }
-  } else if (session.claudeSessionId && !paneAlive) {
+  } else if (session.claudeSessionId && !paneAlive && existsSync(path.join(encodedProjectDir(cwd), `${session.claudeSessionId}.jsonl`))) {
     // Resume: older claude forked a brand-new JSONL, but current versions APPEND to the
     // resumed session's OWN uuid transcript. Record its pre-spawn size so we can detect
     // the resume either way (resolveResumedUuid). Sniff the uuid after spawn.
+    // (Guarded on the transcript still EXISTING — see the fresh fallback below.)
     claudeArgs.push('--resume', session.claudeSessionId);
     waitForResumeUuid = true;
     claudeUuid = ''; // filled in after spawn
@@ -853,7 +854,22 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
       resumeBaselineSize = statSync(path.join(encodedProjectDir(cwd), `${session.claudeSessionId}.jsonl`)).size;
     } catch { resumeBaselineSize = 0; }
   } else {
-    // Fresh: pre-assign uuid via --session-id (added by ensureSession).
+    // Fresh: pre-assign uuid via --session-id (added by ensureSession). This is ALSO the
+    // fallback when a recorded claudeSessionId's transcript is GONE from disk: Claude Code
+    // prunes old transcripts (~cleanupPeriodDays, default 30d), so a long-idle session's
+    // <uuid>.jsonl ages out. `claude --resume <that-uuid>` then errors "No conversation
+    // found" and exits instantly → resolveResumedUuid waits the full 4-min timeout for a
+    // transcript that never comes → setup fails → the wake retries every tick FOREVER and
+    // the queued message never lands (observed: a 5-week-old zhinan-dingding session).
+    // Detecting the missing file here and spawning fresh unwedges it — claude's in-memory
+    // history is already unrecoverable (gone from disk), but the pane comes up, the new
+    // uuid is stamped back to the DB, and the pending message is delivered.
+    if (session.claudeSessionId && !paneAlive) {
+      console.warn(
+        `[chat] ${session.id.slice(0, 8)}: recorded claude uuid ${session.claudeSessionId.slice(0, 8)} has no ` +
+          `transcript on disk (pruned) — cannot --resume; starting a FRESH claude session`,
+      );
+    }
     claudeUuid = randomUUID();
   }
 
