@@ -250,6 +250,7 @@ function NewAgentForm({ onClose }: { onClose: () => void }) {
   const [persona, setPersona] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [skills, setSkills] = useState<string[]>([]);
+  const [skillQuery, setSkillQuery] = useState('');
   const templates = trpc.market.listTemplates.useQuery();
   const marketSkills = trpc.market.listSkills.useQuery();
   const router = useRouter();
@@ -264,6 +265,19 @@ function NewAgentForm({ onClose }: { onClose: () => void }) {
   const nameOk = /^[a-z][a-z0-9-]{0,30}$/.test(name);
   const toggleSkill = (slug: string) =>
     setSkills((prev) => (prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]));
+
+  // Filter the market skill list by a case-insensitive match across name / slug /
+  // description so a long market stays navigable when picking skills at create time.
+  const skillList = marketSkills.data ?? [];
+  const skillQ = skillQuery.trim().toLowerCase();
+  const filteredSkills = skillQ
+    ? skillList.filter(
+        (s) =>
+          (s.displayName || '').toLowerCase().includes(skillQ) ||
+          s.slug.toLowerCase().includes(skillQ) ||
+          (s.description || '').toLowerCase().includes(skillQ),
+      )
+    : skillList;
 
   return (
         <form
@@ -323,13 +337,22 @@ function NewAgentForm({ onClose }: { onClose: () => void }) {
               <span className="text-[10px] text-muted-foreground/70">从市场模板新建会套用它的 identity / 工作区规则 / skills</span>
             </label>
           )}
-          {(marketSkills.data?.length ?? 0) > 0 && (
+          {skillList.length > 0 && (
             <div>
               <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
                 Skills from market <span className="text-muted-foreground/60 normal-case">(optional)</span>
+                {skills.length > 0 && <span className="text-muted-foreground/60 normal-case"> · {skills.length} selected</span>}
               </span>
+              {skillList.length > 5 && (
+                <Input
+                  value={skillQuery}
+                  onChange={(e) => setSkillQuery(e.target.value)}
+                  placeholder="Search skills…"
+                  className="mt-1.5 h-9 text-base sm:text-sm"
+                />
+              )}
               <div className="mt-1.5 max-h-44 overflow-y-auto rounded-md border border-border divide-y divide-border">
-                {(marketSkills.data ?? []).map((s) => (
+                {filteredSkills.map((s) => (
                   <label key={s.slug} className="flex items-start gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-accent/40">
                     <input
                       type="checkbox"
@@ -343,6 +366,9 @@ function NewAgentForm({ onClose }: { onClose: () => void }) {
                     </span>
                   </label>
                 ))}
+                {filteredSkills.length === 0 && (
+                  <p className="px-2.5 py-3 text-[11px] text-muted-foreground/70">No skills match your search.</p>
+                )}
               </div>
               <span className="text-[10px] text-muted-foreground/70">勾选的 skill 会装进新 agent 的 .claude/skills/（默认 skill 已含,无需勾）</span>
             </div>
