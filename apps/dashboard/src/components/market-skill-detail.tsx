@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Download, Pencil } from 'lucide-react';
+import { Download, Pencil, Trash2 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
@@ -11,6 +11,7 @@ import { getActiveKey } from '@/lib/keyring';
 import { type FileItem } from '@/components/file-detail';
 import { SkillDiff } from '@/components/skill-diff';
 import { SkillFilesModal } from '@/components/skill-files-modal';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 type Ref = { path?: string; name?: string; content: string };
 
@@ -63,6 +64,27 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
     const n = nameDraft.trim();
     if (n && skill && n !== skill.displayName) rename.mutate({ slug, displayName: n });
     else setEditingName(false);
+  }
+  // Delete this skill from the market (registry row + all versions). Guarded by a
+  // confirm; installed on-disk copies are left untouched (see deleteSkill). On
+  // success the card leaves the grid (listSkills) and the modal closes.
+  const confirm = useConfirm();
+  const del = trpc.market.deleteSkill.useMutation({
+    onSuccess: () => {
+      utils.market.listSkills.invalidate();
+      onClose();
+    },
+  });
+  async function handleDelete() {
+    if (
+      await confirm({
+        title: 'Delete skill',
+        message: `Delete “${skill?.displayName ?? slug}” (${slug}) and all its versions from the market? Copies already installed on agents or machines stay on disk. This can’t be undone.`,
+        confirmLabel: 'Delete',
+        danger: true,
+      })
+    )
+      del.mutate({ slug });
   }
   // Download the selected version as a .zip. A plain <a download> can't carry
   // the x-asst-key header, so fetch with the key → blob → synthetic anchor.
@@ -119,7 +141,11 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
               <Download className="h-3.5 w-3.5 mr-1" /> {downloading ? '打包中…' : `Download v${selected?.version ?? ''} .zip`}
             </Button>
             {dlError && <span className="text-xs text-rose-500">{dlError}</span>}
+            <Button size="sm" variant="destructive" className="ml-auto" disabled={del.isPending} onClick={handleDelete}>
+              <Trash2 className="h-3.5 w-3.5 mr-1" /> {del.isPending ? 'Deleting…' : 'Delete'}
+            </Button>
           </div>
+          {del.isError && <span className="text-xs text-rose-500">{del.error.message}</span>}
           {skill.description && <p className="text-sm text-muted-foreground">{skill.description}</p>}
           <div className="flex items-center gap-2 text-xs">
             <span className="shrink-0 text-muted-foreground/70">Display name</span>

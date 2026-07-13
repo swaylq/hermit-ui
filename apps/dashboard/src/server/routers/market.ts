@@ -88,6 +88,28 @@ export const marketRouter = router({
       });
     }),
 
+  // Delete a skill from the fleet market: its MarketSkill row + all its versions
+  // (MarketSkillVersion cascades via its FK). Provenance on installed copies
+  // references marketSkillId as a plain string (no FK), so clear it explicitly —
+  // drop the AgentSkillInstall bindings + null out GlobalSkill.marketSkillId — so
+  // no dangling ids remain. The already-installed on-disk copies are deliberately
+  // left in place: delete-from-registry is NOT uninstall-everywhere (uninstall
+  // stays a separate per-target action, and there's no fleet-wide rm mechanism).
+  // Same permissive machineProcedure model as the rest of the market — a scoped
+  // agent-share token can't reach this destructive op.
+  deleteSkill: machineProcedure
+    .input(z.object({ slug: z.string() }))
+    .mutation(async ({ input }) => {
+      const m = await prisma.marketSkill.findUnique({ where: { slug: input.slug }, select: { id: true } });
+      if (!m) throw new Error('market skill not found');
+      await prisma.$transaction([
+        prisma.agentSkillInstall.deleteMany({ where: { marketSkillId: m.id } }),
+        prisma.globalSkill.updateMany({ where: { marketSkillId: m.id }, data: { marketSkillId: null, marketVersion: null } }),
+        prisma.marketSkill.delete({ where: { id: m.id } }),
+      ]);
+      return { ok: true, slug: input.slug };
+    }),
+
   listTemplates: machineProcedure.query(async () => {
     return prisma.marketTemplate.findMany({
       orderBy: { updatedAt: 'desc' },
