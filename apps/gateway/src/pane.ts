@@ -145,6 +145,34 @@ export function transcriptToolRunning(lines: string[]): boolean {
   return tuMax > 0 && tuMax > trMax && Date.now() - tuMax < TOOL_RUNNING_CAP_MS;
 }
 
+// Read up to the last TAIL_BYTES of a transcript as complete JSONL lines — enough for the
+// in-flight-tool check when the caller holds a path but no pre-read tail (the delivery
+// gate). Sync + byte-bounded like newestLineIsTurn: a mid-flight tool_use is always at the
+// very END of the file, and any tool_result for it is even newer (also inside the window),
+// so a window that reaches the tool_use can't miss its result → no false "running". A
+// leading partial record (window opened mid-line) is dropped — transcriptToolRunning would
+// skip it as unparseable anyway. Returns [] on any read failure (→ no tool-running signal).
+const TAIL_BYTES = 256 * 1024;
+export function readTranscriptTail(transcriptPath: string): string[] {
+  try {
+    const fd = fs.openSync(transcriptPath, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      const readLen = Math.min(size, TAIL_BYTES);
+      if (readLen === 0) return [];
+      const buf = Buffer.alloc(readLen);
+      fs.readSync(fd, buf, 0, readLen, size - readLen);
+      const lines = buf.toString('utf8').split('\n').filter((l) => l.trim());
+      if (readLen < size && lines.length) lines.shift(); // drop leading partial record
+      return lines;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return [];
+  }
+}
+
 // ── Authoritative width-independent signal: the turn-state hook ──────────────
 // hook-session-state.sh (wired as UserPromptSubmit / PreToolUse / Stop hooks) keeps
 // <agentDir>/.claude/state/session-status.json: state "running" from prompt-submit
@@ -237,9 +265,10 @@ export interface SessionActivity {
 // never reach different answers about the same session. ORs the four signals in
 // cheapest-first order and names the winner:
 //   1. transcript freshness — width-independent, no shell-out (short-circuits active turns)
-//   2. in-flight tool call  — retroactive, only when the caller supplies the transcript
-//                             tail (`transcriptLines`): a long quiet tool call on a narrow,
-//                             not-yet-hook-wired pane that both the marker AND freshness miss
+//   2. in-flight tool call  — retroactive; from the caller's pre-read tail (`transcriptLines`,
+//                             the snapshot) OR a bounded tail read from `transcriptPath` (the
+//                             delivery gate): a long quiet tool call on a narrow, not-yet-hook-
+//                             wired pane that both the marker AND freshness miss
 //   3. pane work-marker     — the authoritative "esc to interrupt" / spinner read
 //   4. turn-state hook      — narrow-pane-only fallback (marker truncated off the mode line)
 // Callers with no session context (reaper / cron / machine-requests) pass only the
@@ -257,7 +286,18 @@ export async function sessionActivity(
 ): Promise<SessionActivity> {
   const { transcriptPath, agentDir, claudeSessionId, transcriptLines } = opts;
   if (transcriptFresh(transcriptPath)) return { working: true, reason: 'transcript-fresh' };
-  if (transcriptLines?.length && transcriptToolRunning(transcriptLines)) {
+  // Retroactive in-flight-tool check. Prefer the caller's pre-read tail (the snapshot
+  // already read it for usage/text); otherwise read a bounded tail ourselves from
+  // transcriptPath — this is what gives the DELIVERY gate (it passes a path, not lines)
+  // the SAME tool-running signal the snapshot has, closing the verdict desync. Callers
+  // with neither (reaper / cron / machine-requests pass no transcriptPath) skip it →
+  // pure pane-marker behaviour, exactly as before.
+  const toolLines = transcriptLines?.length
+    ? transcriptLines
+    : transcriptPath
+      ? readTranscriptTail(transcriptPath)
+      : null;
+  if (toolLines?.length && transcriptToolRunning(toolLines)) {
     return { working: true, reason: 'tool-running' };
   }
   const pane = await capturePaneMarker(sessionId);

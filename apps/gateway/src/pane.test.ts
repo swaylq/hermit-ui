@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   WORK_MARKER_RE, newestLineIsTurn, transcriptFresh, sessionTranscriptPath,
-  transcriptToolRunning, sessionActivity,
+  transcriptToolRunning, sessionActivity, readTranscriptTail,
 } from './pane';
 
 let dir: string;
@@ -164,5 +164,35 @@ describe('sessionActivity', () => {
     assert.deepEqual(await sessionActivity('sid', { transcriptLines: lines }), {
       working: true, reason: 'tool-running',
     });
+  });
+  it('reads tool-running from transcriptPath when no lines are supplied (delivery-gate path)', async () => {
+    const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+    // A dangling tool_use (newer than the last tool_result) = a tool in flight.
+    const p = writeTranscript('act-toolpath.jsonl', [
+      { type: 'user', timestamp: iso(30_000), message: { content: [{ type: 'tool_result', tool_use_id: 't', content: 'x' }] } },
+      { type: 'assistant', timestamp: iso(2_000), message: { content: [{ type: 'tool_use', id: 't', name: 'Bash', input: {} }] } },
+    ]);
+    // Stale the mtime so transcriptFresh() is false → sessionActivity must fall through to
+    // the INTERNAL tail read (this is exactly the gate desync closure: a path, no lines).
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(p, old, old);
+    assert.deepEqual(await sessionActivity('sid', { transcriptPath: p }), {
+      working: true, reason: 'tool-running',
+    });
+  });
+});
+
+describe('readTranscriptTail', () => {
+  it('returns the non-empty lines of a transcript', () => {
+    const p = writeTranscript('tail-small.jsonl', [{ type: 'assistant' }, { type: 'user' }]);
+    const lines = readTranscriptTail(p);
+    assert.equal(lines.length, 2);
+    assert.deepEqual(JSON.parse(lines[0]), { type: 'assistant' });
+  });
+  it('returns [] for an empty or missing file', () => {
+    const empty = path.join(dir, 'tail-empty.jsonl');
+    fs.writeFileSync(empty, '');
+    assert.deepEqual(readTranscriptTail(empty), []);
+    assert.deepEqual(readTranscriptTail(path.join(dir, 'tail-nope.jsonl')), []);
   });
 });
