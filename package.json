@@ -12,7 +12,8 @@
     "dev:gateway": "pnpm --filter @hermit-ui/gateway dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
   },
   "engines": {
     "node": ">=20.0.0"

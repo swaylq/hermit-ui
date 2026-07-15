@@ -80,7 +80,7 @@ const NON_TURN_EVENT_TYPES = new Set(['bridge-session', 'summary', 'file-history
 // assistant/tool block mid-write, so an unparseable partial — or ANY read failure —
 // conservatively counts AS a turn: we only ever suppress the KNOWN metadata types,
 // never real work.
-function newestLineIsTurn(transcriptPath: string): boolean {
+export function newestLineIsTurn(transcriptPath: string): boolean {
   try {
     const fd = fs.openSync(transcriptPath, 'r');
     try {
@@ -103,7 +103,7 @@ function newestLineIsTurn(transcriptPath: string): boolean {
   }
 }
 
-function transcriptFresh(transcriptPath: string | null | undefined): boolean {
+export function transcriptFresh(transcriptPath: string | null | undefined): boolean {
   if (!transcriptPath) return false;
   try {
     if (Date.now() - fs.statSync(transcriptPath).mtimeMs >= TRANSCRIPT_FRESH_MS) return false;
