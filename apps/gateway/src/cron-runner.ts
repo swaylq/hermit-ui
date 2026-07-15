@@ -17,7 +17,7 @@ import {
   sendKeys,
   awaitTranscript,
   watchTranscript,
-  listTranscripts,
+  resolveLiveTranscript,
   encodedProjectDir,
   kill as killSession,
 } from '@hermit-ui/tmux-driver';
@@ -167,9 +167,10 @@ async function fire(c: Cron): Promise<void> {
     // `-n +1` so the adopted file replays from line 1 — no early text is lost.
     const appeared = await awaitTranscript(jsonlPath).then(() => true).catch(() => false);
     if (!appeared) {
-      const live = listTranscripts(cwd)
-        .filter((t) => t.size > 0 && !pinnedUuids.has(t.uuid) && t.mtimeMs >= startedAt - 2_000)
-        .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+      // Adopt the newest transcript created around/after this run started (mtime lower
+      // bound), excluding uuids we've already pinned this process. Shared drift-adopt
+      // helper — see pickLiveTranscript in @hermit-ui/tmux-driver.
+      const live = resolveLiveTranscript(cwd, { exclude: pinnedUuids, minMtimeMs: startedAt - 2_000 });
       if (live) {
         console.warn(
           `[cron] ${c.id.slice(0, 8)}: session uuid drift — pinned ${claudeUuid.slice(0, 8)} ` +

@@ -395,14 +395,57 @@ function listJsonlUuids(projectDir: string): string[] {
  * transcript here (newest non-empty, excluding uuids owned by sibling sessions that
  * share this project dir) and adopts it.
  */
-export function listTranscripts(cwd: string): Array<{ uuid: string; size: number; mtimeMs: number }> {
+export interface TranscriptInfo {
+  uuid: string;
+  size: number;
+  mtimeMs: number;
+}
+
+export function listTranscripts(cwd: string): TranscriptInfo[] {
   const projectDir = encodedProjectDir(cwd);
-  const out: Array<{ uuid: string; size: number; mtimeMs: number }> = [];
+  const out: TranscriptInfo[] = [];
   for (const uuid of listJsonlUuids(projectDir)) {
     const st = safeStat(join(projectDir, `${uuid}.jsonl`));
     if (st) out.push({ uuid, size: Number(st.size), mtimeMs: Number(st.mtimeMs) });
   }
   return out;
+}
+
+// Pick the newest "live" transcript for uuid-DRIFT adoption (see listTranscripts): the
+// most-recently-written non-empty transcript whose uuid isn't excluded and whose mtime
+// is within the caller's window. Pure over its inputs (the filesystem read + the clock
+// live in resolveLiveTranscript) so the exclusion + bounds logic is unit-testable. Both
+// drift-adopt sites (chat reattach, cron freshly-spawned) were open-coded copies of this
+// same "newest unclaimed transcript" pick with different exclusion sources + time bounds:
+//   • exclude    — uuids to skip: the recorded uuid itself + those owned by sibling chat
+//                  sessions sharing the project dir (chat), or already-seen uuids (cron).
+//   • minMtimeMs — lower bound: only transcripts written at/after this (cron pins the adopt
+//                  to a transcript created around/after the run started). Omit for none.
+//   • maxAgeMs   — upper bound: only transcripts newer than this age (chat bounds the size-0
+//                  ambiguous case to FRESH_MS; omit for no bound, e.g. a pruned recorded uuid).
+export function pickLiveTranscript(
+  transcripts: TranscriptInfo[],
+  opts: { exclude: Set<string>; minMtimeMs?: number; maxAgeMs?: number },
+  now: number,
+): TranscriptInfo | null {
+  return transcripts
+    .filter((t) =>
+      t.size > 0 &&
+      !opts.exclude.has(t.uuid) &&
+      (opts.minMtimeMs == null || t.mtimeMs >= opts.minMtimeMs) &&
+      (opts.maxAgeMs == null || now - t.mtimeMs < opts.maxAgeMs))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)[0] ?? null;
+}
+
+// Read the project dir and pick the drift-adopt target — the entry point the cron
+// freshly-spawned path uses. (The chat reattach path already holds a listTranscripts()
+// result — it reuses it for the recorded-uuid lookup — so it calls pickLiveTranscript
+// directly to avoid re-reading the dir.)
+export function resolveLiveTranscript(
+  cwd: string,
+  opts: { exclude: Set<string>; minMtimeMs?: number; maxAgeMs?: number },
+): TranscriptInfo | null {
+  return pickLiveTranscript(listTranscripts(cwd), opts, Date.now());
 }
 
 // ── Transcript watcher ───────────────────────────────────────────────────────

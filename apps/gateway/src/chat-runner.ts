@@ -35,6 +35,7 @@ import {
   readComposer,
   waitForReplReady,
   listTranscripts,
+  pickLiveTranscript,
   tmuxPaneName,
 } from '@hermit-ui/tmux-driver';
 import { paneIsWorking, WORK_MARKER_RE, sessionTranscriptPath } from './pane';
@@ -824,8 +825,11 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     const transcripts = listTranscripts(cwd);
     const recorded = transcripts.find((t) => t.uuid === claudeUuid);
     if (!recorded || recorded.size === 0) {
-      const claimed = new Set<string>();
-      for (const [sid, st] of sessionStates) if (sid !== session.id) claimed.add(st.claudeUuid);
+      // Exclude the recorded uuid itself + uuids owned by OTHER live sessions (an agent's
+      // chat sessions all share one project dir) so we never cross-wire two chats onto the
+      // same transcript.
+      const exclude = new Set<string>([claudeUuid]);
+      for (const [sid, st] of sessionStates) if (sid !== session.id) exclude.add(st.claudeUuid);
       // Require a RECENTLY-written transcript — the live pane's claude is actively
       // writing, whereas a stale OLD session's transcript is not. This also stops us
       // adopting an old transcript if a just-spawned session is reattached before its
@@ -835,16 +839,18 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
       // just hasn't been written yet). When the recorded transcript is MISSING ENTIRELY —
       // pruned by Claude Code's retention, or the uuid stamp was lost so the DB points at a
       // uuid that never got a file — there is no size-0 ambiguity: the newest unclaimed
-      // transcript IS the live pane's, at ANY age. Applying the 5-min bound there stranded
-      // sessions on "starting" forever when the recorded uuid was pruned AND the live pane
-      // had gone idle >5 min before the reattach — the drift never healed, so replies never
-      // synced (observed 2026-07-13: zhinan-dingding pinned to a pruned uuid, its real
-      // transcript last written ~10 min earlier → excluded by FRESH_MS → permanently stuck).
+      // transcript IS the live pane's, at ANY age. So we pass NO upper age bound
+      // (maxAgeMs undefined) there instead of the 5-min FRESH_MS; applying the bound
+      // stranded sessions on "starting" forever when the recorded uuid was pruned AND the
+      // live pane had gone idle >5 min before the reattach — the drift never healed, so
+      // replies never synced (observed 2026-07-13: zhinan-dingding pinned to a pruned uuid,
+      // its real transcript last written ~10 min earlier → excluded by FRESH_MS → stuck).
       const FRESH_MS = 5 * 60_000;
-      const maxAgeMs = recorded ? FRESH_MS : Infinity;
-      const live = transcripts
-        .filter((t) => t.size > 0 && t.uuid !== claudeUuid && !claimed.has(t.uuid) && Date.now() - t.mtimeMs < maxAgeMs)
-        .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+      const live = pickLiveTranscript(
+        transcripts,
+        { exclude, maxAgeMs: recorded ? FRESH_MS : undefined },
+        Date.now(),
+      );
       if (live) {
         console.warn(
           `[chat] ${session.id.slice(0, 8)}: claude-session uuid drift — recorded ${claudeUuid.slice(0, 8)} ` +
