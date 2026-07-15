@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tmuxPaneName, encodedProjectDir } from '@hermit-ui/tmux-driver';
+import { isNonTurnEvent } from './claude-code';
 
 // Claude Code's in-flight turn renders a spinner status line like
 //   "✶ Considering… (6m 44s · thinking)"  /  "✽ Warping… (10m 46s · ↓ 43.1k tokens)"
@@ -73,7 +74,7 @@ export function sessionTranscriptPath(
 // delivery (a send in that window queues instead of landing). So the freshness
 // signal only counts when the NEWEST line is a real turn (assistant / user
 // content); a metadata write falls through to the authoritative pane-marker read.
-const NON_TURN_EVENT_TYPES = new Set(['bridge-session', 'summary', 'file-history-snapshot']);
+// NON_TURN_EVENT_TYPES + isNonTurnEvent now live in ./claude-code (shared vocabulary).
 
 // Whether the newest complete JSONL line is a real turn event. bridge-session /
 // summary lines are tiny (fully captured in the tail); a huge last line is a real
@@ -94,7 +95,7 @@ export function newestLineIsTurn(transcriptPath: string): boolean {
       if (!last) return true;
       let ev: { type?: string };
       try { ev = JSON.parse(last); } catch { return true; } // partial huge line = real turn block
-      return !NON_TURN_EVENT_TYPES.has(ev?.type ?? '');
+      return !isNonTurnEvent(ev?.type);
     } finally {
       fs.closeSync(fd);
     }

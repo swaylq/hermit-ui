@@ -24,6 +24,7 @@ import {
 import { AGENTS_ROOT } from './config';
 import { api } from './api';
 import { paneIsWorking } from './pane';
+import { extractText, CcEvent, CcBlock } from './claude-code';
 import { buildMcpConfigArg } from './chat-runner';
 
 const RUN_TIMEOUT_MS = 120 * 60_000; // hard cap per run (2h)
@@ -53,15 +54,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function extractText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .map((b: any) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : ''))
-    .filter(Boolean)
-    .join('\n')
-    .trim();
-}
+// extractText now lives in ./claude-code (shared); cron trims at the call site.
 
 // paneIsWorking (the "esc to interrupt" pane work-marker) lives in ./pane and is
 // shared with the chat dispatch gate + session-snapshot collector. Here it keeps
@@ -196,14 +189,14 @@ async function fire(c: Cron): Promise<void> {
     let toolsBack = 0;
     stop = watchTranscript(jsonlPath, (ev) => {
       lastEventAt = Date.now();
-      if (ev.type === 'assistant' && ev.message?.content) {
-        const t = extractText(ev.message.content);
+      if (ev.type === CcEvent.assistant && ev.message?.content) {
+        const t = extractText(ev.message.content).trim();
         if (t) lastText = t; // keep the latest assistant text block as the result
         if (Array.isArray(ev.message.content)) {
-          for (const b of ev.message.content) if (b?.type === 'tool_use') toolsOut++;
+          for (const b of ev.message.content) if (b?.type === CcBlock.toolUse) toolsOut++;
         }
-      } else if (ev.type === 'user' && Array.isArray(ev.message?.content)) {
-        for (const b of ev.message.content) if (b?.type === 'tool_result') toolsBack++;
+      } else if (ev.type === CcEvent.user && Array.isArray(ev.message?.content)) {
+        for (const b of ev.message.content) if (b?.type === CcBlock.toolResult) toolsBack++;
       }
     });
 

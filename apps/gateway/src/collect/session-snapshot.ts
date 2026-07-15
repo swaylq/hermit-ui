@@ -26,6 +26,7 @@ import { tmuxPaneName } from '@hermit-ui/tmux-driver';
 import { AGENTS_ROOT } from '../config';
 import { api } from '../api';
 import { paneIsWorking, sessionTranscriptPath } from '../pane';
+import { extractText, hasToolResult, hasToolUse, CcEvent } from '../claude-code';
 
 const TAIL_LINES = 500;
 const TAIL_TIMEOUT_MS = 4000;
@@ -178,18 +179,7 @@ async function lastUsageTokens(jsonl: string): Promise<{ contextTokens: number; 
   return null;
 }
 
-function extractText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .map((b: any) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : ''))
-    .filter(Boolean)
-    .join('\n');
-}
-
-function hasToolResult(content: unknown): boolean {
-  return Array.isArray(content) && content.some((b: any) => b?.type === 'tool_result');
-}
+// extractText / hasToolResult / hasToolUse now live in ../claude-code (shared).
 
 // A single tool call writes an assistant `tool_use` event when the tool STARTS and a
 // user `tool_result` event when it returns. So a turn is mid-tool-call iff the newest
@@ -210,8 +200,8 @@ export function transcriptToolRunning(lines: string[]): boolean {
     const content = ev?.message?.content;
     if (!Array.isArray(content)) continue;
     const t = Date.parse(ev.timestamp || '') || 0;
-    if (!tuMax && ev.type === 'assistant' && content.some((b: any) => b?.type === 'tool_use')) tuMax = t;
-    if (!trMax && ev.type === 'user' && content.some((b: any) => b?.type === 'tool_result')) trMax = t;
+    if (!tuMax && ev.type === CcEvent.assistant && hasToolUse(content)) tuMax = t;
+    if (!trMax && ev.type === CcEvent.user && hasToolResult(content)) trMax = t;
   }
   return tuMax > 0 && tuMax > trMax && Date.now() - tuMax < TOOL_RUNNING_CAP_MS;
 }

@@ -38,6 +38,7 @@ import {
   tmuxPaneName,
 } from '@hermit-ui/tmux-driver';
 import { paneIsWorking, WORK_MARKER_RE, sessionTranscriptPath } from './pane';
+import { extractText, hasToolResult, CcEvent } from './claude-code';
 
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
@@ -1037,7 +1038,7 @@ function onTranscriptEvent(chatSessionId: string, ev: any, state: SessionState) 
 
   const stampUuid = !state.uuidStamped ? state.claudeUuid : null;
 
-  if (ev.type === 'assistant' && ev.message?.content) {
+  if (ev.type === CcEvent.assistant && ev.message?.content) {
     // Assistant turn — text, tool_use, thinking blocks.
     const content = normalizeContent(ev.message.content);
     if (content.length === 0) return;
@@ -1051,14 +1052,13 @@ function onTranscriptEvent(chatSessionId: string, ev: any, state: SessionState) 
     return;
   }
 
-  if (ev.type === 'user' && ev.message?.content && Array.isArray(ev.message.content)) {
+  if (ev.type === CcEvent.user && ev.message?.content && Array.isArray(ev.message.content)) {
     // Only forward user events with tool_result blocks (claude's reply to a
     // tool_use). Skip plain user prompts — the dashboard already wrote those
     // rows when it sent them, and re-syncing would create a duplicate-text
     // row with the wrong externalId.
     const blocks = ev.message.content;
-    const hasToolResult = blocks.some((b: any) => b?.type === 'tool_result');
-    if (!hasToolResult) return;
+    if (!hasToolResult(blocks)) return;
     queueSync(state, {
       sessionId: chatSessionId,
       role: 'user',
@@ -1133,14 +1133,7 @@ async function robustSubmit(session: PendingSession, state: SessionState, prompt
   return started();
 }
 
-function extractText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .map((block: any) => (block?.type === 'text' && typeof block.text === 'string' ? block.text : ''))
-    .filter(Boolean)
-    .join('\n');
-}
+// extractText now lives in ./claude-code (shared transcript vocabulary).
 
 /**
  * Coerce whatever shape the JSONL gave us into an array of content blocks the
