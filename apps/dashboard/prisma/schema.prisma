@@ -410,6 +410,16 @@ model ChatSession {
 
   @@index([machineId, agentName])
   @@index([machineId, closedAt])
+  // Resolve a session by its Claude uuid — the interaction-sync fallback lookup
+  // (app/api/sync/interaction/route.ts) findFirst WHERE claudeSessionId + machineId.
+  @@index([machineId, claudeSessionId])
+  // Four PARTIAL indexes for the sparse request-flag columns — cancelRequestedAt /
+  // restartRequestedAt / hibernateRequestedAt / (dispatchedBySessionId + closedAt) —
+  // back the gateway's per-~1.5s cancel/restart/hibernate/dispatch pollers. Prisma's
+  // @@index can't express a WHERE predicate, so they live as raw
+  // `CREATE INDEX ... WHERE <col> IS NOT NULL` in migration
+  // 20260715170000_chatsession_poller_indexes (this repo applies migrations via
+  // `migrate deploy`, never `migrate dev`).
 }
 
 model ChatMessage {
