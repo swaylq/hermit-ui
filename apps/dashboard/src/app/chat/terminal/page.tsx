@@ -13,6 +13,7 @@ import { Suspense, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { ArrowLeft } from 'lucide-react';
+import { tmuxPaneName } from '@/lib/pane-name';
 
 // xterm.js pulls in DOM-only modules + ~250KB JS; lazy-load so the rest of
 // the dashboard doesn't pay for it. Re-export as a single dynamic-imported
@@ -62,7 +63,7 @@ function TerminalPageInner() {
             <ArrowLeft className="h-4 w-4" />
           </button>
           <span className="font-mono text-[11px] text-zinc-400 truncate">
-            tmux <span className="text-zinc-200">hermit-{sessionId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-12)}</span>
+            tmux <span className="text-zinc-200">{tmuxPaneName(sessionId)}</span>
           </span>
         </div>
       </header>

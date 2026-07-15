@@ -35,6 +35,7 @@ import {
   readComposer,
   waitForReplReady,
   listTranscripts,
+  tmuxPaneName,
 } from '@hermit-ui/tmux-driver';
 import { paneIsWorking, WORK_MARKER_RE, sessionTranscriptPath } from './pane';
 
@@ -710,9 +711,7 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
       // upsert on the same externalId) so the user watches the output land live.
       sendKeys(session.id, promptText);
       const cmd = trimmed.split(/\s+/)[0];
-      // Pane name matches tmux-driver's `paneName()`: last-12 of the session
-      // id (cuids are 25 chars; the entropic suffix is what we keep).
-      const paneN = `hermit-${session.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-12)}`;
+      const paneN = tmuxPaneName(session.id);
       void streamSlashOutput({ sessionId: session.id, cmd, paneN });
     } else {
       // robustSubmit OWNS the keystrokes for normal messages: it waits for the `❯`

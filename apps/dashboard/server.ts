@@ -38,6 +38,7 @@ import { WebSocketServer, type WebSocket as WSWebSocket } from 'ws';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from './src/generated/prisma/client';
 import { setGatewaySocket, clearGatewaySocket, resolveFsResponse } from './src/server/gateway-bridge';
+import { tmuxPaneName } from './src/lib/pane-name';
 
 const port = parseInt(process.env.PORT || '4101', 10);
 const dev = process.env.NODE_ENV !== 'production';
@@ -328,10 +329,8 @@ app.prepare().then(() => {
           socket.destroy();
           return;
         }
-        // pane naming is canonical — mirrors @hermit-ui/tmux-driver paneName()
-        // and the chat page's `tmuxPane` string. Last 12 chars after sanitizing.
-        const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-12);
-        const paneName = `hermit-${safe}`;
+        // Canonical pane name via the shared helper (mirrors @hermit-ui/tmux-driver).
+        const paneName = tmuxPaneName(sessionId);
 
         // ws's WebSocketServer with handleProtocols echoes the first
         // hermit-key.* subprotocol back to the browser — required for the
