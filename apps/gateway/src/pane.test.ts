@@ -9,7 +9,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { WORK_MARKER_RE, newestLineIsTurn, transcriptFresh, sessionTranscriptPath } from './pane';
+import {
+  WORK_MARKER_RE, newestLineIsTurn, transcriptFresh, sessionTranscriptPath,
+  transcriptToolRunning, sessionActivity,
+} from './pane';
 
 let dir: string;
 before(() => {
@@ -103,5 +106,63 @@ describe('sessionTranscriptPath', () => {
       sessionTranscriptPath('abc-123', '/Users/mac/claudeclaw/asst'),
       path.join(os.homedir(), '.claude', 'projects', '-Users-mac-claudeclaw-asst', 'abc-123.jsonl'),
     );
+  });
+});
+
+// The retroactive "a tool call is in flight" signal (moved here from the snapshot
+// collector in P1-5). Pure over its `lines` input given the wall clock, so the caps +
+// newest-of-kind comparison are directly assertable.
+describe('transcriptToolRunning', () => {
+  const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+  const toolUse = (msAgo: number) =>
+    JSON.stringify({ type: 'assistant', timestamp: iso(msAgo), message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] } });
+  const toolResult = (msAgo: number) =>
+    JSON.stringify({ type: 'user', timestamp: iso(msAgo), message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } });
+  const assistantText = (msAgo: number) =>
+    JSON.stringify({ type: 'assistant', timestamp: iso(msAgo), message: { content: [{ type: 'text', text: 'hi' }] } });
+
+  it('is true when the newest tool_use is newer than the newest tool_result (in flight)', () => {
+    assert.equal(transcriptToolRunning([toolResult(10_000), toolUse(2_000)]), true);
+  });
+  it('is false when the tool_result is newer than the tool_use (tool returned)', () => {
+    assert.equal(transcriptToolRunning([toolUse(10_000), toolResult(2_000)]), false);
+  });
+  it('is true for a dangling tool_use with no tool_result at all', () => {
+    assert.equal(transcriptToolRunning([assistantText(20_000), toolUse(2_000)]), true);
+  });
+  it('is false when there is no tool_use', () => {
+    assert.equal(transcriptToolRunning([assistantText(5_000), toolResult(3_000)]), false);
+  });
+  it('self-heals: an abandoned tool_use older than the 20-min cap is not working', () => {
+    assert.equal(transcriptToolRunning([toolUse(21 * 60_000)]), false);
+  });
+  it('is false for empty / unparseable lines', () => {
+    assert.equal(transcriptToolRunning([]), false);
+    assert.equal(transcriptToolRunning(['not json', '{ partial']), false);
+  });
+});
+
+// The single working-detection verdict. Only the two transcript-driven short-circuits
+// are unit-testable without a live tmux pane — they return before capturePaneMarker
+// shells out, so they run deterministically here. The pane-marker / hook / idle paths
+// need a real pane and are covered by the runtime parity check.
+describe('sessionActivity', () => {
+  it('reports transcript-fresh (no shell-out) for a just-written turn transcript', async () => {
+    const p = writeTranscript('act-fresh.jsonl', [{ type: 'assistant' }]);
+    assert.deepEqual(await sessionActivity('sid', { transcriptPath: p }), {
+      working: true, reason: 'transcript-fresh',
+    });
+  });
+  it('reports tool-running from the supplied tail when the mtime is not fresh', async () => {
+    // No transcriptPath → freshness is false → falls through to the caller-supplied tail
+    // (this is the narrow-pane long-tool-call signal the snapshot folds in).
+    const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+    const lines = [
+      JSON.stringify({ type: 'user', timestamp: iso(30_000), message: { content: [{ type: 'tool_result', tool_use_id: 't', content: 'x' }] } }),
+      JSON.stringify({ type: 'assistant', timestamp: iso(2_000), message: { content: [{ type: 'tool_use', id: 't', name: 'Bash', input: {} }] } }),
+    ];
+    assert.deepEqual(await sessionActivity('sid', { transcriptLines: lines }), {
+      working: true, reason: 'tool-running',
+    });
   });
 });

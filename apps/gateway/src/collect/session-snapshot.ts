@@ -25,8 +25,8 @@ import { execFile } from 'node:child_process';
 import { tmuxPaneName } from '@hermit-ui/tmux-driver';
 import { AGENTS_ROOT } from '../config';
 import { api } from '../api';
-import { paneIsWorking, sessionTranscriptPath } from '../pane';
-import { extractText, hasToolResult, hasToolUse, CcEvent } from '../claude-code';
+import { sessionActivity, sessionTranscriptPath } from '../pane';
+import { extractText, hasToolResult, CcEvent } from '../claude-code';
 
 const TAIL_LINES = 500;
 const TAIL_TIMEOUT_MS = 4000;
@@ -129,8 +129,9 @@ async function tmuxPanePid(sessionId: string): Promise<number | null> {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-// paneIsWorking (working-vs-idle via the "esc to interrupt" pane marker) now
-// lives in ../pane — shared with the chat dispatch gate + cron-runner.
+// The working-vs-idle verdict (sessionActivity — freshness / tool-in-flight / pane
+// marker / hook, composed into one answer) lives in ../pane, shared with the chat
+// dispatch gate + cron-runner so every caller reaches the same verdict.
 
 // The transcript-path derivation is shared with pane.ts (sessionTranscriptPath) —
 // the single source of truth for the ~/.claude/projects layout. The snapshot adds
@@ -181,30 +182,8 @@ async function lastUsageTokens(jsonl: string): Promise<{ contextTokens: number; 
 
 // extractText / hasToolResult / hasToolUse now live in ../claude-code (shared).
 
-// A single tool call writes an assistant `tool_use` event when the tool STARTS and a
-// user `tool_result` event when it returns. So a turn is mid-tool-call iff the newest
-// tool_use is newer than the newest tool_result. This is a width-independent, hook-free,
-// RETROACTIVE working signal: it catches a long quiet tool call on a narrow pane (where
-// the "esc to interrupt" / spinner marker has truncated off AND the transcript mtime has
-// gone stale) even for a session whose turn-state hook isn't wired / hasn't reloaded —
-// no session restart required. Capped so an abandoned tool_use (claude killed mid-tool,
-// so tool_result never lands) self-heals instead of pinning "working" forever. The
-// paneAlive short-circuit already handles the common crash case (dead pane → not working).
-const TOOL_RUNNING_CAP_MS = 20 * 60_000;
-export function transcriptToolRunning(lines: string[]): boolean {
-  let tuMax = 0, trMax = 0;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (tuMax && trMax) break; // both newest-of-kind found (scanning newest-first)
-    let ev: any;
-    try { ev = JSON.parse(lines[i]); } catch { continue; }
-    const content = ev?.message?.content;
-    if (!Array.isArray(content)) continue;
-    const t = Date.parse(ev.timestamp || '') || 0;
-    if (!tuMax && ev.type === CcEvent.assistant && hasToolUse(content)) tuMax = t;
-    if (!trMax && ev.type === CcEvent.user && hasToolResult(content)) trMax = t;
-  }
-  return tuMax > 0 && tuMax > trMax && Date.now() - tuMax < TOOL_RUNNING_CAP_MS;
-}
+// transcriptToolRunning (the retroactive "tool in flight" signal) moved to ../pane in
+// P1-5 — it's now composed inside sessionActivity so every caller shares one verdict.
 
 // Read the per-agent loop / scheduled-task state file the cron skill maintains.
 // Absent / unparseable returns null (dashboard hides the chip). Lives at the
@@ -243,18 +222,19 @@ async function probe(
 
   const tp = claudeSessionId ? transcriptPath(claudeSessionId, agentDir) : null;
 
-  // Independent shell-outs run concurrently — none blocks the event loop.
-  // paneIsWorking gets `tp` so a mid-tool-call turn on a NARROW pane (where Claude
-  // Code truncates "esc to interrupt" off the mode line) still reads working off
-  // its live transcript, instead of falsely flipping the session to idle/ready.
-  const [pid, working, lines] = await Promise.all([
+  // Read the transcript tail (also used below for usage/last-text parsing), then hand
+  // it to the ONE working-detection verdict — sessionActivity folds the retroactive
+  // "tool in flight" signal (a long quiet tool call on a NARROW pane, where Claude Code
+  // truncates "esc to interrupt" off the mode line and the transcript mtime has gone
+  // stale) into the same verdict every gate uses, instead of it being bolted on here.
+  const [pid, lines] = await Promise.all([
     tmuxPanePid(sessionId),
-    paneIsWorking(sessionId, tp, agentDir, claudeSessionId),
     tp ? tailLines(tp) : Promise.resolve<string[]>([]),
   ]);
-  // OR in the transcript "tool in flight" signal: retroactively covers a long quiet
-  // tool call on a narrow, not-yet-hook-wired session that paneIsWorking would miss.
-  const state = (working || transcriptToolRunning(lines)) ? 'working' : 'idle';
+  const { working } = await sessionActivity(sessionId, {
+    transcriptPath: tp, agentDir, claudeSessionId, transcriptLines: lines,
+  });
+  const state = working ? 'working' : 'idle';
   const rssMb = pid != null ? subtreeRssMb(pid, psTree) : null;
 
   if (!tp) return { ...empty, alive, pid, state: 'starting', rssMb };

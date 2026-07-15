@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tmuxPaneName, encodedProjectDir } from '@hermit-ui/tmux-driver';
-import { isNonTurnEvent } from './claude-code';
+import { isNonTurnEvent, CcEvent, hasToolUse, hasToolResult } from './claude-code';
 
 // Claude Code's in-flight turn renders a spinner status line like
 //   "✶ Considering… (6m 44s · thinking)"  /  "✽ Warping… (10m 46s · ↓ 43.1k tokens)"
@@ -117,6 +117,34 @@ export function transcriptFresh(transcriptPath: string | null | undefined): bool
   return newestLineIsTurn(transcriptPath);
 }
 
+// ── Retroactive width-independent signal: an in-flight tool call ──────────────
+// A single tool call writes an assistant `tool_use` event when the tool STARTS and a
+// user `tool_result` event when it returns. So a turn is mid-tool-call iff the newest
+// tool_use is newer than the newest tool_result. This is a width-independent, hook-free,
+// RETROACTIVE working signal: it catches a long quiet tool call on a narrow pane (where
+// the "esc to interrupt" / spinner marker has truncated off AND the transcript mtime has
+// gone stale) even for a session whose turn-state hook isn't wired / hasn't reloaded —
+// no session restart required. Capped so an abandoned tool_use (claude killed mid-tool,
+// so tool_result never lands) self-heals instead of pinning "working" forever. The
+// pane-alive short-circuit in the snapshot collector already handles the common crash
+// case (dead pane → not working). Takes the caller's pre-read transcript tail (the
+// snapshot already reads it for usage/text) so it adds no file I/O of its own.
+const TOOL_RUNNING_CAP_MS = 20 * 60_000;
+export function transcriptToolRunning(lines: string[]): boolean {
+  let tuMax = 0, trMax = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (tuMax && trMax) break; // both newest-of-kind found (scanning newest-first)
+    let ev: any;
+    try { ev = JSON.parse(lines[i]); } catch { continue; }
+    const content = ev?.message?.content;
+    if (!Array.isArray(content)) continue;
+    const t = Date.parse(ev.timestamp || '') || 0;
+    if (!tuMax && ev.type === CcEvent.assistant && hasToolUse(content)) tuMax = t;
+    if (!trMax && ev.type === CcEvent.user && hasToolResult(content)) trMax = t;
+  }
+  return tuMax > 0 && tuMax > trMax && Date.now() - tuMax < TOOL_RUNNING_CAP_MS;
+}
+
 // ── Authoritative width-independent signal: the turn-state hook ──────────────
 // hook-session-state.sh (wired as UserPromptSubmit / PreToolUse / Stop hooks) keeps
 // <agentDir>/.claude/state/session-status.json: state "running" from prompt-submit
@@ -162,46 +190,94 @@ function hookTurnActive(
   }
 }
 
-// `transcriptPath` (optional) enables the freshness check; `agentDir` +
-// `claudeSessionId` (optional) enable the authoritative hook turn-state fallback,
-// used ONLY when the pane read is untrustworthy (a narrow pane). Callers with no
-// session context (reaper / cron / machine-requests) pass none → pure pane-marker
-// behaviour.
+// ── The single verdict: capture the pane once, then compose every signal ──────
+// Capture the pane ONE time and report both whether the work-marker is visible and
+// the pane width (widest rendered row ≈ pane cols — the composer's full-width rules
+// are always drawn). null when the capture can't run (no pane / spawn failure); the
+// caller treats that as "not working" (a missing pane is idle). Scan the last 12 rows
+// (not just the bottom mode line) — tool results, a periodic "How is Claude doing?"
+// feedback nag, and the composer can push the spinner status line up from the bottom.
+function capturePaneMarker(sessionId: string): Promise<{ marker: boolean; cols: number } | null> {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn('tmux', ['capture-pane', '-t', tmuxPaneName(sessionId), '-p'], { timeout: 2_000 });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let out = '';
+    child.stdout?.on('data', (d) => { out += d.toString(); });
+    child.on('error', () => resolve(null));
+    child.on('close', () => {
+      const lines = out.replace(/\x1b\[[0-9;]*m/g, '').split('\n').filter((l) => l.trim());
+      const marker = WORK_MARKER_RE.test(lines.slice(-12).join('\n'));
+      const cols = lines.reduce((m, l) => (l.length > m ? l.length : m), 0);
+      resolve({ marker, cols });
+    });
+  });
+}
+
+// Which signal decided the verdict — observability, so a caller can log WHY a session
+// read working/idle instead of re-deriving it. (Not persisted; the wire schema is
+// unchanged.) Ordered cheapest-first, matching sessionActivity's short-circuit order.
+export type ActivityReason =
+  | 'transcript-fresh' // newest turn line written within TRANSCRIPT_FRESH_MS
+  | 'tool-running'     // a tool_use with no matching tool_result yet (retroactive)
+  | 'pane-marker'      // "esc to interrupt" / spinner timer visible on the pane
+  | 'hook-active'      // turn-state hook says running (narrow pane, marker truncated off)
+  | 'idle';            // none of the above
+export interface SessionActivity {
+  working: boolean;
+  reason: ActivityReason;
+}
+
+// THE single "is this session's claude working?" verdict — every caller (snapshot
+// collector, send / delivery gates, cron settle-loop) routes through this so they can
+// never reach different answers about the same session. ORs the four signals in
+// cheapest-first order and names the winner:
+//   1. transcript freshness — width-independent, no shell-out (short-circuits active turns)
+//   2. in-flight tool call  — retroactive, only when the caller supplies the transcript
+//                             tail (`transcriptLines`): a long quiet tool call on a narrow,
+//                             not-yet-hook-wired pane that both the marker AND freshness miss
+//   3. pane work-marker     — the authoritative "esc to interrupt" / spinner read
+//   4. turn-state hook      — narrow-pane-only fallback (marker truncated off the mode line)
+// Callers with no session context (reaper / cron / machine-requests) pass only the
+// sessionId → pure pane-marker behaviour, exactly as before. Every ORed condition
+// biases toward "busy", the SAFE direction for every caller (never deliver into / reap
+// / flip a still-running turn to ready).
+export async function sessionActivity(
+  sessionId: string,
+  opts: {
+    transcriptPath?: string | null;
+    agentDir?: string | null;
+    claudeSessionId?: string | null;
+    transcriptLines?: string[];
+  } = {},
+): Promise<SessionActivity> {
+  const { transcriptPath, agentDir, claudeSessionId, transcriptLines } = opts;
+  if (transcriptFresh(transcriptPath)) return { working: true, reason: 'transcript-fresh' };
+  if (transcriptLines?.length && transcriptToolRunning(transcriptLines)) {
+    return { working: true, reason: 'tool-running' };
+  }
+  const pane = await capturePaneMarker(sessionId);
+  if (pane?.marker) return { working: true, reason: 'pane-marker' };
+  if (pane && pane.cols < WIDE_PANE_COLS && hookTurnActive(agentDir, claudeSessionId)) {
+    return { working: true, reason: 'hook-active' };
+  }
+  return { working: false, reason: 'idle' };
+}
+
+// Backward-compatible boolean alias — the send / queue-drain / cron gates only need
+// the yes/no. ZERO independent logic: one verdict (sessionActivity), one source of
+// truth. `transcriptPath` enables the freshness check; `agentDir` + `claudeSessionId`
+// enable the narrow-pane hook fallback. No `transcriptLines`, so the tool-running
+// signal is inert here — identical behaviour to before the unification.
 export function paneIsWorking(
   sessionId: string,
   transcriptPath?: string | null,
   agentDir?: string | null,
   claudeSessionId?: string | null,
 ): Promise<boolean> {
-  // Cheap, width-independent check first: an actively-writing transcript means a
-  // turn is in flight — and short-circuits the tmux shell-out during active turns.
-  // Falls through to the pane marker for the quiet phases (a long silent think
-  // writes nothing but shows the spinner-timer, which survives narrow truncation).
-  if (transcriptFresh(transcriptPath)) return Promise.resolve(true);
-  return new Promise((resolve) => {
-    let child;
-    try {
-      child = spawn('tmux', ['capture-pane', '-t', tmuxPaneName(sessionId), '-p'], { timeout: 2_000 });
-    } catch {
-      resolve(false);
-      return;
-    }
-    let out = '';
-    child.stdout?.on('data', (d) => { out += d.toString(); });
-    child.on('error', () => resolve(false));
-    child.on('close', () => {
-      const lines = out.replace(/\x1b\[[0-9;]*m/g, '').split('\n').filter((l) => l.trim());
-      // Scan more rows than the bottom mode line alone — tool results, a periodic
-      // "How is Claude doing?" feedback nag, and the composer can push the spinner
-      // status line several rows up from the very bottom.
-      if (WORK_MARKER_RE.test(lines.slice(-12).join('\n'))) { resolve(true); return; }
-      // No marker. On a NARROW pane it may simply have truncated off — a long quiet
-      // tool call is invisible here — so defer to the authoritative hook state. On a
-      // WIDE pane the idle read is trustworthy and we DON'T override it. Widest
-      // rendered row ≈ pane width (the composer's full-width rules are always drawn).
-      const paneCols = lines.reduce((m, l) => (l.length > m ? l.length : m), 0);
-      if (paneCols < WIDE_PANE_COLS && hookTurnActive(agentDir, claudeSessionId)) { resolve(true); return; }
-      resolve(false);
-    });
-  });
+  return sessionActivity(sessionId, { transcriptPath, agentDir, claudeSessionId }).then((v) => v.working);
 }
