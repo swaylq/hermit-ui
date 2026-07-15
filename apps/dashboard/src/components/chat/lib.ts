@@ -21,3 +21,37 @@ export function isSameDay(a: Date | string, b: Date | string): boolean {
   const y = typeof b === 'string' ? new Date(b) : b;
   return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
 }
+
+// A single content block in an assistant/user message (text / tool_use /
+// tool_result / image / thinking). Shared by page.tsx and the message-render
+// components split out of it.
+export type Block = { type: string; text?: string; name?: string; input?: any; tool_use_id?: string; content?: any; source?: any; width?: number; height?: number };
+
+// Claude Code's harness writes "No response requested." as the visible-text
+// portion of an assistant turn whenever the model exited without producing
+// substantive output — typically post-restart `--resume` picking up a half-
+// finished tool task, a prompt the model read as pure instruction, or a turn
+// killed mid-tool-call. It's a JSONL terminator marker, not the model's
+// real reply. We keep the row visible (so the timeline doesn't lose a turn
+// boundary), but swap the misleading text for an honest one-liner explaining
+// what actually happened. Accepts accompanying thinking/empty blocks; bails
+// on anything else (tool_use / tool_result / image / real text).
+export function isHarnessTerminator(content: unknown): boolean {
+  if (!Array.isArray(content) || content.length === 0) return false;
+  let sawTerminator = false;
+  for (const b of content) {
+    if (!b || typeof b !== 'object') return false;
+    if (b.type === 'thinking') continue;
+    if (b.type === 'text') {
+      const text = String(b.text ?? '').trim();
+      if (!text) continue;
+      if (/^no response requested\.?$/i.test(text)) {
+        sawTerminator = true;
+        continue;
+      }
+      return false;
+    }
+    return false;
+  }
+  return sawTerminator;
+}

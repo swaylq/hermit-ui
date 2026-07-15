@@ -26,15 +26,13 @@ import { ToolChip, ToolBatchChip, InlineToolResult, InlineToolResultBatch } from
 import { InteractionCard } from '@/components/chat/interaction-card';
 import { ChatImage, ChatFile } from '@/components/chat/file-preview';
 import { LoopBar } from '@/components/chat/loop-bar';
-import { msgText, isSameDay } from '@/components/chat/lib';
+import { msgText, isSameDay, isHarnessTerminator, type Block } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
 import { NewChatPane } from '@/components/chat/new-chat-pane';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 import { EmptyChat } from '@/components/chat/empty-chat';
 import { StreamingDots, TypingIndicator, TypedText, DateDivider } from '@/components/chat/message-bits';
 import { RestartBar } from '@/components/chat/restart-bar';
-
-type Block = { type: string; text?: string; name?: string; input?: any; tool_use_id?: string; content?: any; source?: any; width?: number; height?: number };
 
 // In-flight or finished upload attached to the composer (image or generic file).
 // `previewUrl` is an object-URL thumbnail for images, null for non-image files.
@@ -1197,35 +1195,6 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
       )}
     </>
   );
-}
-
-// Claude Code's harness writes "No response requested." as the visible-text
-// portion of an assistant turn whenever the model exited without producing
-// substantive output — typically post-restart `--resume` picking up a half-
-// finished tool task, a prompt the model read as pure instruction, or a turn
-// killed mid-tool-call. It's a JSONL terminator marker, not the model's
-// real reply. We keep the row visible (so the timeline doesn't lose a turn
-// boundary), but swap the misleading text for an honest one-liner explaining
-// what actually happened. Accepts accompanying thinking/empty blocks; bails
-// on anything else (tool_use / tool_result / image / real text).
-function isHarnessTerminator(content: unknown): boolean {
-  if (!Array.isArray(content) || content.length === 0) return false;
-  let sawTerminator = false;
-  for (const b of content) {
-    if (!b || typeof b !== 'object') return false;
-    if (b.type === 'thinking') continue;
-    if (b.type === 'text') {
-      const text = String(b.text ?? '').trim();
-      if (!text) continue;
-      if (/^no response requested\.?$/i.test(text)) {
-        sawTerminator = true;
-        continue;
-      }
-      return false;
-    }
-    return false;
-  }
-  return sawTerminator;
 }
 
 function HarnessTerminatorRow({ ts }: { ts: Date | string }) {
