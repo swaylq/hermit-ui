@@ -64,13 +64,56 @@ export function sessionTranscriptPath(
   return path.join(encodedProjectDir(agentDir), `${claudeSessionId}.jsonl`);
 }
 
+// Claude Code appends non-turn METADATA to an otherwise-idle transcript — most
+// notably a `bridge-session` event each time a new bridge connects to a
+// --resume'd session (a dashboard SSE / browser-terminal (re)connect). Those bump
+// the file mtime with NO turn in flight, so a pure mtime<window freshness check
+// flips a long-finished session to "working" for ~10s every time one lands — the
+// "occasionally shows working then settles" flap — and, worse, briefly gates
+// delivery (a send in that window queues instead of landing). So the freshness
+// signal only counts when the NEWEST line is a real turn (assistant / user
+// content); a metadata write falls through to the authoritative pane-marker read.
+const NON_TURN_EVENT_TYPES = new Set(['bridge-session', 'summary', 'file-history-snapshot']);
+
+// Whether the newest complete JSONL line is a real turn event. bridge-session /
+// summary lines are tiny (fully captured in the tail); a huge last line is a real
+// assistant/tool block mid-write, so an unparseable partial — or ANY read failure —
+// conservatively counts AS a turn: we only ever suppress the KNOWN metadata types,
+// never real work.
+function newestLineIsTurn(transcriptPath: string): boolean {
+  try {
+    const fd = fs.openSync(transcriptPath, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      const readLen = Math.min(size, 8192);
+      if (readLen === 0) return true;
+      const buf = Buffer.alloc(readLen);
+      fs.readSync(fd, buf, 0, readLen, size - readLen);
+      const lines = buf.toString('utf8').split('\n').filter((l) => l.trim());
+      const last = lines[lines.length - 1];
+      if (!last) return true;
+      let ev: { type?: string };
+      try { ev = JSON.parse(last); } catch { return true; } // partial huge line = real turn block
+      return !NON_TURN_EVENT_TYPES.has(ev?.type ?? '');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return true; // read failed → don't suppress the freshness signal
+  }
+}
+
 function transcriptFresh(transcriptPath: string | null | undefined): boolean {
   if (!transcriptPath) return false;
   try {
-    return Date.now() - fs.statSync(transcriptPath).mtimeMs < TRANSCRIPT_FRESH_MS;
+    if (Date.now() - fs.statSync(transcriptPath).mtimeMs >= TRANSCRIPT_FRESH_MS) return false;
   } catch {
     return false; // missing / unreadable → no signal, fall through to the pane
   }
+  // mtime is fresh — but a bridge-session / metadata write bumps mtime without a
+  // turn in flight, so confirm the newest line is an actual turn before calling it
+  // working. If it isn't, we fall through to the pane marker (the real idle/busy read).
+  return newestLineIsTurn(transcriptPath);
 }
 
 // ── Authoritative width-independent signal: the turn-state hook ──────────────
