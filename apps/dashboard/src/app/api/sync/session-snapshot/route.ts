@@ -15,16 +15,21 @@ const Item = z.object({
   sessionId: z.string().min(1),
   pid: z.number().int().nullable().optional(),
   alive: z.boolean().optional(),
-  state: z.string().nullable().optional(),
+  // The collector emits exactly these (session-snapshot.ts): 'starting' (no
+  // transcript yet), 'working', 'idle', or null (pane dead). MUST stay in sync with
+  // the collector — an unlisted value would 400 the whole batch.
+  state: z.enum(['starting', 'working', 'idle']).nullable().optional(),
   contextTokens: z.number().int().nullable().optional(),
   outputTokens: z.number().int().nullable().optional(),
   lastActivity: z.string().datetime().nullable().optional(),
   transcriptPath: z.string().nullable().optional(),
   lastUserPrompt: z.string().nullable().optional(),
   lastAssistantText: z.string().nullable().optional(),
-  // Opaque JSON written by the agent's cron skill — dashboard treats it as
-  // a black box (renders a count chip + an expandable detail dropdown).
-  loopState: z.any().nullable().optional(),
+  // Opaque JSON written by the agent's cron / loop skill (readLoopState just
+  // JSON.parses the file → any JSON value, or null when absent/corrupt). Kept
+  // unvalidated on purpose (z.unknown(), not z.any()): the dashboard treats it as a
+  // black box (count chip + expandable detail).
+  loopState: z.unknown(),
   // Process-tree RSS of the session's pane, MB (resource governance).
   rssMb: z.number().int().nullable().optional(),
 });

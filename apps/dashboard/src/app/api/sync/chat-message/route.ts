@@ -12,7 +12,13 @@ import { stripNulDeep } from '@/server/sanitize';
 const Item = z.object({
   sessionId: z.string(),
   role: z.string(),
-  content: z.any(),
+  // Gateway-pushed content: always an array of Anthropic content blocks
+  // (text / tool_use / tool_result / image / thinking) — see chat-runner's
+  // normalizeContent — or a plain string. Not a strict per-block schema (block
+  // shapes are the SDK's and evolve), but no longer z.any(): a null / number /
+  // bare object is now rejected. Deliberately permissive — one bad item 400s the
+  // whole batch, so over-tightening here would drop good messages with it.
+  content: z.union([z.string(), z.array(z.unknown())]),
   externalId: z.string().nullable().optional(),
   claudeSessionId: z.string().nullable().optional(), // first message can stamp this on the session
 });
@@ -67,7 +73,12 @@ export async function POST(req: NextRequest) {
 
     // Strip NUL bytes (U+0000): Postgres jsonb/text reject them, which aborts
     // the insert and silently drops the message. No-op (same ref) otherwise.
-    const content = stripNulDeep(m.content);
+    // The union schema narrows content to string|unknown[]; the column is opaque
+    // JSON, so cast to its accepted type at the write boundary (same idiom as the
+    // chat.send path in routers/chat.ts). Runtime validation already happened above.
+    const content = stripNulDeep(m.content) as unknown as Parameters<
+      typeof prisma.chatMessage.create
+    >[0]['data']['content'];
 
     // Stamp claudeSessionId whenever the gateway reports one that DIFFERS from what
     // we hold — this both fills a null on the first sync AND corrects a stale pointer
