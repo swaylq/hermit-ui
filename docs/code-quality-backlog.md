@@ -19,11 +19,11 @@ Each iteration:
 
 **Stop condition:** every item in the Prioritized Backlog is `[x]`.
 
-### Verification recipe (no unit-test harness existed at review time — item P0-1 builds one)
-- **Dashboard** (`apps/dashboard`): `npx tsc --noEmit` + `npm run build` (Next build). Runtime: VPS deploy → curl / Playwright probe.
-- **Gateway** (`apps/gateway`): `npx tsc --noEmit` (runs via tsx, so typecheck is the compile gate) → `pm2 restart hermit-ui-gateway --update-env` on Mac (confirm pid changed) → observe live snapshot/chat.
+### Verification recipe (pnpm monorepo — `packageManager: pnpm@9`)
+- **Dashboard** (`apps/dashboard`): `pnpm --filter @hermit-ui/dashboard typecheck` + `pnpm --filter @hermit-ui/dashboard build` (Next build). Runtime: VPS deploy → curl / Playwright probe.
+- **Gateway** (`apps/gateway`): `pnpm --filter @hermit-ui/gateway typecheck` (runs via tsx, so typecheck is the compile gate) → `pm2 restart hermit-ui-gateway --update-env` on Mac (confirm pid changed) → observe live snapshot/chat.
 - **Prisma**: hand-written **additive** migration only → `prisma migrate deploy` runs on VPS deploy. Never edit an applied migration.
-- **Pure functions** (after P0-1): `node --import tsx --test <glob>`.
+- **Unit tests** (harness landed in P0-1): `pnpm test` (root → `pnpm -r test`) or `pnpm --filter @hermit-ui/gateway test`. Tests live in `apps/gateway/src/*.test.ts`, run via `tsx --test`.
 
 ### Deploy per change type
 - Docs / tests only → `git push origin main` (no deploy).
@@ -88,7 +88,7 @@ Ordered **most-important-first, risk-ascending**: build the safety net and kill 
 
 ### P0 — foundation & safe high-ROI
 
-- [ ] **P0-1 · Minimal test harness + pure-function tests.** Add a lightweight `node --import tsx --test` setup (no heavy dep; gateway already uses tsx) + an `npm test` script. Cover the already-pure functions: `newestLineIsTurn` / `transcriptFresh` logic & `WORK_MARKER_RE` (`pane.ts`), `tmuxPaneName` + `encodedProjectDir` / `sessionTranscriptPath` path-encoding (`tmux-driver`, `pane.ts`). *Why first:* it's the safety net every later refactor leans on, and it touches **no** runtime path (pure addition, no deploy). *Test:* the new tests run green; `tsc --noEmit` clean.
+- [x] **P0-1 · Minimal test harness + pure-function tests.** Add a lightweight `node --import tsx --test` setup (no heavy dep; gateway already uses tsx) + an `npm test` script. Cover the already-pure functions: `newestLineIsTurn` / `transcriptFresh` logic & `WORK_MARKER_RE` (`pane.ts`), `tmuxPaneName` + `encodedProjectDir` / `sessionTranscriptPath` path-encoding (`tmux-driver`, `pane.ts`). *Why first:* it's the safety net every later refactor leans on, and it touches **no** runtime path (pure addition, no deploy). *Test:* the new tests run green; `tsc --noEmit` clean.
 - [ ] **P0-2 · Partial indexes on sparse-flag `ChatSession` columns.** Hand-written additive migration: partial indexes `WHERE <col> IS NOT NULL` for `cancelRequestedAt`, `restartRequestedAt`, `hibernateRequestedAt`, `dispatchedBySessionId`; plain composite `@@index([machineId, claudeSessionId])`. *Why:* 4 gateway pollers scan these every tick (`chat.ts:625-631,662-668,697-702,759-768`) on a table with only `[machineId, agentName]` + `[machineId, closedAt]` indexes. *Test:* `prisma migrate diff` clean; `EXPLAIN` shows index use on the poller queries; deploy + confirm pollers still return correct rows.
 
 ### P1 — shared contract & drift removal
@@ -121,4 +121,4 @@ Ordered **most-important-first, risk-ascending**: build the safety net and kill 
 
 _(the loop appends one entry per completed item)_
 
-- _pending — loop `codequal` armed 2026-07-15._
+- **run 1 · P0-1** — test harness (`tsx --test`, wired at gateway + root `pnpm test`) + 19 pure-function tests (WORK_MARKER_RE / newestLineIsTurn / transcriptFresh / sessionTranscriptPath / tmuxPaneName / encodedProjectDir), all green; gateway typecheck clean. Behaviour-neutral (`export` only) — no deploy. commit `af5e182`.
