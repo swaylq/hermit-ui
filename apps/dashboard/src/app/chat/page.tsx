@@ -32,6 +32,7 @@ import { ChatFind } from '@/components/chat/chat-find';
 import { NewChatPane } from '@/components/chat/new-chat-pane';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 import { EmptyChat } from '@/components/chat/empty-chat';
+import { StreamingDots, TypingIndicator } from '@/components/chat/message-bits';
 
 type Block = { type: string; text?: string; name?: string; input?: any; tool_use_id?: string; content?: any; source?: any; width?: number; height?: number };
 
@@ -1374,14 +1375,6 @@ function DateDivider({ day }: { day: Date | string }) {
   );
 }
 
-function TypingIndicator({ dot }: { dot: string }) {
-  return (
-    <div className="flex justify-start mt-2">
-      <StreamingDots variant="bubble" dot={dot} />
-    </div>
-  );
-}
-
 // Claude Code built-in slash commands the composer suggests when the user
 // types "/". Picking one fills the draft; sending sends it as a normal user
 // message — it lands in the agent's REPL via tmux send-keys and claude runs
@@ -2233,22 +2226,6 @@ function MessageActions({ text, tone }: { text: string; tone: 'on-light' | 'on-d
     >
       {copied ? '✓ copied' : 'copy'}
     </button>
-  );
-}
-
-// "Thinking" indicator — a single solid dot that gently breathes (scale +
-// opacity), ChatGPT style. `variant` only nudges the size: a touch smaller
-// when it sits inline at the tail of a tool-chip cluster.
-function StreamingDots({ variant, dot = 'bg-foreground' }: { variant: 'bubble' | 'chip'; dot?: string }) {
-  return (
-    <span
-      aria-label="assistant is thinking"
-      className={cn(
-        'inline-block shrink-0 rounded-full align-middle motion-safe:animate-[breathe_1.4s_ease-in-out_infinite]',
-        dot,
-        variant === 'chip' ? 'h-2.5 w-2.5' : 'h-3 w-3',
-      )}
-    />
   );
 }
 
