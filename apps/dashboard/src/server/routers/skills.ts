@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { router, machineProcedure } from '../trpc';
+import { router, gatewayProcedure, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 
 // Machine-global skills under ~/.claude/skills/ on the gateway host — shared by
@@ -120,14 +120,14 @@ export const skillsRouter = router({
 
   // ── Gateway endpoints ──────────────────────────────────────────────────────
   // Gateway polls ~every 3s, writes/removes ~/.claude/skills/<name>/, then acks.
-  pollRequests: machineProcedure.query(async ({ ctx }) => {
+  pollRequests: gatewayProcedure.query(async ({ ctx }) => {
     return prisma.globalSkillRequest.findMany({
       where: { machineId: ctx.machine.id, status: 'pending' },
       orderBy: { requestedAt: 'asc' },
     });
   }),
 
-  ackRequest: machineProcedure
+  ackRequest: gatewayProcedure
     .input(z.object({ id: z.string(), status: z.enum(['done', 'error']), error: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const r = await prisma.globalSkillRequest.findUnique({ where: { id: input.id } });

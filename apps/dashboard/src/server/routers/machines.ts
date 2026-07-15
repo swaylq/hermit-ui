@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { router, machineProcedure } from '../trpc';
+import { router, gatewayProcedure, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { invalidateMachineCache } from '../auth';
 
@@ -99,7 +99,7 @@ export const machinesRouter = router({
   }),
 
   // ── Gateway endpoints ───────────────────────────────────────────────────────
-  pollRequests: machineProcedure.query(async ({ ctx }) => {
+  pollRequests: gatewayProcedure.query(async ({ ctx }) => {
     return prisma.machineRequest.findMany({
       where: { machineId: ctx.machine.id, status: 'pending' },
       orderBy: { requestedAt: 'asc' },
@@ -107,7 +107,7 @@ export const machinesRouter = router({
     });
   }),
 
-  ackRequest: machineProcedure
+  ackRequest: gatewayProcedure
     .input(
       z.object({
         id: z.string(),

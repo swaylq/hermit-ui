@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { router, machineProcedure, agentProcedure } from '../trpc';
+import { router, gatewayProcedure, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 import {
   BRAIN_PERSONA, BRAIN_DREAM_PROMPT,
@@ -616,7 +616,7 @@ export const agentsRouter = router({
 
   // ── Gateway endpoints ──────────────────────────────────────────────────────
   // Gateway polls ~every 3s, scaffolds/deletes on disk, then acks.
-  pollRequests: machineProcedure.query(async ({ ctx }) => {
+  pollRequests: gatewayProcedure.query(async ({ ctx }) => {
     const reqs = await prisma.agentRequest.findMany({
       where: { machineId: ctx.machine.id, status: 'pending' },
       orderBy: { requestedAt: 'asc' },
@@ -640,7 +640,7 @@ export const agentsRouter = router({
   // pushes content back via /api/sync/agents. Rows with null directory are
   // freshly-created agents the gateway hasn't scaffolded yet — gateway skips
   // those until the matching AgentRequest(create) is processed.
-  listForGateway: machineProcedure.query(async ({ ctx }) => {
+  listForGateway: gatewayProcedure.query(async ({ ctx }) => {
     return prisma.agent.findMany({
       // Trashed agents are skipped — their dirs are in .hermit-trash, so there's
       // nothing for the gateway to read; their content stays frozen until restore.
@@ -650,7 +650,7 @@ export const agentsRouter = router({
     });
   }),
 
-  ackRequest: machineProcedure
+  ackRequest: gatewayProcedure
     .input(z.object({ id: z.string(), status: z.enum(['done', 'error']), error: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const r = await prisma.agentRequest.findUnique({ where: { id: input.id } });

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { platform } from 'node:os';
-import { router, machineProcedure } from '../trpc';
+import { router, gatewayProcedure, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 
 // Where the dashboard stashes uploaded files (mirrors the upload/download routes).
@@ -41,7 +41,7 @@ export const fileStationRouter = router({
   }),
 
   // ── Gateway endpoints ───────────────────────────────────────────────────────
-  pollPending: machineProcedure.query(async ({ ctx }) => {
+  pollPending: gatewayProcedure.query(async ({ ctx }) => {
     return prisma.fileTransfer.findMany({
       where: { machineId: ctx.machine.id, status: 'pending' },
       orderBy: { requestedAt: 'asc' },
@@ -49,7 +49,7 @@ export const fileStationRouter = router({
     });
   }),
 
-  ack: machineProcedure
+  ack: gatewayProcedure
     .input(z.object({ id: z.string(), status: z.enum(['running', 'done', 'error']), error: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const resolved = input.status === 'done' || input.status === 'error';

@@ -4,7 +4,7 @@
 // /api/sync/cron-run. Each fire is a fresh tmux + claude turn in the agent dir.
 
 import { z } from 'zod';
-import { router, machineProcedure, agentProcedure } from '../trpc';
+import { router, gatewayProcedure, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 
 // Unread finished runs per cron (status not 'running', readAt null) → the red
@@ -253,7 +253,7 @@ export const cronRouter = router({
   // Enabled crons joined with their agent's stored directory (DB-leader, mirrors
   // chat.pollPending). The cron-runner reads `nextFire`/`lastFire` to decide what
   // is due and fires it in `agentDirectory`.
-  listForGateway: machineProcedure.query(async ({ ctx }) => {
+  listForGateway: gatewayProcedure.query(async ({ ctx }) => {
     const crons = await prisma.cron.findMany({
       where: { machineId: ctx.machine.id, enabled: true },
     });

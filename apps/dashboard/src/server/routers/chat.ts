@@ -4,7 +4,7 @@
 // /api/sync/chat-message. Browser tails messages via tRPC refetch (1s).
 
 import { z } from 'zod';
-import { router, machineProcedure, agentProcedure } from '../trpc';
+import { router, gatewayProcedure, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 import { QUEUE_LIMIT } from '../../lib/chat-queue';
 import { stripNulDeep } from '../sanitize';
@@ -562,7 +562,7 @@ export const chatRouter = router({
 
   // ─── Gateway endpoints ────────────────────────────────────────────────────
   // Active sessions + their unread user messages. Gateway polls this every 2s.
-  pollPending: machineProcedure.query(async ({ ctx }) => {
+  pollPending: gatewayProcedure.query(async ({ ctx }) => {
     const sessions = await prisma.chatSession.findMany({
       where: { machineId: ctx.machine.id, closedAt: null },
       select: { id: true, agentName: true, claudeSessionId: true },
@@ -606,7 +606,7 @@ export const chatRouter = router({
     return { sessions: sessionsWithDir, messages };
   }),
 
-  ackDelivered: machineProcedure
+  ackDelivered: gatewayProcedure
     .input(z.object({ messageIds: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
       if (input.messageIds.length === 0) return { ok: true, updated: 0 };
@@ -622,7 +622,7 @@ export const chatRouter = router({
 
   // Gateway polls this every ~1.5s during turns. Returns sessions where the
   // user has clicked Stop. Gateway kills the matching child + acks.
-  pollCancellations: machineProcedure.query(async ({ ctx }) => {
+  pollCancellations: gatewayProcedure.query(async ({ ctx }) => {
     const rows = await prisma.chatSession.findMany({
       where: { machineId: ctx.machine.id, cancelRequestedAt: { not: null } },
       select: { id: true, cancelRequestedAt: true },
@@ -630,7 +630,7 @@ export const chatRouter = router({
     return rows;
   }),
 
-  ackCancel: machineProcedure
+  ackCancel: gatewayProcedure
     .input(z.object({ sessionIds: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
       if (input.sessionIds.length === 0) return { ok: true, updated: 0 };
@@ -659,7 +659,7 @@ export const chatRouter = router({
 
   // Gateway polls every ~2s. Each returned session id triggers a tmux
   // `kill(sessionId)` then `ackSessionRestart`.
-  pollSessionRestarts: machineProcedure.query(async ({ ctx }) => {
+  pollSessionRestarts: gatewayProcedure.query(async ({ ctx }) => {
     const rows = await prisma.chatSession.findMany({
       where: { machineId: ctx.machine.id, restartRequestedAt: { not: null } },
       select: { id: true, restartRequestedAt: true },
@@ -667,7 +667,7 @@ export const chatRouter = router({
     return rows;
   }),
 
-  ackSessionRestart: machineProcedure
+  ackSessionRestart: gatewayProcedure
     .input(z.object({ sessionIds: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
       if (input.sessionIds.length === 0) return { ok: true, updated: 0 };
@@ -694,7 +694,7 @@ export const chatRouter = router({
     }),
 
   // Gateway polls for manual hibernate requests (kill pane → ackHibernated).
-  pollHibernations: machineProcedure.query(async ({ ctx }) => {
+  pollHibernations: gatewayProcedure.query(async ({ ctx }) => {
     return prisma.chatSession.findMany({
       where: { machineId: ctx.machine.id, hibernateRequestedAt: { not: null } },
       select: { id: true },
@@ -707,7 +707,7 @@ export const chatRouter = router({
   // (a pane to free), not closed / already-hibernated, not 'working', no running
   // loop, no undelivered user message, and idle (no message OR pane activity)
   // past the TTL. The gateway re-checks 'working' on the live pane before killing.
-  pollReapCandidates: machineProcedure.query(async ({ ctx }) => {
+  pollReapCandidates: gatewayProcedure.query(async ({ ctx }) => {
     const reapHours = ctx.machine.idleReapHours;
     if (reapHours == null) return [];
     const ids = await reapCandidateIds(ctx.machine.id, reapHours);
@@ -734,7 +734,7 @@ export const chatRouter = router({
   // clear the manual request flag. claudeSessionId + transcript are kept, so the
   // next user message respawns with --resume (the snapshot route clears
   // hibernatedAt once the pane is back up).
-  ackHibernated: machineProcedure
+  ackHibernated: gatewayProcedure
     .input(z.object({ sessionIds: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
       if (input.sessionIds.length === 0) return { ok: true, updated: 0 };
@@ -756,7 +756,7 @@ export const chatRouter = router({
   // delivery pipeline types it into the Brain's pane). dispatchNotify dedups so
   // each transition pokes exactly once — never every tick. A narrow filtered query
   // + writes only on change → no full-table scan, no per-tick churn.
-  runDispatchWatch: machineProcedure.mutation(async ({ ctx }) => {
+  runDispatchWatch: gatewayProcedure.mutation(async ({ ctx }) => {
     const rows = await prisma.chatSession.findMany({
       where: {
         machineId: ctx.machine.id,

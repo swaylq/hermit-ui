@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { router, machineProcedure } from '../trpc';
+import { router, gatewayProcedure, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 
 // Per-machine knowledge bases: a library of markdown docs attached to agents like
@@ -373,7 +373,7 @@ export const knowledgeRouter = router({
 
   // Pending materialize/remove requests, joined with each agent's on-disk directory
   // (like chat.pollPending) so the gateway knows where to write. Gateway polls ~3s.
-  pollRequests: machineProcedure.query(async ({ ctx }) => {
+  pollRequests: gatewayProcedure.query(async ({ ctx }) => {
     const reqs = await prisma.knowledgeBaseRequest.findMany({
       where: { machineId: ctx.machine.id, status: 'pending' },
       orderBy: { createdAt: 'asc' },
@@ -395,7 +395,7 @@ export const knowledgeRouter = router({
     }));
   }),
 
-  ackRequest: machineProcedure
+  ackRequest: gatewayProcedure
     .input(z.object({ id: z.string(), status: z.enum(['done', 'error']), error: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const r = await prisma.knowledgeBaseRequest.findUnique({ where: { id: input.id } });

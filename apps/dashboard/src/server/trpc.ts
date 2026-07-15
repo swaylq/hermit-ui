@@ -46,12 +46,27 @@ export const machineProcedure = withScope.use(async ({ ctx, next }) => {
   return next({ ctx });
 });
 
+// Machine-wide GATEWAY plumbing: the poll* / ack* / *ForGateway endpoints a
+// machine's gateway calls (never the browser) to drain its request queues and push
+// runtime state. Enforcement is IDENTICAL to machineProcedure (rejects scoped share
+// keys, ctx.machine intact) — this is a NAMED alias so "gateway plumbing" reads
+// distinctly from a browser-facing full-access endpoint, and gives one seam to add
+// gateway-only policy later. NOT for browser-driven machine actions (e.g. the bulk-
+// reap panel's reapIdleNow, or hosts.ackAlert) — those stay machineProcedure.
+export const gatewayProcedure = machineProcedure;
+
 // Agent-scoped: accepts machine keys (full access) AND scoped share tokens, but a
-// scoped caller may only touch ITS agent. Resolvers call `ctx.assertAgent(name)`
-// once the target agent is known (a no-op for machine keys; FORBIDDEN for a
-// scoped key targeting a different agent), or constrain queries by
-// `ctx.scopedAgent`. Forgetting the check on an id/session-keyed endpoint would
-// let a scoped key reach sibling agents, so every converted resolver asserts.
+// scoped caller may only touch ITS agent. An id/session-keyed endpoint that forgets
+// to scope would let a scoped key reach SIBLING agents (it compiles + passes review),
+// so EVERY agentProcedure resolver MUST scope by exactly one of these patterns:
+//   1. a top-level `agentName`/`name` input field   → auto-asserted below (free);
+//   2. `ctx.assertAgent(loadedName)` after loading a row keyed by id/session/cron
+//      (a no-op for machine keys; FORBIDDEN for a scoped key targeting another agent);
+//   3. a `ctx.scopedAgent`-constrained WHERE (findFirst/updateMany then returns nothing
+//      cross-agent), or a helper that does the same (fileManager's fsTarget()).
+// This invariant is enforced by a static-scan regression test
+// (apps/gateway/src/tenancy.test.ts) so a future id-keyed endpoint can't silently ship
+// unscoped — the failure the audit found in fileManager.downloadStatus (now fixed).
 export const agentProcedure = withScope.use(async ({ ctx, getRawInput, next }) => {
   const assertAgent = (agentName: string | null | undefined) => {
     if (ctx.scopedAgent && agentName !== ctx.scopedAgent)
