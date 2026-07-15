@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, mem
 import { keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Plus, ArrowUp, FileText, RotateCw, Trash2, Check, X, Terminal, Pencil, ListCollapse, Search, FoldVertical, type LucideIcon } from 'lucide-react';
+import { Plus, ArrowUp, FileText, RotateCw, Trash2, X, Terminal, Pencil, ListCollapse, Search, FoldVertical } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -30,6 +30,7 @@ import { LoopBar } from '@/components/chat/loop-bar';
 import { msgText } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
 import { NewChatPane } from '@/components/chat/new-chat-pane';
+import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 
 type Block = { type: string; text?: string; name?: string; input?: any; tool_use_id?: string; content?: any; source?: any; width?: number; height?: number };
 
@@ -191,73 +192,6 @@ function ChatPageInner() {
         {sessions.isPending ? 'loading…' : 'No chats yet — start a New chat from the sidebar.'}
       </div>
     </div>
-  );
-}
-
-// Icon button with an inline two-step confirm (click → ✓ confirm / ✗ cancel),
-// auto-disarming after a few seconds. Used for destructive/disruptive session
-// actions (restart, delete) per "删除/restart 前都需要确认".
-function ConfirmIconButton({
-  icon: Icon,
-  title,
-  onConfirm,
-  disabled = false,
-  busy = false,
-  danger = false,
-}: {
-  icon: LucideIcon;
-  title: string;
-  onConfirm: () => void;
-  disabled?: boolean;
-  busy?: boolean;
-  danger?: boolean;
-}) {
-  const [armed, setArmed] = useState(false);
-  useEffect(() => {
-    if (!armed) return;
-    const t = setTimeout(() => setArmed(false), 3500);
-    return () => clearTimeout(t);
-  }, [armed]);
-
-  if (armed) {
-    return (
-      <span className="inline-flex items-center gap-0.5 rounded-md border border-border bg-background px-0.5">
-        <button
-          type="button"
-          onClick={() => { setArmed(false); onConfirm(); }}
-          className={cn(
-            'inline-flex items-center gap-1 h-7 px-1.5 rounded text-xs font-medium cursor-pointer transition-colors',
-            danger ? 'text-rose-600 hover:bg-rose-500/10' : 'text-foreground hover:bg-accent',
-          )}
-        >
-          <Check className="h-3.5 w-3.5" /> confirm
-        </button>
-        <button
-          type="button"
-          onClick={() => setArmed(false)}
-          title="cancel"
-          aria-label="cancel"
-          className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:bg-accent cursor-pointer"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </span>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={() => setArmed(true)}
-      disabled={disabled || busy}
-      title={title}
-      aria-label={title}
-      className={cn(
-        'inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed',
-        danger ? 'hover:bg-rose-500/10 hover:text-rose-600' : 'hover:bg-accent hover:text-foreground',
-      )}
-    >
-      {busy ? <span className="text-xs">…</span> : <Icon className="h-4 w-4" />}
-    </button>
   );
 }
 
