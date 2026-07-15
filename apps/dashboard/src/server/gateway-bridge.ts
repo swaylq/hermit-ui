@@ -16,6 +16,13 @@ export type FsResponse = { ok: true; data: unknown } | { ok: false; error: strin
 
 export interface DownloadEntry {
   machineId: string;
+  // The agent this download was prepared for (Agent.name), or null for a
+  // machine-scoped (global-memory) download. A scoped share key may only read
+  // downloads whose agentName matches its own scoped agent — see downloadStatus
+  // + the /api/file-manager/download/<id> route. (The id is already an
+  // unguessable UUID; this is the ownership check that matches the assertAgent
+  // pattern, defence-in-depth against a scoped key holding a sibling's id.)
+  agentName: string | null;
   status: 'preparing' | 'ready' | 'error';
   filename: string;
   size: number;
@@ -123,9 +130,9 @@ export function resolveFsResponse(msg: { reqId?: string; ok?: boolean; data?: un
 }
 
 // ── prepared-download bookkeeping ───────────────────────────────────────────
-export function createDownload(id: string, machineId: string): void {
+export function createDownload(id: string, machineId: string, agentName: string | null): void {
   const b = bridge();
-  b.downloads.set(id, { machineId, status: 'preparing', filename: '', size: 0, createdAt: Date.now() });
+  b.downloads.set(id, { machineId, agentName, status: 'preparing', filename: '', size: 0, createdAt: Date.now() });
   // GC entries older than 30 min so the map can't grow unbounded.
   const cutoff = Date.now() - 30 * 60_000;
   for (const [k, v] of [...b.downloads.entries()]) if (v.createdAt < cutoff) b.downloads.delete(k);

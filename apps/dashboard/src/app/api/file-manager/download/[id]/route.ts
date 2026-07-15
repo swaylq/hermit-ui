@@ -22,14 +22,19 @@ function fileManagerDir(): string {
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   // resolveKey accepts a machine key OR an agent share token (a scoped user
-  // downloading a file from their own agent's directory). The download id was
-  // created by their prepareDownload, so the machineId guard below suffices.
-  const machine = (await resolveKey(req.headers.get('x-asst-key') || ''))?.machine;
-  if (!machine) return new NextResponse('unauthorized', { status: 401 });
+  // downloading a file from their own agent's directory).
+  const resolved = await resolveKey(req.headers.get('x-asst-key') || '');
+  if (!resolved) return new NextResponse('unauthorized', { status: 401 });
 
   const { id } = await params;
   const entry = getDownload(id);
-  if (!entry || entry.machineId !== machine.id) return new NextResponse('not found', { status: 404 });
+  if (!entry || entry.machineId !== resolved.machine.id) return new NextResponse('not found', { status: 404 });
+  // Ownership: a scoped share key may only pull a download prepared for ITS agent. The
+  // id is already an unguessable UUID (a scoped caller only ever holds ids from its own
+  // fsTarget-gated prepareDownload), but assert the owner agent explicitly — defence in
+  // depth, and it matches downloadStatus + the assertAgent pattern across the surface.
+  if (resolved.scope === 'agent' && entry.agentName !== resolved.scopedAgent)
+    return new NextResponse('not found', { status: 404 });
   if (entry.status === 'error') return new NextResponse(entry.error || 'prepare failed', { status: 410 });
   if (entry.status !== 'ready') return new NextResponse('not ready', { status: 409 });
 

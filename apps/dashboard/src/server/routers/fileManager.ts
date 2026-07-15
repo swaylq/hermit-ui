@@ -124,7 +124,9 @@ export const fileManagerRouter = router({
     .mutation(async ({ ctx, input }) => {
       const target = await fsTarget(ctx, input);
       const id = `dl_${randomUUID()}`;
-      createDownload(id, ctx.machine.id);
+      // Stamp the owner agent (null for a machine-scoped global-memory download) so
+      // downloadStatus + the byte route can enforce it against a scoped share key.
+      createDownload(id, ctx.machine.id, input.globalMemory ? null : input.agentName ?? null);
       const res = await requestFs(ctx.machine.id, 'download', {
         ...target,
         relPath: input.path,
@@ -138,7 +140,11 @@ export const fileManagerRouter = router({
   // Poll until status === 'ready' (then GET /api/file-manager/download/<id>).
   downloadStatus: agentProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
     const d = getDownload(input.id);
-    if (!d || d.machineId !== ctx.machine.id)
+    // Ownership: same machine AND (for a scoped share key) the download must belong to
+    // the caller's own agent — a scoped key must never see a sibling agent's download,
+    // even its metadata. Matches the assertAgent pattern every other id-keyed endpoint
+    // in this router follows (was the one gap: id-keyed with only a machineId check).
+    if (!d || d.machineId !== ctx.machine.id || (ctx.scopedAgent && d.agentName !== ctx.scopedAgent))
       return { status: 'error' as const, error: '下载已过期或不存在', filename: '', size: 0 };
     return { status: d.status, error: d.error ?? null, filename: d.filename, size: d.size };
   }),
