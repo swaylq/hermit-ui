@@ -21,7 +21,7 @@ import { getActiveKey } from '@/app/providers';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { useScope } from '@/lib/use-scope';
 import { LoopBar } from '@/components/chat/loop-bar';
-import { msgText, isHarnessTerminator } from '@/components/chat/lib';
+import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
 import { NewChatPane } from '@/components/chat/new-chat-pane';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
@@ -29,13 +29,6 @@ import { EmptyChat } from '@/components/chat/empty-chat';
 import { TypingIndicator } from '@/components/chat/message-bits';
 import { RestartBar } from '@/components/chat/restart-bar';
 import { MessageTimeline } from '@/components/chat/message-timeline';
-
-// In-flight or finished upload attached to the composer (image or generic file).
-// `previewUrl` is an object-URL thumbnail for images, null for non-image files.
-type Attachment =
-  | { id: string; kind: 'uploading'; name: string; isImage: boolean; previewUrl: string | null }
-  | { id: string; kind: 'ready'; name: string; isImage: boolean; previewUrl: string | null; data: { url: string; mimeType: string; width: number | null; height: number | null } }
-  | { id: string; kind: 'error'; name: string; error: string };
 
 // isTouchPrimary (phone/tablet vs desktop) lives in @/lib/save-file — the
 // soft-keyboard return key inserts a newline there (a dedicated send button

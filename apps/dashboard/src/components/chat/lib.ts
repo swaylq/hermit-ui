@@ -55,3 +55,10 @@ export function isHarnessTerminator(content: unknown): boolean {
   }
   return sawTerminator;
 }
+
+// In-flight or finished upload attached to the composer (image or generic file).
+// `previewUrl` is an object-URL thumbnail for images, null for non-image files.
+export type Attachment =
+  | { id: string; kind: 'uploading'; name: string; isImage: boolean; previewUrl: string | null }
+  | { id: string; kind: 'ready'; name: string; isImage: boolean; previewUrl: string | null; data: { url: string; mimeType: string; width: number | null; height: number | null } }
+  | { id: string; kind: 'error'; name: string; error: string };
