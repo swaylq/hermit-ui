@@ -4,9 +4,10 @@
 // chat/page.tsx (P2-3); behaviour identical. StreamingDots is consumed by
 // MessageRow and by TypingIndicator (here); TypingIndicator by SessionPane.
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { Markdown } from '@/components/markdown';
+import { isSameDay, ymdLocal } from './lib';
 
 // "Thinking" indicator — a single solid dot that gently breathes (scale +
 // opacity), ChatGPT style. `variant` only nudges the size: a touch smaller
@@ -66,4 +67,24 @@ export function TypedText({ text, typing }: { text: string; typing: boolean }) {
   const shown = useTypewriter(text, typing);
   if (shown >= text.length) return <Markdown>{text}</Markdown>;
   return <span className="whitespace-pre-wrap break-words">{text.slice(0, shown)}</span>;
+}
+
+// A centered "Today / Yesterday / <date>" separator between message-timeline
+// day groups. Consumed by MessageTimeline (in page.tsx).
+export function DateDivider({ day }: { day: Date | string }) {
+  const label = useMemo(() => {
+    const x = typeof day === 'string' ? new Date(day) : day;
+    const now = new Date();
+    const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+    if (isSameDay(x, now)) return 'Today';
+    if (isSameDay(x, yesterday)) return 'Yesterday';
+    return ymdLocal(x);
+  }, [day]);
+  return (
+    <div className="flex justify-center my-5">
+      <span className="text-[10px] font-mono uppercase tracking-[0.12em] text-muted-foreground/60 px-2">
+        {label}
+      </span>
+    </div>
+  );
 }

@@ -9,3 +9,15 @@ export function msgText(content: unknown): string {
   if (!Array.isArray(content)) return '';
   return content.map((b: any) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('').trim();
 }
+
+// Local-timezone date helpers for the message-timeline day dividers. Shared by
+// MessageTimeline (day grouping, stays in page.tsx) and DateDivider (the label).
+export function ymdLocal(d: Date | string): string {
+  const x = typeof d === 'string' ? new Date(d) : d;
+  return x.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short' });
+}
+export function isSameDay(a: Date | string, b: Date | string): boolean {
+  const x = typeof a === 'string' ? new Date(a) : a;
+  const y = typeof b === 'string' ? new Date(b) : b;
+  return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+}
