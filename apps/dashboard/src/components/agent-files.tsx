@@ -8,20 +8,14 @@
 // the gateway. Performance: one query per expanded directory (lazy, never
 // recursive), the gateway caps + sorts each listing.
 
-import { useEffect, useRef, useState } from 'react';
-import {
-  Folder, File as FileIcon, Download, Upload, Trash2, Pencil,
-  FolderPlus, RotateCw, Loader2, X, Check, FileText,
-} from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import { Upload, FolderPlus, RotateCw, Loader2, X, Check } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { getActiveKey } from '@/lib/keyring';
 import { Button } from '@/components/ui/button';
-import { useConfirm } from '@/components/ui/confirm-dialog';
-import {
-  type Selected, fmtSize, joinPath, parentOf,
-  IMAGE_RE, PREVIEW_IMG_MAX, fetchPreparedBlob, pullDownload,
-} from '@/components/file-explorer/core';
+import { type Selected, fmtSize, joinPath, parentOf } from '@/components/file-explorer/core';
 import { FileTree } from '@/components/file-explorer/file-tree';
+import { FilePane } from '@/components/file-explorer/file-pane';
 
 const MAX_UPLOAD = 100 * 1024 * 1024; // 100 MB per the spec
 
@@ -53,6 +47,9 @@ export function AgentFiles({ agentName, directory }: { agentName: string; direct
   const [selected, setSelected] = useState<Selected>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  // Stable across renders so the shared FilePane's ImagePreview effect doesn't
+  // refetch every render (see file-pane.tsx).
+  const source = useMemo(() => ({ kind: 'agent' as const, agentName }), [agentName]);
 
   if (!directory) {
     return <p className="text-xs text-muted-foreground py-4">Agent directory unknown (not yet scanned by the gateway) — can&rsquo;t browse files yet.</p>;
@@ -92,14 +89,14 @@ export function AgentFiles({ agentName, directory }: { agentName: string; direct
         {/* Left: lazy file tree */}
         <div className="w-2/5 min-w-[150px] max-w-[320px] shrink-0 border-r border-border overflow-y-auto bg-muted/20">
           <FileTree
-            source={{ kind: 'agent', agentName }} path="" depth={0}
+            source={source} path="" depth={0}
             expanded={expanded} toggleExpand={toggleExpand}
             selectedPath={selected?.path ?? null} onSelect={setSelected} onError={setError}
           />
         </div>
         {/* Right: selected file/folder content + actions (inline, no modal) */}
         <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          <FilePane agentName={agentName} selected={selected} onSelect={setSelected} onError={setError} />
+          <FilePane source={source} selected={selected} onSelect={setSelected} onError={setError} />
         </div>
       </div>
     </div>
@@ -188,228 +185,6 @@ function Toolbar({
           <Button size="icon-sm" variant="ghost" onClick={() => { setMkdirOpen(false); setFolderName(''); }}><X className="h-3.5 w-3.5" /></Button>
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Right pane: selected file/folder — actions + inline content ──────────────
-function FilePane({
-  agentName, selected, onSelect, onError,
-}: {
-  agentName: string; selected: Selected; onSelect: (s: Selected) => void; onError: (e: string | null) => void;
-}) {
-  const utils = trpc.useUtils();
-  const confirm = useConfirm();
-  const [renaming, setRenaming] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [downloading, setDownloading] = useState(false);
-
-  const remove = trpc.fileManager.remove.useMutation({
-    onSuccess: () => { utils.fileManager.list.invalidate(); onSelect(null); },
-    onError: (e) => onError(e.message),
-  });
-  const rename = trpc.fileManager.rename.useMutation({
-    onSuccess: (_d, vars) => {
-      utils.fileManager.list.invalidate();
-      setRenaming(false);
-      if (selected) onSelect({ ...selected, path: vars.toPath, name: vars.toPath.split('/').pop() || selected.name });
-    },
-    onError: (e) => onError(e.message),
-  });
-  const prepare = trpc.fileManager.prepareDownload.useMutation();
-
-  if (!selected) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center text-center px-6 text-muted-foreground">
-        <FileText className="h-9 w-9 mb-2 opacity-25" />
-        <p className="text-xs">Select a file on the left to view it, or a folder to act on.</p>
-      </div>
-    );
-  }
-
-  const isDir = selected.type === 'dir';
-
-  async function doDownload() {
-    if (!selected) return;
-    onError(null);
-    setDownloading(true);
-    try {
-      await pullDownload({ kind: 'agent', agentName }, selected.path, isDir, selected.name, utils, prepare.mutateAsync);
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setDownloading(false);
-    }
-  }
-  async function doDelete() {
-    if (!selected) return;
-    if (!(await confirm({
-      title: `Delete ${isDir ? 'folder' : 'file'}`,
-      message: `Delete ${isDir ? 'folder' : 'file'} "${selected.name}"${isDir ? ' and all its contents' : ''}? This cannot be undone.`,
-      confirmLabel: 'Delete',
-      danger: true,
-    }))) return;
-    remove.mutate({ agentName, path: selected.path });
-  }
-  function commitRename() {
-    if (!selected) return;
-    const name = draft.trim();
-    if (!name || name === selected.name) { setRenaming(false); return; }
-    rename.mutate({ agentName, path: selected.path, toPath: joinPath(parentOf(selected.path), name) });
-  }
-
-  return (
-    <>
-      {/* Header: name + actions */}
-      <div className="flex items-center gap-2 px-3 h-11 border-b border-border shrink-0">
-        {isDir ? <Folder className="h-4 w-4 shrink-0 text-sky-500" /> : <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />}
-        {renaming ? (
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false); }}
-            autoFocus
-            className="h-7 flex-1 min-w-0 rounded border border-border bg-background px-2 text-sm font-mono outline-none focus:border-foreground/30"
-          />
-        ) : (
-          <span className="font-mono text-sm truncate flex-1" title={selected.path}>{selected.name}</span>
-        )}
-        {renaming ? (
-          <>
-            <button onClick={commitRename} className="p-1 text-muted-foreground hover:text-foreground" title="Save"><Check className="h-4 w-4" /></button>
-            <button onClick={() => setRenaming(false)} className="p-1 text-muted-foreground hover:text-foreground" title="Cancel"><X className="h-4 w-4" /></button>
-          </>
-        ) : (
-          <>
-            <button onClick={doDownload} disabled={downloading} className="p-1 text-muted-foreground hover:text-foreground" title={isDir ? 'Download as zip' : 'Download'}>
-              {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            </button>
-            <button onClick={() => { setDraft(selected.name); setRenaming(true); }} className="p-1 text-muted-foreground hover:text-foreground" title="Rename"><Pencil className="h-4 w-4" /></button>
-            <button onClick={doDelete} disabled={remove.isPending} className="p-1 text-muted-foreground hover:text-rose-500" title="Delete">
-              {remove.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-            </button>
-          </>
-        )}
-      </div>
-
-      {/* Body: file content (inline) or folder summary */}
-      <div className="flex-1 min-h-0 overflow-auto">
-        {isDir ? (
-          <div className="p-4 text-xs text-muted-foreground space-y-1">
-            <p className="font-mono text-foreground/70 break-all">{selected.path || '(root)'}</p>
-            <p>Folder — expand it on the left to browse, or use the buttons above to download as zip / rename / delete.</p>
-          </div>
-        ) : (
-          <FileContent agentName={agentName} path={selected.path} size={selected.size} onDownload={doDownload} downloading={downloading} />
-        )}
-      </div>
-    </>
-  );
-}
-
-function DownloadBtn({ onDownload, downloading }: { onDownload: () => void; downloading: boolean }) {
-  return (
-    <Button size="sm" variant="outline" onClick={onDownload} disabled={downloading}>
-      {downloading ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1" />} Download file
-    </Button>
-  );
-}
-
-// Inline preview (no modal): images render as <img>, everything else tries a
-// text preview; binary / oversized falls back to a download button.
-function FileContent({
-  agentName, path, size, onDownload, downloading,
-}: {
-  agentName: string; path: string; size: number; onDownload: () => void; downloading: boolean;
-}) {
-  const name = path.split('/').pop() ?? '';
-  const isImg = IMAGE_RE.test(name);
-  return (
-    <div className="p-3">
-      <div className="mb-2 text-[11px] font-mono text-muted-foreground/60">{fmtSize(size)}</div>
-      {isImg ? (
-        size > PREVIEW_IMG_MAX ? (
-          <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
-            <p>Large image ({fmtSize(size)}) — not auto-previewed.</p>
-            <DownloadBtn onDownload={onDownload} downloading={downloading} />
-          </div>
-        ) : (
-          <ImagePreview key={path} agentName={agentName} path={path} onDownload={onDownload} downloading={downloading} />
-        )
-      ) : (
-        <TextPreview agentName={agentName} path={path} onDownload={onDownload} downloading={downloading} />
-      )}
-    </div>
-  );
-}
-
-function TextPreview({
-  agentName, path, onDownload, downloading,
-}: {
-  agentName: string; path: string; onDownload: () => void; downloading: boolean;
-}) {
-  const q = trpc.fileManager.readText.useQuery({ agentName, path }, { retry: false });
-  if (q.isPending) return <div className="h-40 rounded bg-accent/30 animate-pulse" />;
-  if (q.error) {
-    return (
-      <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
-        <p>{q.error.message}</p>
-        <DownloadBtn onDownload={onDownload} downloading={downloading} />
-      </div>
-    );
-  }
-  return <pre className="text-[12px] font-mono whitespace-pre-wrap break-words text-foreground/90 leading-relaxed">{q.data?.text}</pre>;
-}
-
-// Image preview — pull the bytes via the same prepared-download path (gateway →
-// stash → blob), render as an object URL. Keyed by path so it refetches cleanly
-// on file change; the object URL is revoked on unmount.
-function ImagePreview({
-  agentName, path, onDownload, downloading,
-}: {
-  agentName: string; path: string; onDownload: () => void; downloading: boolean;
-}) {
-  const utils = trpc.useUtils();
-  const prepareAsync = trpc.fileManager.prepareDownload.useMutation().mutateAsync;
-  const [state, setState] = useState<{ url?: string; error?: string }>({});
-  useEffect(() => {
-    let cancelled = false;
-    let objUrl: string | undefined;
-    void (async () => {
-      try {
-        const { blob } = await fetchPreparedBlob({ kind: 'agent', agentName }, path, false, utils, prepareAsync);
-        if (cancelled) return;
-        objUrl = URL.createObjectURL(blob);
-        setState({ url: objUrl });
-      } catch (e) {
-        if (!cancelled) setState({ error: e instanceof Error ? e.message : String(e) });
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (objUrl) URL.revokeObjectURL(objUrl);
-    };
-  }, [agentName, path, utils, prepareAsync]);
-
-  if (state.error) {
-    return (
-      <div className="flex flex-col items-start gap-2 text-xs text-muted-foreground">
-        <p>Preview failed: {state.error}</p>
-        <DownloadBtn onDownload={onDownload} downloading={downloading} />
-      </div>
-    );
-  }
-  if (!state.url) {
-    return (
-      <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading preview…
-      </div>
-    );
-  }
-  return (
-    <div className="flex justify-center">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={state.url} alt={path.split('/').pop() ?? ''} className="max-w-full max-h-[60vh] w-auto h-auto rounded border border-border object-contain" />
     </div>
   );
 }
