@@ -22,10 +22,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { encodedProjectDir, tmuxPaneName } from '@hermit-ui/tmux-driver';
+import { tmuxPaneName } from '@hermit-ui/tmux-driver';
 import { AGENTS_ROOT } from '../config';
 import { api } from '../api';
-import { paneIsWorking } from '../pane';
+import { paneIsWorking, sessionTranscriptPath } from '../pane';
 
 const TAIL_LINES = 500;
 const TAIL_TIMEOUT_MS = 4000;
@@ -131,9 +131,12 @@ async function tmuxPanePid(sessionId: string): Promise<number | null> {
 // paneIsWorking (working-vs-idle via the "esc to interrupt" pane marker) now
 // lives in ../pane — shared with the chat dispatch gate + cron-runner.
 
+// The transcript-path derivation is shared with pane.ts (sessionTranscriptPath) —
+// the single source of truth for the ~/.claude/projects layout. The snapshot adds
+// the existence check on top: a pruned / not-yet-created transcript reports as null.
 function transcriptPath(claudeSessionId: string, agentDir: string): string | null {
-  const p = path.join(encodedProjectDir(agentDir), `${claudeSessionId}.jsonl`);
-  return fs.existsSync(p) ? p : null;
+  const p = sessionTranscriptPath(claudeSessionId, agentDir);
+  return p && fs.existsSync(p) ? p : null;
 }
 
 async function tailLines(jsonl: string, n = TAIL_LINES): Promise<string[]> {
