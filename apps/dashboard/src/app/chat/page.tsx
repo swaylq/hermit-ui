@@ -12,7 +12,6 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { relTime } from '@/lib/format';
-import { Markdown } from '@/components/markdown';
 import { ImageLightbox } from '@/components/ui/image-lightbox';
 import { isTouchPrimary } from '@/lib/save-file';
 import { CtxBar } from '@/components/ctx-bar';
@@ -32,7 +31,7 @@ import { ChatFind } from '@/components/chat/chat-find';
 import { NewChatPane } from '@/components/chat/new-chat-pane';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 import { EmptyChat } from '@/components/chat/empty-chat';
-import { StreamingDots, TypingIndicator } from '@/components/chat/message-bits';
+import { StreamingDots, TypingIndicator, TypedText } from '@/components/chat/message-bits';
 
 type Block = { type: string; text?: string; name?: string; input?: any; tool_use_id?: string; content?: any; source?: any; width?: number; height?: number };
 
@@ -2301,42 +2300,6 @@ function groupConsecutiveTools(blocks: Block[], askCardByQuestion?: Map<string, 
     }
   }
   return out;
-}
-
-// Typewriter reveal for the streaming tail's assistant text. The server sends
-// whole content blocks (no token deltas — see the SSE route), so the "typing"
-// is synthesized client-side: reveal plain text char-by-char (cheap, no
-// markdown re-parse mid-type), then settle into rendered Markdown once the
-// block is fully shown. Honors prefers-reduced-motion.
-function useTypewriter(text: string, enabled: boolean): number {
-  const [shown, setShown] = useState(enabled ? 0 : text.length);
-  useEffect(() => {
-    if (!enabled) { setShown(text.length); return; }
-    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
-      setShown(text.length);
-      return;
-    }
-    let raf = 0;
-    let last = 0;
-    const step = (now: number) => {
-      if (now - last >= 28) {
-        last = now;
-        // ease-out: reveal a chunk proportional to what's left (≈0.85s to full,
-        // regardless of length), so short blocks finish fast and long ones glide.
-        setShown((cur) => (cur >= text.length ? cur : Math.min(text.length, cur + Math.max(2, Math.round((text.length - cur) * 0.14)))));
-      }
-      raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [text, enabled]);
-  return Math.min(shown, text.length);
-}
-
-function TypedText({ text, typing }: { text: string; typing: boolean }) {
-  const shown = useTypewriter(text, typing);
-  if (shown >= text.length) return <Markdown>{text}</Markdown>;
-  return <span className="whitespace-pre-wrap break-words">{text.slice(0, shown)}</span>;
 }
 
 function GroupView({ group, dark, inline = false, typing = false }: { group: Group; dark: boolean; inline?: boolean; typing?: boolean }) {
