@@ -274,7 +274,7 @@ async function probe(
       const t = Date.parse(ev.timestamp);
       if (Number.isFinite(t) && t > lastActivityMs) lastActivityMs = t;
     }
-    if (contextTokens == null && ev.type === 'assistant' && ev.message?.usage) {
+    if (contextTokens == null && ev.type === CcEvent.assistant && ev.message?.usage) {
       const u = ev.message.usage;
       contextTokens = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
       outputTokens = u.output_tokens || 0;
@@ -291,10 +291,10 @@ async function probe(
       const post = ev.compactMetadata?.postTokens;
       if (typeof post === 'number' && post > 0) contextTokens = post;
     }
-    if (lastAssistant == null && ev.type === 'assistant' && ev.message?.content) {
+    if (lastAssistant == null && ev.type === CcEvent.assistant && ev.message?.content) {
       const t = extractText(ev.message.content).trim();
       if (t) lastAssistant = t.slice(0, PROMPT_MAX_CHARS);
-    } else if (lastUser == null && ev.type === 'user' && ev.message?.content) {
+    } else if (lastUser == null && ev.type === CcEvent.user && ev.message?.content) {
       if (hasToolResult(ev.message.content)) continue;
       const t = extractText(ev.message.content).trim();
       if (t) lastUser = t.slice(0, PROMPT_MAX_CHARS);
