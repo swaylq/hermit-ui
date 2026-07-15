@@ -10,34 +10,20 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  Folder, FolderOpen, File as FileIcon, Download, Upload, Trash2, Pencil,
-  FolderPlus, ChevronRight, RotateCw, Loader2, X, Check, FileText,
+  Folder, File as FileIcon, Download, Upload, Trash2, Pencil,
+  FolderPlus, RotateCw, Loader2, X, Check, FileText,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { getActiveKey } from '@/lib/keyring';
-import { cn } from '@/lib/utils';
-import { relTime } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import {
+  type Selected, fmtSize, joinPath, parentOf,
+  IMAGE_RE, PREVIEW_IMG_MAX, fetchPreparedBlob, pullDownload,
+} from '@/components/file-explorer/core';
+import { FileTree } from '@/components/file-explorer/file-tree';
 
 const MAX_UPLOAD = 100 * 1024 * 1024; // 100 MB per the spec
-const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
-const PREVIEW_IMG_MAX = 25 * 1024 * 1024; // auto-preview images up to 25 MB; bigger → download only
-
-type PrepareAsync = (vars: { agentName: string; path: string; isFolder: boolean }) => Promise<{ id: string }>;
-
-type Entry = { name: string; type: 'dir' | 'file' | 'other'; size: number; mtimeMs: number };
-type Selected = { path: string; name: string; type: 'dir' | 'file' | 'other'; size: number } | null;
-
-function fmtSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-const joinPath = (base: string, name: string) => (base ? `${base}/${name}` : name);
-const parentOf = (p: string) => p.split('/').slice(0, -1).join('/');
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function uploadXhr(file: File, destPath: string, onProgress: (p: number) => void): Promise<{ id: string }> {
   return new Promise((resolve, reject) => {
@@ -60,50 +46,6 @@ function uploadXhr(file: File, destPath: string, onProgress: (p: number) => void
     xhr.onerror = () => reject(new Error('Network error'));
     xhr.send(file);
   });
-}
-
-// Fetch a prepared download (a file, or a gateway-zipped folder) as a Blob:
-// trigger the gateway prepare, poll until it's stashed, then pull the bytes.
-// Shared by the download action and the inline image preview.
-async function fetchPreparedBlob(
-  agentName: string,
-  path: string,
-  isFolder: boolean,
-  utils: ReturnType<typeof trpc.useUtils>,
-  prepareAsync: PrepareAsync,
-): Promise<{ blob: Blob; filename: string }> {
-  const { id } = await prepareAsync({ agentName, path, isFolder });
-  for (let i = 0; i < 180; i++) {
-    await sleep(2000);
-    const s = await utils.fileManager.downloadStatus.fetch({ id });
-    if (s.status === 'ready') {
-      const res = await fetch(`/api/file-manager/download/${encodeURIComponent(id)}`, { headers: { 'x-asst-key': getActiveKey() } });
-      if (!res.ok) throw new Error(`Load failed (${res.status})`);
-      return { blob: await res.blob(), filename: s.filename };
-    }
-    if (s.status === 'error') throw new Error(s.error || 'Prepare failed');
-  }
-  throw new Error('Timed out');
-}
-
-// Save a prepared download to disk (synthetic anchor — the key can't ride <a>).
-async function pullDownload(
-  agentName: string,
-  path: string,
-  isFolder: boolean,
-  fallbackName: string,
-  utils: ReturnType<typeof trpc.useUtils>,
-  prepareAsync: PrepareAsync,
-): Promise<void> {
-  const { blob, filename } = await fetchPreparedBlob(agentName, path, isFolder, utils, prepareAsync);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename || fallbackName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 }
 
 export function AgentFiles({ agentName, directory }: { agentName: string; directory: string | null | undefined }) {
@@ -149,8 +91,8 @@ export function AgentFiles({ agentName, directory }: { agentName: string; direct
       <div className="flex flex-1 min-h-[260px] rounded-lg border border-border overflow-hidden">
         {/* Left: lazy file tree */}
         <div className="w-2/5 min-w-[150px] max-w-[320px] shrink-0 border-r border-border overflow-y-auto bg-muted/20">
-          <TreeChildren
-            agentName={agentName} path="" depth={0}
+          <FileTree
+            source={{ kind: 'agent', agentName }} path="" depth={0}
             expanded={expanded} toggleExpand={toggleExpand}
             selectedPath={selected?.path ?? null} onSelect={setSelected} onError={setError}
           />
@@ -250,89 +192,6 @@ function Toolbar({
   );
 }
 
-// ── Tree: the lazily-loaded children of one directory ────────────────────────
-function TreeChildren({
-  agentName, path, depth, expanded, toggleExpand, selectedPath, onSelect, onError,
-}: {
-  agentName: string; path: string; depth: number;
-  expanded: Set<string>; toggleExpand: (p: string, force?: boolean) => void;
-  selectedPath: string | null; onSelect: (s: Selected) => void; onError: (e: string | null) => void;
-}) {
-  const list = trpc.fileManager.list.useQuery({ agentName, path }, { retry: false });
-  const indent = depth * 12 + 8;
-
-  if (list.isPending) {
-    return <div style={{ paddingLeft: indent + 16 }} className="py-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /></div>;
-  }
-  if (list.error) {
-    return <div style={{ paddingLeft: indent + 16 }} className="py-1 text-[11px] text-rose-500 pr-2 break-words">{list.error.message}</div>;
-  }
-  const entries = (list.data?.entries ?? []) as Entry[];
-  if (entries.length === 0) {
-    return <div style={{ paddingLeft: indent + 16 }} className="py-1 text-[11px] text-muted-foreground/50">empty</div>;
-  }
-  return (
-    <ul>
-      {entries.map((e) => (
-        <TreeNode
-          key={e.name}
-          agentName={agentName} entry={e} path={joinPath(path, e.name)} depth={depth}
-          expanded={expanded} toggleExpand={toggleExpand} selectedPath={selectedPath} onSelect={onSelect} onError={onError}
-        />
-      ))}
-      {list.data?.truncated && (
-        <li style={{ paddingLeft: indent + 16 }} className="py-1 text-[11px] text-amber-600">…directory too large, truncated</li>
-      )}
-    </ul>
-  );
-}
-
-function TreeNode({
-  agentName, entry, path, depth, expanded, toggleExpand, selectedPath, onSelect, onError,
-}: {
-  agentName: string; entry: Entry; path: string; depth: number;
-  expanded: Set<string>; toggleExpand: (p: string, force?: boolean) => void;
-  selectedPath: string | null; onSelect: (s: Selected) => void; onError: (e: string | null) => void;
-}) {
-  const isDir = entry.type === 'dir';
-  const isOpen = expanded.has(path);
-  const isSel = selectedPath === path;
-  const indent = depth * 12 + 8;
-
-  return (
-    <li>
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => { onSelect({ path, name: entry.name, type: entry.type, size: entry.size }); if (isDir) toggleExpand(path); }}
-        style={{ paddingLeft: indent }}
-        className={cn(
-          'group flex items-center gap-1 pr-1.5 h-7 cursor-pointer text-sm select-none',
-          isSel ? 'bg-accent text-foreground' : 'hover:bg-accent/40 text-foreground/85',
-        )}
-      >
-        {isDir ? (
-          <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-90')} />
-        ) : (
-          <span className="w-3.5 shrink-0" />
-        )}
-        {isDir ? (
-          isOpen ? <FolderOpen className="h-4 w-4 shrink-0 text-sky-500" /> : <Folder className="h-4 w-4 shrink-0 text-sky-500" />
-        ) : (
-          <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-        )}
-        <span className="truncate flex-1">{entry.name}</span>
-      </div>
-      {isDir && isOpen && (
-        <TreeChildren
-          agentName={agentName} path={path} depth={depth + 1}
-          expanded={expanded} toggleExpand={toggleExpand} selectedPath={selectedPath} onSelect={onSelect} onError={onError}
-        />
-      )}
-    </li>
-  );
-}
-
 // ── Right pane: selected file/folder — actions + inline content ──────────────
 function FilePane({
   agentName, selected, onSelect, onError,
@@ -375,7 +234,7 @@ function FilePane({
     onError(null);
     setDownloading(true);
     try {
-      await pullDownload(agentName, selected.path, isDir, selected.name, utils, prepare.mutateAsync);
+      await pullDownload({ kind: 'agent', agentName }, selected.path, isDir, selected.name, utils, prepare.mutateAsync);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -518,7 +377,7 @@ function ImagePreview({
     let objUrl: string | undefined;
     void (async () => {
       try {
-        const { blob } = await fetchPreparedBlob(agentName, path, false, utils, prepareAsync);
+        const { blob } = await fetchPreparedBlob({ kind: 'agent', agentName }, path, false, utils, prepareAsync);
         if (cancelled) return;
         objUrl = URL.createObjectURL(blob);
         setState({ url: objUrl });
