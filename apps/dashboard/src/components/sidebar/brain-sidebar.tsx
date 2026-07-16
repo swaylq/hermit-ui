@@ -1,10 +1,11 @@
 'use client';
 
 // The brain-mode sidebar (shown on /brain). Extracted verbatim from
-// app-sidebar.tsx (P2-4); behaviour identical. BrainSidebar is rendered by
-// AppSidebar; RecentBrainSessions is private to this module.
+// app-sidebar.tsx (P2-4); behaviour identical. BrainSidebar and
+// RecentDispatchSessions are rendered by AppSidebar; RecentBrainSessions is
+// private to this module.
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
@@ -110,6 +111,80 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
                           <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
                             {relTime(s.lastMessageAt ?? s.startedAt)}
                           </span>
+                        </div>
+                      </div>
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Brain's dispatch conversations (origin:'dispatch') in the sidebar when on
+// /brain/dispatch — the same place the chat keeps its recents. Each links the
+// thread into the main pane (?session=); the worker chat recents filter these out.
+export function RecentDispatchSessions() {
+  const search = useSearchParams();
+  const activeId = search.get('session');
+  const sessions = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
+  const rows = useMemo(
+    () =>
+      (sessions.data ?? [])
+        .filter((s) => s.origin === 'dispatch' || (s.title ?? '').startsWith('Brain →'))
+        .sort((a, b) => new Date(b.lastMessageAt ?? b.startedAt).getTime() - new Date(a.lastMessageAt ?? a.startedAt).getTime()),
+    [sessions.data],
+  );
+  return (
+    <div className="flex-1 min-h-0 flex flex-col mt-3">
+      <div className="px-3 pb-1 flex items-baseline gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+        <span>Dispatches</span>
+        <span className="tabular-nums text-muted-foreground/50">{rows.length}</span>
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
+        {sessions.isPending ? (
+          <div className="space-y-1 px-1 pt-1">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-8 rounded-md bg-sidebar-accent/40 animate-pulse" />
+            ))}
+          </div>
+        ) : rows.length === 0 ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">No dispatches yet. When Brain delegates a one-shot task, it appears here.</p>
+        ) : (
+          <ul className="space-y-px">
+            {rows.map((s) => {
+              const active = activeId === s.id;
+              const label = s.title || `Brain → ${s.agentName}`;
+              return (
+                <li key={s.id}>
+                  <Link
+                    href={`/brain/dispatch?session=${encodeURIComponent(s.id)}`}
+                    className={cn(
+                      'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors',
+                      active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
+                    )}
+                    title={label}
+                  >
+                    <div className="flex items-start gap-2 min-w-0">
+                      <span
+                        className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', s.alive ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500')}
+                        aria-hidden
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline justify-between gap-1.5">
+                          <span className={cn('flex-1 truncate text-[13px]', active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85')}>
+                            {label}
+                          </span>
+                          <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
+                            {relTime(s.lastMessageAt ?? s.startedAt)}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 truncate text-[10px] font-mono text-muted-foreground/70 tabular-nums">
+                          {s.alive ? 'running' : 'done'} · {s.agentName}
                         </div>
                       </div>
                     </div>
