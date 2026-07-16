@@ -10,9 +10,16 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { FileText, Download, X } from 'lucide-react';
 import { Markdown } from '@/components/markdown';
-import { ImageLightbox } from '@/components/ui/image-lightbox';
+import dynamic from 'next/dynamic';
 import { saveFile } from '@/lib/save-file';
 import { Overlay } from '@/components/overlay';
+
+// Lazy-load the zoomable image lightbox (a portal overlay in its own ~20KB chunk)
+// so the chat route's first paint doesn't carry it — it's only needed once an
+// image thumbnail actually renders / is opened. ssr:false + no loading fallback:
+// the lightbox renders null while closed, so "nothing until the chunk loads"
+// matches the closed state exactly. (P3-5)
+const ImageLightbox = dynamic(() => import('@/components/ui/image-lightbox').then((m) => m.ImageLightbox), { ssr: false });
 
 // A chat image: a capped thumbnail that opens a zoomable full-screen lightbox
 // on click (instead of yanking the user to the raw file in a new tab).

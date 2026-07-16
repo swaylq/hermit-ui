@@ -13,9 +13,14 @@ import { trpc } from '@/lib/trpc';
 import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
 import { QUEUE_LIMIT } from '@/lib/chat-queue';
-import { ImageLightbox } from '@/components/ui/image-lightbox';
+import dynamic from 'next/dynamic';
 import { Plus, ArrowUp, FileText, X } from 'lucide-react';
 import { msgText, type Attachment } from '@/components/chat/lib';
+
+// Lazy-load the zoomable image lightbox (its own ~20KB portal-overlay chunk) so
+// the chat composer's first paint doesn't carry it — only an attachment preview
+// opens it. ssr:false, no loading fallback (renders null while closed anyway). (P3-5)
+const ImageLightbox = dynamic(() => import('@/components/ui/image-lightbox').then((m) => m.ImageLightbox), { ssr: false });
 
 // Claude Code built-in slash commands the composer suggests when the user
 // types "/". Picking one fills the draft; sending sends it as a normal user
