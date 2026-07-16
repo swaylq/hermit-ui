@@ -6,11 +6,20 @@
 // lists now live here so P2-4's runtime-gated dedup can fold them into one parameterised
 // unit within a single file. RecentCrons/RecentAgents/RecentSessions are rendered by
 // AppSidebar; fmtEvery is a private cron-interval formatter.
+//
+// Each row is a memo() component (CronRow/AgentRow/SessionRow) fed only stable props
+// (the row object — referentially stable across a no-op poll via React Query's
+// structural sharing — plus primitives and stable useCallbacks), so unchanged rows bail
+// on every 5s poll instead of re-running their render body (sessionStatusView / relTime /
+// cn / cronStatusTone) for all ~60 rows. Per-row handlers are created INSIDE the memo'd
+// row (from stable callback props), which doesn't defeat its memo (P1-3, finding C2).
 
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, memo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon } from 'lucide-react';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
@@ -26,6 +35,11 @@ import { SidebarFindInput } from '@/components/sidebar/sidebar-find-input';
 import { TrashedAgents } from '@/components/sidebar/trashed-agents';
 import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
 
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+type CronListItem = RouterOutputs['cron']['list'][number];
+type AgentListItem = RouterOutputs['agents']['list'][number];
+type SessionListItem = RouterOutputs['chat']['listSessions'][number];
+
 function fmtEvery(sec: number): string {
   if (sec % 3600 === 0) return `every ${sec / 3600}h`;
   if (sec % 60 === 0) return `every ${sec / 60}m`;
@@ -40,6 +54,55 @@ const SIDEBAR_DOT_CLS: Record<CronStatusTone, string> = {
   inconclusive: 'bg-amber-500',
   neutral: 'bg-emerald-500',
 };
+
+// One cron row. memo'd: `cron` is stable across a no-op poll (RQ structural sharing)
+// and `active` is a primitive, so an unchanged row bails.
+const CronRow = memo(function CronRow({ cron: c, active }: { cron: CronListItem; active: boolean }) {
+  const dot = !c.enabled ? 'border border-muted-foreground/40' : SIDEBAR_DOT_CLS[cronStatusTone(c.lastStatus)];
+  return (
+    <li>
+      <Link
+        href={`/cron?id=${encodeURIComponent(c.id)}`}
+        className={cn(
+          'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors',
+          active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
+          !c.enabled && 'opacity-60',
+        )}
+        title={c.title || c.prompt}
+      >
+        <div className="flex items-start gap-2 min-w-0">
+          <span
+            className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', dot, c.lastStatus === 'running' && 'animate-pulse')}
+            aria-hidden="true"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline justify-between gap-1.5">
+              <span className={cn('flex-1 truncate text-[13px]', active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85')}>
+                {c.title || c.prompt}
+              </span>
+              {c.unreadCount > 0 && (
+                <span
+                  className="shrink-0 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-mono tabular-nums leading-none"
+                  title={`${c.unreadCount} 条未读执行`}
+                >
+                  {c.unreadCount}
+                </span>
+              )}
+              <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
+                {relTime(c.lastFire ?? c.createdAt)}
+              </span>
+            </div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 tabular-nums truncate">
+              <span className="truncate">{c.agentName}</span>
+              <span className="text-muted-foreground/40">·</span>
+              <span>{fmtEvery(c.intervalSec)}</span>
+            </div>
+          </div>
+        </div>
+      </Link>
+    </li>
+  );
+});
 
 // Cron list shown in the sidebar on /cron — all scheduled tasks across agents.
 // Mirrors RecentSessions/RecentAgents so the chrome reads the same.
@@ -80,59 +143,76 @@ export function RecentCrons() {
           <p className="px-2 py-2 text-xs text-muted-foreground">没有匹配 “{q.trim()}” 的 cron。</p>
         ) : (
           <ul className="space-y-px">
-            {visible.map((c) => {
-              const active = activeId === c.id;
-              const dot = !c.enabled ? 'border border-muted-foreground/40' : SIDEBAR_DOT_CLS[cronStatusTone(c.lastStatus)];
-              return (
-                <li key={c.id}>
-                  <Link
-                    href={`/cron?id=${encodeURIComponent(c.id)}`}
-                    className={cn(
-                      'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors',
-                      active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
-                      !c.enabled && 'opacity-60',
-                    )}
-                    title={c.title || c.prompt}
-                  >
-                    <div className="flex items-start gap-2 min-w-0">
-                      <span
-                        className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', dot, c.lastStatus === 'running' && 'animate-pulse')}
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline justify-between gap-1.5">
-                          <span className={cn('flex-1 truncate text-[13px]', active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85')}>
-                            {c.title || c.prompt}
-                          </span>
-                          {c.unreadCount > 0 && (
-                            <span
-                              className="shrink-0 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-mono tabular-nums leading-none"
-                              title={`${c.unreadCount} 条未读执行`}
-                            >
-                              {c.unreadCount}
-                            </span>
-                          )}
-                          <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
-                            {relTime(c.lastFire ?? c.createdAt)}
-                          </span>
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 tabular-nums truncate">
-                          <span className="truncate">{c.agentName}</span>
-                          <span className="text-muted-foreground/40">·</span>
-                          <span>{fmtEvery(c.intervalSec)}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </Link>
-                </li>
-              );
-            })}
+            {visible.map((c) => (
+              <CronRow key={c.id} cron={c} active={activeId === c.id} />
+            ))}
           </ul>
         )}
       </div>
     </div>
   );
 }
+
+// One agent row. memo'd: `agent` is stable across a no-op poll, `active` is a
+// primitive, and `onPrefetch` is a stable useCallback → unchanged rows bail.
+const AgentRow = memo(function AgentRow({
+  agent: a,
+  active,
+  onPrefetch,
+}: {
+  agent: AgentListItem;
+  active: boolean;
+  onPrefetch: (name: string) => void;
+}) {
+  return (
+    <li>
+      <Link
+        href={`/agents?name=${encodeURIComponent(a.name)}`}
+        onMouseEnter={() => onPrefetch(a.name)}
+        onFocus={() => onPrefetch(a.name)}
+        className={cn(
+          'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors',
+          active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
+        )}
+        title={a.name}
+      >
+        <div className="flex items-start gap-2 min-w-0">
+          <span
+            className={cn(
+              'mt-1.5 h-1.5 w-1.5 rounded-full shrink-0',
+              a.activeSessionCount > 0 ? 'bg-emerald-500' : 'border border-muted-foreground/40',
+            )}
+            aria-hidden="true"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline justify-between gap-1.5">
+              <span className={cn(
+                'flex-1 truncate text-[13px] font-mono',
+                active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85',
+              )}>
+                {a.name}
+              </span>
+              {a.metadataAt && (
+                <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
+                  {relTime(a.metadataAt)}
+                </span>
+              )}
+            </div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 tabular-nums">
+              {a.activeSessionCount > 0 ? (
+                <span className="text-emerald-600">{a.activeSessionCount} active</span>
+              ) : (
+                <span>{a.sessionCount} session{a.sessionCount === 1 ? '' : 's'}</span>
+              )}
+              <span className="text-muted-foreground/40">·</span>
+              <span>{a.skillCount} skill{a.skillCount === 1 ? '' : 's'}</span>
+            </div>
+          </div>
+        </div>
+      </Link>
+    </li>
+  );
+});
 
 // Agent list shown in the sidebar on /agents. Mirrors RecentSessions visually
 // so the two routes feel like the same chrome with a different payload.
@@ -189,57 +269,9 @@ export function RecentAgents() {
           <p className="px-2 py-2 text-xs text-muted-foreground">没有匹配 “{q.trim()}” 的 agent。</p>
         ) : (
           <ul className="space-y-px">
-            {visible.map((a) => {
-              const active = activeName === a.name;
-              return (
-                <li key={a.id}>
-                  <Link
-                    href={`/agents?name=${encodeURIComponent(a.name)}`}
-                    onMouseEnter={() => prefetchAgent(a.name)}
-                    onFocus={() => prefetchAgent(a.name)}
-                    className={cn(
-                      'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors',
-                      active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
-                    )}
-                    title={a.name}
-                  >
-                    <div className="flex items-start gap-2 min-w-0">
-                      <span
-                        className={cn(
-                          'mt-1.5 h-1.5 w-1.5 rounded-full shrink-0',
-                          a.activeSessionCount > 0 ? 'bg-emerald-500' : 'border border-muted-foreground/40',
-                        )}
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline justify-between gap-1.5">
-                          <span className={cn(
-                            'flex-1 truncate text-[13px] font-mono',
-                            active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85',
-                          )}>
-                            {a.name}
-                          </span>
-                          {a.metadataAt && (
-                            <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
-                              {relTime(a.metadataAt)}
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 tabular-nums">
-                          {a.activeSessionCount > 0 ? (
-                            <span className="text-emerald-600">{a.activeSessionCount} active</span>
-                          ) : (
-                            <span>{a.sessionCount} session{a.sessionCount === 1 ? '' : 's'}</span>
-                          )}
-                          <span className="text-muted-foreground/40">·</span>
-                          <span>{a.skillCount} skill{a.skillCount === 1 ? '' : 's'}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </Link>
-                </li>
-              );
-            })}
+            {visible.map((a) => (
+              <AgentRow key={a.id} agent={a} active={activeName === a.name} onPrefetch={prefetchAgent} />
+            ))}
             {pendingAdds.map((p) => (
               <li key={p.id} className="px-2.5 py-1.5 opacity-70">
                 <div className="flex items-start gap-2 min-w-0">
@@ -262,6 +294,97 @@ export function RecentAgents() {
     </div>
   );
 }
+
+// One session row. memo'd: `session` is stable across a no-op poll (RQ structural
+// sharing), `active`/`liveAt`/`pinned` are primitives, and onPrefetch/onOpenMenu/
+// longPress are stable, so an unchanged row bails. The optimistic-working / unread /
+// status derivation runs INSIDE the row (only when it re-renders), and the per-row
+// handlers are built here from the stable callbacks — neither defeats the memo.
+const SessionRow = memo(function SessionRow({
+  session: s,
+  active,
+  liveAt,
+  pinned,
+  onPrefetch,
+  onOpenMenu,
+  longPress,
+}: {
+  session: SessionListItem;
+  active: boolean;
+  liveAt: number | null;
+  pinned: boolean;
+  onPrefetch: (id: string) => void;
+  onOpenMenu: (id: string, x: number, y: number) => void;
+  longPress: ReturnType<typeof useLongPress>;
+}) {
+  // Optimistic working: the moment the user sends, the session is marked live
+  // (markSessionWorking) so this dot turns yellow instantly — no waiting ~13s for
+  // the gateway snapshot + 5s poll. Reconcile with the gateway's truth: once it
+  // snapshots the pane AFTER the send (snapshotAt > stamp), drop the optimism and
+  // let the real `state` drive the dot.
+  const optimisticWorking = liveAt != null && (!s.snapshotAt || new Date(s.snapshotAt).getTime() < liveAt);
+  const status = sessionStatusView(s, {
+    unread: isSessionUnread(s),
+    liveWorking: optimisticWorking,
+  });
+  return (
+    <li>
+      <Link
+        href={`/chat?session=${encodeURIComponent(s.id)}`}
+        onMouseEnter={() => onPrefetch(s.id)}
+        onFocus={() => onPrefetch(s.id)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onOpenMenu(s.id, e.clientX, e.clientY);
+        }}
+        {...longPress(s.id)}
+        className={cn(
+          'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors select-none [-webkit-touch-callout:none]',
+          active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
+          s.closedAt && 'opacity-60',
+          s.hiddenAt && 'opacity-50',
+          s.hibernatedAt && !s.closedAt && 'opacity-60',
+        )}
+        title={s.title || s.preview || s.agentName}
+      >
+        <div className="flex items-start gap-2 min-w-0">
+          <span
+            className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', status.dot, status.pulse && 'animate-pulse')}
+            aria-hidden="true"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline justify-between gap-1.5">
+              <span className={cn('flex-1 truncate text-[13px]', active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85')}>
+                {s.title || s.preview || s.agentName}
+              </span>
+              {pinned && (
+                <Pin className="h-3 w-3 shrink-0 self-center -rotate-45 fill-current text-muted-foreground/70" aria-label="pinned" />
+              )}
+              {s.hiddenAt && (
+                <EyeOff className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hidden" />
+              )}
+              {s.hibernatedAt && (
+                <Moon className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hibernated — wakes on send" />
+              )}
+              <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
+                {relTime(s.lastMessageAt ?? s.startedAt)}
+              </span>
+            </div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 tabular-nums truncate">
+              <span className="truncate">{s.agentName}</span>
+              {status.key !== 'ready' && (
+                <>
+                  <span className="text-muted-foreground/40">·</span>
+                  <span>{status.label}</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </Link>
+    </li>
+  );
+});
 
 // The /chat session list — per-agent sessions with live-working dots, unread
 // state, pins, a context menu, hide/hibernate/restart actions, and long-press on
@@ -553,79 +676,18 @@ export function RecentSessions() {
           </p>
         ) : (
           <ul className="space-y-px">
-            {visible.map((s) => {
-              const active = activeId === s.id;
-              // Optimistic working: the moment the user sends, the session is
-              // marked live (markSessionWorking) so this dot turns yellow
-              // instantly — no waiting ~13s for the gateway snapshot + 5s poll.
-              // Reconcile with the gateway's truth: once it snapshots the pane
-              // AFTER the send (snapshotAt > stamp), drop the optimism and let
-              // the real `state` drive the dot.
-              const liveAt = liveWorkingSince(s.id);
-              const optimisticWorking =
-                liveAt != null && (!s.snapshotAt || new Date(s.snapshotAt).getTime() < liveAt);
-              const status = sessionStatusView(s, {
-                unread: isSessionUnread(s),
-                liveWorking: optimisticWorking,
-              });
-              return (
-                <li key={s.id}>
-                  <Link
-                    href={`/chat?session=${encodeURIComponent(s.id)}`}
-                    onMouseEnter={() => prefetchSession(s.id)}
-                    onFocus={() => prefetchSession(s.id)}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setMenu({ x: e.clientX, y: e.clientY, id: s.id });
-                    }}
-                    {...longPress(s.id)}
-                    className={cn(
-                      'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors select-none [-webkit-touch-callout:none]',
-                      active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
-                      s.closedAt && 'opacity-60',
-                      s.hiddenAt && 'opacity-50',
-                      s.hibernatedAt && !s.closedAt && 'opacity-60',
-                    )}
-                    title={s.title || s.preview || s.agentName}
-                  >
-                    <div className="flex items-start gap-2 min-w-0">
-                      <span
-                        className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', status.dot, status.pulse && 'animate-pulse')}
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline justify-between gap-1.5">
-                          <span className={cn('flex-1 truncate text-[13px]', active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85')}>
-                            {s.title || s.preview || s.agentName}
-                          </span>
-                          {pins.has(s.id) && (
-                            <Pin className="h-3 w-3 shrink-0 self-center -rotate-45 fill-current text-muted-foreground/70" aria-label="pinned" />
-                          )}
-                          {s.hiddenAt && (
-                            <EyeOff className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hidden" />
-                          )}
-                          {s.hibernatedAt && (
-                            <Moon className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hibernated — wakes on send" />
-                          )}
-                          <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
-                            {relTime(s.lastMessageAt ?? s.startedAt)}
-                          </span>
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 tabular-nums truncate">
-                          <span className="truncate">{s.agentName}</span>
-                          {status.key !== 'ready' && (
-                            <>
-                              <span className="text-muted-foreground/40">·</span>
-                              <span>{status.label}</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </Link>
-                </li>
-              );
-            })}
+            {visible.map((s) => (
+              <SessionRow
+                key={s.id}
+                session={s}
+                active={activeId === s.id}
+                liveAt={liveWorkingSince(s.id)}
+                pinned={pins.has(s.id)}
+                onPrefetch={prefetchSession}
+                onOpenMenu={openMenuAt}
+                longPress={longPress}
+              />
+            ))}
           </ul>
         )}
       </div>
