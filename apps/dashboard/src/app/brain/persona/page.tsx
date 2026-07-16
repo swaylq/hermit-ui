@@ -72,7 +72,7 @@ function PersonaEditor({ agentName }: { agentName: string }) {
 }
 
 export default function BrainPersonaPage() {
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 15_000 });
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 30_000 });
   const brain = (agents.data ?? []).find((a) => a.isOrchestrator);
   return (
     <div className="flex flex-1 min-h-0 flex-col">

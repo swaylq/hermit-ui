@@ -49,7 +49,7 @@ function FrequencySelect({ cronId, current }: { cronId: string; current: number 
 }
 
 export default function BrainDreamPage() {
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 15_000 });
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 30_000 });
   const brain = (agents.data ?? []).find((a) => a.isOrchestrator);
   const crons = trpc.cron.list.useQuery(undefined, { refetchInterval: 10_000 });
   const dreamCron = (crons.data ?? []).find((c) => c.agentName === brain?.name && /dream/i.test(c.title ?? ''));

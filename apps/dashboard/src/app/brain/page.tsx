@@ -21,7 +21,7 @@ export default function BrainPage() {
 function BrainPageInner() {
   const search = useSearchParams();
   const sessionParam = search.get('session');
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 15_000 });
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 30_000 });
   const brain = (agents.data ?? []).find((a) => a.isOrchestrator);
   // Only ever render a chat pane for a session that ACTUALLY belongs to the brain.
   // A stray ?session= — e.g. a worker chat id that ended up in the /brain URL
@@ -64,7 +64,7 @@ const Centered = ({ children }: { children: React.ReactNode }) => (
 
 function BrainChatLanding() {
   const router = useRouter();
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 15_000 });
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 30_000 });
   const brain = (agents.data ?? []).find((a) => a.isOrchestrator);
   const sessions = trpc.chat.listSessions.useQuery(
     { agentName: brain?.name },

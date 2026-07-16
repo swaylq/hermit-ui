@@ -219,7 +219,7 @@ const AgentRow = memo(function AgentRow({
 export function RecentAgents() {
   const search = useSearchParams();
   const activeName = search.get('name');
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 10_000 });
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 30_000 });
   const pending = trpc.agents.pendingRequests.useQuery(undefined, {
     // Fast only while something is in flight; idle backs off hard (create/delete
     // already invalidate this, so a fresh pending shows at once). Both observers

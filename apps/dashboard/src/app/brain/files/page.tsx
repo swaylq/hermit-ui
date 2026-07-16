@@ -8,7 +8,7 @@ import { AgentFiles } from '@/components/agent-files';
 // (browse / edit / upload its whole directory). The curated memory view lives at
 // /brain/memory.
 export default function BrainFilesPage() {
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 15_000 });
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 30_000 });
   const brain = (agents.data ?? []).find((a) => a.isOrchestrator);
   return (
     <div className="flex flex-1 min-h-0 flex-col">

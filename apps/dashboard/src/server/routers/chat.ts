@@ -92,6 +92,13 @@ export const chatRouter = router({
           ...(agentName ? { agentName } : {}),
         },
         orderBy: [{ closedAt: 'asc' }, { lastMessageAt: 'desc' }, { startedAt: 'desc' }],
+        // Growth ceiling on the recents payload (S4): without a bound this returns
+        // every session ever, unbounded, polled every 5s on every page. 200 is well
+        // above the current fleet count (~61) so it never truncates today — it just
+        // caps future growth to what the sidebar/agent-detail recents actually show.
+        // (Order is closedAt-then-lastMessageAt-desc; with no closed sessions that's
+        // just most-recent-first, so the cap keeps the freshest sessions.)
+        take: 200,
         select: {
           id: true,
           agentName: true,

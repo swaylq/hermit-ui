@@ -34,7 +34,7 @@ function AgentsPageInner() {
   // Sidebar owns the agent list now; this page is just the right pane. Still
   // need the list here for the default-landing redirect (pick the first agent
   // when no `?name=` is set).
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 10_000, enabled: !scope.scoped });
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 30_000, enabled: !scope.scoped });
   // Poll fast only while something is in flight (tracking its resolution); idle —
   // the common case, no pending request — backs off hard. The create/delete flows
   // already invalidate this query, so a fresh pending shows immediately regardless.

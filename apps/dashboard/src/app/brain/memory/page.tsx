@@ -13,7 +13,7 @@ const Centered = ({ children }: { children: React.ReactNode }) => (
 );
 
 export default function BrainMemoryPage() {
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 15_000 });
+  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 30_000 });
   const brain = (agents.data ?? []).find((a) => a.isOrchestrator);
 
   return (
