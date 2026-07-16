@@ -1,0 +1,36 @@
+-- Partial index backing the hot unread-CronRun counts (docs/perf-backlog.md P1-1).
+--
+-- notifications.counts (5s, mounted in the always-on sidebar on every page),
+-- notifications.feed (5s while /notifications is open), and cron.list's
+-- unreadCountByCron (5s, /cron sidebar) all count/scan CronRun with the SAME
+-- predicate:
+--     WHERE cron.machineId = ? (or cronId IN (...)) AND readAt IS NULL AND status <> 'running'
+-- CronRun had only (cronId, firedAt), so each of these seq-scanned the whole,
+-- ever-growing run-history table and filtered readAt/status in the heap. It's one
+-- of the top steady-state DB costs (findings S1/S2/S6); the P0-1 smoke already saw
+-- 489 unread runs on this machine, and the table only grows.
+--
+-- Design — WHY the predicate is only `readAt IS NULL` (not the full
+-- `readAt IS NULL AND status <> 'running'`) with status as a KEY column instead:
+--   * `readAt: null` compiles to a literal `"readAt" IS NULL` in every one of these
+--     queries, so the planner can always prove the partial index is applicable —
+--     in both custom and generic prepared-statement plans.
+--   * `status: { not: 'running' }` (status is a non-nullable column) compiles to a
+--     *parameterized* `"status" <> $1`. A partial-index predicate of
+--     `status <> 'running'` would only be provably matched when the planner inlines
+--     the parameter (custom plan); once Prisma's prepared statement flips to a
+--     generic plan the predicate match fails and the index goes unused. Keeping
+--     status OUT of the predicate and IN the key sidesteps that: `status <> $1` is
+--     applied as an index filter on the tuple (works with any plan, no heap fetch),
+--     and the count / `groupBy by cronId` can run as an index-only scan.
+--   * Leading `cronId` matches the equality / `IN` scoping and the `groupBy by cronId`
+--     in unreadCountByCron.
+--
+-- Partial on `readAt IS NULL` keeps the index to just the unread rows. Raw SQL
+-- (Prisma @@index can't express a WHERE predicate — same as the poller partials in
+-- 20260715170000), applied by `migrate deploy`. Plain CREATE INDEX (not CONCURRENTLY):
+-- migrate deploy wraps the migration in a transaction and the table is small, so the
+-- brief SHARE lock is sub-millisecond.
+
+CREATE INDEX IF NOT EXISTS "CronRun_cronId_status_unread_partial_idx"
+  ON "CronRun" ("cronId", "status") WHERE "readAt" IS NULL;
