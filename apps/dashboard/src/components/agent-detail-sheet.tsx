@@ -27,11 +27,20 @@ import { isSessionUnread } from '@/lib/session-read';
 import { removeAgentSkill } from '@/lib/optimistic-skills';
 import { AgentFiles } from './agent-files';
 import { useScope } from '@/lib/use-scope';
+import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
 
 type SessionRow = inferRouterOutputs<AppRouter>['chat']['listSessions'][number];
 type AgentByNameOutput = NonNullable<inferRouterOutputs<AppRouter>['agents']['byName']>;
 
 export type DetailTab = 'detail' | 'files';
+
+// tone → cron dot bg (this site's own visual map; the status→tone grouping is shared).
+const AGENT_DOT_CLS: Record<CronStatusTone, string> = {
+  ok: 'bg-emerald-500',
+  bad: 'bg-rose-500',
+  inconclusive: 'bg-amber-500',
+  neutral: 'bg-zinc-400',
+};
 
 // Keep the agent detail fresh after a gateway-applied change — a new agent's
 // scaffold, or a skill install/uninstall — WITHOUT a manual refresh, and without
@@ -378,17 +387,7 @@ function CronsSection({ agentName }: { agentName: string }) {
       ) : (
         <ul className="space-y-1.5">
           {list.map((c) => {
-            const dot = !c.enabled
-              ? 'bg-zinc-500'
-              : c.lastStatus === 'fail' || c.lastStatus === 'error'
-                ? 'bg-rose-500'
-                : c.lastStatus === 'running'
-                  ? 'bg-amber-500'
-                  : c.lastStatus === 'ok'
-                    ? 'bg-emerald-500'
-                    : c.lastStatus === 'timeout' || c.lastStatus === 'no_output'
-                      ? 'bg-amber-500' // inconclusive, not a failure
-                      : 'bg-zinc-400';
+            const dot = !c.enabled ? 'bg-zinc-500' : AGENT_DOT_CLS[cronStatusTone(c.lastStatus)];
             const running = c.enabled && c.lastStatus === 'running';
             return (
               <li key={c.id}>

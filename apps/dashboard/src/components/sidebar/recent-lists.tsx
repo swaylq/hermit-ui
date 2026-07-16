@@ -24,12 +24,22 @@ import { ContextMenu } from '@/components/ui/context-menu';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { SidebarFindInput } from '@/components/sidebar/sidebar-find-input';
 import { TrashedAgents } from '@/components/sidebar/trashed-agents';
+import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
 
 function fmtEvery(sec: number): string {
   if (sec % 3600 === 0) return `every ${sec / 3600}h`;
   if (sec % 60 === 0) return `every ${sec / 60}m`;
   return `every ${sec}s`;
 }
+
+// tone → cron dot bg (this site's own visual map; the status→tone grouping is shared).
+// Note: an unknown/ok status both render emerald here (matches the prior fall-through).
+const SIDEBAR_DOT_CLS: Record<CronStatusTone, string> = {
+  ok: 'bg-emerald-500',
+  bad: 'bg-rose-500',
+  inconclusive: 'bg-amber-500',
+  neutral: 'bg-emerald-500',
+};
 
 // Cron list shown in the sidebar on /cron — all scheduled tasks across agents.
 // Mirrors RecentSessions/RecentAgents so the chrome reads the same.
@@ -72,15 +82,7 @@ export function RecentCrons() {
           <ul className="space-y-px">
             {visible.map((c) => {
               const active = activeId === c.id;
-              const dot = !c.enabled
-                ? 'border border-muted-foreground/40'
-                : c.lastStatus === 'fail' || c.lastStatus === 'error'
-                  ? 'bg-rose-500'
-                  : c.lastStatus === 'running'
-                    ? 'bg-amber-500'
-                    : c.lastStatus === 'timeout' || c.lastStatus === 'no_output'
-                      ? 'bg-amber-500' // inconclusive, not a failure
-                      : 'bg-emerald-500';
+              const dot = !c.enabled ? 'border border-muted-foreground/40' : SIDEBAR_DOT_CLS[cronStatusTone(c.lastStatus)];
               return (
                 <li key={c.id}>
                   <Link

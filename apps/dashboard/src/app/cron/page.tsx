@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { Markdown } from '@/components/markdown';
+import { cronStatusTone, CRON_STATUS, type CronStatusTone } from '@/lib/cron-status';
 
 // ── format helpers ───────────────────────────────────────────────────────────
 function fmtDur(sec: number): string {
@@ -27,25 +28,19 @@ function fmtMs(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
+// tone → badge classes (this site's own visual map; the status→tone grouping is shared).
+const CRON_BADGE_CLS: Record<CronStatusTone, string> = {
+  ok: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/25',
+  bad: 'text-rose-500 bg-rose-500/10 border-rose-500/25',
+  inconclusive: 'text-amber-500 bg-amber-500/10 border-amber-500/25',
+  neutral: 'text-zinc-400 bg-zinc-500/10 border-zinc-500/25',
+};
+
 function CronStatusBadge({ status, enabled }: { status?: string | null; enabled: boolean }) {
-  let text = status ?? 'idle';
-  let cls = 'text-zinc-400 bg-zinc-500/10 border-zinc-500/25';
-  if (!enabled) {
-    text = 'off';
-  } else if (status === 'ok') {
-    cls = 'text-emerald-500 bg-emerald-500/10 border-emerald-500/25';
-  } else if (status === 'fail' || status === 'error') {
-    // error = the gateway caught an exception running the turn; fail = legacy rows.
-    cls = 'text-rose-500 bg-rose-500/10 border-rose-500/25';
-  } else if (status === 'running') {
-    cls = 'text-amber-500 bg-amber-500/10 border-amber-500/25';
-  } else if (status === 'timeout' || status === 'no_output') {
-    // Inconclusive — the gateway couldn't confirm completion (hit the 2h cap / host
-    // suspended, or the turn settled but produced no text). NOT a failure.
-    cls = 'text-amber-500 bg-amber-500/10 border-amber-500/25';
-  }
+  const text = enabled ? (status ?? 'idle') : 'off';
+  const cls = enabled ? CRON_BADGE_CLS[cronStatusTone(status)] : CRON_BADGE_CLS.neutral;
   return (
-    <span className={cn('inline-flex items-center rounded border px-1.5 py-px text-[10px] font-mono uppercase tracking-wide', cls, status === 'running' && enabled && 'animate-pulse')}>
+    <span className={cn('inline-flex items-center rounded border px-1.5 py-px text-[10px] font-mono uppercase tracking-wide', cls, status === CRON_STATUS.running && enabled && 'animate-pulse')}>
       {text}
     </span>
   );

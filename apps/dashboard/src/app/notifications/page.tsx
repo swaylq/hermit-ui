@@ -15,6 +15,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
+import { cronStatusTone } from '@/lib/cron-status';
 
 type FeedItem = {
   kind: 'chat' | 'cron' | 'host';
@@ -124,7 +125,7 @@ function NotificationsInner() {
                     <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                       <span className="font-medium text-foreground/80 truncate">{item.agentName}</span>
                       <span className="uppercase tracking-wide">{item.kind}</span>
-                      {item.kind === 'cron' && (item.status === 'fail' || item.status === 'error') && (
+                      {item.kind === 'cron' && cronStatusTone(item.status) === 'bad' && (
                         <span className="inline-flex items-center gap-0.5 text-rose-500">
                           <AlertTriangle className="h-3 w-3" /> failed
                         </span>
