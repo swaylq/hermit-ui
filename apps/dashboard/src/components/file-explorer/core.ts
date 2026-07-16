@@ -7,7 +7,7 @@
 // note) stay in each component for now.
 
 import type { trpc } from '@/lib/trpc';
-import { getActiveKey } from '@/lib/keyring';
+import { authedFetch } from '@/lib/asst-fetch';
 
 // The fileManager tRPC input is a flat { agentName?, globalMemory?, path } (NOT a
 // discriminated union — see server/routers/fileManager.ts PathInput), so a source
@@ -61,7 +61,7 @@ export async function fetchPreparedBlob(
     await sleep(2000);
     const s = await utils.fileManager.downloadStatus.fetch({ id });
     if (s.status === 'ready') {
-      const res = await fetch(`/api/file-manager/download/${encodeURIComponent(id)}`, { headers: { 'x-asst-key': getActiveKey() } });
+      const res = await authedFetch(`/api/file-manager/download/${encodeURIComponent(id)}`);
       if (!res.ok) throw new Error(`Load failed (${res.status})`);
       return { blob: await res.blob(), filename: s.filename };
     }

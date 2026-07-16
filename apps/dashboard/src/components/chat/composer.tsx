@@ -10,7 +10,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, type ChangeEvent, type ClipboardEvent, type DragEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
-import { getActiveKey } from '@/app/providers';
+import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
 import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { ImageLightbox } from '@/components/ui/image-lightbox';
@@ -226,7 +226,7 @@ export function ComposeBar({
         const fd = new FormData();
         fd.append('sessionId', sessionId);
         fd.append('file', file);
-        const r = await fetch('/api/upload', { method: 'POST', headers: { 'x-asst-key': getActiveKey() }, body: fd });
+        const r = await authedFetch('/api/upload', { method: 'POST', body: fd });
         if (!r.ok) throw new Error(`upload failed (${r.status}): ${await r.text().catch(() => '')}`);
         const data = await r.json() as { url: string; mimeType: string; width: number | null; height: number | null };
         const clientDims = await clientDimsP;

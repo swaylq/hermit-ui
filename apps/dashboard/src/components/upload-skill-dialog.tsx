@@ -6,7 +6,7 @@ import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Overlay } from '@/components/overlay';
-import { getActiveKey } from '@/lib/keyring';
+import { authedFetch } from '@/lib/asst-fetch';
 
 type Result = { slug: string; latestVersion: string; created: boolean; fileCount: number; skipped: string[] };
 
@@ -51,9 +51,8 @@ export function UploadSkillDialog({ onClose }: { onClose: () => void }) {
       if (slug.trim()) fd.append('slug', slug.trim());
       if (displayName.trim()) fd.append('displayName', displayName.trim());
       if (changelog.trim()) fd.append('changelog', changelog.trim());
-      const res = await fetch('/api/market/skills/upload', {
+      const res = await authedFetch('/api/market/skills/upload', {
         method: 'POST',
-        headers: { 'x-asst-key': getActiveKey() },
         body: fd,
       });
       const j = await res.json().catch(() => ({}));

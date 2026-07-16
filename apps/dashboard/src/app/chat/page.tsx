@@ -15,7 +15,7 @@ import { CtxBar } from '@/components/ctx-bar';
 import { sessionStatusView } from '@/lib/session-status';
 import { useMarkSessionRead } from '@/lib/session-read';
 import { markSessionWorking } from '@/lib/session-live';
-import { getActiveKey } from '@/app/providers';
+import { authedFetch } from '@/lib/asst-fetch';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { useScope } from '@/lib/use-scope';
 import { LoopBar } from '@/components/chat/loop-bar';
@@ -337,8 +337,7 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
           // this window (avoids the open-time double-fetch). A RECONNECT does NOT
           // skip: it emits the current window once to catch up on anything that
           // landed during the disconnect gap.
-          const res = await fetch(`/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}${isReconnect ? '' : '&skipInitial=1'}`, {
-            headers: { 'x-asst-key': getActiveKey() },
+          const res = await authedFetch(`/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}${isReconnect ? '' : '&skipInitial=1'}`, {
             signal: myCtrl.signal,
           });
           if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);

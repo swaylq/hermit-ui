@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
-import { getActiveKey } from '@/lib/keyring';
+import { authedFetch } from '@/lib/asst-fetch';
 import { type FileItem } from '@/components/file-detail';
 import { SkillDiff } from '@/components/skill-diff';
 import { SkillFilesModal } from '@/components/skill-files-modal';
@@ -93,9 +93,8 @@ export function MarketSkillDetail({ slug, onClose }: { slug: string; onClose: ()
     setDownloading(true);
     setDlError(null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/market/skills/${encodeURIComponent(slug)}/download?version=${encodeURIComponent(selected.version)}`,
-        { headers: { 'x-asst-key': getActiveKey() } },
       );
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
