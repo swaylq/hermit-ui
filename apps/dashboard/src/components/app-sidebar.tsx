@@ -1,10 +1,10 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
-  SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, MenuIcon, Plus,
+  SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, Plus,
   Trash2, RotateCw, FoldVertical, X, Store, Bell, ArrowLeft, Package, Search, Pin, NotebookText, Send, Folder, Moon, Eye, EyeOff, BookOpen, Drama, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
@@ -25,50 +25,11 @@ import { TrashedAgents } from '@/components/sidebar/trashed-agents';
 import { BrainButton, SettingsButton, NotificationsButton } from '@/components/sidebar/header-buttons';
 import { BrainSidebar, RecentDispatchSessions } from '@/components/sidebar/brain-sidebar';
 import { KnowledgeSidebarList } from '@/components/sidebar/knowledge-sidebar-list';
+import { useSidebar, SidebarProvider, SidebarMobileToggle } from '@/components/sidebar/context';
 
-// ── Sidebar open/collapse state, shared so a page header can drop a hamburger ──
-type SidebarCtx = {
-  mobileOpen: boolean;
-  setMobileOpen: (b: boolean) => void;
-  collapsed: boolean;
-  setCollapsed: (b: boolean) => void;
-};
-const Ctx = createContext<SidebarCtx | null>(null);
-export function useSidebar(): SidebarCtx {
-  const v = useContext(Ctx);
-  if (!v) throw new Error('useSidebar must be used inside <SidebarProvider>');
-  return v;
-}
-
-export function SidebarProvider({ children }: { children: React.ReactNode }) {
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [collapsed, setCollapsedState] = useState(false);
-  // restore desktop collapse preference
-  useEffect(() => {
-    setCollapsedState(localStorage.getItem('hermit:sidebar-collapsed') === '1');
-  }, []);
-  const setCollapsed = useCallback((b: boolean) => {
-    setCollapsedState(b);
-    try { localStorage.setItem('hermit:sidebar-collapsed', b ? '1' : '0'); } catch {}
-  }, []);
-  const value = useMemo(() => ({ mobileOpen, setMobileOpen, collapsed, setCollapsed }), [mobileOpen, collapsed, setCollapsed]);
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
-}
-
-// Hamburger for mobile — pages render this at the top-left of their header.
-export function SidebarMobileToggle({ className }: { className?: string }) {
-  const { setMobileOpen } = useSidebar();
-  return (
-    <button
-      type="button"
-      onClick={() => setMobileOpen(true)}
-      aria-label="open navigation"
-      className={cn('lg:hidden -ml-1 p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer', className)}
-    >
-      <MenuIcon className="h-5 w-5" />
-    </button>
-  );
-}
+// Re-export the sidebar context/provider API (moved to components/sidebar/context)
+// so the @/components/app-sidebar barrel stays intact for its ~18 external consumers.
+export { useSidebar, SidebarProvider, SidebarMobileToggle };
 
 const NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/chat', label: 'Chat', icon: MessageSquare },
