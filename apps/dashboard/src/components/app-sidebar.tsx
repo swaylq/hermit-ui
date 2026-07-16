@@ -5,13 +5,14 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, Clock, Boxes, PanelLeft, Plus,
-  Store, Bell, ArrowLeft, Package, NotebookText, Send, Folder, Moon, BookOpen, Drama, type LucideIcon,
+  Store, ArrowLeft, Package, NotebookText, Send, Folder, Moon, BookOpen, Drama, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { SETTINGS_HREFS, SETTINGS_TABS } from '@/lib/settings-nav';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { BrainButton, SettingsButton, NotificationsButton } from '@/components/sidebar/header-buttons';
+import { NotificationsFilters } from '@/components/sidebar/notifications-nav';
 import { BrainSidebar, RecentDispatchSessions } from '@/components/sidebar/brain-sidebar';
 import { KnowledgeSidebarList } from '@/components/sidebar/knowledge-sidebar-list';
 import { useSidebar, SidebarProvider, SidebarMobileToggle } from '@/components/sidebar/context';
@@ -46,14 +47,6 @@ const BRAIN_NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/brain/dispatch', label: 'Dispatches', icon: Send },
 ];
 
-// Notifications mode: filter the unread inbox by source. Counts come from
-// notifications.counts; the page filters the already-loaded feed client-side.
-const NOTIF_FILTERS: Array<{ key: 'all' | 'chat' | 'cron'; href: string; label: string; icon: LucideIcon }> = [
-  { key: 'all', href: '/notifications', label: 'All', icon: Bell },
-  { key: 'chat', href: '/notifications?filter=chat', label: 'Chat', icon: MessageSquare },
-  { key: 'cron', href: '/notifications?filter=cron', label: 'Cron', icon: Clock },
-];
-
 export function AppSidebar() {
   const pathname = usePathname();
   const search = useSearchParams();
@@ -71,11 +64,9 @@ export function AppSidebar() {
   const onBrainChat = pathname === '/brain'; // the Chat view (no sub-route; ?session= keeps this path)
   const onBrainDispatch = pathname.startsWith('/brain/dispatch'); // dispatch list lives in the sidebar too
   const onNotifications = pathname.startsWith('/notifications');
-  // Unread roll-up for the bell badge + the notifications-mode filter counts. A
-  // machineProcedure → only ever runs for the owner (scoped keys get ScopedSidebar,
-  // never this component), so it's safe to call unconditionally.
-  const notifCounts = trpc.notifications.counts.useQuery(undefined, { refetchInterval: 5_000 }).data ?? { chat: 0, cron: 0, total: 0 };
-  const notifFilter = onNotifications ? (search.get('filter') ?? 'all') : 'all';
+  // The unread roll-up (bell badge) + the notifications-mode filter counts each
+  // subscribe inside their own leaf now (useNotifCounts) so a count tick re-renders
+  // just that leaf, not this whole sidebar — see components/sidebar/notifications-nav.tsx (P1-2).
   // When viewing a chat session, point the Agents nav at THAT session's agent, so
   // entering Agents from a session lands on its agent instead of the default
   // first-agent. Reuses RecentSessions' listSessions query (same key → deduped).
@@ -326,7 +317,7 @@ export function AppSidebar() {
                 />
               </Link>
               <BrainButton collapsed={collapsed} />
-              <NotificationsButton collapsed={collapsed} count={notifCounts.total} />
+              <NotificationsButton collapsed={collapsed} />
               <Link
                 href="/market/skills"
                 title="Public marketplace"
@@ -416,45 +407,10 @@ export function AppSidebar() {
             )}
           </>
         ) : onNotifications ? (
-          /* Notifications mode: All / Chat / Cron filters with unread counts. The
-             list + "Mark all read" live on the page; this is just the source filter. */
-          <>
-            <nav className="px-2 pt-2 space-y-0.5">
-              {NOTIF_FILTERS.map((f) => {
-                const active = notifFilter === f.key;
-                const Icon = f.icon;
-                const count = f.key === 'all' ? notifCounts.total : f.key === 'chat' ? notifCounts.chat : notifCounts.cron;
-                return (
-                  <Link
-                    key={f.key}
-                    href={f.href}
-                    title={f.label}
-                    className={cn(
-                      'flex items-center gap-2.5 rounded-lg h-8 text-sm transition-colors cursor-pointer',
-                      collapsed ? 'lg:justify-center lg:px-0 px-3' : 'px-3',
-                      active
-                        ? 'bg-sidebar-accent text-sidebar-foreground font-medium'
-                        : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
-                    )}
-                  >
-                    <Icon className="h-4 w-4 shrink-0" />
-                    <span className={cn('truncate flex-1', collapsed && 'lg:hidden')}>{f.label}</span>
-                    {count > 0 && (
-                      <span
-                        className={cn(
-                          'shrink-0 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-mono tabular-nums leading-none',
-                          collapsed && 'lg:hidden',
-                        )}
-                      >
-                        {count}
-                      </span>
-                    )}
-                  </Link>
-                );
-              })}
-            </nav>
-            <div className="flex-1" />
-          </>
+          /* Notifications mode: All / Chat / Cron source filters. The counts
+             subscription lives in the leaf so a count tick re-renders only the
+             strip, not this sidebar (P1-2). */
+          <NotificationsFilters collapsed={collapsed} />
         ) : onSettings ? (
           /* Settings mode: the settings tabs as a vertical nav (back in the header). */
           <>

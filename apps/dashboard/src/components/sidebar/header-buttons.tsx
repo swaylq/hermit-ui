@@ -10,6 +10,7 @@ import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { Settings, Bell } from 'lucide-react';
 import { SETTINGS_HREFS, SETTINGS_ENTRY_HREF } from '@/lib/settings-nav';
+import { useNotifCounts } from './notifications-nav';
 
 // The hermit-crab button in the sidebar header → the dedicated 义脑 / Brain panel
 // (/brain). The orchestrator lives there, kept out of the worker agent lists. The
@@ -77,9 +78,12 @@ export function SettingsButton({ collapsed }: { collapsed: boolean }) {
 // Sits right beside the Brain button. Carries a small rose badge with the total
 // unread roll-up (chat sessions + cron runs) so the user sees pending items
 // without entering. Mirrors BrainButton's active/hover treatment.
-export function NotificationsButton({ collapsed, count }: { collapsed: boolean; count: number }) {
+export function NotificationsButton({ collapsed }: { collapsed: boolean }) {
   const pathname = usePathname();
   const active = pathname.startsWith('/notifications');
+  // Subscribe to the unread roll-up HERE (leaf) rather than in AppSidebar, so a
+  // count tick re-renders just this badge, not the whole sidebar subtree (P1-2).
+  const { total: count } = useNotifCounts();
   return (
     <Link
       href="/notifications"
