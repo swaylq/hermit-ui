@@ -413,6 +413,11 @@ model ChatSession {
   // Resolve a session by its Claude uuid — the interaction-sync fallback lookup
   // (app/api/sync/interaction/route.ts) findFirst WHERE claudeSessionId + machineId.
   @@index([machineId, claudeSessionId])
+  // Back the `WHERE machineId ORDER BY lastMessageAt DESC` scans in the always-on
+  // sidebar's notifications.counts / notifications.feed (5s, every page) — without it
+  // Postgres filesorts the machine's whole session set to take the top 300. See
+  // docs/perf-backlog.md P0-1.
+  @@index([machineId, lastMessageAt])
   // Four PARTIAL indexes for the sparse request-flag columns — cancelRequestedAt /
   // restartRequestedAt / hibernateRequestedAt / (dispatchedBySessionId + closedAt) —
   // back the gateway's per-~1.5s cancel/restart/hibernate/dispatch pollers. Prisma's
