@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
-  SquarePen, MessageSquare, Bot, BarChart3, Clock, Boxes, PanelLeft, Plus,
+  SquarePen, MessageSquare, Bot, Clock, Boxes, PanelLeft, Plus,
   Store, Bell, ArrowLeft, Package, NotebookText, Send, Folder, Moon, BookOpen, Drama, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';

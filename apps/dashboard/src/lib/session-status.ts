@@ -31,10 +31,7 @@ export interface SessionRuntimeLike {
 }
 
 export interface StatusView {
-  // 'idle' is legacy — never returned anymore (idle split into 'ready'/'unread'),
-  // but kept in the union so an older caller comparing `key !== 'idle'` still
-  // type-checks during a staged rollout. Drop once every caller is updated.
-  key: 'working' | 'unread' | 'ready' | 'starting' | 'restarting' | 'down' | 'idle';
+  key: 'working' | 'unread' | 'ready' | 'starting' | 'restarting' | 'down';
   label: string;
   dot: string;   // Tailwind bg-* for the status dot
   pulse: boolean; // animate the dot (working / starting)

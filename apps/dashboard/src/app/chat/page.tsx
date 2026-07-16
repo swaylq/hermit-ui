@@ -25,7 +25,6 @@ import { NewChatPane } from '@/components/chat/new-chat-pane';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 import { EmptyChat } from '@/components/chat/empty-chat';
 import { TypingIndicator } from '@/components/chat/message-bits';
-import { RestartBar } from '@/components/chat/restart-bar';
 import { MessageTimeline } from '@/components/chat/message-timeline';
 import { ComposeBar, QueueBar } from '@/components/chat/composer';
 
@@ -474,10 +473,6 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
   // row on the next stream push (and flicker it mid-turn). Merged into `view` at
   // render-time and auto-dropped once the real row (same text) lands in the cache.
   const [pending, setPending] = useState<Array<{ id: string; role: 'user'; content: { type: 'text'; text: string }[]; createdAt: string }>>([]);
-  // Armed when the user clicks Restart on a dead session — reveals the composer
-  // again so their next message respawns claude (--resume). Reset on session
-  // switch (SessionPane is keyed by sessionId).
-  const [restartArmed, setRestartArmed] = useState(false);
   // Inline-edit the session title from the header. Clicking the title swaps
   // it for an input; Enter or blur saves, Escape cancels. Backend already has
   // `chat.setTitle` — we just plug into it.
@@ -820,13 +815,6 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
     markRead(sessionId);
   }, [markRead, sessionId, messages.data?.length, isInFlight]);
 
-  // Exited sessions stay usable: sending `--resume`s the dead pane (the gateway
-  // respawns on delivery; the backend `send` only blocks closed sessions), so we
-  // never swap the composer for the RestartBar — the composer + send revive it,
-  // and the explicit restart still lives in the header. (RestartBar + restartArmed
-  // are vestigial now; safe to delete in a follow-up.)
-  const inactive = false;
-  const showRestartBar = inactive && !restartArmed;
   useEffect(() => {
     if (!isInFlight || session?.closedAt) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1006,7 +994,7 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
             title="restart — kill this session's tmux pane; the next message respawns claude with --resume (history preserved; context NOT reduced — use compact ⌄ for that)"
             busy={!!session?.restartRequestedAt || restartSession.isPending}
             disabled={!session}
-            onConfirm={() => { restartSession.mutate({ id: sessionId }); setRestartArmed(true); }}
+            onConfirm={() => { restartSession.mutate({ id: sessionId }); }}
           />
           <ConfirmIconButton
             icon={Trash2}
@@ -1080,12 +1068,6 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
         </div>
       )}
 
-      {showRestartBar ? (
-        <RestartBar
-          restarting={!!session?.restartRequestedAt || restartSession.isPending}
-          onRestart={() => { restartSession.mutate({ id: sessionId }); setRestartArmed(true); }}
-        />
-      ) : (
         <>
           <LoopBar
             loopState={(session as { loopState?: unknown } | undefined)?.loopState}
@@ -1180,7 +1162,6 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
             history={sentHistory}
           />
         </>
-      )}
     </>
   );
 }
