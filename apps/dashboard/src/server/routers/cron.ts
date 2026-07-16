@@ -256,6 +256,21 @@ export const cronRouter = router({
   listForGateway: gatewayProcedure.query(async ({ ctx }) => {
     const crons = await prisma.cron.findMany({
       where: { machineId: ctx.machine.id, enabled: true },
+      // Only the columns the map below actually returns. The response is already
+      // projected, so this trims the DB read (drops title / lastStatus / createdAt /
+      // updatedAt) for a byte-identical response — the gateway sees no change.
+      // `prompt` (@db.Text) stays: the runner needs it to fire. (P3-3)
+      select: {
+        id: true,
+        agentName: true,
+        directory: true,
+        prompt: true,
+        intervalSec: true,
+        jitterSec: true,
+        enabled: true,
+        lastFire: true,
+        nextFire: true,
+      },
     });
     const names = [...new Set(crons.map((c) => c.agentName))];
     const agents = names.length
