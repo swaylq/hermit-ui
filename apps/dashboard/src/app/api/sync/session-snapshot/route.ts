@@ -46,9 +46,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'bad body', detail: String(e) }, { status: 400 });
   }
 
-  let updated = 0;
   const now = new Date();
-  for (const it of body.items) {
+  // Each session's data differs, so this isn't a single updateMany — but the N
+  // per-session updateManys were previously awaited one at a time (N serial
+  // round-trips to the VPS Postgres every 8s push). Build the ops and issue them
+  // as ONE `$transaction([...])`: a single round-trip / BEGIN…COMMIT. Atomic per
+  // batch (a rare DB error rolls the whole push back instead of committing a
+  // prefix — harmless, the collector re-pushes the full snapshot next tick).
+  const ops = body.items.map((it) => {
     // updateMany scoped to (machineId, id) — silently skips sessions the
     // gateway already cleaned up.
     const data: Prisma.ChatSessionUpdateManyMutationInput = {
@@ -78,11 +83,12 @@ export async function POST(req: NextRequest) {
     // respawn) is no longer hibernated. alive=true ⟺ not hibernated.
     if (it.alive === true) data.hibernatedAt = null;
 
-    const r = await prisma.chatSession.updateMany({
+    return prisma.chatSession.updateMany({
       where: { id: it.sessionId, machineId: machine.id },
       data,
     });
-    updated += r.count;
-  }
+  });
+  const results = ops.length ? await prisma.$transaction(ops) : [];
+  const updated = results.reduce((sum, r) => sum + r.count, 0);
   return NextResponse.json({ ok: true, updated });
 }
