@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Clock, Play, Trash2, Pencil, Check, X, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -280,6 +280,10 @@ function CronDetail({ id }: { id: string }) {
     },
     onSettled: () => utils.cron.list.invalidate(),
   });
+  // Stable per-list callback so the memo'd CronRunRow bails across the 5s poll — an
+  // inline `() => markRunRead.mutate(...)` at each row would be a fresh identity every
+  // render. `.mutate` is a stable reference (React Query v5), so this useCallback is too.
+  const markRead = useCallback((runId: string) => markRunRead.mutate({ runId }), [markRunRead.mutate]);
   const markAllRead = trpc.cron.markAllRead.useMutation({
     onMutate: async () => {
       await utils.cron.get.cancel({ id });
@@ -461,7 +465,7 @@ function CronDetail({ id }: { id: string }) {
             ) : (
               <ul className="space-y-1">
                 {runs.map((r) => (
-                  <CronRunRow key={r.id} run={r} autoOpen={r.id === autoRunId} onRead={() => markRunRead.mutate({ runId: r.id })} />
+                  <CronRunRow key={r.id} run={r} autoOpen={r.id === autoRunId} onRead={markRead} />
                 ))}
               </ul>
             )}
@@ -472,13 +476,18 @@ function CronDetail({ id }: { id: string }) {
   );
 }
 
-function CronRunRow({
+// memo'd so a 5s cron.get poll doesn't re-render every run row — React Query's
+// structural sharing keeps unchanged run objects referentially stable, `autoOpen`
+// is a primitive, and `onRead` is a stable useCallback (see `markRead`), so
+// untouched rows bail. `onRead` takes the runId (the row calls it with its own
+// run.id) so the parent can share one stable callback across all rows.
+const CronRunRow = memo(function CronRunRow({
   run,
   onRead,
   autoOpen = false,
 }: {
   run: { id: string; firedAt: Date | string; status: string; durationMs: number | null; readAt: Date | string | null };
-  onRead: () => void;
+  onRead: (runId: string) => void;
   autoOpen?: boolean;
 }) {
   // Unread = finished run not yet expanded. A transparent dot keeps the row
@@ -493,7 +502,7 @@ function CronRunRow({
   // scroll it into view. Fires once for the targeted row.
   useEffect(() => {
     if (!autoOpen) return;
-    if (unread) onRead();
+    if (unread) onRead(run.id);
     ref.current?.scrollIntoView({ block: 'center' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoOpen]);
@@ -503,7 +512,7 @@ function CronRunRow({
         ref={ref}
         open={open}
         className="group rounded-md border border-border"
-        onToggle={(e) => { const o = e.currentTarget.open; setOpen(o); if (o && unread) onRead(); }}
+        onToggle={(e) => { const o = e.currentTarget.open; setOpen(o); if (o && unread) onRead(run.id); }}
       >
         <summary className="cursor-pointer list-none flex items-center gap-2 px-2.5 h-9 text-[12px]">
           <span
@@ -530,4 +539,4 @@ function CronRunRow({
       </details>
     </li>
   );
-}
+});
