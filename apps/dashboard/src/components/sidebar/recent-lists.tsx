@@ -1,18 +1,27 @@
 'use client';
 
 // Worker "recents" sidebar lists — the per-route lists at the bottom of the sidebar
-// (Crons on /cron and Agents on /agents here; the /chat sessions to follow). Extracted
-// verbatim from app-sidebar.tsx (P2-4); behaviour identical. This file is the home for
-// the near-identical Recent* lists that P2-4's runtime-gated dedup will later fold into
-// one parameterised unit. RecentCrons and RecentAgents are rendered by AppSidebar;
-// fmtEvery is a private cron-interval formatter.
+// (Crons on /cron, Agents on /agents, and Sessions on /chat). Extracted verbatim from
+// app-sidebar.tsx (P2-4); behaviour identical. All three near-identical worker Recent*
+// lists now live here so P2-4's runtime-gated dedup can fold them into one parameterised
+// unit within a single file. RecentCrons/RecentAgents/RecentSessions are rendered by
+// AppSidebar; fmtEvery is a private cron-interval formatter.
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
+import { sessionStatusView } from '@/lib/session-status';
+import { isSessionUnread } from '@/lib/session-read';
+import { useLiveWorking } from '@/lib/session-live';
+import { usePins, togglePin } from '@/lib/session-pins';
+import { useLongPress } from '@/lib/use-long-press';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { ContextMenu } from '@/components/ui/context-menu';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { SidebarFindInput } from '@/components/sidebar/sidebar-find-input';
 import { TrashedAgents } from '@/components/sidebar/trashed-agents';
 
@@ -248,6 +257,386 @@ export function RecentAgents() {
         )}
       </div>
       <TrashedAgents />
+    </div>
+  );
+}
+
+// The /chat session list — per-agent sessions with live-working dots, unread
+// state, pins, a context menu, hide/hibernate/restart actions, and long-press on
+// touch. Rendered by AppSidebar; the heaviest of the three worker Recent* lists.
+export function RecentSessions() {
+  const search = useSearchParams();
+  const activeId = search.get('session');
+  const sessions = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
+  // The orchestrator (义脑) lives in /brain — keep its conversations out of the
+  // worker session recents. agents.list is cached (shared), so this is cheap.
+  const orchestratorsQ = trpc.agents.list.useQuery(undefined, { staleTime: 60_000 });
+  const orchestratorName = (orchestratorsQ.data ?? []).find((a) => a.isOrchestrator)?.name;
+  const utils = trpc.useUtils();
+  const confirm = useConfirm();
+  const liveWorkingSince = useLiveWorking();
+  const pins = usePins();
+  // Custom right-click menu: viewport coords + the session it targets, or null.
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  // Touch long-press opens the SAME menu — phones have no right-click.
+  const openMenuAt = useCallback((id: string, x: number, y: number) => setMenu({ x, y, id }), []);
+  const longPress = useLongPress(openMenuAt);
+
+  // Hidden sessions are dropped from the list; a footer toggle reveals them.
+  const [showHidden, setShowHidden] = useState(false);
+  // Hide/unhide optimistically so the row vanishes (or reappears) on the click,
+  // not on the next 5s poll — then reconcile on settle.
+  const setHidden = trpc.chat.setHidden.useMutation({
+    onMutate: async ({ id, hidden }) => {
+      await utils.chat.listSessions.cancel({});
+      const prev = utils.chat.listSessions.getData({});
+      utils.chat.listSessions.setData({}, (old) =>
+        old?.map((s) => (s.id === id ? { ...s, hiddenAt: hidden ? new Date() : null } : s)),
+      );
+      return { prev };
+    },
+    onError: (_e, _v, context) => {
+      if (context?.prev) utils.chat.listSessions.setData({}, context.prev);
+    },
+    onSettled: () => { void utils.chat.listSessions.invalidate(); },
+  });
+
+  // The three big chat actions (compact / restart / delete) also live in an open
+  // chat's header; surfaced here on the right-click menu so you can run them on
+  // ANY session without opening it. Compact just injects `/compact` (benign →
+  // straight through); restart + delete are disruptive so they confirm first,
+  // matching the header's two-step and the cron / skill delete confirms.
+  const compactSession = trpc.chat.send.useMutation({
+    onSuccess: (_d, vars) => {
+      void utils.chat.listMessages.invalidate({ sessionId: vars.sessionId });
+      void utils.chat.listSessions.invalidate();
+    },
+  });
+  const restartSession = trpc.chat.requestSessionRestart.useMutation({
+    onSuccess: () => { void utils.chat.listSessions.invalidate(); },
+  });
+  const hibernateSession = trpc.chat.requestHibernate.useMutation({
+    onSuccess: () => { void utils.chat.listSessions.invalidate(); },
+  });
+  const deleteSession = trpc.chat.deleteSession.useMutation({
+    onSuccess: (_d, vars) => {
+      // Deleting the session you're viewing: hard-nav to /chat (the Next 16
+      // custom-server router strands you on the dead URL — see the chat page's
+      // delete note). A background session: just refresh so its row vanishes.
+      if (vars.id === activeId) { window.location.href = '/chat'; return; }
+      void utils.chat.listSessions.invalidate();
+    },
+  });
+
+  // Local agent filter — persisted in sessionStorage so it survives reloads
+  // but doesn't pollute the URL. "" means "all agents".
+  const [filter, setFilter] = useState<string>('');
+  useEffect(() => {
+    const stored = typeof window !== 'undefined' ? sessionStorage.getItem('hermit:chat-filter') : null;
+    if (stored) setFilter(stored);
+  }, []);
+  const onFilterChange = (v: string) => {
+    setFilter(v);
+    try {
+      if (v) sessionStorage.setItem('hermit:chat-filter', v);
+      else sessionStorage.removeItem('hermit:chat-filter');
+    } catch { /* private mode etc. — fine */ }
+  };
+
+  // Ephemeral text search over recents — matches the displayed title (or preview
+  // fallback) + agent name. Not persisted: a quick find, not a scoping choice.
+  const [q, setQ] = useState('');
+
+  // Prefetch a session's message window on hover/focus (intent to open) so the
+  // click lands as a cache hit. This REPLACED an eager prefetch of the top-8
+  // sessions on every dashboard open, which fired 8 full 60-message fetches —
+  // for heavy sessions ~hundreds of KB (measured: 4 fetches ≈ 561KB) that
+  // competed with the CURRENT session's own load and inflated server TTFB to
+  // ~1s. react-query's staleTime dedupes repeat hovers; limit MUST equal
+  // chat/page.tsx INITIAL_WINDOW so the open query key matches (no skeleton flash).
+  const prefetchSession = useCallback(
+    (id: string) => {
+      void utils.chat.listMessages.prefetch({ sessionId: id, limit: 60 }, { staleTime: 60_000 });
+    },
+    [utils],
+  );
+
+  const agentNames = useMemo(() => {
+    const names = new Set<string>();
+    sessions.data?.forEach((s) => { if (s.agentName !== orchestratorName && s.origin !== 'dispatch') names.add(s.agentName); });
+    return Array.from(names).sort();
+  }, [sessions.data, orchestratorName]);
+  // Worker sessions (orchestrator/Brain lives only in /brain). Brain's dispatch
+  // sessions (origin:'dispatch') are the brain's, shown only in /brain/dispatch —
+  // keep them out of the worker chat recents.
+  const baseRows = useMemo(
+    () => (sessions.data ?? []).filter((s) => s.agentName !== orchestratorName && s.origin !== 'dispatch'),
+    [sessions.data, orchestratorName],
+  );
+  const hiddenCount = useMemo(() => baseRows.filter((s) => s.hiddenAt).length, [baseRows]);
+  const visible = useMemo(() => {
+    // Hidden sessions drop out of the list unless the footer toggle is on.
+    let rows = showHidden ? baseRows : baseRows.filter((s) => !s.hiddenAt);
+    if (filter) rows = rows.filter((s) => s.agentName === filter);
+    const needle = q.trim().toLowerCase();
+    if (needle) {
+      rows = rows.filter(
+        (s) =>
+          (s.title || s.preview || '').toLowerCase().includes(needle) ||
+          s.agentName.toLowerCase().includes(needle),
+      );
+    }
+    // Pinned sessions float to the top — a stable sort keeps the lastMessageAt
+    // order within the pinned and unpinned groups.
+    if (pins.size) rows = [...rows].sort((a, b) => (pins.has(b.id) ? 1 : 0) - (pins.has(a.id) ? 1 : 0));
+    return rows;
+  }, [baseRows, showHidden, filter, q, pins]);
+
+  return (
+    <div className="flex-1 min-h-0 flex flex-col mt-3">
+      <div className="px-3 pb-1 flex items-baseline gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+        <span>Recents</span>
+        <span className="tabular-nums text-muted-foreground/50">{visible.length}</span>
+      </div>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={[
+            {
+              label: pins.has(menu.id) ? 'Unpin' : 'Pin',
+              icon: <Pin className="h-3.5 w-3.5 -rotate-45 fill-current" />,
+              onClick: () => togglePin(menu.id),
+            },
+            (() => {
+              const isHidden = !!(sessions.data ?? []).find((s) => s.id === menu.id)?.hiddenAt;
+              return {
+                label: isHidden ? 'Unhide' : 'Hide',
+                icon: isHidden ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />,
+                onClick: () => setHidden.mutate({ id: menu.id, hidden: !isHidden }),
+              };
+            })(),
+            {
+              label: 'Compact',
+              icon: <FoldVertical className="h-3.5 w-3.5" />,
+              onClick: async () => {
+                const id = menu.id;
+                if (await confirm({
+                  title: 'Compact session',
+                  message: "Run /compact to summarize the conversation and shrink the agent's context window? Continuity is kept.",
+                  confirmLabel: 'Compact',
+                }))
+                  compactSession.mutate({ sessionId: id, text: '/compact', images: [], files: [] });
+              },
+            },
+            {
+              label: 'Restart',
+              icon: <RotateCw className="h-3.5 w-3.5" />,
+              onClick: async () => {
+                const id = menu.id;
+                if (await confirm({
+                  title: 'Restart session',
+                  message: "Kill this session's tmux pane? Your next message respawns claude with history preserved (--resume).",
+                  confirmLabel: 'Restart',
+                }))
+                  restartSession.mutate({ id });
+              },
+            },
+            ...(() => {
+              // Hibernate only makes sense for a live session (a pane to free);
+              // a sleeping one wakes on send, no menu action needed.
+              const s = (sessions.data ?? []).find((x) => x.id === menu.id);
+              if (!s?.alive || s.hibernatedAt) return [];
+              return [{
+                label: 'Hibernate',
+                icon: <Moon className="h-3.5 w-3.5" />,
+                onClick: async () => {
+                  const id = menu.id;
+                  if (await confirm({
+                    title: 'Hibernate session',
+                    message: "Kill this session's pane to free its memory? It sleeps until your next message, which wakes it with full history (--resume).",
+                    confirmLabel: 'Hibernate',
+                  }))
+                    hibernateSession.mutate({ id });
+                },
+              }];
+            })(),
+            {
+              label: 'Delete',
+              icon: <Trash2 className="h-3.5 w-3.5" />,
+              danger: true,
+              onClick: async () => {
+                const id = menu.id;
+                if (await confirm({
+                  title: 'Delete session',
+                  message: 'Delete this session and all its messages? This cannot be undone.',
+                  confirmLabel: 'Delete',
+                  danger: true,
+                }))
+                  deleteSession.mutate({ id });
+              },
+            },
+          ]}
+        />
+      )}
+      {(sessions.data?.length ?? 0) > 0 && (
+        <div className="px-2 pb-1 flex items-center gap-1.5">
+          {/* Left: a simple title/agent text search over the recents list. */}
+          <div className="relative flex-1 min-w-0">
+            <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" aria-hidden="true" />
+            <input
+              data-sidebar-search
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }}
+              placeholder="搜索标题 / agent"
+              aria-label="search recents by title or agent"
+              className={cn(
+                'h-8 w-full rounded-lg border border-sidebar-border bg-sidebar/60 pl-7 text-[12px] text-sidebar-foreground/90 placeholder:text-muted-foreground/50 outline-none transition-colors hover:border-sidebar-foreground/20 focus-visible:border-sidebar-foreground/40 focus-visible:ring-1 focus-visible:ring-sidebar-foreground/15',
+                q ? 'pr-7' : 'pr-2',
+              )}
+            />
+            {q && (
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label="clear"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setQ('')}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:text-foreground cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          {/* Right: the existing per-agent filter (only when >1 agent). Custom
+              base-ui Select; modal={false} so its backdrop can't lock the page —
+              the default scroll-lock left sidebar links unclickable after a cycle. */}
+          {agentNames.length > 1 && (
+            <Select value={filter} onValueChange={(v) => onFilterChange(v ?? '')} modal={false}>
+              <SelectTrigger
+                aria-label="filter sessions by agent"
+                className="w-auto shrink-0 border-sidebar-border bg-sidebar/60 font-mono text-sidebar-foreground/90 hover:border-sidebar-foreground/20 hover:bg-sidebar-accent/60 focus-visible:border-sidebar-foreground/40 focus-visible:ring-sidebar-foreground/15"
+              >
+                <SelectValue>{(v: string | null) => (v ? v : 'All agents')}</SelectValue>
+              </SelectTrigger>
+              <SelectContent className="font-mono">
+                <SelectItem value="">
+                  All agents <span className="text-muted-foreground">· {sessions.data?.length ?? 0}</span>
+                </SelectItem>
+                {agentNames.map((n) => {
+                  const count = (sessions.data ?? []).filter((s) => s.agentName === n).length;
+                  return (
+                    <SelectItem key={n} value={n}>
+                      {n} <span className="text-muted-foreground">· {count}</span>
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+      )}
+      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
+        {sessions.isPending ? (
+          <div className="space-y-1 px-1 pt-1">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="h-8 rounded-md bg-sidebar-accent/40 animate-pulse" />
+            ))}
+          </div>
+        ) : visible.length === 0 ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">
+            {q.trim() ? `没有匹配 “${q.trim()}” 的会话。` : filter ? `no sessions for ${filter}.` : 'no chats yet — start a New chat.'}
+          </p>
+        ) : (
+          <ul className="space-y-px">
+            {visible.map((s) => {
+              const active = activeId === s.id;
+              // Optimistic working: the moment the user sends, the session is
+              // marked live (markSessionWorking) so this dot turns yellow
+              // instantly — no waiting ~13s for the gateway snapshot + 5s poll.
+              // Reconcile with the gateway's truth: once it snapshots the pane
+              // AFTER the send (snapshotAt > stamp), drop the optimism and let
+              // the real `state` drive the dot.
+              const liveAt = liveWorkingSince(s.id);
+              const optimisticWorking =
+                liveAt != null && (!s.snapshotAt || new Date(s.snapshotAt).getTime() < liveAt);
+              const status = sessionStatusView(s, {
+                unread: isSessionUnread(s),
+                liveWorking: optimisticWorking,
+              });
+              return (
+                <li key={s.id}>
+                  <Link
+                    href={`/chat?session=${encodeURIComponent(s.id)}`}
+                    onMouseEnter={() => prefetchSession(s.id)}
+                    onFocus={() => prefetchSession(s.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenu({ x: e.clientX, y: e.clientY, id: s.id });
+                    }}
+                    {...longPress(s.id)}
+                    className={cn(
+                      'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors select-none [-webkit-touch-callout:none]',
+                      active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
+                      s.closedAt && 'opacity-60',
+                      s.hiddenAt && 'opacity-50',
+                      s.hibernatedAt && !s.closedAt && 'opacity-60',
+                    )}
+                    title={s.title || s.preview || s.agentName}
+                  >
+                    <div className="flex items-start gap-2 min-w-0">
+                      <span
+                        className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', status.dot, status.pulse && 'animate-pulse')}
+                        aria-hidden="true"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline justify-between gap-1.5">
+                          <span className={cn('flex-1 truncate text-[13px]', active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85')}>
+                            {s.title || s.preview || s.agentName}
+                          </span>
+                          {pins.has(s.id) && (
+                            <Pin className="h-3 w-3 shrink-0 self-center -rotate-45 fill-current text-muted-foreground/70" aria-label="pinned" />
+                          )}
+                          {s.hiddenAt && (
+                            <EyeOff className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hidden" />
+                          )}
+                          {s.hibernatedAt && (
+                            <Moon className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hibernated — wakes on send" />
+                          )}
+                          <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
+                            {relTime(s.lastMessageAt ?? s.startedAt)}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 tabular-nums truncate">
+                          <span className="truncate">{s.agentName}</span>
+                          {status.key !== 'ready' && (
+                            <>
+                              <span className="text-muted-foreground/40">·</span>
+                              <span>{status.label}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowHidden((v) => !v)}
+          className="mx-2 mb-2 mt-1 flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] text-muted-foreground/70 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/80 cursor-pointer"
+        >
+          {showHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          <span>{showHidden ? 'Hide hidden chats' : `Show hidden (${hiddenCount})`}</span>
+        </button>
+      )}
     </div>
   );
 }
