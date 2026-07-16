@@ -20,13 +20,11 @@ import { usePins, togglePin } from '@/lib/session-pins';
 import { ContextMenu } from '@/components/ui/context-menu';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLongPress } from '@/lib/use-long-press';
-import { SidebarFindInput } from '@/components/sidebar/sidebar-find-input';
-import { TrashedAgents } from '@/components/sidebar/trashed-agents';
 import { BrainButton, SettingsButton, NotificationsButton } from '@/components/sidebar/header-buttons';
 import { BrainSidebar, RecentDispatchSessions } from '@/components/sidebar/brain-sidebar';
 import { KnowledgeSidebarList } from '@/components/sidebar/knowledge-sidebar-list';
 import { useSidebar, SidebarProvider, SidebarMobileToggle } from '@/components/sidebar/context';
-import { RecentCrons } from '@/components/sidebar/recent-lists';
+import { RecentCrons, RecentAgents } from '@/components/sidebar/recent-lists';
 
 // Re-export the sidebar context/provider API (moved to components/sidebar/context)
 // so the @/components/app-sidebar barrel stays intact for its ~18 external consumers.
@@ -552,135 +550,6 @@ export function AppSidebar() {
         </div>
       </aside>
     </>
-  );
-}
-
-// Agent list shown in the sidebar on /agents. Mirrors RecentSessions visually
-// so the two routes feel like the same chrome with a different payload.
-function RecentAgents() {
-  const search = useSearchParams();
-  const activeName = search.get('name');
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 10_000 });
-  const pending = trpc.agents.pendingRequests.useQuery(undefined, {
-    // Fast only while something is in flight; idle backs off hard (create/delete
-    // already invalidate this, so a fresh pending shows at once). Both observers
-    // of this query (here + /agents page) must agree — RQ uses the min interval.
-    refetchInterval: (q) => (((q.state.data as unknown[] | undefined)?.length ?? 0) > 0 ? 2_000 : 12_000),
-  });
-  const utils = trpc.useUtils();
-
-  // Prefetch an agent's full detail on hover/focus (intent to open) so the click
-  // is instant. This REPLACED eagerly prefetching the top-20 agents' byName
-  // (~50-70KB each) on load AND re-firing every 30s — hundreds of KB up front for
-  // agents the user never opens (measured: 4 agents = 229KB at open, dominant
-  // cost once folders went lazy). staleTime dedupes repeat hovers.
-  const prefetchAgent = useCallback(
-    (name: string) => {
-      void utils.agents.byName.prefetch({ name }, { staleTime: 30_000 });
-    },
-    [utils],
-  );
-
-  const pendingAdds = (pending.data ?? []).filter((p) => p.kind === 'create' || p.kind === 'import');
-  const [q, setQ] = useState('');
-  const needle = q.trim().toLowerCase();
-  // The orchestrator (义脑) lives in its own /brain panel, not the worker list.
-  const workers = (agents.data ?? []).filter((a) => !a.isOrchestrator);
-  const visible = needle ? workers.filter((a) => a.name.toLowerCase().includes(needle)) : workers;
-
-  return (
-    <div className="flex-1 min-h-0 flex flex-col mt-3">
-      <div className="px-3 pb-1 flex items-baseline gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
-        <span>Agents</span>
-        <span className="tabular-nums text-muted-foreground/50">{visible.length}</span>
-      </div>
-      {(agents.data?.length ?? 0) > 0 && (
-        <SidebarFindInput value={q} onChange={setQ} placeholder="搜索 agent" label="search agents by name" />
-      )}
-      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
-        {agents.isPending ? (
-          <div className="space-y-1 px-1 pt-1">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="h-10 rounded-md bg-sidebar-accent/40 animate-pulse" />
-            ))}
-          </div>
-        ) : workers.length === 0 && pendingAdds.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">no agents yet — start with “New agent”.</p>
-        ) : visible.length === 0 && pendingAdds.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">没有匹配 “{q.trim()}” 的 agent。</p>
-        ) : (
-          <ul className="space-y-px">
-            {visible.map((a) => {
-              const active = activeName === a.name;
-              return (
-                <li key={a.id}>
-                  <Link
-                    href={`/agents?name=${encodeURIComponent(a.name)}`}
-                    onMouseEnter={() => prefetchAgent(a.name)}
-                    onFocus={() => prefetchAgent(a.name)}
-                    className={cn(
-                      'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors',
-                      active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
-                    )}
-                    title={a.name}
-                  >
-                    <div className="flex items-start gap-2 min-w-0">
-                      <span
-                        className={cn(
-                          'mt-1.5 h-1.5 w-1.5 rounded-full shrink-0',
-                          a.activeSessionCount > 0 ? 'bg-emerald-500' : 'border border-muted-foreground/40',
-                        )}
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline justify-between gap-1.5">
-                          <span className={cn(
-                            'flex-1 truncate text-[13px] font-mono',
-                            active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85',
-                          )}>
-                            {a.name}
-                          </span>
-                          {a.metadataAt && (
-                            <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
-                              {relTime(a.metadataAt)}
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 tabular-nums">
-                          {a.activeSessionCount > 0 ? (
-                            <span className="text-emerald-600">{a.activeSessionCount} active</span>
-                          ) : (
-                            <span>{a.sessionCount} session{a.sessionCount === 1 ? '' : 's'}</span>
-                          )}
-                          <span className="text-muted-foreground/40">·</span>
-                          <span>{a.skillCount} skill{a.skillCount === 1 ? '' : 's'}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </Link>
-                </li>
-              );
-            })}
-            {pendingAdds.map((p) => (
-              <li key={p.id} className="px-2.5 py-1.5 opacity-70">
-                <div className="flex items-start gap-2 min-w-0">
-                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 border border-muted-foreground/40" aria-hidden="true" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-baseline justify-between gap-1.5">
-                      <span className="flex-1 truncate text-[13px] font-mono text-sidebar-foreground/70">{p.agentName}</span>
-                      <span className="shrink-0 text-[10px] text-muted-foreground/60 animate-pulse">
-                        {p.kind === 'import' ? 'importing…' : 'creating…'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      <TrashedAgents />
-    </div>
   );
 }
 
