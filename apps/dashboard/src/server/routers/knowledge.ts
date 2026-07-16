@@ -339,21 +339,17 @@ export const knowledgeRouter = router({
   }),
 
   // ── Gateway endpoints ──────────────────────────────────────────────────────
-  // Full attached-KB snapshot for this machine — the gateway's startup reconcile
-  // materializes each and prunes orphan kb-* dirs. Joined with the agent directory.
-  materializationForMachine: machineProcedure.query(async ({ ctx }) => {
+  // Lightweight manifest for the gateway's startup reconcile: every attached KB on
+  // this machine + its `contentUpdatedAt`, WITHOUT the docs' markdown. The gateway
+  // diffs this against an on-disk `.materialized-at` marker per kb-<slug> dir and
+  // only fetches + rewrites the CHANGED bases (materializationForMachine below),
+  // instead of re-shipping every base's full content on every restart. (P3-1)
+  materializationManifestForMachine: machineProcedure.query(async ({ ctx }) => {
     const rows = await prisma.agentKnowledgeBase.findMany({
       where: { machineId: ctx.machine.id },
       select: {
         agentName: true,
-        knowledgeBase: {
-          select: {
-            slug: true,
-            name: true,
-            intro: true,
-            docs: { orderBy: { sortOrder: 'asc' }, select: { filename: true, title: true, content: true } },
-          },
-        },
+        knowledgeBase: { select: { slug: true, name: true, contentUpdatedAt: true } },
       },
     });
     const names = [...new Set(rows.map((r) => r.agentName))];
@@ -366,10 +362,52 @@ export const knowledgeRouter = router({
       agentDirectory: dirByName.get(r.agentName) ?? null,
       slug: r.knowledgeBase.slug,
       name: r.knowledgeBase.name,
-      intro: r.knowledgeBase.intro,
-      docs: r.knowledgeBase.docs,
+      contentUpdatedAt: r.knowledgeBase.contentUpdatedAt.toISOString(),
     }));
   }),
+
+  // Full attached-KB snapshot for this machine (docs' markdown included), joined
+  // with the agent directory. `input.items` (optional) restricts it to a specific
+  // set of (agentName, slug) attachments — the changed subset the gateway asks for
+  // after diffing the manifest; omit it (null) for the whole set. Each item carries
+  // `contentUpdatedAt` so the gateway can stamp its per-dir marker after writing.
+  materializationForMachine: machineProcedure
+    .input(z.object({ items: z.array(z.object({ agentName: z.string(), slug: z.string() })) }).nullish())
+    .query(async ({ ctx, input }) => {
+      const wanted = input?.items ?? null;
+      if (wanted && wanted.length === 0) return [];
+      const rows = await prisma.agentKnowledgeBase.findMany({
+        where: wanted
+          ? { machineId: ctx.machine.id, OR: wanted.map((i) => ({ agentName: i.agentName, knowledgeBase: { slug: i.slug } })) }
+          : { machineId: ctx.machine.id },
+        select: {
+          agentName: true,
+          knowledgeBase: {
+            select: {
+              slug: true,
+              name: true,
+              intro: true,
+              contentUpdatedAt: true,
+              docs: { orderBy: { sortOrder: 'asc' }, select: { filename: true, title: true, content: true } },
+            },
+          },
+        },
+      });
+      const names = [...new Set(rows.map((r) => r.agentName))];
+      const agents = names.length
+        ? await prisma.agent.findMany({ where: { machineId: ctx.machine.id, name: { in: names } }, select: { name: true, directory: true } })
+        : [];
+      const dirByName = new Map(agents.map((a) => [a.name, a.directory]));
+      return rows.map((r) => ({
+        agentName: r.agentName,
+        agentDirectory: dirByName.get(r.agentName) ?? null,
+        slug: r.knowledgeBase.slug,
+        name: r.knowledgeBase.name,
+        intro: r.knowledgeBase.intro,
+        contentUpdatedAt: r.knowledgeBase.contentUpdatedAt.toISOString(),
+        docs: r.knowledgeBase.docs,
+      }));
+    }),
 
   // Pending materialize/remove requests, joined with each agent's on-disk directory
   // (like chat.pollPending) so the gateway knows where to write. Gateway polls ~3s.

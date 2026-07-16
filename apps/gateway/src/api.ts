@@ -302,11 +302,27 @@ export const api = {
   },
 
   // Full attached-KB snapshot for the startup reconcile (materialize all + prune orphans).
-  listKnowledgeMaterialization: async (): Promise<
-    Array<{ agentName: string; agentDirectory: string | null; slug: string; name: string; intro: string; docs: Array<{ filename: string; title: string; content: string }> }>
+  // KB startup reconcile (P3-1): fetch the lightweight manifest (per-base
+  // contentUpdatedAt, no docs' markdown) first, diff it against on-disk markers,
+  // then fetch full content only for the changed subset via
+  // listKnowledgeMaterialization(items) — instead of re-shipping every base's
+  // content on every restart.
+  listKnowledgeManifest: async (): Promise<
+    Array<{ agentName: string; agentDirectory: string | null; slug: string; name: string; contentUpdatedAt: string }>
   > => {
     const r = await get<any>(
-      '/api/trpc/knowledge.materializationForMachine?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+      '/api/trpc/knowledge.materializationManifestForMachine?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+  listKnowledgeMaterialization: async (
+    items?: Array<{ agentName: string; slug: string }>,
+  ): Promise<
+    Array<{ agentName: string; agentDirectory: string | null; slug: string; name: string; intro: string; contentUpdatedAt: string; docs: Array<{ filename: string; title: string; content: string }> }>
+  > => {
+    const input = items ? { items } : null;
+    const r = await get<any>(
+      '/api/trpc/knowledge.materializationForMachine?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: input } })),
     );
     return r[0]?.result?.data?.json ?? [];
   },

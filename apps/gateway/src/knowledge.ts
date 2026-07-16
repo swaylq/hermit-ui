@@ -124,22 +124,62 @@ export async function knowledgeRequestTick(): Promise<void> {
   }
 }
 
-// Startup convergence (once, not per-tick): materialize every attachment DB→disk,
-// then prune orphan kb-* dirs the DB no longer lists (only dirs carrying the
-// hermit_kind marker — never a human skill named kb-*).
+// Per-dir marker recording the contentUpdatedAt we last materialized. Lives at the
+// kb-<slug> root (never inside docs/, so materializeKb's doc-pruning leaves it
+// alone; and it's a dotfile, not a SKILL.md, so skill collectors ignore it).
+function markerPath(agentDir: string, slug: string): string {
+  return path.join(kbDir(agentDir, slug), '.materialized-at');
+}
+// contentUpdatedAt bumps on every KB content change, so a marker that still matches
+// means the on-disk KB is current — skip re-materializing it. A missing/half-written
+// dir (no SKILL.md) or a missing marker (older / incremental write) refreshes once.
+function kbUpToDate(agentDir: string, slug: string, contentUpdatedAt: string): boolean {
+  if (!fs.existsSync(path.join(kbDir(agentDir, slug), 'SKILL.md'))) return false;
+  try {
+    return fs.readFileSync(markerPath(agentDir, slug), 'utf8').trim() === contentUpdatedAt;
+  } catch {
+    return false;
+  }
+}
+function writeKbMarker(agentDir: string, slug: string, contentUpdatedAt: string): void {
+  try {
+    fs.writeFileSync(markerPath(agentDir, slug), contentUpdatedAt);
+  } catch {
+    /* best-effort — a missing marker just refreshes on the next reconcile */
+  }
+}
+
+// Startup convergence (once, not per-tick): materialize attachments DB→disk, then
+// prune orphan kb-* dirs the DB no longer lists (only dirs carrying the hermit_kind
+// marker — never a human skill named kb-*). To avoid re-shipping every base's full
+// markdown on every restart (P3-1), fetch the lightweight manifest first and only
+// pull + rewrite the bases whose contentUpdatedAt changed since the on-disk marker;
+// ALL attached slugs still count as valid for the pruner. (An incremental edit
+// doesn't touch the marker, so an edited base refreshes once on the next restart —
+// harmless, materializeKb is idempotent.)
 export async function reconcileKnowledgeOnStartup(): Promise<void> {
-  const items = await api.listKnowledgeMaterialization();
+  const manifest = await api.listKnowledgeManifest();
   const validByDir = new Map<string, Set<string>>();
-  for (const it of items) {
+  const changed: Array<{ agentName: string; slug: string }> = [];
+  for (const it of manifest) {
     if (!it.agentDirectory) continue;
-    try {
-      materializeKb(it.agentDirectory, it.slug, it.name, it.intro, it.docs);
-      if (!validByDir.has(it.agentDirectory)) validByDir.set(it.agentDirectory, new Set());
-      validByDir.get(it.agentDirectory)!.add(it.slug);
-    } catch (e) {
-      console.error(`[knowledge] reconcile ${it.agentName}/${it.slug}:`, e instanceof Error ? e.message : e);
+    if (!validByDir.has(it.agentDirectory)) validByDir.set(it.agentDirectory, new Set());
+    validByDir.get(it.agentDirectory)!.add(it.slug); // every attached slug stays valid for the pruner
+    if (!kbUpToDate(it.agentDirectory, it.slug, it.contentUpdatedAt)) changed.push({ agentName: it.agentName, slug: it.slug });
+  }
+  if (changed.length) {
+    const items = await api.listKnowledgeMaterialization(changed);
+    for (const it of items) {
+      if (!it.agentDirectory) continue;
+      try {
+        materializeKb(it.agentDirectory, it.slug, it.name, it.intro, it.docs);
+        writeKbMarker(it.agentDirectory, it.slug, it.contentUpdatedAt);
+      } catch (e) {
+        console.error(`[knowledge] reconcile ${it.agentName}/${it.slug}:`, e instanceof Error ? e.message : e);
+      }
     }
   }
+  console.log(`[knowledge] reconcile: ${manifest.length} attached, ${changed.length} (re)materialized, ${manifest.length - changed.length} unchanged`);
   const agents = await api.listAgentDirectories();
   for (const a of agents) {
     if (!a.directory) continue;
