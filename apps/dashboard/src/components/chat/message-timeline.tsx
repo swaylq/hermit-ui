@@ -103,7 +103,15 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
       // if it landed in the last few seconds, types out.
       const isLast = i === visibleMessages.length - 1;
       const typing = isLast && m.role === 'assistant' && Date.now() - new Date(m.createdAt).getTime() < 8_000;
-      out.push(<MessageRow key={m.id} role={m.role} content={blocks} ts={m.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={askCardByQuestion} />);
+      // askCardByQuestion is rebuilt as a fresh Map every render, and `view`
+      // hands us a new array on every streaming tick — so passing the Map to
+      // every row would break MessageRow's memo shallow-compare each tick and
+      // re-render the whole visible timeline, not just the growing tail. Only
+      // mcp__hermit__ask tool_use rows actually read the map (groupConsecutiveTools);
+      // every other row gets a stable `undefined` and its memo bails. Identical
+      // output either way — non-ask rows never touch the map.
+      const rowHasAsk = blocks.some((b) => b.type === 'tool_use' && (b as any).name === 'mcp__hermit__ask');
+      out.push(<MessageRow key={m.id} role={m.role} content={blocks} ts={m.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />);
       i += 1;
     }
   }
