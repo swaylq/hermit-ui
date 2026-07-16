@@ -21,6 +21,9 @@
 const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
+// Pure helpers live in a sibling // @ts-check'd module (type-checked + unit-tested
+// in isolation; this stub is spawned by raw `node` so it stays outside the tsc gate).
+const { mimeForExt, textOf } = require('./mcp-stub-util.cjs');
 
 const SESSION_ID = process.env.HERMIT_SESSION_ID || '';
 const DASHBOARD_URL = process.env.HERMIT_DASHBOARD_URL || 'http://127.0.0.1:4101';
@@ -29,24 +32,6 @@ const KEY = process.env.HERMIT_KEY || '';
 // Only then are the cross-agent brain tools (roster / agent_activity / dispatch /
 // dispatch_result) registered + accepted — a normal agent never gets them.
 const BRAIN = process.env.HERMIT_BRAIN === '1';
-
-const MIME_BY_EXT = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  // office docs (so the download chip carries a correct content-type)
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  doc: 'application/msword',
-  xls: 'application/vnd.ms-excel',
-  ppt: 'application/vnd.ms-powerpoint',
-  odt: 'application/vnd.oasis.opendocument.text',
-  ods: 'application/vnd.oasis.opendocument.spreadsheet',
-  odp: 'application/vnd.oasis.opendocument.presentation',
-};
 
 function sendJson(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
@@ -144,7 +129,7 @@ async function uploadFile(filePath) {
   // path (≤2000px .safe. sidecar). Everything else goes up as octet-stream;
   // /api/upload validates the extension against its SAFE_FILE_EXT_SET allowlist
   // and returns kind:'file'. (attach_image guards on the returned kind.)
-  const mt = MIME_BY_EXT[ext] || 'application/octet-stream';
+  const mt = mimeForExt(ext);
   const buf = fs.readFileSync(filePath);
   const fd = new FormData();
   fd.append('sessionId', SESSION_ID);
@@ -156,18 +141,6 @@ async function uploadFile(filePath) {
   });
   if (!r.ok) throw new Error(`upload → ${r.status}: ${await r.text().catch(() => '')}`);
   return r.json();
-}
-
-// Flatten Anthropic content blocks to plain text (drops tool_use / tool_result /
-// image blocks) — used to summarize an agent's last turn for the brain tools.
-function textOf(content) {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text)
-    .join('\n')
-    .trim();
 }
 
 const TOOLS = [
