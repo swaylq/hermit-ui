@@ -26,6 +26,7 @@ import { api } from './api';
 import { paneIsWorking } from './pane';
 import { extractText, CcEvent, CcBlock } from './claude-code';
 import { buildMcpConfigArg } from './chat-runner';
+import { tryAcquire, release, isLocked } from './op-locks';
 
 const RUN_TIMEOUT_MS = 120 * 60_000; // hard cap per run (2h)
 const IDLE_DONE_MS = 8_000;         // assistant quiet this long ⇒ turn complete
@@ -45,7 +46,10 @@ type Cron = {
   nextFire: string | null;
 };
 
-const running = new Set<string>();
+// The per-cron re-entrancy guard ('cron' lock, keyed by cronId) lives in the shared
+// op-locks owner (./op-locks): a cron must not fire again while its previous run is
+// still in flight (a run can take up to RUN_TIMEOUT_MS = 2h; the tick re-checks each
+// interval and skips a cron already running).
 // claude-session uuids pinned by an in-flight fire — so the uuid-drift self-heal
 // never adopts a SIBLING cron's live transcript (agents share one project dir).
 const pinnedUuids = new Set<string>();
@@ -88,14 +92,26 @@ export async function tick(): Promise<void> {
   const now = Date.now();
   for (const c of crons) {
     if (!c.enabled) continue;
-    if (running.has(c.id)) continue;
+    if (isLocked('cron', c.id)) continue;
     if (dueAtMs(c) > now) continue;
     fire(c).catch((e) => console.error('[cron] fire error', c.id.slice(0, 8), e));
   }
 }
 
 async function fire(c: Cron): Promise<void> {
-  running.add(c.id);
+  // Take the per-cron lock and GUARANTEE its release, however fireInner exits. The
+  // release used to sit at the very end of the body, so a throw before it (e.g. a
+  // bad schedule expr) stranded the cron as permanently "running" until a gateway
+  // restart. cronTick already skips a locked cron, so this tryAcquire normally wins.
+  if (!tryAcquire('cron', c.id)) return;
+  try {
+    await fireInner(c);
+  } finally {
+    release('cron', c.id);
+  }
+}
+
+async function fireInner(c: Cron): Promise<void> {
   const startedAt = Date.now();
   // Throwaway pane id — paneName() keeps the last 12 chars (the ms timestamp),
   // so concurrent crons never collide.
@@ -275,6 +291,5 @@ async function fire(c: Cron): Promise<void> {
     console.error('[cron] runFinish post failed', e);
   }
 
-  running.delete(c.id);
   console.log('[cron] done', c.id.slice(0, 8), status, durationMs, 'ms');
 }

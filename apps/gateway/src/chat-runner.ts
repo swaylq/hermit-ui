@@ -44,6 +44,7 @@ import { extractText, hasToolResult, CcEvent } from './claude-code';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
 import { relayImages } from './image-relay';
+import { tryAcquire, release, isLocked } from './op-locks';
 
 // MCP stub gives the in-pane claude these tools: set_session_title, log_status,
 // attach_image, attach_file. Spawned as a stdio child of `claude --mcp-config <json>`.
@@ -106,12 +107,10 @@ interface SessionState {
 // Per-session runtime state. Cleared on gateway restart; rebuilt lazily on
 // next chatTick. The tmux pane survives gateway restarts so re-attach is cheap.
 const sessionStates = new Map<string, SessionState>();
-// Concurrency guard: don't run setup twice for the same session.
-const settingUp = new Set<string>();
-// Concurrency guard for chatRestartTick: the kill can take up to 2s but the
-// tick re-fires every 2s (setInterval doesn't await), so overlapping ticks
-// would re-process the same not-yet-acked row. Skip rows already in flight.
-const restartingSessions = new Set<string>();
+// The per-session re-entrancy guards (setup / restart / hibernate) live in the
+// shared op-locks owner (./op-locks): the kill/spawn can take up to ~2s while ticks
+// re-fire every ~2s (setInterval doesn't await), so an overlapping tick must skip a
+// session already in flight rather than double-process it.
 
 // ── Cancellation tick ────────────────────────────────────────────────────────
 
@@ -124,8 +123,7 @@ const restartingSessions = new Set<string>();
 export async function restartOneSession(sessionId: string, stampMs: number): Promise<boolean> {
   // The kill can take up to 2s and ticks don't await each other — guard so
   // overlapping ticks don't re-process the same session.
-  if (restartingSessions.has(sessionId)) return false;
-  restartingSessions.add(sessionId);
+  if (!tryAcquire('restart', sessionId)) return false;
   try {
     // Tear down in-memory state first so the next deliverMessages call hits
     // setupSession fresh (paneAlive=false → respawn with --resume).
@@ -154,7 +152,7 @@ export async function restartOneSession(sessionId: string, stampMs: number): Pro
   } catch (e) {
     console.error('[chat-restart] kill failed:', e);
   } finally {
-    restartingSessions.delete(sessionId);
+    release('restart', sessionId);
   }
   return true;
 }
@@ -184,9 +182,6 @@ export async function chatRestartTick() {
 }
 
 // ── Hibernation (resource governance) ─────────────────────────────────────────
-// In-flight guard like restartingSessions: the kill takes up to 2s and ticks
-// don't await each other.
-const hibernatingSessions = new Set<string>();
 
 // Hibernate one session: tear down in-memory state + kill the pane to free its
 // ~500MB claude process. No "[restarted]" banner — the session is idle (reaper
@@ -195,8 +190,7 @@ const hibernatingSessions = new Set<string>();
 // dead pane, so it stays asleep until the user sends). Returns false if already
 // mid-hibernate so the caller skips acking it.
 export async function hibernateOneSession(sessionId: string): Promise<boolean> {
-  if (hibernatingSessions.has(sessionId)) return false;
-  hibernatingSessions.add(sessionId);
+  if (!tryAcquire('hibernate', sessionId)) return false;
   try {
     const state = sessionStates.get(sessionId);
     if (state) {
@@ -207,7 +201,7 @@ export async function hibernateOneSession(sessionId: string): Promise<boolean> {
     console.log(`[hibernate] killed session=${sessionId.slice(0, 8)}`);
     return true;
   } finally {
-    hibernatingSessions.delete(sessionId);
+    release('hibernate', sessionId);
   }
 }
 
@@ -322,19 +316,19 @@ export async function chatTick() {
   const havePending = new Set(payload.messages.map((m) => m.sessionId));
   for (const s of payload.sessions) {
     if (havePending.has(s.id)) continue;
-    if (sessionStates.has(s.id) || settingUp.has(s.id)) continue;
+    if (sessionStates.has(s.id) || isLocked('setup', s.id)) continue;
     // Don't reattach a session that's mid-restart: chatRestartTick is about to
     // (or is currently) killing its pane. Reattaching here would re-populate
     // sessionStates with a state pointing at the doomed pane (the stale-state
     // race that left dead panes un-respawned). The next user message respawns it.
-    if (restartingSessions.has(s.id)) continue;
+    if (isLocked('restart', s.id)) continue;
     if (!s.claudeSessionId) continue; // no transcript to tail yet (fresh, pre-uuid)
     if (!tmuxSessionExists(s.id)) continue; // pane not running — nothing to watch
-    settingUp.add(s.id);
+    if (!tryAcquire('setup', s.id)) continue; // another path is already setting it up
     setupSession(s)
       .then((st) => { sessionStates.set(s.id, st); })
       .catch((e) => console.error(`[chat] watcher reattach failed for ${s.id.slice(0, 8)}:`, e))
-      .finally(() => settingUp.delete(s.id));
+      .finally(() => release('setup', s.id));
   }
 
   if (payload.messages.length === 0) return;
@@ -347,15 +341,15 @@ export async function chatTick() {
   }
 
   for (const [sessionId, msgs] of grouped) {
-    if (settingUp.has(sessionId)) continue;
+    if (isLocked('setup', sessionId)) continue;
     // Don't deliver into a session mid-restart: chatRestartTick is killing its
     // pane (up to a 2s grace after /exit). Sending now types the message into the
     // dying pane and loses it on exit — the same reason the reattach loop above
-    // skips restartingSessions. Leave it queued (deliveredAt=null); once the
+    // skips sessions mid-restart. Leave it queued (deliveredAt=null); once the
     // restart completes, the next chatTick respawns via --resume and delivers it
     // to the fresh pane. Reachable now that queued messages can sit pending across
     // a user-triggered restart (the message-queue feature).
-    if (restartingSessions.has(sessionId)) continue;
+    if (isLocked('restart', sessionId)) continue;
     const session = payload.sessions.find((s) => s.id === sessionId);
     if (!session) continue;
 
@@ -560,8 +554,7 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // mashing into the same composer.)
   let freshSpawn = false;
   if (!state) {
-    if (settingUp.has(session.id)) return;
-    settingUp.add(session.id);
+    if (!tryAcquire('setup', session.id)) return;
     try {
       state = await setupSession(session);
       sessionStates.set(session.id, state);
@@ -570,7 +563,7 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
       console.error(`[chat] setup failed for ${session.id.slice(0, 8)}:`, e);
       return;
     } finally {
-      settingUp.delete(session.id);
+      release('setup', session.id);
     }
   }
 
