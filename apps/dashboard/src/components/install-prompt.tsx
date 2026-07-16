@@ -25,7 +25,7 @@ export function InstallPrompt() {
     // Register the SW regardless of the install UI (it makes the app installable
     // and provides the offline fallback).
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('[pwa] service worker registration failed:', e));
     }
 
     // Already installed (running standalone)? Never nag.

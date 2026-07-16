@@ -96,7 +96,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     await rename(tmp, join(dir, `${ft.id}.bin`));
   } catch (e) {
-    await prisma.fileTransfer.update({ where: { id: ft.id }, data: { status: 'error', error: 'stash failed' } }).catch(() => {});
+    await prisma.fileTransfer.update({ where: { id: ft.id }, data: { status: 'error', error: 'stash failed' } }).catch((err) => console.error('[file-station] failed to mark transfer errored after stash failure:', err));
     await rm(tmp, { force: true }).catch(() => {});
     return NextResponse.json({ error: 'stash failed: ' + (e instanceof Error ? e.message : String(e)) }, { status: 500 });
   }

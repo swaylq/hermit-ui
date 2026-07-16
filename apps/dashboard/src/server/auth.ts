@@ -56,6 +56,9 @@ export async function resolveMachineByKey(keyPlain: string): Promise<MachineRow 
     authCache.set(keyPlain, hit);
   }
 
+  // Debounced, fire-and-forget lastSeen bump (the share-link lastUsedAt bump below
+  // mirrors this). Best-effort telemetry — a failed write just means the next
+  // request re-bumps, so the error is intentionally dropped.
   if (Date.now() - hit.lastSeenBumpedAt > LASTSEEN_DEBOUNCE_MS) {
     hit.lastSeenBumpedAt = Date.now();
     void prisma.machine
