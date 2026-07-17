@@ -31,19 +31,21 @@ interface LoopEntry {
 
 // Strip above the composer: each active loop as a status card (click to expand
 // details), a compact count of any scheduled routines, and a persistent
-// "Start a loop" suggestion that fills the composer with a template. Loop and
+// "开启循环任务" suggestion that fills the composer with a template. Loop and
 // schedule data is the opaque JSON the gateway forwards from
 // `<agent_dir>/.loop-state.json` → `session.loopState`.
 export function LoopBar({
   loopState,
   onStartLoop,
   onStartCron,
+  onStartAutonomy,
   disabled,
   sessionId,
 }: {
   loopState: unknown;
   onStartLoop: () => void;
   onStartCron: () => void;
+  onStartAutonomy: () => void;
   disabled?: boolean;
   sessionId: string;
 }) {
@@ -105,6 +107,16 @@ export function LoopBar({
             >
               <span className="text-sky-500" aria-hidden="true">⏰</span>
               Schedule a task
+            </button>
+          )}
+          {!disabled && (
+            <button
+              type="button"
+              onClick={onStartAutonomy}
+              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
+            >
+              <span className="text-amber-500" aria-hidden="true">⚡</span>
+              Run to done
             </button>
           )}
           {schedules.length > 0 && (

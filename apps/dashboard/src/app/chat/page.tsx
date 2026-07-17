@@ -1072,6 +1072,7 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
             loopState={(session as { loopState?: unknown } | undefined)?.loopState}
             onStartLoop={() => pickPrompt(LOOP_TEMPLATE)}
             onStartCron={() => pickPrompt(CRON_TEMPLATE)}
+            onStartAutonomy={() => pickPrompt(AUTONOMY_TEMPLATE)}
             disabled={!!session?.closedAt}
             sessionId={sessionId}
           />
@@ -1165,17 +1166,22 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
   );
 }
 
-// Natural-language template the "Start a loop" suggestion drops into the
+// Natural-language template the "开启循环任务" suggestion drops into the
 // composer. /loop left the slash picker (loops are natural-language now), so
-// this guided starter is the entry point. The loop skill matches on loop / every
-// X / until (and their Chinese equivalents) and sets up a session-scoped
-// recurring task whose every iteration streams back into THIS conversation.
+// this guided starter is the entry point. The loop skill matches on 循环/每 X/
+// 直到 and sets up a session-scoped recurring task whose every iteration
+// streams back into THIS conversation.
 const LOOP_TEMPLATE =
-  'Start a loop: every 1 hour, <what to do>. Test and verify each iteration yourself, then post the result (with the verification outcome) back to this chat. Keep looping until <done condition>, then stop automatically.';
+  '开启循环任务：每 1 小时，<要做的事>。每轮做完都自己测试验证一遍，再把结果（含验证结论）发到这个对话；达成 <完成条件> 后自动停止。';
 
-// Cron sibling of LOOP_TEMPLATE. The cron skill matches on schedule / every X /
-// cron (and their Chinese equivalents) and creates a DURABLE background task via
-// mcp__hermit__cron_create — results land on the /cron page, not in this chat
-// (that is what makes it a cron, not a loop).
+// Cron sibling of LOOP_TEMPLATE. The cron skill matches on 定时/每 X/cron and
+// creates a DURABLE background task via mcp__hermit__cron_create — results land
+// on the /cron page, not in this chat (that is what makes it a cron, not a loop).
 const CRON_TEMPLATE =
-  'Schedule a task: every 60 minutes (±10 min jitter), <what to do>. Run it in the background on a schedule; log each result to the /cron page (not this chat).';
+  '开启定时任务：每 60 分钟（时间上下浮动 ±10 分钟），<要做的事>。后台定时跑，结果记录到 /cron 页面（不发到这个对话）。';
+
+// One-shot autonomy nudge (NOT a recurring task): tells the agent to proceed with
+// its own recommendation and stop asking for confirmation until the work is done.
+// Dropped by the "Run to done" suggestion — no cadence, so it doesn't trip the
+// loop/cron skills; it's a plain directive for the current task.
+const AUTONOMY_TEMPLATE = '按照你的推荐做，不再询问我，直到做完。';
