@@ -31,7 +31,7 @@ interface LoopEntry {
 
 // Strip above the composer: each active loop as a status card (click to expand
 // details), a compact count of any scheduled routines, and a persistent
-// "开启循环任务" suggestion that fills the composer with a template. Loop and
+// "Start a loop" suggestion that fills the composer with a template. Loop and
 // schedule data is the opaque JSON the gateway forwards from
 // `<agent_dir>/.loop-state.json` → `session.loopState`.
 export function LoopBar({
