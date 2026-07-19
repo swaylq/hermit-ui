@@ -71,51 +71,58 @@ export const notificationsRouter = router({
       const limit = input.limit;
       const before = input.cursor != null ? new Date(input.cursor) : null;
 
-      const [sessionRows, cronRuns, hostStat] = await Promise.all([
-        // First page only: scan recent sessions once and JS-filter unread (the
-        // column-to-column lastMessageAt > lastReadAt Prisma can't express). Later
-        // pages skip chat entirely — it's all delivered on page one.
+      // Batch 1 — all independent: recent sessions (no message bodies; the first
+      // page JS-filters unread, later pages skip chat since it all rides page one),
+      // the machine's cron ids, and the host stat (first page only).
+      const [sessionRows, cronIdRows, hostStat] = await Promise.all([
         before
           ? Promise.resolve([])
           : prisma.chatSession.findMany({
               where: { machineId },
               orderBy: { lastMessageAt: 'desc' },
               take: SESSION_SCAN,
-              // No message bodies here — pulling the latest message for all 300
-              // scanned sessions (a per-session subquery) was the ~4s cost. We fetch
-              // previews for only the few unread ones below.
               select: { id: true, agentName: true, title: true, lastMessageAt: true, lastReadAt: true },
             }),
-        prisma.cronRun.findMany({
-          where: { cron: { machineId }, readAt: null, status: { not: 'running' }, ...(before ? { firedAt: { lt: before } } : {}) },
-          orderBy: { firedAt: 'desc' },
-          take: limit,
-          select: {
-            id: true,
-            firedAt: true,
-            status: true,
-            output: true,
-            cron: { select: { id: true, title: true, prompt: true, agentName: true } },
-          },
-        }),
-        // The host alert is a single item — only the (unpaginated) first page carries it.
+        prisma.cron.findMany({ where: { machineId }, select: { id: true } }),
         before ? Promise.resolve(null) : prisma.hostStat.findUnique({ where: { machineId } }),
       ]);
-
-      // The "what's new" preview = each unread session's latest message, fetched in
-      // ONE query for only the (few) unread sessions — DISTINCT ON sessionId ordered
-      // by createdAt desc, served by the (sessionId, createdAt) index.
+      const cronIds = cronIdRows.map((c) => c.id);
       const unreadSessions = sessionRows.filter(isUnread);
+
+      // Batch 2 — the cron page and the chat previews, both needing batch-1 results:
+      //   · cron: an explicit `cronId IN` (not the `cron: { machineId }` relation
+      //     filter) so the (cronId, firedAt) WHERE readAt IS NULL partial index
+      //     serves the unread-newest-first page directly — no Cron join, no filesort
+      //     (this was the inbox's ~0.7s "still slow" cost).
+      //   · previews: each unread session's latest message ("what's new"), fetched in
+      //     one DISTINCT-ON-sessionId query for only the few unread sessions.
+      const [cronRuns, latestMsgs] = await Promise.all([
+        cronIds.length > 0
+          ? prisma.cronRun.findMany({
+              where: { cronId: { in: cronIds }, readAt: null, status: { not: 'running' }, ...(before ? { firedAt: { lt: before } } : {}) },
+              orderBy: { firedAt: 'desc' },
+              take: limit,
+              select: {
+                id: true,
+                firedAt: true,
+                status: true,
+                output: true,
+                cron: { select: { id: true, title: true, prompt: true, agentName: true } },
+              },
+            })
+          : Promise.resolve([]),
+        unreadSessions.length > 0
+          ? prisma.chatMessage.findMany({
+              where: { sessionId: { in: unreadSessions.map((s) => s.id) } },
+              orderBy: [{ sessionId: 'asc' }, { createdAt: 'desc' }],
+              distinct: ['sessionId'],
+              select: { sessionId: true, content: true },
+            })
+          : Promise.resolve([]),
+      ]);
+
       const previewBySession = new Map<string, string | null>();
-      if (unreadSessions.length > 0) {
-        const latest = await prisma.chatMessage.findMany({
-          where: { sessionId: { in: unreadSessions.map((s) => s.id) } },
-          orderBy: [{ sessionId: 'asc' }, { createdAt: 'desc' }],
-          distinct: ['sessionId'],
-          select: { sessionId: true, content: true },
-        });
-        for (const m of latest) previewBySession.set(m.sessionId, firstText(m.content));
-      }
+      for (const m of latestMsgs) previewBySession.set(m.sessionId, firstText(m.content));
 
       const chatItems = unreadSessions.map((s) => {
         const preview = previewBySession.get(s.id) ?? null;

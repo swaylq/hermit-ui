@@ -1,0 +1,24 @@
+-- Partial index for the notifications inbox's cron page (its "slow to open" cost).
+--
+-- notifications.feed pages the machine's unread cron runs newest-first:
+--     WHERE "cronId" IN (this machine's crons) AND "readAt" IS NULL
+--       AND "status" <> 'running'
+--     ORDER BY "firedAt" DESC LIMIT N
+-- The existing CronRun indexes forced a bad trade: the 20260716190000 partial
+-- (cronId, status) WHERE readAt IS NULL filters unread but has no firedAt, so the
+-- ORDER BY firedAt became a filesort over the whole unread set; the non-partial
+-- (cronId, firedAt) orders by firedAt but walks the (far larger) READ history in
+-- the heap to filter readAt IS NULL. Either way the feed's cron query measured
+-- ~0.7s (vs ~0.1s for the equivalent COUNT), independent of LIMIT — a sort/scan
+-- cost, not a row-fetch one.
+--
+-- This index puts firedAt right after cronId under the same WHERE readAt IS NULL
+-- partial predicate, so a per-cron backward scan is already in firedAt-desc order
+-- over ONLY the unread rows (status filtered on that small set) — a MergeAppend
+-- across the machine's cronIds then serves ORDER BY firedAt DESC + LIMIT with no
+-- filesort and no read-history walk. Same partial-predicate reasoning as
+-- 20260716190000 (readAt IS NULL is a literal ⟹ the planner always proves it
+-- applies). Raw SQL (Prisma @@index can't express a WHERE predicate); plain CREATE
+-- INDEX (not CONCURRENTLY) — migrate deploy wraps it in a transaction.
+CREATE INDEX IF NOT EXISTS "CronRun_cronId_firedAt_unread_idx"
+  ON "CronRun" ("cronId", "firedAt") WHERE "readAt" IS NULL;
