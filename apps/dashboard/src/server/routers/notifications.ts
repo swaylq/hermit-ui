@@ -81,16 +81,10 @@ export const notificationsRouter = router({
               where: { machineId },
               orderBy: { lastMessageAt: 'desc' },
               take: SESSION_SCAN,
-              select: {
-                id: true,
-                agentName: true,
-                title: true,
-                lastMessageAt: true,
-                lastReadAt: true,
-                // Latest message (any role) → the "what's new" preview. Same nested-take
-                // shape chat.listSessions already uses, so no extra round-trip per session.
-                messages: { orderBy: { createdAt: 'desc' }, take: 1, select: { content: true } },
-              },
+              // No message bodies here — pulling the latest message for all 300
+              // scanned sessions (a per-session subquery) was the ~4s cost. We fetch
+              // previews for only the few unread ones below.
+              select: { id: true, agentName: true, title: true, lastMessageAt: true, lastReadAt: true },
             }),
         prisma.cronRun.findMany({
           where: { cron: { machineId }, readAt: null, status: { not: 'running' }, ...(before ? { firedAt: { lt: before } } : {}) },
@@ -108,8 +102,23 @@ export const notificationsRouter = router({
         before ? Promise.resolve(null) : prisma.hostStat.findUnique({ where: { machineId } }),
       ]);
 
-      const chatItems = sessionRows.filter(isUnread).map((s) => {
-        const preview = firstText(s.messages[0]?.content);
+      // The "what's new" preview = each unread session's latest message, fetched in
+      // ONE query for only the (few) unread sessions — DISTINCT ON sessionId ordered
+      // by createdAt desc, served by the (sessionId, createdAt) index.
+      const unreadSessions = sessionRows.filter(isUnread);
+      const previewBySession = new Map<string, string | null>();
+      if (unreadSessions.length > 0) {
+        const latest = await prisma.chatMessage.findMany({
+          where: { sessionId: { in: unreadSessions.map((s) => s.id) } },
+          orderBy: [{ sessionId: 'asc' }, { createdAt: 'desc' }],
+          distinct: ['sessionId'],
+          select: { sessionId: true, content: true },
+        });
+        for (const m of latest) previewBySession.set(m.sessionId, firstText(m.content));
+      }
+
+      const chatItems = unreadSessions.map((s) => {
+        const preview = previewBySession.get(s.id) ?? null;
         return {
           kind: 'chat' as const,
           key: `chat:${s.id}`,
