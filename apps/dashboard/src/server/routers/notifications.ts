@@ -8,6 +8,7 @@
 // Owner-only: every procedure is machineProcedure, which rejects scoped share
 // keys — a shared single-agent link never sees the global inbox.
 
+import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { fmtGB } from '@/lib/host-health';
@@ -26,7 +27,7 @@ function hostAlertPending(s: { redAlertAt: Date | null; alertReadAt: Date | null
 // active, so a generous recent-window scan captures them without an unbounded fetch.
 const SESSION_SCAN = 300;
 const PREVIEW_LEN = 140;
-const CRON_FEED_TAKE = 200;
+const DEFAULT_PAGE = 30; // notifications feed page size (the feed is cursor-paginated)
 
 function firstText(content: unknown): string | null {
   if (!Array.isArray(content)) return null;
@@ -56,80 +57,107 @@ async function scanUnreadSessionIds(machineId: string): Promise<string[]> {
 }
 
 export const notificationsRouter = router({
-  // The full feed: unread chat sessions + unread cron runs, merged newest-first.
-  feed: machineProcedure.query(async ({ ctx }) => {
-    const machineId = ctx.machine.id;
-    const [sessionRows, cronRuns, hostStat] = await Promise.all([
-      prisma.chatSession.findMany({
-        where: { machineId },
-        orderBy: { lastMessageAt: 'desc' },
-        take: SESSION_SCAN,
-        select: {
-          id: true,
-          agentName: true,
-          title: true,
-          lastMessageAt: true,
-          lastReadAt: true,
-          // Latest message (any role) → the "what's new" preview. Same nested-take
-          // shape chat.listSessions already uses, so no extra round-trip per session.
-          messages: { orderBy: { createdAt: 'desc' }, take: 1, select: { content: true } },
-        },
-      }),
-      prisma.cronRun.findMany({
-        where: { cron: { machineId }, readAt: null, status: { not: 'running' } },
-        orderBy: { firedAt: 'desc' },
-        take: CRON_FEED_TAKE,
-        select: {
-          id: true,
-          firedAt: true,
-          status: true,
-          output: true,
-          cron: { select: { id: true, title: true, prompt: true, agentName: true } },
-        },
-      }),
-      prisma.hostStat.findUnique({ where: { machineId } }),
-    ]);
+  // The feed: unread chat sessions + unread cron runs, merged newest-first, CURSOR-
+  // PAGINATED by time so the inbox loads a page at a time instead of the whole
+  // (cron-dominated) backlog on entry. `cursor` is a ms timestamp — a page returns
+  // items strictly older than nothing on the first call, then older than the cursor.
+  // The two streams are paginated independently and merged; the "safe boundary" (see
+  // below) is what keeps that merge gap-free across pages. Header totals come from the
+  // separate `counts` query, so this response carries no aggregate count.
+  feed: machineProcedure
+    .input(z.object({ cursor: z.number().nullish(), limit: z.number().int().min(1).max(100).default(DEFAULT_PAGE) }))
+    .query(async ({ ctx, input }) => {
+      const machineId = ctx.machine.id;
+      const limit = input.limit;
+      const before = input.cursor != null ? new Date(input.cursor) : null;
 
-    const chatItems = sessionRows.filter(isUnread).map((s) => {
-      const preview = firstText(s.messages[0]?.content);
-      return {
-        kind: 'chat' as const,
-        key: `chat:${s.id}`,
-        agentName: s.agentName,
-        title: s.title?.trim() || preview || 'Untitled session',
-        preview,
-        at: s.lastMessageAt as Date,
-        sessionId: s.id,
-      };
-    });
+      const [sessionRows, cronRuns, hostStat] = await Promise.all([
+        prisma.chatSession.findMany({
+          where: { machineId, ...(before ? { lastMessageAt: { lt: before } } : {}) },
+          orderBy: { lastMessageAt: 'desc' },
+          take: limit,
+          select: {
+            id: true,
+            agentName: true,
+            title: true,
+            lastMessageAt: true,
+            lastReadAt: true,
+            // Latest message (any role) → the "what's new" preview. Same nested-take
+            // shape chat.listSessions already uses, so no extra round-trip per session.
+            messages: { orderBy: { createdAt: 'desc' }, take: 1, select: { content: true } },
+          },
+        }),
+        prisma.cronRun.findMany({
+          where: { cron: { machineId }, readAt: null, status: { not: 'running' }, ...(before ? { firedAt: { lt: before } } : {}) },
+          orderBy: { firedAt: 'desc' },
+          take: limit,
+          select: {
+            id: true,
+            firedAt: true,
+            status: true,
+            output: true,
+            cron: { select: { id: true, title: true, prompt: true, agentName: true } },
+          },
+        }),
+        // The host alert is a single item — only the (unpaginated) first page carries it.
+        before ? Promise.resolve(null) : prisma.hostStat.findUnique({ where: { machineId } }),
+      ]);
 
-    const cronItems = cronRuns.map((r) => ({
-      kind: 'cron' as const,
-      key: `cron:${r.id}`,
-      agentName: r.cron.agentName,
-      title: r.cron.title?.trim() || r.cron.prompt.slice(0, 60),
-      // Tail of the run output — the end is where the result / error usually lands.
-      preview: r.output ? r.output.replace(/\s+/g, ' ').trim().slice(-PREVIEW_LEN) : null,
-      at: r.firedAt,
-      status: r.status, // 'ok' | 'fail'
-      cronId: r.cron.id,
-      runId: r.id,
-    }));
+      const chatItems = sessionRows.filter(isUnread).map((s) => {
+        const preview = firstText(s.messages[0]?.content);
+        return {
+          kind: 'chat' as const,
+          key: `chat:${s.id}`,
+          agentName: s.agentName,
+          title: s.title?.trim() || preview || 'Untitled session',
+          preview,
+          at: s.lastMessageAt as Date,
+          sessionId: s.id,
+        };
+      });
 
-    const hostItems = hostAlertPending(hostStat)
-      ? [{
-          kind: 'host' as const,
-          key: `host:${machineId}`,
-          agentName: ctx.machine.alias || ctx.machine.name,
-          title: 'Host under memory pressure',
-          preview: `free ${fmtGB(hostStat!.ramFreeMb)} GB · load ${hostStat!.loadAvg1?.toFixed(1) ?? '—'} · ${hostStat!.cpuCount ?? '—'} cores`,
-          at: hostStat!.redAlertAt as Date,
-        }]
-      : [];
+      const cronItems = cronRuns.map((r) => ({
+        kind: 'cron' as const,
+        key: `cron:${r.id}`,
+        agentName: r.cron.agentName,
+        title: r.cron.title?.trim() || r.cron.prompt.slice(0, 60),
+        // Tail of the run output — the end is where the result / error usually lands.
+        preview: r.output ? r.output.replace(/\s+/g, ' ').trim().slice(-PREVIEW_LEN) : null,
+        at: r.firedAt,
+        status: r.status, // 'ok' | 'fail'
+        cronId: r.cron.id,
+        runId: r.id,
+      }));
 
-    const items = [...hostItems, ...chatItems, ...cronItems].sort((a, b) => b.at.getTime() - a.at.getTime());
-    return { items, counts: { chat: chatItems.length, cron: cronItems.length, total: items.length } };
-  }),
+      const hostItems = !before && hostAlertPending(hostStat)
+        ? [{
+            kind: 'host' as const,
+            key: `host:${machineId}`,
+            agentName: ctx.machine.alias || ctx.machine.name,
+            title: 'Host under memory pressure',
+            preview: `free ${fmtGB(hostStat!.ramFreeMb)} GB · load ${hostStat!.loadAvg1?.toFixed(1) ?? '—'} · ${hostStat!.cpuCount ?? '—'} cores`,
+            at: hostStat!.redAlertAt as Date,
+          }]
+        : [];
+
+      // Safe merge boundary: a stream that filled its page may have more rows below
+      // its last one, so we can only safely emit down to the NEWEST such last-row
+      // timestamp — everything ≥ boundary is fully known from both streams. Items
+      // below are deferred to the next page (which re-queries each stream < cursor).
+      // A stream that returned < limit is exhausted for this window → −∞ (no floor).
+      const chatBoundary = sessionRows.length >= limit ? (sessionRows[sessionRows.length - 1].lastMessageAt?.getTime() ?? -Infinity) : -Infinity;
+      const cronBoundary = cronRuns.length >= limit ? cronRuns[cronRuns.length - 1].firedAt.getTime() : -Infinity;
+      const boundary = Math.max(chatBoundary, cronBoundary);
+      const hasMore = Number.isFinite(boundary);
+
+      const body = [...chatItems, ...cronItems];
+      const bounded = hasMore ? body.filter((it) => it.at.getTime() >= boundary) : body;
+      // Host alert bypasses the boundary filter (single item, first page only) so an
+      // older-but-pending alert can't be sliced off.
+      const items = [...hostItems, ...bounded].sort((a, b) => b.at.getTime() - a.at.getTime());
+      const nextCursor = hasMore ? boundary : null;
+      return { items, nextCursor };
+    }),
 
   // Cheap counts for the sidebar bell badge + filter labels (no bodies). Polled
   // globally while the dashboard is open, so it stays bounded and select-light.
