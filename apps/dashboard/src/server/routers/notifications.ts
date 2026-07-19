@@ -57,13 +57,13 @@ async function scanUnreadSessionIds(machineId: string): Promise<string[]> {
 }
 
 export const notificationsRouter = router({
-  // The feed: unread chat sessions + unread cron runs, merged newest-first, CURSOR-
-  // PAGINATED by time so the inbox loads a page at a time instead of the whole
-  // (cron-dominated) backlog on entry. `cursor` is a ms timestamp — a page returns
-  // items strictly older than nothing on the first call, then older than the cursor.
-  // The two streams are paginated independently and merged; the "safe boundary" (see
-  // below) is what keeps that merge gap-free across pages. Header totals come from the
-  // separate `counts` query, so this response carries no aggregate count.
+  // The feed: unread chat sessions + unread cron runs, merged newest-first. The cron
+  // backlog is what makes the inbox heavy, so it's CURSOR-PAGINATED (`cursor` = the
+  // firedAt ms of the last cron shown; a page returns the next `limit` older runs).
+  // Chat is NOT paginated: unread chat is sparse (unread ⟹ recently active) and
+  // bounded, so it's scanned once on the first page and rides there — paginating it
+  // by small takes would churn through pages of read sessions for ~0 unread items.
+  // Header totals come from the separate `counts` query; this carries no aggregate.
   feed: machineProcedure
     .input(z.object({ cursor: z.number().nullish(), limit: z.number().int().min(1).max(100).default(DEFAULT_PAGE) }))
     .query(async ({ ctx, input }) => {
@@ -72,21 +72,26 @@ export const notificationsRouter = router({
       const before = input.cursor != null ? new Date(input.cursor) : null;
 
       const [sessionRows, cronRuns, hostStat] = await Promise.all([
-        prisma.chatSession.findMany({
-          where: { machineId, ...(before ? { lastMessageAt: { lt: before } } : {}) },
-          orderBy: { lastMessageAt: 'desc' },
-          take: limit,
-          select: {
-            id: true,
-            agentName: true,
-            title: true,
-            lastMessageAt: true,
-            lastReadAt: true,
-            // Latest message (any role) → the "what's new" preview. Same nested-take
-            // shape chat.listSessions already uses, so no extra round-trip per session.
-            messages: { orderBy: { createdAt: 'desc' }, take: 1, select: { content: true } },
-          },
-        }),
+        // First page only: scan recent sessions once and JS-filter unread (the
+        // column-to-column lastMessageAt > lastReadAt Prisma can't express). Later
+        // pages skip chat entirely — it's all delivered on page one.
+        before
+          ? Promise.resolve([])
+          : prisma.chatSession.findMany({
+              where: { machineId },
+              orderBy: { lastMessageAt: 'desc' },
+              take: SESSION_SCAN,
+              select: {
+                id: true,
+                agentName: true,
+                title: true,
+                lastMessageAt: true,
+                lastReadAt: true,
+                // Latest message (any role) → the "what's new" preview. Same nested-take
+                // shape chat.listSessions already uses, so no extra round-trip per session.
+                messages: { orderBy: { createdAt: 'desc' }, take: 1, select: { content: true } },
+              },
+            }),
         prisma.cronRun.findMany({
           where: { cron: { machineId }, readAt: null, status: { not: 'running' }, ...(before ? { firedAt: { lt: before } } : {}) },
           orderBy: { firedAt: 'desc' },
@@ -140,22 +145,13 @@ export const notificationsRouter = router({
           }]
         : [];
 
-      // Safe merge boundary: a stream that filled its page may have more rows below
-      // its last one, so we can only safely emit down to the NEWEST such last-row
-      // timestamp — everything ≥ boundary is fully known from both streams. Items
-      // below are deferred to the next page (which re-queries each stream < cursor).
-      // A stream that returned < limit is exhausted for this window → −∞ (no floor).
-      const chatBoundary = sessionRows.length >= limit ? (sessionRows[sessionRows.length - 1].lastMessageAt?.getTime() ?? -Infinity) : -Infinity;
-      const cronBoundary = cronRuns.length >= limit ? cronRuns[cronRuns.length - 1].firedAt.getTime() : -Infinity;
-      const boundary = Math.max(chatBoundary, cronBoundary);
-      const hasMore = Number.isFinite(boundary);
+      // Only cron paginates (it's dense — the WHERE already restricts to unread, so
+      // every fetched row is shown). More iff cron filled its page; the next cursor is
+      // its oldest run's firedAt. Chat + host are fully delivered on the first page.
+      const hasMore = cronRuns.length >= limit;
+      const nextCursor = hasMore ? cronRuns[cronRuns.length - 1].firedAt.getTime() : null;
 
-      const body = [...chatItems, ...cronItems];
-      const bounded = hasMore ? body.filter((it) => it.at.getTime() >= boundary) : body;
-      // Host alert bypasses the boundary filter (single item, first page only) so an
-      // older-but-pending alert can't be sliced off.
-      const items = [...hostItems, ...bounded].sort((a, b) => b.at.getTime() - a.at.getTime());
-      const nextCursor = hasMore ? boundary : null;
+      const items = [...hostItems, ...chatItems, ...cronItems].sort((a, b) => b.at.getTime() - a.at.getTime());
       return { items, nextCursor };
     }),
 
