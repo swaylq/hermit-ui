@@ -74,6 +74,7 @@ export const notificationsRouter = router({
       // Batch 1 — all independent: recent sessions (no message bodies; the first
       // page JS-filters unread, later pages skip chat since it all rides page one),
       // the machine's cron ids, and the host stat (first page only).
+      const _t0 = Date.now();
       const [sessionRows, cronIdRows, hostStat] = await Promise.all([
         before
           ? Promise.resolve([])
@@ -86,18 +87,15 @@ export const notificationsRouter = router({
         prisma.cron.findMany({ where: { machineId }, select: { id: true } }),
         before ? Promise.resolve(null) : prisma.hostStat.findUnique({ where: { machineId } }),
       ]);
+      const _t1 = Date.now();
       const cronIds = cronIdRows.map((c) => c.id);
       const unreadSessions = sessionRows.filter(isUnread);
 
-      // Batch 2 — the cron page and the chat previews, both needing batch-1 results:
-      //   · cron: an explicit `cronId IN` (not the `cron: { machineId }` relation
-      //     filter) so the (cronId, firedAt) WHERE readAt IS NULL partial index
-      //     serves the unread-newest-first page directly — no Cron join, no filesort
-      //     (this was the inbox's ~0.7s "still slow" cost).
-      //   · previews: each unread session's latest message ("what's new"), fetched in
-      //     one DISTINCT-ON-sessionId query for only the few unread sessions.
+      // Batch 2 — the cron page (explicit `cronId IN` so the (cronId, firedAt) WHERE
+      // readAt IS NULL partial index serves it) and each unread session's latest
+      // message ("what's new"), one guaranteed-single-row findFirst per unread session.
       const [cronRuns, latestMsgs] = await Promise.all([
-        cronIds.length > 0
+        (cronIds.length > 0
           ? prisma.cronRun.findMany({
               where: { cronId: { in: cronIds }, readAt: null, status: { not: 'running' }, ...(before ? { firedAt: { lt: before } } : {}) },
               orderBy: { firedAt: 'desc' },
@@ -110,16 +108,22 @@ export const notificationsRouter = router({
                 cron: { select: { id: true, title: true, prompt: true, agentName: true } },
               },
             })
-          : Promise.resolve([]),
-        unreadSessions.length > 0
-          ? prisma.chatMessage.findMany({
-              where: { sessionId: { in: unreadSessions.map((s) => s.id) } },
-              orderBy: [{ sessionId: 'asc' }, { createdAt: 'desc' }],
-              distinct: ['sessionId'],
-              select: { sessionId: true, content: true },
-            })
-          : Promise.resolve([]),
+          : Promise.resolve([])
+        ).then((r) => { console.log(`[notif-feed] cron ${Date.now() - _t1}ms rows=${r.length}`); return r; }),
+        (unreadSessions.length > 0
+          ? Promise.all(
+              unreadSessions.map((s) =>
+                prisma.chatMessage.findFirst({
+                  where: { sessionId: s.id },
+                  orderBy: { createdAt: 'desc' },
+                  select: { sessionId: true, content: true },
+                }),
+              ),
+            ).then((rows) => rows.filter((r): r is NonNullable<typeof r> => r != null))
+          : Promise.resolve([])
+        ).then((r) => { console.log(`[notif-feed] msg ${Date.now() - _t1}ms unread=${unreadSessions.length}`); return r; }),
       ]);
+      console.log(`[notif-feed] batch1 ${_t1 - _t0}ms batch2 ${Date.now() - _t1}ms`);
 
       const previewBySession = new Map<string, string | null>();
       for (const m of latestMsgs) previewBySession.set(m.sessionId, firstText(m.content));
