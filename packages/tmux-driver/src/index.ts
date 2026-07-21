@@ -248,48 +248,75 @@ export async function waitForReplReady(sessionId: string, timeoutMs = 45_000, ga
 
 /**
  * `claude --resume` on a LARGE session blocks on an in-pane prompt before the
- * REPL loads:
- *     This session is Xh old and Nk tokens. … We recommend resuming from a summary.
+ * REPL loads (the header sentence has changed across Claude Code versions, the
+ * numbered options have not):
+ *     Resuming the full session will consume a substantial portion of your usage
+ *     limits. We recommend resuming from a summary.
  *      ❯ 1. Resume from summary (recommended)
  *        2. Resume full session as-is
  *        3. Don't ask me again
  * It's painted in the tmux pane and never reaches the web chat, so the session
- * hangs forever (the caller's getClaudeSessionUuid waits on a transcript that
- * never appears). Watch the pane and auto-pick option 2 — "Resume full session
- * as-is" — to keep the COMPLETE history. `Up Up` returns ❯ to the top from
- * wherever it sits, `Down` moves to option 2, `Enter` confirms; the sequence is
- * idempotent, so re-issuing it each tick the prompt is still up (tmux drops keys
- * — the same hazard confirmSubmitted handles) never lands on the wrong option.
- * No-op if the prompt never appears (small sessions resume straight to the REPL).
+ * hangs forever (resolveResumedUuid waits on a transcript that never appears).
+ * Watch the pane and auto-pick "Resume full session as-is" to keep the COMPLETE
+ * history: step the ❯ cursor toward the full-session option (comparing option
+ * numbers, so direction is right regardless of the default/order), Enter to
+ * confirm; idempotent, so re-issuing each tick survives tmux dropping a key.
+ *
+ * Hardened (2026-07-21, after a miss on a loaded macmini): (1) watch for the
+ * whole resume window (~240s, matching resolveResumedUuid) instead of 20s — a
+ * slow-to-appear picker or dropped keys no longer time the watcher out early;
+ * (2) detect by the stable option KEYWORDS, not the exact header/option text;
+ * (3) locate the cursor on a numbered option line, not the first ❯ anywhere in
+ * the pane; (4) exit early once the REPL is ready (small sessions don't spin the
+ * full window); (5) log on detect / give-up so any future miss is captured.
  * Fire-and-forget: runs in the background alongside the resume.
  */
-export async function acceptResumePromptAsFull(sessionId: string, tries = 40, gapMs = 500): Promise<boolean> {
+export async function acceptResumePromptAsFull(sessionId: string, timeoutMs = 240_000, gapMs = 500): Promise<boolean> {
   const name = paneName(sessionId);
+  const deadline = Date.now() + timeoutMs;
+  const optNum = (l: string | undefined): number => {
+    const m = l?.match(/(\d+)\./);
+    return m ? Number(m[1]) : NaN;
+  };
+  // A numbered menu line that is one of the resume-picker options.
+  const isPickerOption = (l: string): boolean => /^\s*[❯>]?\s*\d+\.\s/.test(l) && /(resume from summary|resume full session|full session as-is)/i.test(l);
   let answered = false;
-  for (let i = 0; i < tries; i++) {
+  let sawPrompt = false;
+  while (Date.now() < deadline) {
     await sleep(gapMs);
     if (!hasSession(name)) return answered; // pane gone — nothing to answer
     const cap = tmux(['capture-pane', '-t', `${name}.0`, '-p'], { timeoutMs: 2_000 });
     if (!cap.ok) continue;
-    const pane = cap.stdout.replace(/\x1b\[[0-9;]*m/g, '');
-    if (!(pane.includes('Resume full session as-is') && pane.includes('Resume from summary'))) {
-      if (answered) return true; // we answered and the prompt has cleared
-      continue; // not up yet — keep watching
+    const lines = cap.stdout.replace(/\x1b\[[0-9;]*m/g, '').split('\n');
+    const summaryLine = lines.find((l) => /^\s*[❯>]?\s*\d+\./.test(l) && /resume from summary/i.test(l));
+    const fullLine = lines.find((l) => /^\s*[❯>]?\s*\d+\./.test(l) && /full session/i.test(l));
+    if (!(summaryLine && fullLine)) {
+      // No picker on screen. If the REPL composer is ready, the resume is done
+      // (dismissed / never needed) → stop watching. Otherwise it's still loading
+      // (or the picker hasn't painted yet) → keep watching until the deadline.
+      if (composerStatus(name) !== 'unknown') return answered;
+      continue;
     }
-    // Prompt is up. Read which option the ❯ cursor sits on and take ONE step
-    // toward option 2 ("Resume full session as-is"), re-reading each tick — robust
-    // to tmux dropping a key and to whatever the menu's wrap behavior is (never
-    // assumes a fixed start). Confirm with Enter only once the cursor is on 2.
-    const cursorLine = pane.split('\n').find((l) => l.includes('❯')) ?? '';
-    if (cursorLine.includes('Resume full session as-is')) {
-      tmux(['send-keys', '-t', `${name}.0`, 'Enter']); // on option 2 → confirm
+    if (!sawPrompt) {
+      sawPrompt = true;
+      console.log(`[resume-prompt] ${sessionId.slice(0, 8)}: picker up — auto-selecting full session`);
+    }
+    // Cursor = the ❯-carrying numbered option line (not just the first ❯ in the
+    // pane, which could be the composer). Step toward the full-session option.
+    const cursorLine = lines.find((l) => l.includes('❯') && isPickerOption(l));
+    if (cursorLine && /full session/i.test(cursorLine)) {
+      tmux(['send-keys', '-t', `${name}.0`, 'Enter']); // cursor on full session → confirm
       answered = true;
-    } else if (cursorLine.includes('Resume from summary')) {
-      tmux(['send-keys', '-t', `${name}.0`, 'Down']); // on option 1 → step down to 2
-    } else if (cursorLine.includes("Don't ask me again")) {
-      tmux(['send-keys', '-t', `${name}.0`, 'Up']); // on option 3 → step up to 2
+    } else {
+      const cur = optNum(cursorLine), full = optNum(fullLine);
+      if (Number.isFinite(cur) && Number.isFinite(full) && cur !== full) {
+        tmux(['send-keys', '-t', `${name}.0`, cur < full ? 'Down' : 'Up']);
+      }
+      // cursor not on a picker option this frame → re-read next tick
     }
-    // cursor not located yet → wait and re-read next tick
+  }
+  if (sawPrompt && !answered) {
+    console.error(`[resume-prompt] ${sessionId.slice(0, 8)}: gave up after ${Math.round(timeoutMs / 1000)}s — picker may still be up`);
   }
   return answered;
 }
