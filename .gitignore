@@ -21,5 +21,8 @@ agents/*/restart.log
 **/ACCOUNTS.md
 **/.vps-*
 
-# Image uploads (filesystem-backed)
+# Image uploads (filesystem-backed) — the runtime storage dir, NOT the source
+# route that serves it (this pattern was accidentally hiding the App Router route
+# app/uploads/[...path]/route.ts from git since it was created).
 uploads/
+!/apps/dashboard/src/app/uploads/

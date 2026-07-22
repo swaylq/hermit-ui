@@ -8,7 +8,7 @@
 // chat/page.tsx (P2-3); behaviour identical. Consumed by GroupView back there.
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { FileText, Download, X } from 'lucide-react';
+import { FileText, Download, X, Music, Film } from 'lucide-react';
 import { Markdown } from '@/components/markdown';
 import dynamic from 'next/dynamic';
 import { saveFile } from '@/lib/save-file';
@@ -55,6 +55,12 @@ const TEXT_EXT = new Set([
   'py','sh','bash','zsh','c','h','cpp','hpp','cc','java','go','rs','rb','php','lua','r','kt','swift','pl',
 ]);
 
+// Audio / video files play inline (<audio>/<video>) instead of downloading. The
+// mimeType from /api/upload is often octet-stream, so detect by extension too; the
+// /uploads route now serves these with a real content-type + Range support.
+const AUDIO_EXT = new Set(['mp3', 'm4a', 'aac', 'wav', 'ogg', 'oga', 'flac']);
+const VIDEO_EXT = new Set(['mp4', 'm4v', 'webm', 'mov', 'mkv', 'mpeg', 'mpg']);
+
 function classifyFile(name: string, mimeType: string | null) {
   const ext = (name.split('.').pop() || '').toLowerCase();
   const mt = (mimeType || '').toLowerCase();
@@ -62,8 +68,10 @@ function classifyFile(name: string, mimeType: string | null) {
   const isSvg = mt.includes('svg') || ext === 'svg';
   const isPdf = mt.includes('pdf') || ext === 'pdf';
   const isMarkdown = ext === 'md' || ext === 'markdown';
-  const isText = !isHtml && !isSvg && (mt.startsWith('text/') || TEXT_EXT.has(ext));
-  return { isHtml, isSvg, isPdf, isText, isMarkdown, previewable: isHtml || isSvg || isPdf || isText };
+  const isAudio = mt.startsWith('audio/') || AUDIO_EXT.has(ext);
+  const isVideo = mt.startsWith('video/') || VIDEO_EXT.has(ext);
+  const isText = !isHtml && !isSvg && !isAudio && !isVideo && (mt.startsWith('text/') || TEXT_EXT.has(ext));
+  return { isHtml, isSvg, isPdf, isText, isMarkdown, isAudio, isVideo, previewable: isHtml || isSvg || isPdf || isText };
 }
 
 // Lazily fetch + render an attachment INSIDE the overlay, independent of how the
@@ -141,6 +149,36 @@ export function ChatFile({ url, name, mimeType }: { url: string; name: string; m
     catch { /* swallow — rare; the user can retry */ }
     finally { setSaving(false); }
   }, [url, name, mimeType]);
+
+  // Audio / video play INLINE — no download, no overlay. The native controls
+  // stream from /uploads (now typed + Range-capable), with a small download button.
+  if (c.isAudio || c.isVideo) {
+    return (
+      <div className="inline-flex max-w-full flex-col gap-1.5 rounded-lg border border-border bg-background p-2">
+        <div className="flex items-center gap-2 min-w-0 px-0.5">
+          {c.isVideo ? <Film className="h-4 w-4 shrink-0 text-muted-foreground" /> : <Music className="h-4 w-4 shrink-0 text-muted-foreground" />}
+          <span className="truncate text-xs text-foreground/90" title={name}>{name}</span>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            aria-label={`Download ${name}`}
+            title="Download"
+            className="ml-auto shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground disabled:opacity-50 cursor-pointer"
+          >
+            <Download className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        {c.isVideo ? (
+          // eslint-disable-next-line jsx-a11y/media-has-caption
+          <video controls playsInline preload="metadata" src={url} className="max-h-[360px] max-w-full rounded bg-black" />
+        ) : (
+          // eslint-disable-next-line jsx-a11y/media-has-caption
+          <audio controls preload="metadata" src={url} className="h-9 w-[280px] max-w-full" />
+        )}
+      </div>
+    );
+  }
 
   return (
     <>
