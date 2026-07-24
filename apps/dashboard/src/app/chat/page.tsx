@@ -27,6 +27,7 @@ import { EmptyChat } from '@/components/chat/empty-chat';
 import { TypingIndicator } from '@/components/chat/message-bits';
 import { MessageTimeline } from '@/components/chat/message-timeline';
 import { ComposeBar, QueueBar } from '@/components/chat/composer';
+import { VoiceMic } from '@/components/chat/voice-mic';
 
 // isTouchPrimary (phone/tablet vs desktop) lives in @/lib/save-file — the
 // soft-keyboard return key inserts a newline there (a dedicated send button
@@ -483,6 +484,16 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
+  // Floating voice-mic visibility (Settings → hermit:hide-voice-mic). Read on
+  // mount + on cross-tab storage events so toggling it takes effect without a reload.
+  const [micHidden, setMicHidden] = useState(false);
+  useEffect(() => {
+    const read = () => { try { setMicHidden(localStorage.getItem('hermit:hide-voice-mic') === '1'); } catch { /* ignore */ } };
+    read();
+    window.addEventListener('storage', read);
+    return () => window.removeEventListener('storage', read);
+  }, []);
+
   // Track whether the messages viewport is pinned to the bottom. We only
   // auto-scroll when the user is already there — otherwise reading older
   // messages while the assistant streams would yank scroll position.
@@ -870,6 +881,23 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
     });
   }, []);
 
+  // Voice transcript → APPEND to the current draft (never clobber typed text),
+  // then focus + caret-to-end + resize (mirrors pickPrompt's programmatic path).
+  const insertTranscript = useCallback((text: string) => {
+    setDraft((d) => {
+      const base = d.trimEnd();
+      return base ? `${base} ${text}` : text;
+    });
+    requestAnimationFrame(() => {
+      const el = taRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
+    });
+  }, []);
+
   return (
     <>
       <div className="border-b border-border px-4 h-12 flex items-center justify-between gap-3 shrink-0">
@@ -1067,6 +1095,7 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
         </div>
       )}
 
+        <VoiceMic sessionId={sessionId} hidden={micHidden || !!session?.closedAt} onTranscript={insertTranscript} />
         <>
           <LoopBar
             loopState={(session as { loopState?: unknown } | undefined)?.loopState}
