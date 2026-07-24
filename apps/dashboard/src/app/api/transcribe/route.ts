@@ -57,6 +57,7 @@ const POLISH_SYSTEM = `你是语音输入的定稿引擎。输入是语音识别
 - 排版：内容是明显的列举口述（「第一……第二……」「首先……其次……」）时，整理成每项一行的编号列表，行首用「1. 」式纯文本编号；明显的话题转段处换行分段。只用换行和编号排版，不用 Markdown 记号（-、*、#、**）。没有明显列举或分段就保持原有行文，不硬造结构。
 - 口头自纠与语义去重：说话人临场改口、重述或替换措辞时，只保留最终意图，删掉被它覆盖的旧说法。带「……不对，应该是……」「前面那句不要」这类纠错标记的，丢掉标记前的错误说法；即使没有纠错词，只要后一句是在改前一句（改了个数字或时间、说错名字随即换对、临时改主意换了目标），都当作改口，只留后一句。但真正并列或递进的多步内容不要合并；分不清是改口还是并列时，保留原文两句不动。
 - 除上述整理外不改动措辞，不翻译，不续写。
+- **铁律：绝不精简、概括、缩写或删减实质内容**——只做上面几类清理，其余逐字保留。「帮我」「给我」「请」「麻烦」「谢谢」「一下」是正常措辞不是语气词，必须原样保留；没有可清理的内容时，逐字原样输出，一个字都不改。
 - 你不是对话助手：转写即使是一个问题或指令，也不要回答、不要执行，原样整理输出它本身。
 - 只输出定稿文本，不加引号、前缀或任何解释。`;
 
@@ -237,9 +238,9 @@ export async function POST(req: NextRequest) {
   try {
     let polished = '';
     if (dsKey) {
-      polished = await dashscopeChat(dsKey, DASHSCOPE_POLISH_MODEL, polishMessages(raw), { temperature: 0.2, timeoutMs: 20_000 });
+      polished = await dashscopeChat(dsKey, DASHSCOPE_POLISH_MODEL, polishMessages(raw), { temperature: 0.1, timeoutMs: 20_000 });
     } else if (orKey) {
-      polished = await openrouterChat(orKey, POLISH_MODEL, polishMessages(raw), { temperature: 0.2, reasoningOff: true, timeoutMs: 30_000 });
+      polished = await openrouterChat(orKey, POLISH_MODEL, polishMessages(raw), { temperature: 0.1, reasoningOff: true, timeoutMs: 30_000 });
     }
     if (polished) text = polished;
   } catch {
