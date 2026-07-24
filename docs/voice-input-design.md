@@ -113,6 +113,7 @@ onTranscript={(text) => {
 
 ## 模型与凭据
 
+- **现状(线上 2026-07-24, `80aac70`)**:VPS 已配 `DASHSCOPE_API_KEY`,故**两步都直连 DashScope**——ASR `qwen3-asr-flash` + 定稿 `qwen-flash`,总 ~1.1-1.7s(Keyo 级);下面的 OpenRouter 是不配 DashScope 时的兜底路径。DashScope 直连细节见 `route.ts` 顶部注释(`DASHSCOPE_*` env;定稿加了「绝不精简、礼貌用语必留」铁律防 qwen-flash 过度精简)。
 - 全走 OpenRouter,默认:ASR `mistralai/voxtral-small-24b-2507`(专用音频模型)、定稿 `deepseek/deepseek-v4-flash`(Keyo 同款);均 env 可覆盖。
 - ⚠️ **ASR 模型选型（2026-07-24 benchmark）**:最初用 Keyo 同款 `xiaomi/mimo-v2.5`,但它是通用多模态 LLM、拿来做 ASR **慢且随音频长度暴涨**(3s 音频 5-12s、12s 音频 25s,还极不稳);换 `voxtral-small-24b`(Mistral 专用音频)后 **1.5s / 2.5s**、稳定、中文质量相当、同价。**慢的是模型不是 OpenRouter 路由**(voxtral 走同一路由就快)。想要 Keyo 级(~1s)可直连 DashScope `qwen3-asr-flash`(需 Keyo 的 `aliyun-api-key`,绕开 OpenRouter)。`google/gemini-2.5-flash-lite`、`openai/gpt-audio*` 走 OpenRouter 传音频报 403(provider TOS)不可用。
 - **凭据落点**:secret store(Mac)已有 `OPENROUTER_API_KEY`,但 dashboard 在 VPS、解不了该 store → 部署时把值注入 **VPS dashboard env**(secret-safe,不回显)。
