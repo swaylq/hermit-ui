@@ -5,8 +5,9 @@
 //   wav        <Blob>    16 kHz mono PCM16 WAV recorded in the browser, ≤ ~15 MB
 //
 // Two OpenRouter chat/completions hops (one transport, one key):
-//   ① ASR    — an audio-input model (default xiaomi/mimo-v2.5, Keyo-consistent)
-//              transcribes the WAV verbatim.
+//   ① ASR    — a dedicated audio model (default mistralai/voxtral-small-24b: a
+//              purpose-built ASR, ~1.5–2.5s vs mimo-v2.5's slow, length-scaling
+//              5–25s as a general multimodal LLM) transcribes the WAV verbatim.
 //   ② polish — a text model (default deepseek/deepseek-v4-flash) applies Keyo's
 //              "定稿" rules: drop fillers, normalise punctuation, restore spoken
 //              symbols, resolve in-sentence self-corrections. Reasoning is
@@ -24,7 +25,7 @@ import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const ASR_MODEL = process.env.OPENROUTER_ASR_MODEL || 'xiaomi/mimo-v2.5';
+const ASR_MODEL = process.env.OPENROUTER_ASR_MODEL || 'mistralai/voxtral-small-24b-2507';
 const POLISH_MODEL = process.env.OPENROUTER_POLISH_MODEL || 'deepseek/deepseek-v4-flash';
 
 // 16 kHz mono PCM16 WAV is ~32 KB/s; the client caps recording at ~60 s (~2 MB).
