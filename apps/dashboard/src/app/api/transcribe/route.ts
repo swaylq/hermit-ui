@@ -4,24 +4,26 @@
 //   sessionId  <string>  ChatSession id (must belong to the auth machine/agent)
 //   wav        <Blob>    16 kHz mono PCM16 WAV recorded in the browser, ≤ ~15 MB
 //
-// ASR provider is chosen by which key is set:
-//   · DASHSCOPE_API_KEY → DashScope qwen3-asr-flash DIRECT (a dedicated, fast ASR
-//     — the Keyo path, ~1s, no OpenRouter hop). Falls back to OpenRouter on error
-//     when OPENROUTER_API_KEY is also present.
-//   · else → an OpenRouter audio model (default mistralai/voxtral-small-24b — a
-//     dedicated ASR, ~1.5–2.5s; far faster + steadier than the general
-//     multimodal mimo-v2.5's 5–25s).
-// Polish (best-effort): OpenRouter deepseek-v4-flash with Keyo's 定稿 rules,
-// reasoning off; skipped (→ raw) if there's no OpenRouter key or it fails.
+// Two steps, ASR then polish. Provider is chosen by which key is set:
+//   · DASHSCOPE_API_KEY → BOTH steps go DIRECT to DashScope (the Keyo path, one
+//     key + datacenter, no OpenRouter hop): ASR = qwen3-asr-flash (a dedicated
+//     fast ASR, ~1s), polish = qwen-flash (~0.5s). ASR errors fall back to
+//     OpenRouter when its key is also set.
+//   · else → OpenRouter: ASR = an audio model (default mistralai/voxtral-small-24b,
+//     a dedicated ASR far faster + steadier than a general multimodal LLM),
+//     polish = deepseek-v4-flash.
+// Polish is best-effort with Keyo's 定稿 rules (drop fillers, restore spoken
+// symbols, resolve self-corrections); on any failure we return the raw transcript.
 //
 // Returns { text, raw }. Auth mirrors /api/upload (resolveKey + session
 // ownership). Server-side only — keys never reach the client.
 //
 // Env: OPENROUTER_API_KEY and/or DASHSCOPE_API_KEY (at least one required).
 // Overrides: OPENROUTER_ASR_MODEL, OPENROUTER_POLISH_MODEL, DASHSCOPE_ASR_MODEL,
-// DASHSCOPE_BASE_URL (default https://dashscope.aliyuncs.com — the China/Beijing
-// endpoint, matching Keyo; use https://dashscope-intl.aliyuncs.com for an
-// Alibaba Cloud International / Model Studio key).
+// DASHSCOPE_POLISH_MODEL, DASHSCOPE_BASE_URL (default https://dashscope.aliyuncs.com
+// — the China/Beijing endpoint, matching Keyo; a Model Studio workspace uses its
+// own https://<ws>.<region>.maas.aliyuncs.com host; Alibaba Cloud International is
+// https://dashscope-intl.aliyuncs.com).
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/server/db';
@@ -33,10 +35,10 @@ const POLISH_MODEL = process.env.OPENROUTER_POLISH_MODEL || 'deepseek/deepseek-v
 
 const DASHSCOPE_BASE_URL = process.env.DASHSCOPE_BASE_URL || 'https://dashscope.aliyuncs.com';
 const DASHSCOPE_ASR_MODEL = process.env.DASHSCOPE_ASR_MODEL || 'qwen3-asr-flash';
+const DASHSCOPE_POLISH_MODEL = process.env.DASHSCOPE_POLISH_MODEL || 'qwen-flash';
 
 // 16 kHz mono PCM16 WAV is ~32 KB/s; the client caps recording at ~60 s (~2 MB).
-// 15 MB is a generous safety net that still base64-encodes under OpenRouter's
-// audio ceiling.
+// 15 MB is a generous safety net that still base64-encodes under the audio ceiling.
 const MAX_WAV_BYTES = 15 * 1024 * 1024;
 
 const ASR_SYSTEM =
@@ -74,6 +76,14 @@ function orAsrMessages(base64: string): ORMessage[] {
   ];
 }
 
+// Polish messages (text in → cleaned text out); shared by both providers.
+function polishMessages(raw: string): ORMessage[] {
+  return [
+    { role: 'system', content: POLISH_SYSTEM },
+    { role: 'user', content: raw },
+  ];
+}
+
 // One OpenRouter chat/completions call. Throws on non-200 / timeout.
 async function openrouterChat(
   apiKey: string,
@@ -102,6 +112,34 @@ async function openrouterChat(
       | { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } }
       | null;
     if (!r.ok) throw new Error(`OpenRouter ${model} HTTP ${r.status}: ${j?.error?.message ?? 'unknown'}`);
+    return (j?.choices?.[0]?.message?.content ?? '').trim();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// One DashScope chat/completions call (OpenAI-compatible), for the polish step.
+async function dashscopeChat(
+  apiKey: string,
+  model: string,
+  messages: ORMessage[],
+  opts: { temperature?: number; timeoutMs: number },
+): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+  try {
+    const body: Record<string, unknown> = { model, messages };
+    if (opts.temperature != null) body.temperature = opts.temperature;
+    const r = await fetch(`${DASHSCOPE_BASE_URL}/compatible-mode/v1/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const j = (await r.json().catch(() => null)) as
+      | { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string }; message?: string; code?: string }
+      | null;
+    if (!r.ok) throw new Error(`DashScope ${model} HTTP ${r.status}: ${j?.error?.message ?? j?.message ?? j?.code ?? 'unknown'}`);
     return (j?.choices?.[0]?.message?.content ?? '').trim();
   } finally {
     clearTimeout(timer);
@@ -192,24 +230,20 @@ export async function POST(req: NextRequest) {
   }
   if (!raw) return NextResponse.json({ text: '', raw: '' });
 
-  // ② polish — best-effort via OpenRouter; fall back to the raw transcript on any
-  // failure / no OpenRouter key so the user never loses their words.
+  // ② polish — best-effort. Prefer DashScope qwen (same key + datacenter as the
+  // ASR when set, ~0.5s); else OpenRouter deepseek. Fall back to the raw
+  // transcript on any failure / no key so the user never loses their words.
   let text = raw;
-  if (orKey) {
-    try {
-      const polished = await openrouterChat(
-        orKey,
-        POLISH_MODEL,
-        [
-          { role: 'system', content: POLISH_SYSTEM },
-          { role: 'user', content: raw },
-        ],
-        { temperature: 0.2, reasoningOff: true, timeoutMs: 30_000 },
-      );
-      if (polished) text = polished;
-    } catch {
-      // keep raw
+  try {
+    let polished = '';
+    if (dsKey) {
+      polished = await dashscopeChat(dsKey, DASHSCOPE_POLISH_MODEL, polishMessages(raw), { temperature: 0.2, timeoutMs: 20_000 });
+    } else if (orKey) {
+      polished = await openrouterChat(orKey, POLISH_MODEL, polishMessages(raw), { temperature: 0.2, reasoningOff: true, timeoutMs: 30_000 });
     }
+    if (polished) text = polished;
+  } catch {
+    // keep raw
   }
 
   return NextResponse.json({ text, raw });
