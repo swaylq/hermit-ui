@@ -4,21 +4,24 @@
 //   sessionId  <string>  ChatSession id (must belong to the auth machine/agent)
 //   wav        <Blob>    16 kHz mono PCM16 WAV recorded in the browser, ≤ ~15 MB
 //
-// Two OpenRouter chat/completions hops (one transport, one key):
-//   ① ASR    — a dedicated audio model (default mistralai/voxtral-small-24b: a
-//              purpose-built ASR, ~1.5–2.5s vs mimo-v2.5's slow, length-scaling
-//              5–25s as a general multimodal LLM) transcribes the WAV verbatim.
-//   ② polish — a text model (default deepseek/deepseek-v4-flash) applies Keyo's
-//              "定稿" rules: drop fillers, normalise punctuation, restore spoken
-//              symbols, resolve in-sentence self-corrections. Reasoning is
-//              disabled for latency. On ANY failure we fall back to the raw
-//              transcript — the user never loses their words.
+// ASR provider is chosen by which key is set:
+//   · DASHSCOPE_API_KEY → DashScope qwen3-asr-flash DIRECT (a dedicated, fast ASR
+//     — the Keyo path, ~1s, no OpenRouter hop). Falls back to OpenRouter on error
+//     when OPENROUTER_API_KEY is also present.
+//   · else → an OpenRouter audio model (default mistralai/voxtral-small-24b — a
+//     dedicated ASR, ~1.5–2.5s; far faster + steadier than the general
+//     multimodal mimo-v2.5's 5–25s).
+// Polish (best-effort): OpenRouter deepseek-v4-flash with Keyo's 定稿 rules,
+// reasoning off; skipped (→ raw) if there's no OpenRouter key or it fails.
 //
 // Returns { text, raw }. Auth mirrors /api/upload (resolveKey + session
-// ownership). Server-side only — OPENROUTER_API_KEY never reaches the client.
+// ownership). Server-side only — keys never reach the client.
 //
-// Env: OPENROUTER_API_KEY (required); OPENROUTER_ASR_MODEL /
-// OPENROUTER_POLISH_MODEL override the model ids without a code change.
+// Env: OPENROUTER_API_KEY and/or DASHSCOPE_API_KEY (at least one required).
+// Overrides: OPENROUTER_ASR_MODEL, OPENROUTER_POLISH_MODEL, DASHSCOPE_ASR_MODEL,
+// DASHSCOPE_BASE_URL (default https://dashscope.aliyuncs.com — the China/Beijing
+// endpoint, matching Keyo; use https://dashscope-intl.aliyuncs.com for an
+// Alibaba Cloud International / Model Studio key).
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/server/db';
@@ -27,6 +30,9 @@ import { resolveKey } from '@/server/auth';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const ASR_MODEL = process.env.OPENROUTER_ASR_MODEL || 'mistralai/voxtral-small-24b-2507';
 const POLISH_MODEL = process.env.OPENROUTER_POLISH_MODEL || 'deepseek/deepseek-v4-flash';
+
+const DASHSCOPE_BASE_URL = process.env.DASHSCOPE_BASE_URL || 'https://dashscope.aliyuncs.com';
+const DASHSCOPE_ASR_MODEL = process.env.DASHSCOPE_ASR_MODEL || 'qwen3-asr-flash';
 
 // 16 kHz mono PCM16 WAV is ~32 KB/s; the client caps recording at ~60 s (~2 MB).
 // 15 MB is a generous safety net that still base64-encodes under OpenRouter's
@@ -57,8 +63,18 @@ interface ORMessage {
   content: string | Array<Record<string, unknown>>;
 }
 
-// One OpenRouter chat/completions call. Throws on non-200 / timeout; the caller
-// decides whether that's fatal (ASR) or falls back (polish).
+// OpenRouter ASR request messages: audio as raw base64 + a separate format field.
+function orAsrMessages(base64: string): ORMessage[] {
+  return [
+    { role: 'system', content: ASR_SYSTEM },
+    { role: 'user', content: [
+      { type: 'text', text: '转写这段音频。' },
+      { type: 'input_audio', input_audio: { data: base64, format: 'wav' } },
+    ] },
+  ];
+}
+
+// One OpenRouter chat/completions call. Throws on non-200 / timeout.
 async function openrouterChat(
   apiKey: string,
   model: string,
@@ -76,7 +92,6 @@ async function openrouterChat(
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        // OpenRouter attribution (optional, harmless).
         'HTTP-Referer': 'https://dash.swaylab.ai',
         'X-Title': 'hermit-ui voice input',
       },
@@ -93,12 +108,44 @@ async function openrouterChat(
   }
 }
 
+// Direct DashScope qwen3-asr-flash (OpenAI-compatible). Differs from OpenRouter:
+// the audio is a data-URI in input_audio.data, and asr_options sits at the body
+// TOP LEVEL (per Alibaba's docs + Keyo's live testing — nesting it elsewhere is
+// silently dropped). A dedicated ASR needs no system prompt; language omitted →
+// auto (Chinese/English mix).
+async function transcribeViaDashScope(apiKey: string, wavBase64: string, timeoutMs = 30_000): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${DASHSCOPE_BASE_URL}/compatible-mode/v1/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: DASHSCOPE_ASR_MODEL,
+        messages: [
+          { role: 'user', content: [{ type: 'input_audio', input_audio: { data: `data:audio/wav;base64,${wavBase64}` } }] },
+        ],
+        asr_options: { enable_itn: false },
+      }),
+      signal: controller.signal,
+    });
+    const j = (await r.json().catch(() => null)) as
+      | { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string }; message?: string; code?: string }
+      | null;
+    if (!r.ok) throw new Error(`DashScope HTTP ${r.status}: ${j?.error?.message ?? j?.message ?? j?.code ?? 'unknown'}`);
+    return (j?.choices?.[0]?.message?.content ?? '').trim();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function POST(req: NextRequest) {
   const scope = await resolveKey(req.headers.get('x-asst-key') ?? '');
   if (!scope) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) return NextResponse.json({ error: 'transcription not configured' }, { status: 503 });
+  const orKey = process.env.OPENROUTER_API_KEY;
+  const dsKey = process.env.DASHSCOPE_API_KEY;
+  if (!orKey && !dsKey) return NextResponse.json({ error: 'transcription not configured' }, { status: 503 });
 
   let form: FormData;
   try {
@@ -125,44 +172,44 @@ export async function POST(req: NextRequest) {
 
   const base64 = Buffer.from(await wav.arrayBuffer()).toString('base64');
 
-  // ① ASR — verbatim transcript. A failure here is fatal (nothing to fall back to).
+  // ① ASR — DashScope qwen3-asr-flash direct when its key is set (fast Keyo path);
+  // its errors fall back to OpenRouter voxtral when possible. Fatal only if all fail.
   let raw: string;
   try {
-    raw = await openrouterChat(
-      apiKey,
-      ASR_MODEL,
-      [
-        { role: 'system', content: ASR_SYSTEM },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: '转写这段音频。' },
-            { type: 'input_audio', input_audio: { data: base64, format: 'wav' } },
-          ],
-        },
-      ],
-      { timeoutMs: 60_000 },
-    );
+    if (dsKey) {
+      try {
+        raw = await transcribeViaDashScope(dsKey, base64);
+      } catch (e) {
+        if (!orKey) throw e;
+        raw = await openrouterChat(orKey, ASR_MODEL, orAsrMessages(base64), { timeoutMs: 60_000 });
+      }
+    } else {
+      // orKey is guaranteed here: the 503 above rules out "neither key set".
+      raw = await openrouterChat(orKey!, ASR_MODEL, orAsrMessages(base64), { timeoutMs: 60_000 });
+    }
   } catch (e) {
     return NextResponse.json({ error: 'transcription failed', detail: String(e) }, { status: 502 });
   }
   if (!raw) return NextResponse.json({ text: '', raw: '' });
 
-  // ② polish — clean up; fall back to the raw transcript on ANY failure.
+  // ② polish — best-effort via OpenRouter; fall back to the raw transcript on any
+  // failure / no OpenRouter key so the user never loses their words.
   let text = raw;
-  try {
-    const polished = await openrouterChat(
-      apiKey,
-      POLISH_MODEL,
-      [
-        { role: 'system', content: POLISH_SYSTEM },
-        { role: 'user', content: raw },
-      ],
-      { temperature: 0.2, reasoningOff: true, timeoutMs: 30_000 },
-    );
-    if (polished) text = polished;
-  } catch {
-    // keep raw
+  if (orKey) {
+    try {
+      const polished = await openrouterChat(
+        orKey,
+        POLISH_MODEL,
+        [
+          { role: 'system', content: POLISH_SYSTEM },
+          { role: 'user', content: raw },
+        ],
+        { temperature: 0.2, reasoningOff: true, timeoutMs: 30_000 },
+      );
+      if (polished) text = polished;
+    } catch {
+      // keep raw
+    }
   }
 
   return NextResponse.json({ text, raw });
