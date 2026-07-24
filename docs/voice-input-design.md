@@ -22,7 +22,7 @@
      │  松手
      ├─ authedFetch POST /api/transcribe   (multipart: wav + sessionId; x-asst-key)
      │        └─[VPS dashboard route]
-     │              ① OpenRouter chat/completions  model=xiaomi/mimo-v2.5           (input_audio wav → 逐字转写)
+     │              ① OpenRouter chat/completions  model=mistralai/voxtral-small-24b (input_audio wav → 逐字转写)
      │              ② OpenRouter chat/completions  model=deepseek/deepseek-v4-flash (polishRules → 定稿)
      │        ← { text, raw }
      ├─ VoiceHUD 状态:录音(极光随电平)→ 识别(白光扫掠)→ 定稿(香槟金强激发)
@@ -77,7 +77,7 @@ Canvas 2D 复刻 Keyo `VoiceHUD.swift` 的数学:
 
 - **鉴权**:`resolveKey(req.headers.get('x-asst-key'))`(同 `/api/upload`,mandatory);校验 `sessionId` 归属(`machineId` + scoped agent)防越权 / 盗刷 ASR 额度。
 - 收 `req.formData()`:`wav`(Blob)+ `sessionId`。
-- **① ASR** → OpenRouter,`model = process.env.OPENROUTER_ASR_MODEL ?? 'xiaomi/mimo-v2.5'`
+- **① ASR** → OpenRouter,`model = process.env.OPENROUTER_ASR_MODEL ?? 'mistralai/voxtral-small-24b-2507'`
   ```jsonc
   { "model": "...", "messages": [
     { "role": "system", "content": "<逐字转写指令,见文末>" },
@@ -113,8 +113,8 @@ onTranscript={(text) => {
 
 ## 模型与凭据
 
-- 全走 OpenRouter,**Keyo 一致默认**:ASR `xiaomi/mimo-v2.5`、定稿 `deepseek/deepseek-v4-flash`(与 Keyo `deepseek-v4-flash` 同名);均 env 可覆盖。
-- ⚠️ OpenRouter 的 `xiaomi/mimo-v2.5` 是**多模态 chat 模型**(prompt 转写),非 Keyo 专用 `mimo-v2.5-asr` 端点;若转写质量不足,切 `google/gemini-2.5-flash-lite`(audio,$0.10)。
+- 全走 OpenRouter,默认:ASR `mistralai/voxtral-small-24b-2507`(专用音频模型)、定稿 `deepseek/deepseek-v4-flash`(Keyo 同款);均 env 可覆盖。
+- ⚠️ **ASR 模型选型（2026-07-24 benchmark）**:最初用 Keyo 同款 `xiaomi/mimo-v2.5`,但它是通用多模态 LLM、拿来做 ASR **慢且随音频长度暴涨**(3s 音频 5-12s、12s 音频 25s,还极不稳);换 `voxtral-small-24b`(Mistral 专用音频)后 **1.5s / 2.5s**、稳定、中文质量相当、同价。**慢的是模型不是 OpenRouter 路由**(voxtral 走同一路由就快)。想要 Keyo 级(~1s)可直连 DashScope `qwen3-asr-flash`(需 Keyo 的 `aliyun-api-key`,绕开 OpenRouter)。`google/gemini-2.5-flash-lite`、`openai/gpt-audio*` 走 OpenRouter 传音频报 403(provider TOS)不可用。
 - **凭据落点**:secret store(Mac)已有 `OPENROUTER_API_KEY`,但 dashboard 在 VPS、解不了该 store → 部署时把值注入 **VPS dashboard env**(secret-safe,不回显)。
 
 ---
