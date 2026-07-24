@@ -216,10 +216,14 @@ export function VoiceMic({
       gg.py = e.clientY;
       gg.fx = pos?.x ?? 0;
       gg.fy = pos?.y ?? 0;
-      setPhase('recording');
       setHint(null);
-      void beginRecording(); // in-gesture (iOS)
-      gg.holdTimer = setTimeout(() => { if (gg.mode === 'deciding') gg.mode = 'recording'; }, HOLD_MS);
+      // Open the mic in-gesture (iOS needs getUserMedia inside the gesture) but do
+      // NOT expand yet — wait out the hold so a drag never triggers a pop. The
+      // capsule opens only once the hold is confirmed (the timer below).
+      void beginRecording();
+      gg.holdTimer = setTimeout(() => {
+        if (gg.mode === 'deciding') { gg.mode = 'recording'; setPhase('recording'); }
+      }, HOLD_MS);
     },
     [phase, pos, beginRecording],
   );
