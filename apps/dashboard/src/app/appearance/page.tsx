@@ -15,6 +15,11 @@ const OPTIONS = [
   { value: 'dark', label: 'Dark', desc: '始终使用暗色', Icon: Moon },
 ] as const;
 
+const MIC_KEY = 'hermit:hide-voice-mic';
+function readMicShown() {
+  try { return localStorage.getItem(MIC_KEY) !== '1'; } catch { return true; }
+}
+
 export default function AppearancePage() {
   const { theme, setTheme, resolvedTheme } = useTheme();
   // theme is unknown on the server / first paint — gate the UI on mount so the
@@ -23,6 +28,19 @@ export default function AppearancePage() {
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard mount gate
   useEffect(() => setMounted(true), []);
   const current = mounted ? theme ?? 'system' : undefined;
+
+  // Floating voice-mic visibility (localStorage; the chat page reads it on mount
+  // + on cross-tab storage events). Default shown.
+  const [micShown, setMicShown] = useState(true);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- mount gate reading localStorage
+  useEffect(() => setMicShown(readMicShown()), []);
+  const toggleMic = () => {
+    setMicShown((v) => {
+      const next = !v;
+      try { localStorage.setItem(MIC_KEY, next ? '0' : '1'); } catch { /* ignore */ }
+      return next;
+    });
+  };
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
@@ -68,6 +86,35 @@ export default function AppearancePage() {
                 : `已固定为${current === 'dark' ? '暗色' : '亮色'}。`
               : null}
           </p>
+
+          <div className="border-t border-border pt-4">
+            <h2 className="text-sm font-semibold text-foreground">Voice input</h2>
+            <p className="text-xs text-muted-foreground mt-1">
+              A floating mic button in chat — hold to talk and your speech is transcribed into the composer; drag to
+              reposition. Saved on this device.
+            </p>
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-border p-3">
+              <span className="text-sm text-foreground">Show the floating mic button</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={mounted ? micShown : undefined}
+                aria-label="Show the floating mic button"
+                onClick={toggleMic}
+                className={cn(
+                  'relative h-6 w-11 shrink-0 rounded-full transition-colors cursor-pointer',
+                  mounted && micShown ? 'bg-emerald-500' : 'bg-muted',
+                )}
+              >
+                <span
+                  className={cn(
+                    'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform',
+                    mounted && micShown ? 'translate-x-[22px]' : 'translate-x-0.5',
+                  )}
+                />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
