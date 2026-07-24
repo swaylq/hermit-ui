@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Mic, Loader2 } from 'lucide-react';
 import { authedFetch } from '@/lib/asst-fetch';
+import { isTouchPrimary } from '@/lib/save-file';
 import { startRecording, type VoiceRecorder } from '@/lib/voice-capture';
 import { VoiceWave, type WavePhase } from '@/components/chat/voice-wave';
 
@@ -80,6 +81,9 @@ export function VoiceMic({
     fx: 0,
     fy: 0,
     holdTimer: 0 as unknown as ReturnType<typeof setTimeout>,
+    keyArmTimer: 0 as unknown as ReturnType<typeof setTimeout>,
+    armingKey: false, // right-Option held, waiting out the hold delay
+    byKey: false, // current recording was started by the PTT key (not the button)
   });
 
   useEffect(() => {
@@ -112,10 +116,15 @@ export function VoiceMic({
   );
 
   const stopAndTranscribe = useCallback(async () => {
+    const gg = g.current;
+    gg.byKey = false;
+    gg.mode = 'idle';
+    gg.armingKey = false;
+    clearTimeout(gg.keyArmTimer);
     const rec = recorderRef.current;
     recorderRef.current = null;
     if (!rec) { setPhase('idle'); return; }
-    const tooShort = Date.now() - g.current.recAt < MIN_MS;
+    const tooShort = Date.now() - gg.recAt < MIN_MS;
     const wav = await rec.stop();
     setLevel(0);
     if (tooShort || wav.size <= 44) {
@@ -127,11 +136,11 @@ export function VoiceMic({
     void finishTranscribe(wav);
   }, [finishTranscribe]);
 
-  const beginRecording = useCallback(async () => {
+  const beginRecording = useCallback(async (maxMs: number = MAX_MS) => {
     try {
       const rec = await startRecording({
         onLevel: setLevel,
-        maxMs: MAX_MS,
+        maxMs,
         onAutoStop: () => { void stopAndTranscribe(); },
       });
       if (g.current.mode !== 'deciding' && g.current.mode !== 'recording') { rec.cancel(); return; }
@@ -146,9 +155,59 @@ export function VoiceMic({
     }
   }, [stopAndTranscribe]);
 
+  // Desktop push-to-talk: hold RIGHT Option (⌥, code "AltRight") to record — the
+  // same voice key as Keyo. Guarded so it never clashes with Option+arrow / Option+
+  // delete text editing: it only arms after a short hold, and pressing ANY other key
+  // aborts it. Held recording gets a generous 5-min cap (a stuck key won't run forever).
+  useEffect(() => {
+    if (isTouchPrimary()) return; // desktop only — touch uses the button
+    const KEY = 'AltRight';
+    const gg = g.current;
+    const onDown = (e: KeyboardEvent) => {
+      if (e.code !== KEY) {
+        // Any other key while arming / key-recording ⇒ the user is editing, not talking.
+        if (gg.armingKey || gg.byKey) {
+          clearTimeout(gg.keyArmTimer);
+          gg.armingKey = false;
+          if (gg.byKey) {
+            gg.byKey = false;
+            gg.mode = 'idle';
+            recorderRef.current?.cancel();
+            recorderRef.current = null;
+            setPhase('idle');
+            setLevel(0);
+          }
+        }
+        return;
+      }
+      if (e.repeat || hidden || gg.mode !== 'idle') return;
+      gg.armingKey = true;
+      gg.keyArmTimer = setTimeout(() => {
+        if (!gg.armingKey || gg.mode !== 'idle' || hidden) return;
+        gg.armingKey = false;
+        gg.mode = 'recording';
+        gg.byKey = true;
+        setPhase('recording');
+        setHint(null);
+        void beginRecording(300_000);
+      }, HOLD_MS);
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code !== KEY) return;
+      if (gg.armingKey) { gg.armingKey = false; clearTimeout(gg.keyArmTimer); return; }
+      if (gg.byKey && gg.mode === 'recording') void stopAndTranscribe();
+    };
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+    };
+  }, [hidden, beginRecording, stopAndTranscribe]);
+
   const onPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>) => {
-      if (phase === 'transcribing') return;
+      if (phase === 'transcribing' || g.current.mode !== 'idle') return;
       e.currentTarget.setPointerCapture(e.pointerId);
       const gg = g.current;
       gg.mode = 'deciding';
@@ -239,7 +298,7 @@ export function VoiceMic({
         onPointerUp={endGesture}
         onPointerCancel={endGesture}
         aria-label="语音输入（长按说话，拖动可移位）"
-        title="长按说话，拖动可移位"
+        title="长按说话，拖动可移位（桌面可按住右 Option 说话）"
         className="relative flex items-center justify-center overflow-hidden rounded-full border border-white/10 bg-[#111319]/85 backdrop-blur-xl cursor-pointer"
         style={{
           width,
