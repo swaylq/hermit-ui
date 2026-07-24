@@ -19,6 +19,7 @@ import { Mic } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { authedFetch } from '@/lib/asst-fetch';
 import { startRecording, type VoiceRecorder } from '@/lib/voice-capture';
+import { VoiceHUD } from '@/components/chat/voice-hud';
 
 type Phase = 'idle' | 'recording' | 'transcribing' | 'error';
 
@@ -199,11 +200,15 @@ export function VoiceMic({
   const recording = phase === 'recording';
   return (
     <div className="fixed z-40 touch-none select-none" style={{ left: pos.x, top: pos.y }}>
-      {(phase !== 'idle' || hint) && (
-        <div className="absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-full border border-border bg-background/95 px-3 py-1 text-xs text-foreground shadow-sm backdrop-blur">
-          {phase === 'recording' ? '录音中…' : phase === 'transcribing' ? '识别中…' : hint ?? ''}
+      {phase !== 'idle' ? (
+        <div className="absolute bottom-full right-0 mb-2">
+          <VoiceHUD phase={phase} level={level} />
         </div>
-      )}
+      ) : hint ? (
+        <div className="absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-full border border-border bg-background/95 px-3 py-1 text-xs text-foreground shadow-sm backdrop-blur">
+          {hint}
+        </div>
+      ) : null}
       <button
         type="button"
         onPointerDown={onPointerDown}
