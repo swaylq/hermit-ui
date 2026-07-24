@@ -21,7 +21,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { Mic, Loader2 } from 'lucide-react';
 import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
-import { startRecording, type VoiceRecorder } from '@/lib/voice-capture';
+import { startRecording, releaseWarmMic, type VoiceRecorder } from '@/lib/voice-capture';
 import { VoiceWave, type WavePhase } from '@/components/chat/voice-wave';
 
 type Phase = 'idle' | 'recording' | 'transcribing' | 'error';
@@ -92,6 +92,9 @@ export function VoiceMic({
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // Release the warm mic on unmount (leaving the chat) so it doesn't linger.
+  useEffect(() => () => releaseWarmMic(), []);
 
   const finishTranscribe = useCallback(
     async (wav: Blob) => {

@@ -18,6 +18,8 @@
 // (the FAB pointerdown / the PTT keydown) so getUserMedia + AudioContext.resume
 // are allowed.
 
+import { isTouchPrimary } from '@/lib/save-file';
+
 export interface VoiceRecorder {
   /** Stop capture and resolve the recording as a 16 kHz mono WAV Blob. */
   stop(): Promise<Blob>;
@@ -32,7 +34,15 @@ interface StartOpts {
 }
 
 const TARGET_RATE = 16_000;
-const WARM_HOLD_MS = 20_000;
+
+// How long to keep the mic warm after a recording. On touch devices iOS re-prompts
+// for permission on essentially every getUserMedia, so we keep ONE stream alive
+// across recordings (until real idle) to avoid a prompt every time — a longer hold.
+// Desktop persists the permission grant, so a short hold (just enough to kill the
+// clipped-first-words latency for back-to-back recordings) is plenty.
+function warmHoldMs(): number {
+  return isTouchPrimary() ? 150_000 : 25_000;
+}
 
 // ── Warm mic (module-level, shared across recordings) ───────────────────────
 let warm: { stream: MediaStream; ctx: AudioContext } | null = null;
@@ -50,7 +60,12 @@ function releaseWarm() {
 
 function scheduleWarmRelease() {
   if (warmTimer) clearTimeout(warmTimer);
-  warmTimer = setTimeout(releaseWarm, WARM_HOLD_MS);
+  warmTimer = setTimeout(releaseWarm, warmHoldMs());
+}
+
+/** Release the warm mic now (call when leaving the chat so it doesn't linger). */
+export function releaseWarmMic(): void {
+  releaseWarm();
 }
 
 async function acquireWarm(): Promise<{ stream: MediaStream; ctx: AudioContext }> {
