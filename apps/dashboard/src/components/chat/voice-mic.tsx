@@ -1,34 +1,38 @@
 'use client';
 
-// Draggable floating mic for voice input. Lives inside SessionPane so it can
-// drop the transcript straight into the active chat's composer draft.
+// Draggable floating mic for voice input. Lives inside SessionPane so it can drop
+// the transcript straight into the active chat's composer draft.
+//
+// The button IS the HUD: idle it's a small dark-glass circle with a mic; hold to
+// record and it springs open into a capsule with the aurora waveform flowing
+// INSIDE it (level-reactive), the mic fading out, a pulsing REC dot + timer, and a
+// coloured glow. Release → transcribing sweep → collapse back to a circle.
 //
 // Gesture (pointer events, unified touch/mouse):
 //   · pointerdown  → open the mic IN-GESTURE (iOS requires getUserMedia inside a
-//                    user gesture) and optimistically show "recording".
+//                    user gesture) and optimistically expand to "recording".
 //   · move > 8px within 180 ms → it was a DRAG: abandon the recording, reposition
 //                    the FAB (persisted to localStorage, clamped to the viewport).
 //   · hold ≥ 180 ms (no early move) → locked recording; later moves are ignored.
 //   · pointerup while recording → stop + POST to /api/transcribe → onTranscript.
 //   · a too-short press (< 400 ms) is treated as an accidental tap (hint, no send).
-//
-// The simple state pill here is replaced by the aurora <VoiceHUD> in P3.
 
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Mic } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { Mic, Loader2 } from 'lucide-react';
 import { authedFetch } from '@/lib/asst-fetch';
 import { startRecording, type VoiceRecorder } from '@/lib/voice-capture';
-import { VoiceHUD } from '@/components/chat/voice-hud';
+import { VoiceWave, type WavePhase } from '@/components/chat/voice-wave';
 
 type Phase = 'idle' | 'recording' | 'transcribing' | 'error';
 
-const FAB = 56; // button diameter (px)
+const FAB = 56; // idle circle diameter (px)
+const EXP_MAX = 212; // expanded capsule width ceiling
 const DRAG_PX = 8; // early move beyond this = drag, not record
 const HOLD_MS = 180; // hold this long with no early move = locked recording
 const MIN_MS = 400; // shorter press = accidental tap, don't send
 const MAX_MS = 60_000; // recording ceiling
 const POS_KEY = 'hermit:voice-mic-pos';
+const SPRING = 'cubic-bezier(0.34, 1.35, 0.5, 1)';
 
 function clampPos(x: number, y: number) {
   const maxX = Math.max(8, window.innerWidth - FAB - 8);
@@ -45,7 +49,7 @@ function loadPos(): { x: number; y: number } | null {
     const p = JSON.parse(raw) as { x?: unknown; y?: unknown };
     if (typeof p.x === 'number' && typeof p.y === 'number') return clampPos(p.x, p.y);
   } catch {
-    /* private mode / bad json — fall through to default */
+    /* private mode / bad json */
   }
   return null;
 }
@@ -63,6 +67,8 @@ export function VoiceMic({
   const [phase, setPhase] = useState<Phase>('idle');
   const [level, setLevel] = useState(0);
   const [hint, setHint] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [startedAt, setStartedAt] = useState(0);
 
   const recorderRef = useRef<VoiceRecorder | null>(null);
   const g = useRef({
@@ -76,7 +82,6 @@ export function VoiceMic({
     holdTimer: 0 as unknown as ReturnType<typeof setTimeout>,
   });
 
-  // Position: load once, keep clamped inside the viewport on resize / rotate.
   useEffect(() => {
     setPos(loadPos() ?? defaultPos());
     const onResize = () => setPos((p) => (p ? clampPos(p.x, p.y) : p));
@@ -129,10 +134,10 @@ export function VoiceMic({
         maxMs: MAX_MS,
         onAutoStop: () => { void stopAndTranscribe(); },
       });
-      // The gesture may have ended / become a drag while getUserMedia resolved.
       if (g.current.mode !== 'deciding' && g.current.mode !== 'recording') { rec.cancel(); return; }
       recorderRef.current = rec;
       g.current.recAt = Date.now();
+      setStartedAt(Date.now());
     } catch {
       setPhase('error');
       setHint('麦克风不可用');
@@ -166,13 +171,13 @@ export function VoiceMic({
     const dx = e.clientX - gg.px;
     const dy = e.clientY - gg.py;
     if (gg.mode === 'deciding' && Math.hypot(dx, dy) > DRAG_PX && Date.now() - gg.downAt < HOLD_MS) {
-      // Early movement → it's a drag, not a hold. Abandon the just-opened mic.
       clearTimeout(gg.holdTimer);
       gg.mode = 'dragging';
       recorderRef.current?.cancel();
       recorderRef.current = null;
       setPhase('idle');
       setLevel(0);
+      setDragging(true);
     }
     if (gg.mode === 'dragging') setPos(clampPos(gg.fx + dx, gg.fy + dy));
   }, []);
@@ -187,6 +192,7 @@ export function VoiceMic({
       if (mode === 'dragging') {
         const np = clampPos(gg.fx + (e.clientX - gg.px), gg.fy + (e.clientY - gg.py));
         setPos(np);
+        setDragging(false);
         try { localStorage.setItem(POS_KEY, JSON.stringify(np)); } catch { /* private mode */ }
         return;
       }
@@ -197,18 +203,35 @@ export function VoiceMic({
 
   if (hidden || !pos) return null;
 
-  const recording = phase === 'recording';
+  const active = phase !== 'idle';
+  const vw = window.innerWidth;
+  const expW = Math.min(EXP_MAX, vw - 24);
+  const expandsLeft = pos.x + expW + 8 > vw;
+  const left = active && expandsLeft ? Math.max(8, pos.x + FAB - expW) : pos.x;
+  const width = active ? expW : FAB;
+
+  const elapsed = phase === 'recording' && startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
+  const mmss = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
+
+  const glow =
+    phase === 'recording'
+      ? '0 10px 34px -4px rgba(79,123,255,0.55), 0 4px 12px -2px rgba(0,0,0,0.5)'
+      : phase === 'transcribing'
+      ? '0 10px 34px -4px rgba(56,189,248,0.5), 0 4px 12px -2px rgba(0,0,0,0.5)'
+      : phase === 'error'
+      ? '0 10px 34px -4px rgba(244,63,94,0.5), 0 4px 12px -2px rgba(0,0,0,0.5)'
+      : '0 6px 20px -6px rgba(0,0,0,0.55)';
+
   return (
-    <div className="fixed z-40 touch-none select-none" style={{ left: pos.x, top: pos.y }}>
-      {phase !== 'idle' ? (
-        <div className="absolute bottom-full right-0 mb-2">
-          <VoiceHUD phase={phase} level={level} />
-        </div>
-      ) : hint ? (
-        <div className="absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-full border border-border bg-background/95 px-3 py-1 text-xs text-foreground shadow-sm backdrop-blur">
+    <div
+      className="fixed z-40 touch-none select-none"
+      style={{ left, top: pos.y, transition: dragging ? 'none' : `left 0.42s ${SPRING}` }}
+    >
+      {!active && hint && (
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap rounded-full bg-black/75 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
           {hint}
         </div>
-      ) : null}
+      )}
       <button
         type="button"
         onPointerDown={onPointerDown}
@@ -217,17 +240,39 @@ export function VoiceMic({
         onPointerCancel={endGesture}
         aria-label="语音输入（长按说话，拖动可移位）"
         title="长按说话，拖动可移位"
-        className={cn(
-          'flex items-center justify-center rounded-full shadow-lg transition-colors cursor-pointer',
-          recording ? 'bg-rose-500 text-white' : phase === 'transcribing' ? 'bg-amber-500 text-white' : 'bg-foreground text-background hover:bg-foreground/90',
-        )}
+        className="relative flex items-center justify-center overflow-hidden rounded-full border border-white/10 bg-[#111319]/85 backdrop-blur-xl cursor-pointer"
         style={{
-          width: FAB,
+          width,
           height: FAB,
-          transform: recording ? `scale(${1 + Math.min(0.25, level * 0.3)})` : undefined,
+          boxShadow: glow,
+          transition: dragging ? 'none' : `width 0.42s ${SPRING}, box-shadow 0.35s ease`,
         }}
       >
-        <Mic className="h-6 w-6" />
+        {active && (
+          <div className="pointer-events-none absolute inset-0">
+            <VoiceWave phase={phase as WavePhase} level={level} />
+          </div>
+        )}
+        <Mic
+          className="pointer-events-none absolute h-6 w-6 text-white/85 transition-all duration-200"
+          style={{ opacity: active ? 0 : 1, transform: active ? 'scale(0.5)' : 'scale(1)' }}
+        />
+        {phase === 'recording' && (
+          <>
+            <span className="pointer-events-none absolute left-4 h-2 w-2 animate-pulse rounded-full bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.9)]" />
+            <span className="pointer-events-none absolute right-4 text-[11px] font-medium tabular-nums text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
+              {mmss}
+            </span>
+          </>
+        )}
+        {phase === 'transcribing' && (
+          <Loader2 className="pointer-events-none absolute right-4 h-3.5 w-3.5 animate-spin text-white/90" />
+        )}
+        {phase === 'error' && (
+          <span className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] font-medium text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
+            {hint ?? '出错了'}
+          </span>
+        )}
       </button>
     </div>
   );
