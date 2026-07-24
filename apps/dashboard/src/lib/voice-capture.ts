@@ -4,17 +4,24 @@
 //
 // getUserMedia + a Web Audio ScriptProcessorNode pull raw Float32 PCM off the
 // mic; on stop() we merge + downsample to 16 kHz mono and encode a WAV Blob —
-// exactly what /api/transcribe → OpenRouter expects. A live RMS level drives the
-// HUD waveform. ScriptProcessorNode is deprecated but works everywhere including
-// iOS Safari and needs no separate worklet module URL.
+// exactly what /api/transcribe → OpenRouter/DashScope expects. A live RMS level
+// drives the HUD waveform. ScriptProcessorNode is deprecated but works everywhere
+// including iOS Safari and needs no separate worklet module URL.
+//
+// WARM MIC: the mic stream + AudioContext are kept alive for a short while after a
+// recording (WARM_HOLD_MS) and reused by the next one. Opening the mic device
+// (getUserMedia) has real latency — enough to clip the first words — so warming it
+// means a rapid second recording starts capturing INSTANTLY. Released on idle or
+// when the tab is hidden (so the mic indicator doesn't linger indefinitely).
 //
 // iOS note: startRecording() MUST be invoked synchronously inside a user gesture
-// (the FAB pointerdown) so getUserMedia + AudioContext are allowed to start.
+// (the FAB pointerdown / the PTT keydown) so getUserMedia + AudioContext.resume
+// are allowed.
 
 export interface VoiceRecorder {
   /** Stop capture and resolve the recording as a 16 kHz mono WAV Blob. */
   stop(): Promise<Blob>;
-  /** Abort capture and release the mic without producing a Blob. */
+  /** Abort capture without producing a Blob (the warm mic is kept for reuse). */
   cancel(): void;
 }
 
@@ -25,8 +32,34 @@ interface StartOpts {
 }
 
 const TARGET_RATE = 16_000;
+const WARM_HOLD_MS = 20_000;
 
-export async function startRecording(opts: StartOpts = {}): Promise<VoiceRecorder> {
+// ── Warm mic (module-level, shared across recordings) ───────────────────────
+let warm: { stream: MediaStream; ctx: AudioContext } | null = null;
+let warmTimer: ReturnType<typeof setTimeout> | null = null;
+let visibilityBound = false;
+
+function releaseWarm() {
+  if (warmTimer) { clearTimeout(warmTimer); warmTimer = null; }
+  if (warm) {
+    warm.stream.getTracks().forEach((t) => t.stop());
+    void warm.ctx.close();
+    warm = null;
+  }
+}
+
+function scheduleWarmRelease() {
+  if (warmTimer) clearTimeout(warmTimer);
+  warmTimer = setTimeout(releaseWarm, WARM_HOLD_MS);
+}
+
+async function acquireWarm(): Promise<{ stream: MediaStream; ctx: AudioContext }> {
+  if (warmTimer) { clearTimeout(warmTimer); warmTimer = null; } // recording again — cancel pending release
+  if (warm && warm.ctx.state !== 'closed' && warm.stream.getTracks().some((t) => t.readyState === 'live')) {
+    return warm;
+  }
+  releaseWarm(); // stale (device revoked / ctx closed) — start fresh
+
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   });
@@ -34,6 +67,19 @@ export async function startRecording(opts: StartOpts = {}): Promise<VoiceRecorde
     window.AudioContext ||
     (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const ctx = new Ctx();
+  if (ctx.state === 'suspended') await ctx.resume();
+  warm = { stream, ctx };
+
+  if (!visibilityBound) {
+    visibilityBound = true;
+    document.addEventListener('visibilitychange', () => { if (document.hidden) releaseWarm(); });
+    window.addEventListener('pagehide', releaseWarm);
+  }
+  return warm;
+}
+
+export async function startRecording(opts: StartOpts = {}): Promise<VoiceRecorder> {
+  const { stream, ctx } = await acquireWarm();
   if (ctx.state === 'suspended') await ctx.resume();
 
   const source = ctx.createMediaStreamSource(stream);
@@ -56,8 +102,6 @@ export async function startRecording(opts: StartOpts = {}): Promise<VoiceRecorde
     if (opts.onLevel) {
       let sum = 0;
       for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
-      // RMS lightly gained into 0..1; the HUD applies its own fast-attack/slow-
-      // decay envelope on top.
       opts.onLevel(Math.min(1, Math.sqrt(sum / input.length) * 5));
     }
   };
@@ -66,15 +110,19 @@ export async function startRecording(opts: StartOpts = {}): Promise<VoiceRecorde
   processor.connect(mute);
   mute.connect(ctx.destination);
 
+  // Detach this recording's nodes but KEEP the stream + ctx warm for the next one.
   const teardown = () => {
     stopped = true;
     clearTimeout(autoTimer);
     processor.onaudioprocess = null;
-    processor.disconnect();
-    mute.disconnect();
-    source.disconnect();
-    stream.getTracks().forEach((t) => t.stop());
-    void ctx.close();
+    try {
+      processor.disconnect();
+      mute.disconnect();
+      source.disconnect();
+    } catch {
+      /* already gone */
+    }
+    scheduleWarmRelease();
   };
 
   return {

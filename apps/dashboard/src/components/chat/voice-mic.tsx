@@ -152,50 +152,58 @@ export function VoiceMic({
       setHint('麦克风不可用');
       setTimeout(() => { setPhase('idle'); setHint(null); }, 2600);
       g.current.mode = 'idle';
+      g.current.byKey = false;
+      g.current.armingKey = false;
+      clearTimeout(g.current.keyArmTimer);
     }
   }, [stopAndTranscribe]);
 
   // Desktop push-to-talk: hold RIGHT Option (⌥, code "AltRight") to record — the
-  // same voice key as Keyo. Guarded so it never clashes with Option+arrow / Option+
-  // delete text editing: it only arms after a short hold, and pressing ANY other key
-  // aborts it. Held recording gets a generous 5-min cap (a stuck key won't run forever).
+  // same voice key as Keyo. Capture starts on keydown (so the first words aren't
+  // clipped); the ~180 ms arm only decides whether to KEEP it (commit → show the
+  // recording HUD) or discard it. Pressing any OTHER key while arming aborts it —
+  // that's an Option+arrow / Option+delete edit, not talking. Held recording gets
+  // a 5-min cap (a stuck key won't run forever).
   useEffect(() => {
     if (isTouchPrimary()) return; // desktop only — touch uses the button
     const KEY = 'AltRight';
     const gg = g.current;
+    const discardKeyPtt = () => {
+      clearTimeout(gg.keyArmTimer);
+      gg.armingKey = false;
+      gg.byKey = false;
+      gg.mode = 'idle';
+      recorderRef.current?.cancel();
+      recorderRef.current = null;
+      setPhase('idle');
+      setLevel(0);
+    };
     const onDown = (e: KeyboardEvent) => {
       if (e.code !== KEY) {
-        // Any other key while arming / key-recording ⇒ the user is editing, not talking.
-        if (gg.armingKey || gg.byKey) {
-          clearTimeout(gg.keyArmTimer);
-          gg.armingKey = false;
-          if (gg.byKey) {
-            gg.byKey = false;
-            gg.mode = 'idle';
-            recorderRef.current?.cancel();
-            recorderRef.current = null;
-            setPhase('idle');
-            setLevel(0);
-          }
-        }
+        // Another key WHILE ARMING (before commit) ⇒ an Option+key shortcut, not
+        // talking — drop the just-opened capture. Once committed we ignore other
+        // keys so a stray keypress can't kill an active recording.
+        if (gg.armingKey) discardKeyPtt();
         return;
       }
       if (e.repeat || hidden || gg.mode !== 'idle') return;
+      // Reserve the gesture + start capturing NOW (from keydown); the timer commits.
       gg.armingKey = true;
+      gg.byKey = true;
+      gg.mode = 'recording';
+      void beginRecording(300_000);
       gg.keyArmTimer = setTimeout(() => {
-        if (!gg.armingKey || gg.mode !== 'idle' || hidden) return;
-        gg.armingKey = false;
-        gg.mode = 'recording';
-        gg.byKey = true;
-        setPhase('recording');
-        setHint(null);
-        void beginRecording(300_000);
+        if (gg.armingKey && gg.byKey && !hidden) {
+          gg.armingKey = false; // committed
+          setPhase('recording');
+          setHint(null);
+        }
       }, HOLD_MS);
     };
     const onUp = (e: KeyboardEvent) => {
-      if (e.code !== KEY) return;
-      if (gg.armingKey) { gg.armingKey = false; clearTimeout(gg.keyArmTimer); return; }
-      if (gg.byKey && gg.mode === 'recording') void stopAndTranscribe();
+      if (e.code !== KEY || !gg.byKey) return;
+      if (gg.armingKey) { discardKeyPtt(); return; } // released before commit → tap, no send
+      void stopAndTranscribe(); // committed → stop + transcribe
     };
     window.addEventListener('keydown', onDown);
     window.addEventListener('keyup', onUp);
