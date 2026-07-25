@@ -250,8 +250,12 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
   // sessions × a per-row preview subquery) — which otherwise leaves the title
   // showing the raw id and the composer disabled. Once the list loads it takes
   // over (every existing sessionMeta.refetch keeps the header fresh), so this is
-  // just the gap-filler and one fetch suffices (staleTime, no extra polling).
-  const sessionOne = trpc.chat.getSession.useQuery({ sessionId }, { enabled: !!sessionId, staleTime: 30_000 });
+  // the gap-filler for the header AND — since P1-2 dropped the whole-.loop-state
+  // blob from listSessions to slim that 5s payload (it was 38% of it) — the
+  // source of the current session's `loopState` for the LoopBar. So it now polls
+  // at 5s to keep the loop card as fresh as the old listSessions-driven path; a
+  // single-row PK query, so the extra poll is cheap and only runs on /chat.
+  const sessionOne = trpc.chat.getSession.useQuery({ sessionId }, { enabled: !!sessionId, staleTime: 30_000, refetchInterval: 5_000 });
   const session = sessionMeta.data?.find((s) => s.id === sessionId) ?? sessionOne.data ?? undefined;
   // Live updates arrive via SSE (/api/chat/stream), written straight into this
   // query's cache. The poll below is only a fallback for when the stream isn't
@@ -1080,7 +1084,7 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
         <VoiceMic sessionId={sessionId} hidden={micHidden || !!session?.closedAt} onTranscript={insertTranscript} />
         <>
           <LoopBar
-            loopState={(session as { loopState?: unknown } | undefined)?.loopState}
+            loopState={sessionOne.data?.loopState}
             onStartLoop={startLoop}
             onStartCron={startCron}
             onStartAutonomy={startAutonomy}

@@ -114,7 +114,11 @@ export const chatRouter = router({
           state: true,
           contextTokens: true,
           snapshotAt: true,
-          loopState: true,
+          // loopState is deliberately NOT selected here (P1-2): it's the entire
+          // .loop-state.json blob and measured at 38% of this 5s-polled payload
+          // (21KB across the machine's sessions), yet the only client reader is
+          // the *current* session's LoopBar, which now sources loopState from
+          // chat.getSession (page.tsx). Don't re-add it to this list query.
           // Resource governance: per-session memory + hibernation state, read by
           // the sidebar rows (rss + 💤) and the Host-health panel.
           rssMb: true,
