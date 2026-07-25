@@ -107,10 +107,29 @@ interface SessionState {
 // Per-session runtime state. Cleared on gateway restart; rebuilt lazily on
 // next chatTick. The tmux pane survives gateway restarts so re-attach is cheap.
 const sessionStates = new Map<string, SessionState>();
+// Claude uuids handed to a spawn whose setup hasn't RESOLVED yet. sessionStates only
+// learns a session's uuid at the end of setupSession, but an agent's chat sessions all
+// share one project dir — so a sibling still inside a slow setup is invisible to the
+// "is this transcript someone else's?" checks, and a concurrent `--resume` sniff could
+// steal the file it just started writing (2026-07-25: a 186MB resume waited 3m23s, a
+// fresh sibling spawned mid-wait, and both dashboard sessions ended up on ONE
+// transcript — cross-posted replies + a delivery gate reading the wrong file).
+// Reserving the uuid the instant we mint it closes that window.
+const reservedUuids = new Map<string, string>();
 // The per-session re-entrancy guards (setup / restart / hibernate) live in the
 // shared op-locks owner (./op-locks): the kill/spawn can take up to ~2s while ticks
 // re-fire every ~2s (setInterval doesn't await), so an overlapping tick must skip a
 // session already in flight rather than double-process it.
+
+// Every claude uuid currently spoken for by ANOTHER session — live (sessionStates) or
+// still starting (reservedUuids). Both transcript-picking paths (resume sniff + drift
+// adoption) exclude these so two chats can never land on one transcript.
+function uuidsOwnedByOtherSessions(sessionId: string): Set<string> {
+  const owned = new Set<string>();
+  for (const [sid, st] of sessionStates) if (sid !== sessionId) owned.add(st.claudeUuid);
+  for (const [sid, uuid] of reservedUuids) if (sid !== sessionId) owned.add(uuid);
+  return owned;
+}
 
 // ── Cancellation tick ────────────────────────────────────────────────────────
 
@@ -132,6 +151,7 @@ export async function restartOneSession(sessionId: string, stampMs: number): Pro
       try { state.stopWatcher(); } catch {}
       sessionStates.delete(sessionId);
     }
+    reservedUuids.delete(sessionId);
     await killTmuxSession(sessionId, 2_000);
     console.log(`[chat-restart] killed session=${sessionId.slice(0, 8)}`);
 
@@ -197,6 +217,7 @@ export async function hibernateOneSession(sessionId: string): Promise<boolean> {
       try { state.stopWatcher(); } catch {}
       sessionStates.delete(sessionId);
     }
+    reservedUuids.delete(sessionId);
     await killTmuxSession(sessionId, 2_000);
     console.log(`[hibernate] killed session=${sessionId.slice(0, 8)}`);
     return true;
@@ -541,6 +562,7 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   if (state && !tmuxSessionExists(session.id)) {
     try { state.stopWatcher(); } catch {}
     sessionStates.delete(session.id);
+    reservedUuids.delete(session.id);
     state = undefined;
   }
   // Track a cold start (fresh spawn / --resume) so the submit-confirm below can
@@ -759,24 +781,37 @@ export async function resolveResumedUuid(opts: {
   recordedUuid: string;
   baselineSize: number;
   timeoutMs: number;
+  // Uuids owned by other sessions (live or still starting). A brand-new transcript in
+  // this SHARED project dir is only ours if nobody else claims it — see (b). Re-read on
+  // every poll, NOT captured once: on a big resume this loop runs for minutes, and the
+  // sibling to exclude is usually one that spawns partway through the wait.
+  exclude?: () => Set<string>;
 }): Promise<string> {
   const projectDir = encodedProjectDir(opts.cwd);
   const recordedPath = path.join(projectDir, `${opts.recordedUuid}.jsonl`);
   const deadline = Date.now() + opts.timeoutMs;
   while (Date.now() < deadline) {
-    // (a) older behavior — a brand-new uuid transcript materialized
+    const exclude = opts.exclude?.() ?? new Set<string>();
+    // (a) current behavior FIRST — claude resumed into the recorded uuid's own
+    // transcript. Checked before (b) because appending in place is what current
+    // claude does, while a NEW file in this shared dir is just as likely to be a
+    // sibling chat's fresh spawn; preferring growth keeps the ambiguous case ours.
+    try {
+      if (statSync(recordedPath).size > opts.baselineSize) return opts.recordedUuid;
+    } catch { /* recorded transcript not present */ }
+    // (b) older behavior — a brand-new uuid transcript materialized. Skip uuids owned
+    // by another session: an agent's chats share this project dir, so during a long
+    // resume a sibling's fresh spawn shows up here as a "new" transcript, and adopting
+    // it cross-wires the two sessions onto one file (2026-07-25 incident).
     try {
       for (const f of readdirSync(projectDir)) {
         if (!f.endsWith('.jsonl')) continue;
         const uuid = f.slice(0, -6);
         if (opts.preExistingUuids.has(uuid)) continue;
+        if (exclude.has(uuid)) continue;
         if (statSync(path.join(projectDir, f)).size > 0) return uuid;
       }
     } catch { /* project dir not ready yet */ }
-    // (b) current behavior — claude resumed into the recorded uuid's own transcript
-    try {
-      if (statSync(recordedPath).size > opts.baselineSize) return opts.recordedUuid;
-    } catch { /* recorded transcript not present */ }
     await new Promise((r) => setTimeout(r, 250));
   }
   throw new Error(`Timed out waiting for resumed claude transcript in ${projectDir}`);
@@ -818,11 +853,11 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     const transcripts = listTranscripts(cwd);
     const recorded = transcripts.find((t) => t.uuid === claudeUuid);
     if (!recorded || recorded.size === 0) {
-      // Exclude the recorded uuid itself + uuids owned by OTHER live sessions (an agent's
-      // chat sessions all share one project dir) so we never cross-wire two chats onto the
-      // same transcript.
-      const exclude = new Set<string>([claudeUuid]);
-      for (const [sid, st] of sessionStates) if (sid !== session.id) exclude.add(st.claudeUuid);
+      // Exclude the recorded uuid itself + uuids owned by OTHER sessions, live or still
+      // starting (an agent's chat sessions all share one project dir) so we never
+      // cross-wire two chats onto the same transcript.
+      const exclude = uuidsOwnedByOtherSessions(session.id);
+      exclude.add(claudeUuid);
       // Require a RECENTLY-written transcript — the live pane's claude is actively
       // writing, whereas a stale OLD session's transcript is not. This also stops us
       // adopting an old transcript if a just-spawned session is reattached before its
@@ -883,6 +918,12 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     claudeUuid = randomUUID();
   }
 
+  // Claim the uuid before the spawn: from here until sessionStates learns it, a
+  // sibling session's `--resume` sniff would otherwise see our brand-new transcript
+  // as an unclaimed "new uuid" and adopt it. (Resume spawns claim theirs after
+  // resolveResumedUuid picks it, below — until then they own nothing.)
+  if (claudeUuid) reservedUuids.set(session.id, claudeUuid);
+
   // Wire the hermit-ui MCP stub on every spawn (fresh OR --resume). claude
   // picks up the in-pane config and exposes mcp__hermit__{set_session_title,
   // log_status, attach_image, attach_file} to the agent. Reattach path skips this — the
@@ -942,7 +983,12 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
       recordedUuid: session.claudeSessionId!,
       baselineSize: resumeBaselineSize,
       timeoutMs: 240_000,
+      // Sampled per poll, not once up front: this wait can run for MINUTES on a big
+      // resume, and the sibling that must be excluded is typically one that spawns
+      // partway through it.
+      exclude: () => uuidsOwnedByOtherSessions(session.id),
     });
+    reservedUuids.set(session.id, claudeUuid);
   } else if (created) {
     // Pre-assigned uuid; just wait for claude to materialize the file.
     await awaitTranscript(path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`)).catch((e) => {
@@ -1155,4 +1201,5 @@ export function shutdownChatRunner() {
     try { state.stopWatcher(); } catch {}
   }
   sessionStates.clear();
+  reservedUuids.clear();
 }
