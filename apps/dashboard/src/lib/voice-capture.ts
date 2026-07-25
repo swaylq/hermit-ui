@@ -120,7 +120,7 @@ export async function startRecording(opts: StartOpts = {}): Promise<VoiceRecorde
   mute.connect(ctx.destination);
 
   // Detach this recording's nodes but KEEP the stream + ctx warm for the next one.
-  const teardown = () => {
+  const teardown = (keepWarm: boolean) => {
     stopped = true;
     clearTimeout(autoTimer);
     processor.onaudioprocess = null;
@@ -131,18 +131,21 @@ export async function startRecording(opts: StartOpts = {}): Promise<VoiceRecorde
     } catch {
       /* already gone */
     }
-    scheduleWarmRelease();
+    // A real recording keeps the mic warm for the next one; a cancel (drag /
+    // discard) releases it immediately so the mic indicator doesn't linger.
+    if (keepWarm) scheduleWarmRelease();
+    else releaseWarm();
   };
 
   return {
     async stop() {
       if (stopped) return new Blob([], { type: 'audio/wav' });
-      teardown();
+      teardown(true);
       const pcm = mergeAndDownsample(chunks, sourceRate, TARGET_RATE);
       return encodeWav(pcm, TARGET_RATE);
     },
     cancel() {
-      if (!stopped) teardown();
+      if (!stopped) teardown(false);
     },
   };
 }
