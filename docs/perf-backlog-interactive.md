@@ -1,0 +1,83 @@
+# hermit-ui Interactive-Latency Performance Backlog
+
+**Opened:** 2026-07-25 · **Scope:** the three interactive paths sway reported as laggy — **(A) page switching, (B) opening a conversation, (C) composer input responsiveness.** · **Driver:** a session-scoped hourly **loop** (interval, `:23`), one item per iteration.
+
+This is a **new focused round**, distinct from the completed steady-state backlog `docs/perf-backlog.md` (`perfopt`, 13/13 done 2026-07-16 — poll/scan/DB/bundle). That round never targeted **typing latency** or **route-switch** latency specifically; those are the new complaints, plus a lot of new global surface has landed since (voice mic FAB, dispatch-watcher, notifications inbox, KB, Brain, PWA SW) that can regress interactivity. Build on the old wins; don't repeat them.
+
+> Line numbers are as-observed 2026-07-25 and drift — **confirm the exact location at edit time.**
+
+---
+
+## How the loop uses this doc
+
+Each iteration:
+1. Pick the **highest-priority unchecked `[ ]` item.**
+2. Implement it (coherent, self-contained; split a large item across iterations, leaving it `[ ]` with a "partial" note).
+3. **Self-test** (see *Verification recipe*) — never report an unverified win.
+4. Flip to `[x]`, add a **Changelog** entry (run #, item, result, commit).
+5. Commit + push (+ deploy per change type), update `.loop-state.json` (this loop's entry only), append one line to daily memory, reply with the `↻ loop <id8> · run N — …` marker.
+
+**Stop condition:** every item in the Prioritized Backlog is `[x]` **and** a profiling iteration across all three paths surfaces no new safe + self-verifiable optimization (a measured/structural plateau, the way the `cf3880e5` open-session loop terminated at run 4). Then set this loop `done` + `CronDelete`.
+
+### Verification recipe
+A perf change is "done" only when it is (a) **behaviour-preserving** and (b) **measured or structurally certain** to help — never "looks faster."
+- **Dashboard** (`apps/dashboard`): `pnpm --filter @hermit-ui/dashboard typecheck` + `pnpm --filter @hermit-ui/dashboard build`. Deploy: `git push` → `ssh ubuntu@45.89.234.110 -- '~/hermit-ui/scripts/vps-deploy.sh'` → health must print `OK … deployed <the sha you just pushed>`.
+- **Client re-render / render-scope fixes** (state isolation, memo, useMemo, stable callbacks): behaviour is preserved by construction (they change *when/whether* work runs, not its output). Verify: tsc + build + a functional check the UI still renders/updates. The perf gain is **structural** — document the exact before/after re-render trigger + blast radius. If the browser MCP (Playwright) is alive, additionally profile/count re-renders or time the interaction; **if it's dead, do NOT block the loop** — state the environment gate and rely on the structural argument (this is how the prior loops shipped).
+- **Live timing when the browser is available:** measure the actual interaction on `dash.swaylab.ai` (route transition ms, open-session TTI, keystroke→paint) before vs after. When it's not, curl-time any server endpoint on the path (secret-safe: machine key in a `umask 077` temp config, never on argv/stdout; only aggregate numbers to the transcript) and reason structurally about the client.
+- **DB index / migration** (if any path needs one): hand-written **additive** migration only (plain `CREATE INDEX`, or raw-SQL partial); `prisma migrate deploy` runs on VPS deploy; never edit an applied migration.
+- **Gateway** (`apps/gateway`): only if a path leads there. `pnpm --filter @hermit-ui/gateway typecheck` (+ tests) → `pm2 restart hermit-ui-gateway` on Mac — **needs a runtime window (ask sway)**; keep gateway-touching items low unless a window is open.
+
+### Deploy per change type
+- Docs only → `git push` (no deploy).
+- Dashboard / migration → push → VPS `scripts/vps-deploy.sh`.
+- Gateway → push → Mac `pm2 restart hermit-ui-gateway` (+ macmini×2 rollout is a known manual step, not blocked on by this loop).
+
+### Shared-tree rules (mandatory every push)
+`git fetch origin main` first · only `git add <named files>`, never `-A` · commit trailer `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` · code & docs in **separate** commits (code → push → deploy-verify → then docs commit referencing the code sha).
+
+---
+
+## Findings
+
+### (C) Composer input responsiveness — one VERIFIED root cause
+- **I1 · VERIFIED · Draft state lives at the `SessionPane` root, so every keystroke re-renders the whole chat pane.** `const [draft, setDraft] = useState(loadDraft(sessionId))` is in `SessionPane` (`app/chat/page.tsx:460`); it's passed as `draft`/`setDraft` props into the extracted `ComposeBar` (`:1184-1185`). `ComposeBar.onChange` → `setDraft(e.target.value)` on **every character** → `SessionPane` re-renders → its whole subtree reconciles (the memo'd `MessageTimeline`, the always-mounted `VoiceMic` FAB, `LoopBar`, `QueueBar`, header buttons, scroll pill) **and** `SessionPane`'s own render body re-runs (message merge/derive, `useMemo`/handler recompute). Even where children are memo'd and bail, `SessionPane`'s body work + reconciliation happens once per keystroke — the classic typing-lag shape, worse on heavy sessions and now that the FAB + wave component mount inside the pane. This is the prime suspect for "对话输入的响应性能" and is **not** covered by the prior (perfopt) backlog.
+- **I2 · to verify** — whether `VoiceMic` (added inside `SessionPane`, ~`:1069`) and its `VoiceWave` do any per-render work that a keystroke needlessly triggers; if draft is isolated (I1) this largely goes away, but confirm no child subscribes to `draft` indirectly.
+- **I3 · to verify** — per-keystroke work inside `ComposeBar` itself: the double `el.style.height='auto'`→`scrollHeight` reflow (`composer.tsx:158-159`) and the slash-prefix regex (`:324`) run on each `onChange`; likely negligible but measure on a long draft.
+
+### (B) Opening a conversation — re-measure for regression (was optimized to plateau 2026-06-28)
+- **O1 · to measure** — current open-session latency on a heavy live session vs the recorded plateau (`getSession` 40ms early-paint, `listSessions` 57ms, `listMessages` ≤190ms, SSE `skipInitial`). Detect any regression since new global surface landed.
+- **O2 · to verify** — first-paint / first-interaction cost added to the chat route by newer global providers/subscriptions (notifications counts, dispatch client bits, brain, voice warm-mic side effects).
+- **O3 · deferred plateau item** — first-paint markdown long task (~338ms). Full virtualization was deferred as high-risk; look for a SAFE incremental (cap initially-rendered rows / defer off-screen markdown to idle) that's self-verifiable, else recon+design only.
+
+### (A) Page switching — new concern, measure first
+- **P-A1 · to measure** — route-transition time between `/chat`, `/agents`, `/cron`, `/brain`, `/notifications` (client `<Link>` nav). Establish which transitions are slow before fixing.
+- **P-A2 · to verify** — hard `window.location.href` full-reloads on hot nav paths (known idiom in this repo where Next 16 client nav didn't fire for some mutation-driven route changes). A full reload re-downloads + re-parses + re-auths = the slowest possible "page switch"; find which user-facing paths use it and whether any can become client nav.
+- **P-A3 · to verify** — the always-mounted sidebar reconciling on each route change; confirm the perfopt memo work (row memo, notifications leaf isolation) still covers it and no new global subscription re-subscribes per nav.
+- **P-A4 · to verify** — any heavy route not code-split, delaying its first paint on navigation (terminal + xterm already split; check brain/knowledge/settings subtrees).
+
+---
+
+## Prioritized Backlog
+
+### P0 — input responsiveness (highest user-felt; verified lead; structurally fixable without a live profiler)
+- [x] **P0-1 · Isolate composer draft so typing re-renders only the composer, not the whole `SessionPane` (I1).** Move `draft` ownership into `ComposeBar`, lifting up only what genuinely needs the value at send time. Must preserve, verifiably: draft persistence across session switches (`loadDraft`/`saveDraft` keyed by `sessionId`), the send handler reading the current draft, shell-style ↑/↓ history recall (`recall`/`liveDraftRef`), the slash-command picker, Esc/clear, and programmatic fills (recall, slash pick, voice-transcript injection via `insertTranscript`). *Test:* tsc + build; typing persists/sends/recalls/injects correctly; **structural:** `SessionPane` no longer re-renders per keystroke. **✅ RESOLVED run 1 — moved `draft` state + its per-session localStorage persistence (`draftKey`/`loadDraft`/`saveDraft`, relocated verbatim) OUT of `SessionPane` and INTO `ComposeBar`, converted to `forwardRef<ComposerHandle>`. `SessionPane` keeps only a `composerRef` and drives its four out-of-band writes imperatively: `pickPrompt` (empty-state chip / loop templates) → `handle.setText`, `insertTranscript` (voice) → `handle.appendText`, send optimistic-clear → `handle.clear`, failed-send restore → `handle.restore`. Each handle method reproduces the OLD body exactly (setText/appendText = the old pickPrompt/insertTranscript focus+caret-to-end+resize; clear = `setDraft('')`; restore = bare `setDraft(prevDraft)` with no focus/resize, matching the old error path). **Key preservation calls:** (a) `prevDraft` for the error-restore is captured untrimmed straight off `taRef.current.value` in the parent (identical value to the old `const prevDraft = draft`, and avoids a stale-closure/async-setState read); (b) `taRef` STAYS in `SessionPane` (the Cmd+/ focus shortcut at `page.tsx:846` reads it, and refs don't cause re-renders — only the draft *state* had to move); (c) `SessionPane` is keyed by `sessionId` (`page.tsx:161` `<SessionPane key={sessionParam}>`) so `ComposeBar` remounts on every session switch and `useState(() => loadDraft(sessionId))` re-inits per session exactly as the old pane-level state did — no reset effect needed. **Before:** a keystroke's `setDraft` at the `SessionPane` root re-rendered the whole pane subtree (memo'd `MessageTimeline` + always-mounted `VoiceMic` FAB + `LoopBar` + `QueueBar` + header) AND re-ran `SessionPane`'s own body (message merge/derive, handler-closure recreation) on every character. **After:** a keystroke's `setDraft` lives in `ComposeBar`, so only the composer subtree (textarea + buttons + attachment chips — all cheap) re-renders; `SessionPane` and its expensive siblings don't re-render at all while typing. Blast radius: whole-pane → composer-only, behaviour-identical by construction (every write path reproduced 1:1). *Verification:* `tsc` exit 0 + `next build` exit 0 (`/chat` compiled); deployed, health `OK — dashboard HTTP 200 — deployed 41e6ca6`; SSR smoke `/` + `/chat` → 200. Live React-profiler re-render counting is environment-gated (no browser MCP this session) → structural argument per the recipe (state ownership moved down ⇒ React re-renders only the owning subtree — certain by construction). commit `41e6ca6`.**
+- [ ] **P0-2 · Confirm no `SessionPane` child does per-render work a keystroke needlessly triggers (I2).** After P0-1, audit `VoiceMic`/`VoiceWave`, `LoopBar`, `QueueBar`, header. Memo any that still re-render on an unrelated `SessionPane` state change and do real work. *Test:* tsc + build; each still updates on its own inputs.
+- [ ] **P0-3 · Trim per-keystroke work in `ComposeBar` (I3) — only if measured to matter.** The twin auto-resize reflow + slash regex per `onChange`. *Test:* tsc + build; auto-grow + slash picker still behave.
+
+### P1 — opening a conversation (measure; treat as regression hunt)
+- [ ] **P1-1 · Baseline open-session latency + regression check (O1).** Measure a heavy session's TTI live (Playwright if alive), or curl-time the on-open tRPC batch (`getSession`/`listMessages`/`listSessions`) secret-safe. Compare to the 2026-06-28 plateau; record deltas. If nothing regressed and nothing beats the plateau safely → note it and move on (don't manufacture a change).
+- [ ] **P1-2 · New-global-surface first-interaction cost on the chat route (O2).** Trace providers/subscriptions added since the plateau; isolate/defer any that add measurable on-open cost.
+- [ ] **P1-3 · Safe incremental for the first-paint markdown long task (O3).** Cap synchronously-rendered rows / defer off-screen markdown to idle, self-verifiable, without full virtualization. Recon+design only if no safe win.
+
+### P2 — page switching (measure first; new concern)
+- [ ] **P2-1 · Baseline route-transition timing (P-A1).** Time `/chat`↔`/agents`↔`/cron`↔`/brain`↔`/notifications`. Identify the slow transitions before touching code.
+- [ ] **P2-2 · Eliminate needless hard reloads on hot nav paths (P-A2).** Find `window.location.href` nav on user-facing hot paths; convert to client nav where it's safe (and where the Next 16 client-nav-not-firing issue that forced the hard reload no longer applies / can be worked around without a full reload).
+- [ ] **P2-3 · Keep the sidebar cheap across nav (P-A3).** Verify memo coverage holds on route change; fix any new per-nav re-subscription.
+- [ ] **P2-4 · Code-split any heavy route that delays its first paint (P-A4).** `next/dynamic` a heavy subtree that isn't needed for the route's first paint.
+
+---
+
+## Changelog
+_(the loop appends one entry per completed item; newest first)_
+
+- **run 1 · P0-1 (isolate composer draft → typing re-renders only the composer)** — `draft` state lived at the `SessionPane` root and was passed as a prop to the extracted `ComposeBar`, so every keystroke's `setDraft` re-rendered the whole pane (memo'd `MessageTimeline` + `VoiceMic` FAB + `LoopBar` + `QueueBar` + header) plus `SessionPane`'s own render body — the classic typing-lag shape, and the top user-felt suspect for path (C). Moved `draft` state + its per-session localStorage persistence into `ComposeBar` (`forwardRef<ComposerHandle{setText,appendText,clear,restore}>`); `SessionPane` keeps a `composerRef` and drives its 4 out-of-band writes (empty-state chip / loop templates, voice transcript, send clear, error restore) through it. Behaviour-identical by construction — every write path reproduced 1:1 (error-restore `prevDraft` captured untrimmed off `taRef.current.value`; `taRef` stays in `SessionPane` for the Cmd+/ focus shortcut; `SessionPane` keyed by `sessionId` so `ComposeBar` remounts + `loadDraft` re-inits per session as before). A keystroke now re-renders only the composer subtree, not the pane. tsc + next build clean; deployed health `OK — dashboard HTTP 200 — deployed 41e6ca6`; SSR smoke `/` + `/chat` → 200. Live re-render profiling env-gated (no browser MCP) → structural argument. commit `41e6ca6`. **P0-1 → `[x]`.**
