@@ -26,7 +26,7 @@ import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 import { EmptyChat } from '@/components/chat/empty-chat';
 import { TypingIndicator } from '@/components/chat/message-bits';
 import { MessageTimeline } from '@/components/chat/message-timeline';
-import { ComposeBar, QueueBar } from '@/components/chat/composer';
+import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
 import { VoiceMic } from '@/components/chat/voice-mic';
 
 // isTouchPrimary (phone/tablet vs desktop) lives in @/lib/save-file — the
@@ -230,17 +230,10 @@ function toSummaryView(messages: TimelineMsg[]): TimelineMsg[] {
   return out;
 }
 
-// ── Composer draft persistence ──────────────────────────────────────────────
-// Keep unsent text per session in localStorage so switching away and back
-// (SessionPane remounts on session change) doesn't lose what you typed. Cleared
-// on send / Escape (setDraft('') → the save effect removes the key).
-const draftKey = (sid: string) => `hermit:draft:${sid}`;
-function loadDraft(sid: string): string {
-  try { return localStorage.getItem(draftKey(sid)) ?? ''; } catch { return ''; }
-}
-function saveDraft(sid: string, v: string) {
-  try { if (v) localStorage.setItem(draftKey(sid), v); else localStorage.removeItem(draftKey(sid)); } catch {}
-}
+// Composer draft state + per-session localStorage persistence now live IN
+// ComposeBar (components/chat/composer.tsx) so a keystroke re-renders only the
+// composer, not this whole pane. SessionPane's occasional draft writes go
+// through the imperative ComposerHandle (composerRef) below.
 
 export function SessionPane({ sessionId }: { sessionId: string }) {
   const utils = trpc.useUtils();
@@ -457,10 +450,10 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
     },
   });
 
-  const [draft, setDraft] = useState(() => loadDraft(sessionId));
-  // Persist the draft per session (localStorage writes are cheap for short
-  // text). Auto-cleared when the draft empties on send / Escape.
-  useEffect(() => { saveDraft(sessionId, draft); }, [sessionId, draft]);
+  // The draft VALUE lives inside ComposeBar now; we reach it only for the rare
+  // out-of-band writes (empty-state chip, voice transcript, send clear/restore)
+  // via this imperative handle — so typing never re-renders SessionPane.
+  const composerRef = useRef<ComposerHandle>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // Composer notice line: attachment-cap warnings (set in ComposeBar.addFiles) AND
   // send failures (set in onSend's onError) — so a rejected send explains itself
@@ -868,34 +861,16 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Empty-state chip → fills compose, focuses caret at end, triggers resize.
+  // Empty-state chip / loop templates → fill compose, focus caret at end, resize.
+  // (The value + textarea manipulation live in ComposeBar; this just drives it.)
   const pickPrompt = useCallback((text: string) => {
-    setDraft(text);
-    requestAnimationFrame(() => {
-      const el = taRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(text.length, text.length);
-      el.style.height = 'auto';
-      el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
-    });
+    composerRef.current?.setText(text);
   }, []);
 
   // Voice transcript → APPEND to the current draft (never clobber typed text),
-  // then focus + caret-to-end + resize (mirrors pickPrompt's programmatic path).
+  // then focus + caret-to-end + resize (all handled inside ComposeBar).
   const insertTranscript = useCallback((text: string) => {
-    setDraft((d) => {
-      const base = d.trimEnd();
-      return base ? `${base} ${text}` : text;
-    });
-    requestAnimationFrame(() => {
-      const el = taRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-      el.style.height = 'auto';
-      el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
-    });
+    composerRef.current?.appendText(text);
   }, []);
 
   return (
@@ -1147,7 +1122,9 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
               // instead of waiting for the round-trip + SSE echo. The overlay row
               // drops itself when the real row lands (see `pending` / `view`);
               // restore the draft if the send itself fails.
-              const prevDraft = draft;
+              // Capture the untrimmed draft straight off the textarea (its value
+              // lives in ComposeBar now) so a failed send restores it exactly.
+              const prevDraft = taRef.current?.value ?? text;
               const prevAttachments = attachments;
               const optimisticId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
               if (text.trim()) {
@@ -1161,7 +1138,7 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
                   setOptimisticQueue((q) => [...q, { id: optimisticId, content: [{ type: 'text', text }] }]);
                 }
               }
-              setDraft('');
+              composerRef.current?.clear();
               setAttachments([]);
               send.mutate(
                 { sessionId, text, images, files },
@@ -1172,7 +1149,7 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
                   onError: (err) => {
                     setPending((p) => p.filter((x) => x.id !== optimisticId));
                     setOptimisticQueue((q) => q.filter((x) => x.id !== optimisticId));
-                    setDraft(prevDraft);
+                    composerRef.current?.restore(prevDraft);
                     setAttachments(prevAttachments);
                     // Surface WHY (e.g. over the image cap) instead of silently
                     // restoring the draft — the old behavior read as "send is dead".
@@ -1181,8 +1158,7 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
                 },
               );
             }}
-            draft={draft}
-            setDraft={setDraft}
+            ref={composerRef}
             attachments={attachments}
             setAttachments={setAttachments}
             notice={composerNotice}

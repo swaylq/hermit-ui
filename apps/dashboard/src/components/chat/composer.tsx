@@ -7,7 +7,7 @@
 // getExt / readImageDims / SLASH_COMMANDS and the SAFE_FILE_* / MAX_* file
 // constants are module-private, used only within this cluster.
 
-import { useState, useRef, useCallback, useEffect, useMemo, type ChangeEvent, type ClipboardEvent, type DragEvent } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImperativeHandle, type ChangeEvent, type ClipboardEvent, type DragEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { authedFetch } from '@/lib/asst-fetch';
@@ -89,25 +89,36 @@ export function QueueBar({
   );
 }
 
-export function ComposeBar({
-  sessionId,
-  disabled,
-  awaitingInput = false,
-  sending,
-  inFlight,
-  queueFull,
-  stopping,
-  onStop,
-  draft,
-  setDraft,
-  attachments,
-  setAttachments,
-  notice,
-  setNotice,
-  onSend,
-  taRef,
-  history,
-}: {
+// ── Composer draft persistence ──────────────────────────────────────────────
+// Keep unsent text per session in localStorage so switching away and back
+// (SessionPane remounts on session change) doesn't lose what you typed. Cleared
+// on send / Escape (setDraft('') → the save effect removes the key). Draft state
+// lives HERE (not in SessionPane) so a keystroke re-renders only the composer,
+// not the whole chat pane (timeline / voice FAB / loop bar). SessionPane's
+// occasional draft writes (empty-state chip, voice transcript, send clear /
+// restore) go through the imperative ComposerHandle below.
+const draftKey = (sid: string) => `hermit:draft:${sid}`;
+function loadDraft(sid: string): string {
+  try { return localStorage.getItem(draftKey(sid)) ?? ''; } catch { return ''; }
+}
+function saveDraft(sid: string, v: string) {
+  try { if (v) localStorage.setItem(draftKey(sid), v); else localStorage.removeItem(draftKey(sid)); } catch {}
+}
+
+// Imperative surface SessionPane uses for the rare, out-of-band draft writes it
+// still owns (the draft VALUE no longer lives there, so these can't be props).
+export interface ComposerHandle {
+  /** Replace the draft, focus, caret-to-end, resize (empty-state chip / slash templates). */
+  setText: (text: string) => void;
+  /** Append to the draft (voice transcript), focus, caret-to-end, resize. */
+  appendText: (text: string) => void;
+  /** Clear the draft (optimistic clear on send). */
+  clear: () => void;
+  /** Put a value back (restore the draft after a failed send). */
+  restore: (text: string) => void;
+}
+
+export const ComposeBar = forwardRef<ComposerHandle, {
   sessionId: string;
   disabled: boolean;
   awaitingInput?: boolean;
@@ -116,8 +127,6 @@ export function ComposeBar({
   queueFull: boolean;
   stopping: boolean;
   onStop: () => void;
-  draft: string;
-  setDraft: (s: string) => void;
   attachments: Attachment[];
   setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
   notice: string | null;
@@ -129,7 +138,64 @@ export function ComposeBar({
   ) => void;
   taRef: React.RefObject<HTMLTextAreaElement | null>;
   history: string[];
-}) {
+}>(function ComposeBar({
+  sessionId,
+  disabled,
+  awaitingInput = false,
+  sending,
+  inFlight,
+  queueFull,
+  stopping,
+  onStop,
+  attachments,
+  setAttachments,
+  notice,
+  setNotice,
+  onSend,
+  taRef,
+  history,
+}, ref) {
+  // Draft is owned here (see note above) so typing doesn't re-render SessionPane.
+  const [draft, setDraft] = useState(() => loadDraft(sessionId));
+  // Persist the draft per session (localStorage writes are cheap for short
+  // text). Auto-cleared when the draft empties on send / Escape.
+  useEffect(() => { saveDraft(sessionId, draft); }, [sessionId, draft]);
+
+  // Out-of-band draft writes SessionPane still triggers. setText/appendText
+  // mirror the old pickPrompt/insertTranscript (focus + caret-to-end + resize);
+  // clear/restore mirror the send path's optimistic clear + error restore
+  // (restore is a bare value set — no focus/resize — exactly as the old
+  // setDraft(prevDraft) on error was).
+  useImperativeHandle(ref, () => ({
+    setText(text: string) {
+      setDraft(text);
+      requestAnimationFrame(() => {
+        const el = taRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(text.length, text.length);
+        el.style.height = 'auto';
+        el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
+      });
+    },
+    appendText(text: string) {
+      setDraft((d) => {
+        const base = d.trimEnd();
+        return base ? `${base} ${text}` : text;
+      });
+      requestAnimationFrame(() => {
+        const el = taRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+        el.style.height = 'auto';
+        el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
+      });
+    },
+    clear() { setDraft(''); },
+    restore(text: string) { setDraft(text); },
+  }), [taRef]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Shell-style sent-message recall: histIdxRef walks `history` (newest last;
@@ -556,7 +622,7 @@ export function ComposeBar({
       </div>
     </form>
   );
-}
+});
 
 // Decode an image file in the browser just far enough to read its pixel size.
 // Resolves null on any failure (non-image, decode error) so callers can fall
