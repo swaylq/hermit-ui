@@ -17,7 +17,7 @@
 //   · pointerup while recording → stop + POST to /api/transcribe → onTranscript.
 //   · a too-short press (< 400 ms) is treated as an accidental tap (hint, no send).
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Mic, Loader2 } from 'lucide-react';
 import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
@@ -55,7 +55,13 @@ function loadPos(): { x: number; y: number } | null {
   return null;
 }
 
-export function VoiceMic({
+// memo: VoiceMic lives inside SessionPane, which re-renders on every SSE
+// streaming tick / poll. Its props (sessionId, hidden boolean, stable
+// onTranscript callback) don't change on those, so without memo it re-ran its
+// whole gesture-setup + canvas-child render body ~4×/sec during a reply for
+// nothing. All dynamic rendering is driven by its own internal state, so memo
+// is behaviour-preserving.
+export const VoiceMic = memo(function VoiceMic({
   sessionId,
   hidden,
   onTranscript,
@@ -355,4 +361,4 @@ export function VoiceMic({
       </button>
     </div>
   );
-}
+});

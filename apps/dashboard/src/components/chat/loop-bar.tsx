@@ -5,7 +5,7 @@
 // helper. Extracted verbatim from chat/page.tsx (P2-3); behaviour identical. Only
 // LoopBar is consumed outside (by SessionPane); the rest stay module-private.
 
-import { useState, useMemo } from 'react';
+import { memo, useState, useMemo } from 'react';
 import { X, ChevronDown } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -34,7 +34,14 @@ interface LoopEntry {
 // "开启循环任务" suggestion that fills the composer with a template. Loop and
 // schedule data is the opaque JSON the gateway forwards from
 // `<agent_dir>/.loop-state.json` → `session.loopState`.
-export function LoopBar({
+// memo: LoopBar sits inside SessionPane and re-renders on every SSE tick / poll.
+// It renders a Markdown-parsed loop lastResult per active loop, so an un-memo'd
+// re-render re-parses that markdown ~4×/sec during a streaming reply (this very
+// session has an active loop card). Its inputs are the loopState/disabled/
+// sessionId props + the three onStart* callbacks (stabilized in SessionPane) +
+// its own internal state, so memo is behaviour-preserving and a real win when a
+// card is shown.
+export const LoopBar = memo(function LoopBar({
   loopState,
   onStartLoop,
   onStartCron,
@@ -129,7 +136,7 @@ export function LoopBar({
       </div>
     </div>
   );
-}
+});
 
 // One active loop, collapsed to a status line; click toggles a detail panel.
 function LoopCard({ loop, sessionId, onDelete }: { loop: LoopEntry; sessionId: string; onDelete?: (id: string) => void }) {

@@ -873,6 +873,13 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
     composerRef.current?.appendText(text);
   }, []);
 
+  // Stable callbacks for the memo'd LoopBar — inline arrows here would give it a
+  // fresh prop identity on every SSE tick and defeat the memo. pickPrompt is
+  // stable; the *_TEMPLATE strings are module constants.
+  const startLoop = useCallback(() => pickPrompt(LOOP_TEMPLATE), [pickPrompt]);
+  const startCron = useCallback(() => pickPrompt(CRON_TEMPLATE), [pickPrompt]);
+  const startAutonomy = useCallback(() => pickPrompt(AUTONOMY_TEMPLATE), [pickPrompt]);
+
   return (
     <>
       <div className="border-b border-border px-4 h-12 flex items-center justify-between gap-3 shrink-0">
@@ -1074,9 +1081,9 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
         <>
           <LoopBar
             loopState={(session as { loopState?: unknown } | undefined)?.loopState}
-            onStartLoop={() => pickPrompt(LOOP_TEMPLATE)}
-            onStartCron={() => pickPrompt(CRON_TEMPLATE)}
-            onStartAutonomy={() => pickPrompt(AUTONOMY_TEMPLATE)}
+            onStartLoop={startLoop}
+            onStartCron={startCron}
+            onStartAutonomy={startAutonomy}
             disabled={!!session?.closedAt}
             sessionId={sessionId}
           />
