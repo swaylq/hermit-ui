@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { tmuxPaneName, encodedProjectDir, pickLiveTranscript } from '@hermit-ui/tmux-driver';
+import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg } from '@hermit-ui/tmux-driver';
 
 describe('tmuxPaneName', () => {
   it('keeps the last 12 id chars behind the hermit- prefix', () => {
@@ -83,5 +83,36 @@ describe('pickLiveTranscript', () => {
   it('returns null when nothing qualifies', () => {
     assert.equal(pickLiveTranscript([], { exclude: new Set() }, NOW), null);
     assert.equal(pickLiveTranscript([t('x', NOW, 0)], { exclude: new Set() }, NOW), null);
+  });
+});
+
+// The recovery path for a pane whose uuid never reached the DB (first sync eaten
+// by a timeout / a gateway restart within seconds of the spawn): the gateway
+// launched claude itself, so its argv is ground truth about which transcript the
+// pane writes. Before this, such a pane stayed untracked and the session sat on
+// "starting" forever while the pane worked (2026-07-25 finance-agent).
+describe('parseClaudeSessionIdArg', () => {
+  const UUID = 'c00c2040-f0d0-4d78-8b7a-e51d1a9da0b3';
+  it('pulls --session-id out of a real spawn argv (uuid sits after the mcp-config blob)', () => {
+    const argv = `claude --dangerously-skip-permissions --mcp-config {"mcpServers":{"hermit":{"command":"node"}}} --effort max --session-id ${UUID}`;
+    assert.equal(parseClaudeSessionIdArg(argv), UUID);
+  });
+  it('accepts the --flag=value form', () => {
+    assert.equal(parseClaudeSessionIdArg(`claude --session-id=${UUID}`), UUID);
+  });
+  it('falls back to --resume when there is no --session-id', () => {
+    assert.equal(parseClaudeSessionIdArg(`claude --resume ${UUID} --effort max`), UUID);
+  });
+  it('prefers --session-id over --resume — post-resume uuids drift, the assigned one does not', () => {
+    const other = '910c1baa-9c3b-43dd-b570-e64a3af62669';
+    assert.equal(parseClaudeSessionIdArg(`claude --resume ${other} --session-id ${UUID}`), UUID);
+  });
+  it('normalizes case so it compares equal to the transcript filename', () => {
+    assert.equal(parseClaudeSessionIdArg(`claude --session-id ${UUID.toUpperCase()}`), UUID);
+  });
+  it('returns null when the pane runs something else entirely', () => {
+    assert.equal(parseClaudeSessionIdArg('claude --dangerously-skip-permissions'), null);
+    assert.equal(parseClaudeSessionIdArg('-zsh'), null);
+    assert.equal(parseClaudeSessionIdArg('claude --session-id not-a-uuid'), null);
   });
 });

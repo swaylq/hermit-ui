@@ -36,6 +36,7 @@ import {
   waitForReplReady,
   listTranscripts,
   pickLiveTranscript,
+  paneClaudeSessionId,
   tmuxPaneName,
 } from '@hermit-ui/tmux-driver';
 import { paneIsWorking, WORK_MARKER_RE, sessionTranscriptPath } from './pane';
@@ -121,13 +122,22 @@ const reservedUuids = new Map<string, string>();
 // re-fire every ~2s (setInterval doesn't await), so an overlapping tick must skip a
 // session already in flight rather than double-process it.
 
-// Every claude uuid currently spoken for by ANOTHER session — live (sessionStates) or
-// still starting (reservedUuids). Both transcript-picking paths (resume sniff + drift
-// adoption) exclude these so two chats can never land on one transcript.
+// claudeSessionId as RECORDED IN THE DB, refreshed from every chatTick poll. The
+// in-memory maps only know sessions this gateway process has already set up, so a
+// session that hasn't been touched since the last restart is invisible to them —
+// yet its uuid is just as owned. Cheap (one map rebuild per ~2s tick) and it makes
+// the ownership check authoritative rather than best-effort.
+let recordedUuids = new Map<string, string>();
+
+// Every claude uuid currently spoken for by ANOTHER session — live (sessionStates),
+// still starting (reservedUuids), or recorded in the DB (recordedUuids). Every
+// transcript-picking path (resume sniff, drift adoption, orphan recovery) excludes
+// these so two chats can never land on one transcript.
 function uuidsOwnedByOtherSessions(sessionId: string): Set<string> {
   const owned = new Set<string>();
   for (const [sid, st] of sessionStates) if (sid !== sessionId) owned.add(st.claudeUuid);
   for (const [sid, uuid] of reservedUuids) if (sid !== sessionId) owned.add(uuid);
+  for (const [sid, uuid] of recordedUuids) if (sid !== sessionId) owned.add(uuid);
   return owned;
 }
 
@@ -334,6 +344,9 @@ export async function chatTick() {
   // alive (ensureSession no-ops on an existing pane) and never sends keys, so
   // this only attaches the tail. Sessions with a pending user message are left
   // to deliverMessages below, which sets the watcher up on the same path.
+  recordedUuids = new Map(
+    payload.sessions.filter((s) => s.claudeSessionId).map((s) => [s.id, s.claudeSessionId!]),
+  );
   const havePending = new Set(payload.messages.map((m) => m.sessionId));
   for (const s of payload.sessions) {
     if (havePending.has(s.id)) continue;
@@ -343,7 +356,13 @@ export async function chatTick() {
     // sessionStates with a state pointing at the doomed pane (the stale-state
     // race that left dead panes un-respawned). The next user message respawns it.
     if (isLocked('restart', s.id)) continue;
-    if (!s.claudeSessionId) continue; // no transcript to tail yet (fresh, pre-uuid)
+    // NOTE: a missing claudeSessionId is NOT a skip. It used to be ("nothing to
+    // tail yet"), which permanently stranded any pane whose uuid stamp never
+    // reached the DB — the stamp rides the first sync batch, so a dashboard
+    // timeout or a gateway restart in the seconds after the spawn loses it, and
+    // the pane then ran untracked forever ("starting" on the dashboard while
+    // tmux showed it working). setupSession recovers the uuid from the pane's
+    // own argv; the pane check below is the real guard.
     if (!tmuxSessionExists(s.id)) continue; // pane not running — nothing to watch
     if (!tryAcquire('setup', s.id)) continue; // another path is already setting it up
     setupSession(s)
@@ -886,6 +905,33 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
         );
         claudeUuid = live.uuid;
       }
+    }
+  } else if (paneAlive && !session.claudeSessionId) {
+    // ORPHANED PANE: claude is running but the DB never learned its uuid. The stamp
+    // rides the first sync batch, so a dashboard timeout or a gateway restart within
+    // seconds of the spawn drops it — and the old code then minted a RANDOM uuid here,
+    // tailing a transcript that would never exist. The pane worked away with nobody
+    // listening: no replies synced, state stuck on "starting" (2026-07-25,
+    // finance-agent). We spawned this claude ourselves with `--session-id`, so its
+    // argv is ground truth — take the uuid from there, and let the next sync stamp it
+    // back to the DB (uuidStamped stays false below).
+    const fromPane = paneClaudeSessionId(session.id);
+    if (fromPane && uuidsOwnedByOtherSessions(session.id).has(fromPane)) {
+      // Another session already owns it — adopting would cross-wire two chats onto one
+      // transcript. Better to stay unstamped and let the next respawn sort it out.
+      console.warn(
+        `[chat] ${session.id.slice(0, 8)}: pane uuid ${fromPane.slice(0, 8)} is owned by another ` +
+          `session — refusing to adopt`,
+      );
+      claudeUuid = randomUUID();
+    } else if (fromPane) {
+      console.warn(
+        `[chat] ${session.id.slice(0, 8)}: no claude uuid on record but the pane is alive — ` +
+          `recovered ${fromPane.slice(0, 8)} from its argv`,
+      );
+      claudeUuid = fromPane;
+    } else {
+      claudeUuid = randomUUID();
     }
   } else if (session.claudeSessionId && !paneAlive && existsSync(path.join(encodedProjectDir(cwd), `${session.claudeSessionId}.jsonl`))) {
     // Resume: older claude forked a brand-new JSONL, but current versions APPEND to the

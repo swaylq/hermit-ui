@@ -54,6 +54,46 @@ export function tmuxPaneName(sessionId: string): string {
   return paneName(sessionId);
 }
 
+/**
+ * The claude session uuid a pane was LAUNCHED with, read out of its argv.
+ * `--session-id` (fresh spawns) wins over `--resume` (which can drift once claude
+ * is running); null when neither is present. Pure half of paneClaudeSessionId so
+ * the parsing is testable without a live pane.
+ */
+export function parseClaudeSessionIdArg(argv: string): string | null {
+  const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+  for (const flag of ['--session-id', '--resume']) {
+    const m = new RegExp(`${flag}[= ]+(${UUID})`).exec(argv);
+    if (m) return m[1].toLowerCase();
+  }
+  return null;
+}
+
+/**
+ * Ground truth for "which transcript is this pane writing": the uuid the gateway
+ * itself passed on the command line. Used to recover a pane whose uuid never made
+ * it into the DB (the first sync — which carries the stamp — can be eaten by a
+ * dashboard timeout or a gateway restart seconds after the spawn), which otherwise
+ * leaves the session "starting" forever while the pane works away untracked.
+ */
+export function paneClaudeSessionId(sessionId: string): string | null {
+  // `<name>.0` (the house pane target), NOT `=<name>`: display-message silently
+  // prints an EMPTY string with exit 0 for the `=` form, so the `=` variant looks
+  // like "no pane" for every session. A missing session also exits 0 with no
+  // output, hence the pid sanity check below rather than trusting the status.
+  const r = tmux(['display-message', '-p', '-t', `${paneName(sessionId)}.0`, '#{pane_pid}']);
+  const pid = Number(r.stdout);
+  if (!r.ok || !Number.isInteger(pid) || pid <= 0) return null;
+  // -ww: don't truncate argv to terminal width — the uuid sits after a long
+  // --mcp-config JSON blob and would otherwise be cut off.
+  const ps = spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  });
+  if (ps.status !== 0) return null;
+  return parseClaudeSessionIdArg(ps.stdout || '');
+}
+
 /** List all tmux sessions whose name starts with the given prefix. */
 export function listSessions(prefix: string): string[] {
   const r = tmux(['list-sessions', '-F', '#{session_name}']);
