@@ -103,7 +103,16 @@ function ChatPageInner() {
 
   // agents.list is machine-wide (403 in a scoped share session) — disable it
   // there; a scoped new-chat is locked to the shared agent and needs no list.
-  const agents = trpc.agents.list.useQuery(undefined, { refetchInterval: 30_000, enabled: !scope.scoped });
+  // It's also only READ by the landing redirect (pick a session when none is in
+  // the URL) and the new-chat pane — the open-session view never touches
+  // agents.data — so don't subscribe while viewing a session. On desktop the
+  // sidebar's RecentAgents still polls the shared key; but on mobile / a
+  // collapsed sidebar (that list unmounted) the chat page was the SOLE
+  // subscriber, needlessly polling a machine-wide groupBy every 30s. (P1-3)
+  const agents = trpc.agents.list.useQuery(undefined, {
+    refetchInterval: 30_000,
+    enabled: !scope.scoped && (!sessionParam || showNew),
+  });
   // No own refetchInterval — the always-mounted sidebar already polls
   // listSessions every 5s; this shares that cache (used here only for the
   // landing redirect + empty state). Drops a duplicate 5s poll/re-render.
