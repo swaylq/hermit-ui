@@ -1042,7 +1042,19 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
                   WHICH agent you're talking to. It's the ONLY shrinkable item on the
                   row (capped + truncating), so a long name yields instead of pushing
                   the state or ctx off the edge. */}
-              <span className="min-w-0 max-w-[9rem] truncate text-foreground/70">{session?.agentName}</span>
+              {session?.agentName ? (
+                // …and it's the way INTO the agent: /agents?name=<agent> is the
+                // detail sheet's deep link (same one the sidebar's Agents entry uses).
+                <Link
+                  href={`/agents?name=${encodeURIComponent(session.agentName)}`}
+                  title={`打开 ${session.agentName} 的 agent 详情`}
+                  className="min-w-0 max-w-[9rem] truncate text-foreground/70 transition-colors hover:text-foreground hover:underline underline-offset-2"
+                >
+                  {session.agentName}
+                </Link>
+              ) : (
+                <span className="min-w-0 max-w-[9rem] truncate text-foreground/70">{session?.agentName}</span>
+              )}
               {session && (
                 <>
                   <span className="shrink-0 text-muted-foreground/40">·</span>
