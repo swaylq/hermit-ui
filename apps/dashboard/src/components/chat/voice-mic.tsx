@@ -9,22 +9,42 @@
 // coloured glow. Release → transcribing sweep → collapse back to a circle.
 //
 // Gesture (pointer events, unified touch/mouse):
-//   · pointerdown  → open the mic IN-GESTURE (iOS requires getUserMedia inside a
-//                    user gesture) and optimistically expand to "recording".
+//   · pointerdown  → open the mic IN-GESTURE (a getUserMedia made inside the
+//                    gesture's own call stack is "privileged", which is what buys
+//                    the long no-reprompt window on iOS) and arm the HUD.
 //   · move > 8px within 180 ms → it was a DRAG: abandon the recording, reposition
 //                    the FAB (persisted to localStorage, clamped to the viewport).
 //   · hold ≥ 180 ms (no early move) → locked recording; later moves are ignored.
 //   · pointerup while recording → stop + POST to /api/transcribe → onTranscript.
 //   · a too-short press (< 400 ms) is treated as an accidental tap (hint, no send).
+//
+// NOT-YET-AUTHORIZED touches take a different path (iOS PWAs re-ask constantly —
+// the grant is in-memory and dies ~10 min after capture stops, or on any relaunch):
+// opening the mic on pointerdown would throw the system alert at someone who is
+// merely DRAGGING the button, and the alert then swallows the touch so pointerup
+// never arrives — the old code sat expanded and "recording" with no mic behind it.
+// So when the permission isn't already granted we open nothing on pointerdown; the
+// press becomes an explicit "tap to allow" that fires the request on RELEASE, from
+// its own gesture, with the button staying a circle + spinner until it resolves.
 
 import { memo, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Mic, Loader2 } from 'lucide-react';
 import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
-import { startRecording, releaseWarmMic, type VoiceRecorder } from '@/lib/voice-capture';
+import {
+  startRecording,
+  releaseWarmMic,
+  canOpenMicSilently,
+  refreshMicPermission,
+  requestMicAccess,
+  type VoiceRecorder,
+} from '@/lib/voice-capture';
 import { VoiceWave, type WavePhase } from '@/components/chat/voice-wave';
 
-type Phase = 'idle' | 'recording' | 'transcribing' | 'error';
+// 'arming' = waiting on the mic (device opening, or the user answering the
+// permission alert). Deliberately NOT expanded: the capsule means "we are
+// recording you", and showing it before a track exists is the bug this fixes.
+type Phase = 'idle' | 'arming' | 'recording' | 'transcribing' | 'error';
 
 const FAB = 56; // idle circle diameter (px)
 const EXP_MAX = 212; // expanded capsule width ceiling
@@ -90,6 +110,8 @@ export const VoiceMic = memo(function VoiceMic({
     keyArmTimer: 0 as unknown as ReturnType<typeof setTimeout>,
     armingKey: false, // right-Option held, waiting out the hold delay
     byKey: false, // current recording was started by the PTT key (not the button)
+    needsAuth: false, // this press must ask for permission on release, not record
+    pointerDown: false, // finger/button still down — false means nobody is holding
   });
 
   useEffect(() => {
@@ -101,6 +123,17 @@ export const VoiceMic = memo(function VoiceMic({
 
   // Release the warm mic on unmount (leaving the chat) so it doesn't linger.
   useEffect(() => () => releaseWarmMic(), []);
+
+  // Keep the cached permission answer fresh — it expires on its own (iOS drops the
+  // grant ~10 min after capture stops) and pointerdown has to read it synchronously.
+  // Poll slowly + on wake; the query is a local IPC, not a network call.
+  useEffect(() => {
+    void refreshMicPermission();
+    const id = setInterval(() => { if (!document.hidden) void refreshMicPermission(); }, 15_000);
+    const onVisible = () => { if (!document.hidden) void refreshMicPermission(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
 
   const finishTranscribe = useCallback(
     async (wav: Blob) => {
@@ -146,26 +179,63 @@ export const VoiceMic = memo(function VoiceMic({
   }, [finishTranscribe]);
 
   const beginRecording = useCallback(async (maxMs: number = MAX_MS) => {
+    const gg = g.current;
     try {
       const rec = await startRecording({
         onLevel: setLevel,
         maxMs,
         onAutoStop: () => { void stopAndTranscribe(); },
       });
-      if (g.current.mode !== 'deciding' && g.current.mode !== 'recording') { rec.cancel(); return; }
+      // The gesture can be gone by the time the mic opens: a drag took over, the
+      // press was released, or a permission alert swallowed the pointerup. Handing
+      // the recorder over then would leave a HUD nobody can close until the 60 s
+      // cap — so drop it and reset instead.
+      const holderGone = !gg.byKey && !gg.pointerDown;
+      if ((gg.mode !== 'deciding' && gg.mode !== 'recording') || holderGone) {
+        rec.cancel();
+        if (holderGone && gg.mode !== 'idle') { gg.mode = 'idle'; setPhase('idle'); setLevel(0); }
+        return;
+      }
       recorderRef.current = rec;
-      g.current.recAt = Date.now();
+      gg.recAt = Date.now();
       setStartedAt(Date.now());
-    } catch {
+      // Pointer path: the hold timer armed the HUD, this flips it live. The key
+      // path owns its phase (it discards a pre-commit release), so leave it alone
+      // while it's still arming.
+      if (gg.mode === 'recording' && !gg.armingKey) setPhase('recording');
+    } catch (e) {
+      const denied = (e as DOMException)?.name === 'NotAllowedError';
       setPhase('error');
-      setHint('麦克风不可用');
-      setTimeout(() => { setPhase('idle'); setHint(null); }, 2600);
-      g.current.mode = 'idle';
-      g.current.byKey = false;
-      g.current.armingKey = false;
-      clearTimeout(g.current.keyArmTimer);
+      setHint(denied ? '麦克风被拒绝，去系统设置开启' : '麦克风不可用');
+      setTimeout(() => { setPhase('idle'); setHint(null); }, denied ? 3600 : 2600);
+      gg.mode = 'idle';
+      gg.byKey = false;
+      gg.armingKey = false;
+      clearTimeout(gg.keyArmTimer);
     }
   }, [stopAndTranscribe]);
+
+  // First-run (and post-expiry) authorization: fired from pointerUP so the system
+  // alert never lands mid-press. requestMicAccess() runs synchronously inside this
+  // gesture — do NOT await anything before it or WebKit stops treating it as
+  // user-initiated.
+  const authorizeMic = useCallback(() => {
+    setPhase('arming');
+    setHint('请允许使用麦克风');
+    requestMicAccess()
+      .then(() => {
+        setPhase('idle');
+        setHint('已授权 · 按住说话');
+        setTimeout(() => setHint(null), 2400);
+      })
+      .catch((e: unknown) => {
+        const denied = (e as DOMException)?.name === 'NotAllowedError';
+        setPhase('error');
+        setHint(denied ? '麦克风被拒绝，去系统设置开启' : '麦克风不可用');
+        setTimeout(() => { setPhase('idle'); setHint(null); }, denied ? 3600 : 2600);
+      })
+      .finally(() => { void refreshMicPermission(); });
+  }, []);
 
   // Desktop push-to-talk: hold RIGHT Option (⌥, code "AltRight") to record — the
   // same voice key as Keyo. Capture starts on keydown (so the first words aren't
@@ -229,22 +299,31 @@ export const VoiceMic = memo(function VoiceMic({
       const gg = g.current;
       gg.mode = 'deciding';
       gg.downAt = Date.now();
+      gg.pointerDown = true;
       gg.px = e.clientX;
       gg.py = e.clientY;
       gg.fx = pos?.x ?? 0;
       gg.fy = pos?.y ?? 0;
       setHint(null);
       // Open the mic only once the hold is confirmed, so a DRAG never opens it (no
-      // stray mic indicator). Exception: touch/iOS requires getUserMedia inside the
-      // gesture, so there we open on pointerdown and a drag's cancel() releases it.
+      // stray mic indicator). Exception: on touch we open on pointerdown — only a
+      // request made inside this gesture is privileged, and that privilege is what
+      // keeps iOS from re-prompting later — and a drag's cancel() releases it.
+      // …unless we aren't authorized yet: then opening here would ask permission of
+      // someone who may only be dragging, so the press becomes a "tap to allow"
+      // handled on release (endGesture) instead.
       const touch = isTouchPrimary();
-      if (touch) void beginRecording();
+      gg.needsAuth = touch && !canOpenMicSilently();
+      if (touch && !gg.needsAuth) void beginRecording();
       gg.holdTimer = setTimeout(() => {
-        if (gg.mode === 'deciding') {
-          gg.mode = 'recording';
-          setPhase('recording');
-          if (!touch) void beginRecording();
-        }
+        if (gg.mode !== 'deciding') return;
+        if (gg.needsAuth) { setHint('松手授权麦克风'); return; } // stay a circle
+        gg.mode = 'recording';
+        // Show the recording capsule only once a track exists — until then it's
+        // 'arming' (circle + spinner), so a pending permission alert can never
+        // leave a fake "recording" HUD on screen.
+        setPhase(recorderRef.current ? 'recording' : 'arming');
+        if (!touch) void beginRecording();
       }, HOLD_MS);
     },
     [phase, pos, beginRecording],
@@ -258,9 +337,11 @@ export const VoiceMic = memo(function VoiceMic({
     if (gg.mode === 'deciding' && Math.hypot(dx, dy) > DRAG_PX && Date.now() - gg.downAt < HOLD_MS) {
       clearTimeout(gg.holdTimer);
       gg.mode = 'dragging';
+      gg.needsAuth = false; // moving the button is not a request to be recorded
       recorderRef.current?.cancel();
       recorderRef.current = null;
       setPhase('idle');
+      setHint(null);
       setLevel(0);
       setDragging(true);
     }
@@ -273,7 +354,10 @@ export const VoiceMic = memo(function VoiceMic({
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
       clearTimeout(gg.holdTimer);
       const mode = gg.mode;
+      const needsAuth = gg.needsAuth;
       gg.mode = 'idle';
+      gg.pointerDown = false;
+      gg.needsAuth = false;
       if (mode === 'dragging') {
         const np = clampPos(gg.fx + (e.clientX - gg.px), gg.fy + (e.clientY - gg.py));
         setPos(np);
@@ -281,14 +365,43 @@ export const VoiceMic = memo(function VoiceMic({
         try { localStorage.setItem(POS_KEY, JSON.stringify(np)); } catch { /* private mode */ }
         return;
       }
+      // Unauthorized press → this release IS the permission request (its own
+      // gesture, finger already up, so the alert can't strand the UI).
+      if (needsAuth) { authorizeMic(); return; }
       if (mode === 'deciding' || mode === 'recording') void stopAndTranscribe();
     },
-    [stopAndTranscribe],
+    [stopAndTranscribe, authorizeMic],
   );
+
+  // Safety net for a press that never gets its pointerup: the tab going away
+  // mid-recording (iOS backgrounding kills capture anyway — voice-capture drops the
+  // warm mic on hidden). Without this the HUD would sit "recording" until the cap.
+  useEffect(() => {
+    const bail = () => {
+      if (!document.hidden) return;
+      const gg = g.current;
+      if (gg.mode === 'idle' && !recorderRef.current) return;
+      clearTimeout(gg.holdTimer);
+      gg.mode = 'idle';
+      gg.pointerDown = false;
+      gg.needsAuth = false;
+      gg.byKey = false;
+      recorderRef.current?.cancel();
+      recorderRef.current = null;
+      setPhase('idle');
+      setLevel(0);
+      setHint(null);
+    };
+    document.addEventListener('visibilitychange', bail);
+    return () => document.removeEventListener('visibilitychange', bail);
+  }, []);
 
   if (hidden || !pos) return null;
 
-  const active = phase !== 'idle';
+  // 'arming' stays a circle on purpose — the capsule is the "you are being
+  // recorded" signal and must not appear before a mic track exists.
+  const arming = phase === 'arming';
+  const active = phase === 'recording' || phase === 'transcribing' || phase === 'error';
   const vw = window.innerWidth;
   const expW = Math.min(EXP_MAX, vw - 24);
   const expandsLeft = pos.x + expW + 8 > vw;
@@ -301,6 +414,8 @@ export const VoiceMic = memo(function VoiceMic({
   const glow =
     phase === 'recording'
       ? '0 10px 34px -4px rgba(79,123,255,0.55), 0 4px 12px -2px rgba(0,0,0,0.5)'
+      : phase === 'arming'
+      ? '0 8px 26px -6px rgba(129,140,248,0.45), 0 4px 12px -2px rgba(0,0,0,0.5)'
       : phase === 'transcribing'
       ? '0 10px 34px -4px rgba(56,189,248,0.5), 0 4px 12px -2px rgba(0,0,0,0.5)'
       : phase === 'error'
@@ -323,7 +438,7 @@ export const VoiceMic = memo(function VoiceMic({
         onPointerMove={onPointerMove}
         onPointerUp={endGesture}
         onPointerCancel={endGesture}
-        aria-label="语音输入（长按说话，拖动可移位）"
+        aria-label="语音输入（长按说话，拖动可移位；未授权时点一下授权）"
         title="长按说话，拖动可移位（桌面可按住右 Option 说话）"
         className="relative flex items-center justify-center overflow-hidden rounded-full border border-white/10 bg-[#111319]/85 backdrop-blur-xl cursor-pointer"
         style={{
@@ -340,8 +455,14 @@ export const VoiceMic = memo(function VoiceMic({
         )}
         <Mic
           className="pointer-events-none absolute h-6 w-6 text-white/85 transition-all duration-200"
-          style={{ opacity: active ? 0 : 1, transform: active ? 'scale(0.5)' : 'scale(1)' }}
+          style={{
+            opacity: active || arming ? 0 : 1,
+            transform: active || arming ? 'scale(0.5)' : 'scale(1)',
+          }}
         />
+        {arming && (
+          <Loader2 className="pointer-events-none absolute h-5 w-5 animate-spin text-white/85" />
+        )}
         {phase === 'recording' && (
           <>
             <span className="pointer-events-none absolute left-4 h-2 w-2 animate-pulse rounded-full bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.9)]" />

@@ -43,6 +43,102 @@ let warm: { stream: MediaStream; ctx: AudioContext } | null = null;
 let warmTimer: ReturnType<typeof setTimeout> | null = null;
 let visibilityBound = false;
 
+// ── Mic permission state ────────────────────────────────────────────────────
+// "Would opening the mic RIGHT NOW pop a permission prompt?" — the button needs
+// that answer SYNCHRONOUSLY at pointerdown, before it knows whether the touch is
+// a press-to-talk or a drag, so the async answer is cached here.
+//
+// It genuinely changes on its own: iOS never persists a getUserMedia grant. WebKit
+// keeps grants in memory (UserMediaPermissionRequestManagerProxy::m_grantedRequests)
+// and a watchdog drops them ~10 min after capture stops (24 h while a track is
+// live); a reload or a cold app launch starts with none. The Permissions API is
+// wired to exactly that state — shouldChangePromptToGrantForMicrophone() answers
+// 'granted' iff a live grant matches — so it is the right thing to ask, but the
+// answer expires, hence the freshness window below.
+export type MicPermission = 'granted' | 'prompt' | 'denied' | 'unknown';
+const PERM_FRESH_MS = 20_000;
+let micPerm: MicPermission = 'unknown';
+let micPermAt = 0;
+let permSubscribed = false;
+
+/** True while a mic track from a previous recording is still open (grant is current). */
+export function isMicWarm(): boolean {
+  return (
+    !!warm &&
+    warm.ctx.state !== 'closed' &&
+    warm.stream.getTracks().some((t) => t.readyState === 'live')
+  );
+}
+
+/**
+ * Last known permission state, synchronously. 'unknown' when the browser can't
+ * answer (Permissions API without the 'microphone' name) or the cached answer has
+ * gone stale — callers should treat 'unknown' as "can't tell", not as a denial.
+ */
+export function micPermission(): MicPermission {
+  if (isMicWarm()) return 'granted';
+  if (micPerm !== 'unknown' && Date.now() - micPermAt > PERM_FRESH_MS) return 'unknown';
+  return micPerm;
+}
+
+/** Re-ask the browser; safe to call often (cheap, and it drives micPermission()). */
+export async function refreshMicPermission(): Promise<MicPermission> {
+  try {
+    const status = await navigator.permissions?.query({ name: 'microphone' as PermissionName });
+    if (!status) return micPerm;
+    micPerm = status.state as MicPermission;
+    micPermAt = Date.now();
+    if (!permSubscribed) {
+      permSubscribed = true;
+      status.addEventListener('change', () => {
+        micPerm = status.state as MicPermission;
+        micPermAt = Date.now();
+      });
+    }
+  } catch {
+    // Safari before the Permissions API knew 'microphone', Firefox, etc.
+  }
+  return micPerm;
+}
+
+function noteGranted() {
+  micPerm = 'granted';
+  micPermAt = Date.now();
+  lastCaptureAt = Date.now();
+}
+
+// How long after a successful capture we still assume the grant is live, when the
+// browser won't tell us. Deliberately under WebKit's ~10 min post-capture watchdog.
+const CAPTURE_EVIDENCE_MS = 4 * 60_000;
+let lastCaptureAt = 0;
+
+/**
+ * "Can we open the mic right now WITHOUT a permission prompt?" — the question the
+ * button asks on pointerdown, when it still can't tell a press-to-talk from a drag.
+ * False means: don't open anything yet, offer an explicit tap-to-allow instead.
+ */
+export function canOpenMicSilently(): boolean {
+  if (isMicWarm()) return true;
+  const perm = micPermission();
+  if (perm === 'granted') return true;
+  if (perm === 'prompt' || perm === 'denied') return false;
+  // Browser can't answer (old Safari, Firefox) or the cached answer went stale —
+  // fall back to evidence: a capture this recently means the grant is still live.
+  return Date.now() - lastCaptureAt < CAPTURE_EVIDENCE_MS;
+}
+
+/**
+ * Ask for mic access WITHOUT starting a recording — the first-run "tap to allow"
+ * step. Must be called straight from a user gesture (a click/pointerup handler):
+ * WebKit only treats a request made inside the gesture's own call stack as
+ * privileged, and an unprivileged one that was denied before is auto-denied.
+ * Leaves the mic warm so the press that follows starts instantly.
+ */
+export async function requestMicAccess(): Promise<void> {
+  await acquireWarm();
+  scheduleWarmRelease();
+}
+
 function releaseWarm() {
   if (warmTimer) { clearTimeout(warmTimer); warmTimer = null; }
   if (warm) {
@@ -69,9 +165,21 @@ async function acquireWarm(): Promise<{ stream: MediaStream; ctx: AudioContext }
   }
   releaseWarm(); // stale (device revoked / ctx closed) — start fresh
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-  });
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (e) {
+    // NotAllowedError is the user (or a policy) saying no — remember it so the
+    // button offers the "go enable it in Settings" hint instead of re-prompting.
+    if ((e as DOMException)?.name === 'NotAllowedError') {
+      micPerm = 'denied';
+      micPermAt = Date.now();
+    }
+    throw e;
+  }
+  noteGranted();
   const Ctx =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
