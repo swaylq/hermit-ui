@@ -1035,31 +1035,30 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
                   <Pencil className="h-3 w-3 shrink-0 opacity-0 group-hover/title:opacity-100 transition-opacity text-muted-foreground/70" aria-hidden="true" />
                 </button>
               )}
-              {/* Status dot — color + pulse track the real Claude Code state */}
-              {session && (
-                <span
-                  className={cn('h-1.5 w-1.5 rounded-full shrink-0', status.dot, status.pulse && 'animate-pulse')}
-                  aria-label={status.label}
-                />
-              )}
             </div>
             <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground truncate">
               {/* Agent name leads the status line on every width — on a phone the
                   sidebar is collapsed away, so this was the only thing telling you
-                  WHICH agent you're talking to. shrink-0 keeps it legible (a
-                  squeezed flex item rendered it as "a…"); the cap + truncate stop a
-                  long name from pushing the rest off the row. */}
-              <span className="shrink-0 max-w-[9rem] truncate text-foreground/70">{session?.agentName}</span>
+                  WHICH agent you're talking to. It's the ONLY shrinkable item on the
+                  row (capped + truncating), so a long name yields instead of pushing
+                  the state or ctx off the edge. */}
+              <span className="min-w-0 max-w-[9rem] truncate text-foreground/70">{session?.agentName}</span>
               {session && (
                 <>
-                  <span className="text-muted-foreground/40">·</span>
+                  <span className="shrink-0 text-muted-foreground/40">·</span>
                   <span className="shrink-0">{status.label}</span>
-                  <span className="text-muted-foreground/40">·</span>
-                  {/* The full bar (count + track + percent) needs ~130px, which is
-                      what was crowding the name out on a phone — mobile gets the
-                      compact `ctx NN%` variant instead. */}
+                  {/* Status dot rides WITH the state word it describes, rather than
+                      next to the title where it read as decoration. */}
+                  <span
+                    className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot, status.pulse && 'animate-pulse')}
+                    aria-label={status.label}
+                  />
+                  <span className="shrink-0 text-muted-foreground/40">·</span>
+                  {/* Full bar (count + 56px track + percent) is ~130px and crowded a
+                      390px header; mobile gets `mini` — same token count, shorter
+                      track, no percent. */}
                   <span className="sm:hidden shrink-0">
-                    <CtxBar tokens={session.contextTokens} variant="compact" />
+                    <CtxBar tokens={session.contextTokens} variant="mini" />
                   </span>
                   <span className="hidden sm:inline-flex shrink-0">
                     <CtxBar tokens={session.contextTokens} />

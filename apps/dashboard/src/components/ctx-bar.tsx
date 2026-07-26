@@ -22,8 +22,9 @@ function textColor(pct: number): string {
  *
  * ALWAYS renders — even when `tokens` is null (no completed turn yet) it shows a
  * muted `ctx —` so the percentage is present in every session state, per the
- * "ctx 占比任何状态都要显示" requirement. `variant="compact"` drops the token
- * count + bar and shows just `ctx NN%` for tight rows (the sidebar).
+ * "ctx 占比任何状态都要显示" requirement. Two narrower cuts for tight rows:
+ * `variant="compact"` is just `ctx NN%` (the sidebar), `variant="mini"` keeps the
+ * token count + a short bar but drops the percent (the mobile chat header).
  */
 export function CtxBar({
   tokens,
@@ -34,7 +35,7 @@ export function CtxBar({
   tokens: number | null | undefined;
   total?: number;
   showLabel?: boolean;
-  variant?: 'full' | 'compact';
+  variant?: 'full' | 'compact' | 'mini';
 }) {
   const known = tokens != null;
   const pct = known ? ctxPct(tokens, total) : 0;
@@ -50,6 +51,28 @@ export function CtxBar({
       <span className="inline-flex items-center gap-1" title={title}>
         {showLabel && <span className="text-muted-foreground/70">ctx</span>}
         <span className={`tabular-nums ${pctClass}`}>{pctText}</span>
+      </span>
+    );
+  }
+
+  // 'mini' — the token count that people actually read, plus a shortened track,
+  // minus the percent (the bar already says it). ~55px instead of the full
+  // variant's ~130px, which is what makes it fit a 390px chat header next to the
+  // agent name + status.
+  if (variant === 'mini') {
+    return (
+      <span className="inline-flex items-center gap-1" title={title}>
+        {showLabel && <span className="text-muted-foreground/70">ctx</span>}
+        <span className="tabular-nums text-foreground">{known ? fmtBytes(tokens!) : '—'}</span>
+        <span
+          className="relative h-[3px] w-8 overflow-hidden rounded-full bg-foreground/10 ring-1 ring-foreground/5"
+          aria-hidden="true"
+        >
+          <span
+            className={`absolute inset-y-0 left-0 rounded-full transition-[width] duration-700 ease-out ${barColor(pct)}`}
+            style={{ width: `${fill}%` }}
+          />
+        </span>
       </span>
     );
   }
