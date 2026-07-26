@@ -1046,15 +1046,24 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
             <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground truncate">
               {/* Agent name leads the status line on every width — on a phone the
                   sidebar is collapsed away, so this was the only thing telling you
-                  WHICH agent you're talking to. min-w-0 + truncate makes it the
-                  part that gives way first when the line runs out of room. */}
-              <span className="min-w-0 truncate text-foreground/70">{session?.agentName}</span>
+                  WHICH agent you're talking to. shrink-0 keeps it legible (a
+                  squeezed flex item rendered it as "a…"); the cap + truncate stop a
+                  long name from pushing the rest off the row. */}
+              <span className="shrink-0 max-w-[9rem] truncate text-foreground/70">{session?.agentName}</span>
               {session && (
                 <>
                   <span className="text-muted-foreground/40">·</span>
                   <span className="shrink-0">{status.label}</span>
                   <span className="text-muted-foreground/40">·</span>
-                  <CtxBar tokens={session.contextTokens} />
+                  {/* The full bar (count + track + percent) needs ~130px, which is
+                      what was crowding the name out on a phone — mobile gets the
+                      compact `ctx NN%` variant instead. */}
+                  <span className="sm:hidden shrink-0">
+                    <CtxBar tokens={session.contextTokens} variant="compact" />
+                  </span>
+                  <span className="hidden sm:inline-flex shrink-0">
+                    <CtxBar tokens={session.contextTokens} />
+                  </span>
                 </>
               )}
               {session?.closedAt && <><span className="text-muted-foreground/40">·</span><span className="text-muted-foreground">closed</span></>}
