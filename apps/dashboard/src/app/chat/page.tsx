@@ -25,6 +25,7 @@ import { LoopBar } from '@/components/chat/loop-bar';
 import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
 import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
+import { useOlderPages } from '@/components/chat/use-older-pages';
 import { useCachedTimeline, useTimelineWriteThrough } from '@/lib/chat-cache/use-chat-cache';
 import { NewChatPane } from '@/components/chat/new-chat-pane';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
@@ -38,13 +39,17 @@ import { VoiceMic } from '@/components/chat/voice-mic';
 // soft-keyboard return key inserts a newline there (a dedicated send button
 // handles sending), and the same gate drives the share-vs-download save path.
 
-// Initial message window: the newest N messages loaded on open. Kept small so a
-// session opens fast — less JSON over the wire + far fewer markdown/highlight
-// passes on first paint — since the visible viewport is only ~15-20 messages.
-// MUST match the sidebar's `listMessages` prefetch limit (app-sidebar.tsx) so a
-// session click stays a cache hit. "load earlier" grows the window by PAGE_STEP.
+// The LIVE window: the newest N messages, and the only thing listMessages (and
+// the SSE stream keyed on it) ever carries. Kept small so a session opens fast —
+// less JSON over the wire + far fewer markdown/highlight passes on first paint —
+// since the visible viewport is only ~15-20 messages. MUST match the sidebar's
+// `listMessages` prefetch limit (app-sidebar.tsx) so a session click stays a
+// cache hit.
+//
+// It is FIXED. "Load earlier" used to grow it, which made each click re-fetch
+// everything already on screen and dragged the SSE stream up with it; older
+// history is now paged separately by useOlderPages.
 const INITIAL_WINDOW = 60;
-const PAGE_STEP = 200;
 
 // useLayoutEffect on the client (runs before the browser paints — used to restore
 // scroll position synchronously after a history prepend so there's no visible
@@ -277,10 +282,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // query's cache. The poll below is only a fallback for when the stream isn't
   // connected (the gateway flushes block-level rows into Postgres either way).
   const [streamConnected, setStreamConnected] = useState(false);
-  // Newest-N window; starts at INITIAL_WINDOW, grows by PAGE_STEP per "load
-  // earlier". Resets on
-  // session switch (SessionPane is keyed by sessionId, so this state remounts).
-  const [limit, setLimit] = useState(INITIAL_WINDOW);
+  // Fixed live window — see INITIAL_WINDOW. Older history lives in `older`.
+  const limit = INITIAL_WINDOW;
   const [summaryMode, toggleSummary] = useSummaryMode();
   const [findOpen, setFindOpen] = useState(false);
   const messages = trpc.chat.listMessages.useQuery(
@@ -567,31 +570,43 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     requestAnimationFrame(() => { autoScrollRef.current = false; });
   }, [getViewport, setPinned]);
 
-  // "load earlier" grows the window from the top. Capture pre-grow scroll
-  // metrics so we can restore the same top-anchor once the taller list paints —
-  // otherwise the prepended history shoves the viewport down and yanks the user.
-  const pendingRestoreRef = useRef<{ h: number; t: number } | null>(null);
-  const loadEarlier = useCallback(() => {
-    const el = getViewport();
-    if (el) pendingRestoreRef.current = { h: el.scrollHeight, t: el.scrollTop };
-    setLimit((l) => l + PAGE_STEP);
-  }, [getViewport]);
-
-  // Eligibility for an infinite-scroll-up pull. Held in a ref so the scroll
-  // listener reads the latest value without re-subscribing every render.
-  const canLoadEarlierRef = useRef(false);
-  canLoadEarlierRef.current = (messages.data?.length ?? 0) >= limit && !messages.isFetching;
-
   // ── Local cache: first paint from disk, and the write-through that fills it ──
   // `cachedRows` is null until the IndexedDB lookup resolves, [] when there's
   // nothing stored. Only used while the server query is still pending — once
   // real data lands it always wins, so a stale cache can never mask live state.
   const cachedRows = useCachedTimeline(sessionId);
   useTimelineWriteThrough(sessionId, messages.data);
-  const baseRows = useMemo(
+  const windowRows = useMemo(
     () => messages.data ?? (cachedRows && cachedRows.length > 0 ? cachedRows : undefined),
     [messages.data, cachedRows]
   );
+
+  // Older history, paged separately from the live window and served from the
+  // local cache whenever it has the page. See use-older-pages.ts.
+  const older = useOlderPages(
+    sessionId,
+    windowRows?.[0]?.id,
+    (messages.data?.length ?? 0) >= limit
+  );
+  const baseRows = useMemo(
+    () => (older.rows.length > 0 ? [...older.rows, ...(windowRows ?? [])] : windowRows),
+    [older.rows, windowRows]
+  );
+
+  // "load earlier" prepends from the top. Capture pre-prepend scroll metrics so
+  // we can restore the same top-anchor once the taller list paints — otherwise
+  // the prepended history shoves the viewport down and yanks the user.
+  const pendingRestoreRef = useRef<{ h: number; t: number } | null>(null);
+  const loadEarlier = useCallback(() => {
+    const el = getViewport();
+    if (el) pendingRestoreRef.current = { h: el.scrollHeight, t: el.scrollTop };
+    older.loadMore();
+  }, [getViewport, older]);
+
+  // Eligibility for an infinite-scroll-up pull. Held in a ref so the scroll
+  // listener reads the latest value without re-subscribing every render.
+  const canLoadEarlierRef = useRef(false);
+  canLoadEarlierRef.current = older.hasMore && !older.loading;
 
   // Anchored mode: viewing a window around one specific message (a search hit).
   // Frozen — see use-anchored-window.ts.
@@ -662,7 +677,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     pendingRestoreRef.current = null;
     const el = getViewport();
     if (el) el.scrollTop = el.scrollHeight - p.h + p.t;
-  }, [messages.data?.length, getViewport]);
+  }, [messages.data?.length, older.rows.length, getViewport]);
 
   // Track the user's scroll intent. Ignore scrolls WE triggered (autoScrollRef)
   // so an auto-follow never unpins them; a real upward scroll past the slack
@@ -1204,15 +1219,15 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   </div>
                 )
               ) : (
-                (messages.data?.length ?? 0) >= limit && (
+                older.hasMore && (
                 <div className="flex justify-center pb-3">
                   <button
                     type="button"
                     onClick={loadEarlier}
-                    disabled={messages.isFetching}
+                    disabled={older.loading}
                     className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1 text-xs text-muted-foreground transition-colors cursor-pointer hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 disabled:cursor-wait disabled:opacity-50"
                   >
-                    {messages.isFetching ? 'loading…' : '↑ load earlier'}
+                    {older.loading ? 'loading…' : '↑ load earlier'}
                   </button>
                 </div>
                 )

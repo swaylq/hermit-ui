@@ -463,6 +463,54 @@ export const chatRouter = router({
       };
     }),
 
+  // One page of history OLDER than a known message — what "load earlier" runs on.
+  //
+  // The timeline used to page by GROWING listMessages' window: 60 → 260 → 460.
+  // Every click re-fetched everything already on screen, so the third click cost
+  // more than the first two combined (measured: +404 KB, +634 KB, +898 KB for
+  // three clicks — 1.9 MB to read back 600 messages). Worse, the SSE stream is
+  // keyed on the same window, so after a few clicks every 250 ms tick re-sent
+  // hundreds of rows.
+  //
+  // Fetching only the older slice makes each click a flat ~200 rows, and lets
+  // the live window stay pinned at its initial size.
+  listMessagesBefore: agentProcedure
+    .input(
+      z.object({
+        sessionId: z.string(),
+        beforeId: z.string(),
+        limit: z.number().int().min(1).max(500).default(200),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = {
+        sessionId: input.sessionId,
+        session: { machineId: ctx.machine.id, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+      };
+      const anchor = await prisma.chatMessage.findFirst({
+        where: { ...scope, id: input.beforeId },
+        select: { id: true, createdAt: true },
+      });
+      if (!anchor) return { rows: [], hasMore: false };
+      // (createdAt, id) ordering matches listMessages, so the prepended page
+      // butts directly against the window with no gap and no overlap.
+      const rows = await prisma.chatMessage.findMany({
+        where: {
+          ...scope,
+          OR: [{ createdAt: { lt: anchor.createdAt } }, { createdAt: anchor.createdAt, id: { lt: anchor.id } }],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: input.limit + 1, // one extra row answers hasMore without a COUNT
+        select: { id: true, role: true, content: true, createdAt: true },
+      });
+      const hasMore = rows.length > input.limit;
+      const page = hasMore ? rows.slice(0, input.limit) : rows;
+      return {
+        rows: page.reverse().map((r) => ({ ...r, content: capMessageContent(r.content) })),
+        hasMore,
+      };
+    }),
+
   // The window AROUND a specific message — how a search hit outside the newest-N
   // window gets opened. listMessages only ever walks back from the newest row, so
   // without this a hit 20,000 messages deep would need 100 "load earlier" clicks.

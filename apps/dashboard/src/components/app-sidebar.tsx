@@ -5,13 +5,15 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   SquarePen, MessageSquare, Bot, Clock, Boxes, PanelLeft, Plus,
-  Store, ArrowLeft, Package, NotebookText, Send, Folder, Moon, BookOpen, Drama, type LucideIcon,
+  Store, ArrowLeft, Package, NotebookText, Send, Folder, Moon, BookOpen, Drama,
+  Search as SearchIcon, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { SETTINGS_HREFS, SETTINGS_TABS } from '@/lib/settings-nav';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
-import { BrainButton, SettingsButton, NotificationsButton, SearchButton } from '@/components/sidebar/header-buttons';
+import { BrainButton, SettingsButton, NotificationsButton } from '@/components/sidebar/header-buttons';
+import { openGlobalSearch } from '@/lib/chat-cache/search-bus';
 import { NotificationsFilters } from '@/components/sidebar/notifications-nav';
 import { BrainSidebar, RecentDispatchSessions } from '@/components/sidebar/brain-sidebar';
 import { KnowledgeSidebarList } from '@/components/sidebar/knowledge-sidebar-list';
@@ -317,7 +319,6 @@ export function AppSidebar() {
                 />
               </Link>
               <BrainButton collapsed={collapsed} />
-              <SearchButton collapsed={collapsed} />
               <NotificationsButton collapsed={collapsed} />
               <Link
                 href="/market/skills"
@@ -442,12 +443,29 @@ export function AppSidebar() {
           </>
         ) : (
           <>
-            {/* Primary CTA — route-aware (New agent / New cron / New chat). */}
-            <div className="px-2">
-              <Link href={cta.href} title={cta.label} className={ctaCls}>
+            {/* Primary CTA — route-aware (New agent / New cron / New chat) — with
+                global message search beside it. Search sits HERE rather than in
+                the header strip: it's the other thing you reach for constantly,
+                and the header already carries four icons. */}
+            <div className="px-2 flex items-center gap-1.5">
+              <Link href={cta.href} title={cta.label} className={cn(ctaCls, 'flex-1 min-w-0')}>
                 <cta.Icon className="h-4 w-4 shrink-0" />
                 <span className={cn('truncate', collapsed && 'lg:hidden')}>{cta.label}</span>
               </Link>
+              <button
+                type="button"
+                onClick={openGlobalSearch}
+                title="Search messages · ⌘K"
+                aria-label="Search messages"
+                className={cn(
+                  'flex items-center justify-center rounded-lg h-9 w-9 shrink-0 transition-colors cursor-pointer',
+                  'border border-sidebar-border bg-sidebar text-muted-foreground',
+                  'hover:bg-sidebar-accent hover:text-sidebar-foreground',
+                  collapsed && 'lg:hidden',
+                )}
+              >
+                <SearchIcon className="h-4 w-4" />
+              </button>
             </div>
 
             {/* Primary nav */}
