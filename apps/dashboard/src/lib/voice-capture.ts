@@ -35,7 +35,10 @@ const TARGET_RATE = 16_000;
 // Keep the mic warm briefly after a recording so a back-to-back recording starts
 // instantly (no getUserMedia device-open latency → no clipped first words). This is
 // only for the clip-fix — NOT a workaround for iOS's per-getUserMedia permission
-// re-prompt (that's left to a future native app).
+// re-prompt. That one is unfixable from here: in Safari and in an installed PWA the
+// prompt returns on every call, and the warm window merely hides it for 20 s. The
+// fix lives in the native shell (apps/ios), where the host app answers the capture
+// request itself so the web layer stops being asked at all.
 const WARM_HOLD_MS = 20_000;
 
 // ── Warm mic (module-level, shared across recordings) ───────────────────────
