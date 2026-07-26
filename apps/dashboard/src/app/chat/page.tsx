@@ -4,7 +4,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, Sus
 import { keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { RotateCw, Trash2, Terminal, Pencil, ListCollapse, Search, FoldVertical } from 'lucide-react';
+import {
+  RotateCw, Trash2, Terminal, Pencil, ListCollapse, Search, FoldVertical,
+  MoreHorizontal, ChevronRight, SquarePen,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -450,6 +453,14 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
   const restartSession = trpc.chat.requestSessionRestart.useMutation({
     onSuccess: () => sessionMeta.refetch(),
   });
+  // "Another chat with this same agent" — the header shortcut for the flow that
+  // otherwise costs a trip through /chat?new=1 and re-picking the agent. Hard
+  // navigation for the same Next 16 reason as onCreated/delete above: a
+  // router.push to the SAME path with a different ?session= is silently
+  // swallowed, which would leave you looking at the old session.
+  const newAgentChat = trpc.chat.createSession.useMutation({
+    onSuccess: (s) => { window.location.href = `/chat?session=${encodeURIComponent(s.id)}`; },
+  });
   const dequeue = trpc.chat.dequeue.useMutation({
     onSuccess: () => {
       utils.chat.queue.invalidate({ sessionId });
@@ -483,6 +494,27 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
   // it for an input; Enter or blur saves, Escape cancels. Backend already has
   // `chat.setTitle` — we just plug into it.
   const [editingTitle, setEditingTitle] = useState(false);
+  // Mobile header overflow: the phone header only has room for the two actions
+  // you actually reach for mid-conversation (tmux, delete), so the rest live in a
+  // tray that slides out leftward OVER the title. Desktop keeps everything inline.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!moreOpen) return;
+    // Close on a tap anywhere else / Esc. NOT on clicks inside the tray: the
+    // destructive actions in there are two-step (ConfirmIconButton arms first),
+    // and closing on the arming tap would make them impossible to confirm.
+    const onDown = (e: PointerEvent) => {
+      if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMoreOpen(false); };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [moreOpen]);
   const [titleDraft, setTitleDraft] = useState('');
   const setTitleMut = trpc.chat.setTitle.useMutation({
     onSuccess: () => { sessionMeta.refetch(); setEditingTitle(false); },
@@ -893,6 +925,66 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
   const startCron = useCallback(() => pickPrompt(CRON_TEMPLATE), [pickPrompt]);
   const startAutonomy = useCallback(() => pickPrompt(AUTONOMY_TEMPLATE), [pickPrompt]);
 
+  // The header's secondary actions, rendered TWICE (inline on ≥sm, in the mobile
+  // tray on phones) — one definition so the two can't drift. Only one is visible
+  // at a time, so the duplicated ConfirmIconButton arm-state is harmless.
+  const secondaryActions = (
+    <>
+      <button
+        type="button"
+        onClick={() => setFindOpen((v) => !v)}
+        aria-pressed={findOpen}
+        aria-label="find in conversation"
+        title="在本会话中查找 (⌘F)"
+        className={cn(
+          'inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer',
+          findOpen ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+        )}
+      >
+        <Search className="h-4 w-4" />
+      </button>
+      <button
+        type="button"
+        onClick={toggleSummary}
+        aria-pressed={summaryMode}
+        aria-label="toggle summary-only view"
+        title={summaryMode ? '当前：只看总结回复 — 点击显示完整过程' : '只看 agent 的总结回复，隐藏中间过程（工具调用等）'}
+        className={cn(
+          'inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer',
+          summaryMode ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+        )}
+      >
+        <ListCollapse className="h-4 w-4" />
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (!session?.agentName || newAgentChat.isPending) return;
+          newAgentChat.mutate({ agentName: session.agentName });
+        }}
+        disabled={!session?.agentName || newAgentChat.isPending}
+        aria-label="new chat with this agent"
+        title={session?.agentName ? `和 ${session.agentName} 新开一个对话` : '和当前 agent 新开一个对话'}
+        className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground disabled:cursor-wait disabled:opacity-50"
+      >
+        <SquarePen className="h-4 w-4" />
+      </button>
+      <ConfirmIconButton
+        icon={FoldVertical}
+        title="compact — summarize the conversation so the agent's context window shrinks (runs /compact, keeps continuity). THIS is what reduces a large context; restart only reloads the whole history via --resume."
+        disabled={!session || !!session?.closedAt}
+        onConfirm={() => send.mutate({ sessionId, text: '/compact', images: [], files: [] })}
+      />
+      <ConfirmIconButton
+        icon={RotateCw}
+        title="restart — kill this session's tmux pane; the next message respawns claude with --resume (history preserved; context NOT reduced — use compact ⌄ for that)"
+        busy={!!session?.restartRequestedAt || restartSession.isPending}
+        disabled={!session}
+        onConfirm={() => { restartSession.mutate({ id: sessionId }); }}
+      />
+    </>
+  );
+
   return (
     <>
       <div className="border-b border-border px-4 h-12 flex items-center justify-between gap-3 shrink-0">
@@ -952,14 +1044,15 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
               )}
             </div>
             <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground truncate">
-              {/* Agent name is hidden on mobile (sidebar / session list already
-                  shows it) to keep the cramped header clean; its leading
-                  separator hides with it so status doesn't start with an orphan "·". */}
-              <span className="hidden sm:inline text-foreground/70">{session?.agentName}</span>
+              {/* Agent name leads the status line on every width — on a phone the
+                  sidebar is collapsed away, so this was the only thing telling you
+                  WHICH agent you're talking to. min-w-0 + truncate makes it the
+                  part that gives way first when the line runs out of room. */}
+              <span className="min-w-0 truncate text-foreground/70">{session?.agentName}</span>
               {session && (
                 <>
-                  <span className="hidden sm:inline text-muted-foreground/40">·</span>
-                  <span>{status.label}</span>
+                  <span className="text-muted-foreground/40">·</span>
+                  <span className="shrink-0">{status.label}</span>
                   <span className="text-muted-foreground/40">·</span>
                   <CtxBar tokens={session.contextTokens} />
                 </>
@@ -968,32 +1061,38 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
             </div>
           </div>
         </div>
-        <div className="relative flex items-center gap-1 shrink-0">
+        <div ref={moreRef} className="relative flex items-center gap-1 shrink-0">
+          {/* Secondary actions. Inline on ≥sm; on a phone they live in the tray
+              below, which is the same JSX rendered into a different container. */}
+          <div className="hidden sm:flex items-center gap-1">{secondaryActions}</div>
+          {/* Mobile tray: anchored to the LEFT of the persistent buttons and
+              floated over the title (right-full + its own opaque background), so
+              opening it costs no header width. */}
+          <div
+            className={cn(
+              'sm:hidden absolute right-full top-1/2 -translate-y-1/2 mr-1 z-20 flex items-center gap-1',
+              'rounded-lg border border-border bg-popover/95 px-1 py-0.5 shadow-lg backdrop-blur-sm',
+              'origin-right transition-[opacity,transform] duration-200 ease-out',
+              moreOpen
+                ? 'opacity-100 translate-x-0 scale-100'
+                : 'pointer-events-none opacity-0 translate-x-2 scale-95',
+            )}
+            aria-hidden={!moreOpen}
+          >
+            {secondaryActions}
+          </div>
           <button
             type="button"
-            onClick={() => setFindOpen((v) => !v)}
-            aria-pressed={findOpen}
-            aria-label="find in conversation"
-            title="在本会话中查找 (⌘F)"
+            onClick={() => setMoreOpen((v) => !v)}
+            aria-expanded={moreOpen}
+            aria-label={moreOpen ? 'hide more actions' : 'more actions'}
+            title="更多操作"
             className={cn(
-              'inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer',
-              findOpen ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+              'sm:hidden inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer',
+              moreOpen ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
             )}
           >
-            <Search className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={toggleSummary}
-            aria-pressed={summaryMode}
-            aria-label="toggle summary-only view"
-            title={summaryMode ? '当前：只看总结回复 — 点击显示完整过程' : '只看 agent 的总结回复，隐藏中间过程（工具调用等）'}
-            className={cn(
-              'inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer',
-              summaryMode ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-            )}
-          >
-            <ListCollapse className="h-4 w-4" />
+            {moreOpen ? <ChevronRight className="h-4 w-4" /> : <MoreHorizontal className="h-4 w-4" />}
           </button>
           {!scope.scoped && (
             <Link
@@ -1005,19 +1104,6 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
               <Terminal className="h-4 w-4" />
             </Link>
           )}
-          <ConfirmIconButton
-            icon={FoldVertical}
-            title="compact — summarize the conversation so the agent's context window shrinks (runs /compact, keeps continuity). THIS is what reduces a large context; restart only reloads the whole history via --resume."
-            disabled={!session || !!session?.closedAt}
-            onConfirm={() => send.mutate({ sessionId, text: '/compact', images: [], files: [] })}
-          />
-          <ConfirmIconButton
-            icon={RotateCw}
-            title="restart — kill this session's tmux pane; the next message respawns claude with --resume (history preserved; context NOT reduced — use compact ⌄ for that)"
-            busy={!!session?.restartRequestedAt || restartSession.isPending}
-            disabled={!session}
-            onConfirm={() => { restartSession.mutate({ id: sessionId }); }}
-          />
           <ConfirmIconButton
             icon={Trash2}
             danger
