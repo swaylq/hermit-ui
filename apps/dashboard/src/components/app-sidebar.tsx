@@ -11,7 +11,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { SETTINGS_HREFS, SETTINGS_TABS } from '@/lib/settings-nav';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
-import { BrainButton, SettingsButton, NotificationsButton } from '@/components/sidebar/header-buttons';
+import { BrainButton, SettingsButton, NotificationsButton, SearchButton } from '@/components/sidebar/header-buttons';
 import { NotificationsFilters } from '@/components/sidebar/notifications-nav';
 import { BrainSidebar, RecentDispatchSessions } from '@/components/sidebar/brain-sidebar';
 import { KnowledgeSidebarList } from '@/components/sidebar/knowledge-sidebar-list';
@@ -317,6 +317,7 @@ export function AppSidebar() {
                 />
               </Link>
               <BrainButton collapsed={collapsed} />
+              <SearchButton collapsed={collapsed} />
               <NotificationsButton collapsed={collapsed} />
               <Link
                 href="/market/skills"

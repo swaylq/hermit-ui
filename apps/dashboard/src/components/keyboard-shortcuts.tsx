@@ -7,6 +7,7 @@
 import { useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { SHORTCUTS, isStandalone } from '@/lib/shortcuts';
+import { openGlobalSearch } from '@/lib/chat-cache/search-bus';
 
 function isTypingTarget(el: EventTarget | null): boolean {
   const t = el as HTMLElement | null;
@@ -21,12 +22,13 @@ export function KeyboardShortcuts() {
     (e: KeyboardEvent) => {
       if (!isStandalone()) return;
       const typing = isTypingTarget(e.target);
-      // ⌘K — focus the sidebar search (whichever the current route renders).
+      // ⌘K — global message search (every session's prose, from the local cache).
+      // It used to focus the sidebar's list filter; that filter only ever matched
+      // session titles, and it's still one click away in the sidebar, whereas
+      // searching what was actually SAID had no shortcut at all.
       if (e.metaKey && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
-        const input = document.querySelector('[data-sidebar-search]') as HTMLInputElement | null;
-        input?.focus();
-        input?.select();
+        openGlobalSearch();
         return;
       }
       // ? — jump to the Help page (not while typing). NB: ⌘/ is taken — the chat

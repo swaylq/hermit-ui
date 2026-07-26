@@ -24,6 +24,8 @@ import { useScope } from '@/lib/use-scope';
 import { LoopBar } from '@/components/chat/loop-bar';
 import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
+import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
+import { useCachedTimeline, useTimelineWriteThrough } from '@/lib/chat-cache/use-chat-cache';
 import { NewChatPane } from '@/components/chat/new-chat-pane';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 import { EmptyChat } from '@/components/chat/empty-chat';
@@ -170,7 +172,9 @@ function ChatPageInner() {
   if (sessionParam) {
     // key remounts SessionPane on session switch — resets scroll + streaming
     // refs cleanly (no carry-over between sessions).
-    return <SessionPane key={sessionParam} sessionId={sessionParam} />;
+    // `msg` (set by a global-search hit) opens the session positioned on that
+    // message instead of at the live tail.
+    return <SessionPane key={sessionParam} sessionId={sessionParam} anchorMessageId={search.get('msg')} />;
   }
 
   return (
@@ -247,7 +251,7 @@ function toSummaryView(messages: TimelineMsg[]): TimelineMsg[] {
 // composer, not this whole pane. SessionPane's occasional draft writes go
 // through the imperative ComposerHandle (composerRef) below.
 
-export function SessionPane({ sessionId }: { sessionId: string }) {
+export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: string; anchorMessageId?: string | null }) {
   const utils = trpc.useUtils();
   const scope = useScope();
   // Poll on our own heartbeat instead of free-riding the sidebar's listSessions
@@ -578,16 +582,35 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
   const canLoadEarlierRef = useRef(false);
   canLoadEarlierRef.current = (messages.data?.length ?? 0) >= limit && !messages.isFetching;
 
+  // ── Local cache: first paint from disk, and the write-through that fills it ──
+  // `cachedRows` is null until the IndexedDB lookup resolves, [] when there's
+  // nothing stored. Only used while the server query is still pending — once
+  // real data lands it always wins, so a stale cache can never mask live state.
+  const cachedRows = useCachedTimeline(sessionId);
+  useTimelineWriteThrough(sessionId, messages.data);
+  const baseRows = useMemo(
+    () => messages.data ?? (cachedRows && cachedRows.length > 0 ? cachedRows : undefined),
+    [messages.data, cachedRows]
+  );
+
+  // Anchored mode: viewing a window around one specific message (a search hit).
+  // Frozen — see use-anchored-window.ts.
+  const anchored = useAnchoredWindow(sessionId, anchorMessageId, getViewport);
+  // Read by the sticky-bottom effect, which must not re-subscribe per render.
+  const anchoredActiveRef = useRef(false);
+  anchoredActiveRef.current = anchored.active;
+
   // The rendered timeline. Summary mode collapses each turn to its final reply;
   // useMemo keeps the array reference stable between refetches so memo(MessageTimeline) still bails on no-op ticks.
   const view = useMemo(() => {
-    const base = summaryMode ? toSummaryView(messages.data ?? []) : (messages.data ?? []);
+    if (anchored.active) return anchored.rows ?? [];
+    const base = summaryMode ? toSummaryView(baseRows ?? []) : (baseRows ?? []);
     if (pending.length === 0) return base;
     // Drop any optimistic row whose real counterpart (same user text) has landed.
     const sent = new Set((messages.data ?? []).filter((m) => m.role === 'user').map((m) => msgText(m.content)));
     const live = pending.filter((p) => !sent.has(msgText(p.content)));
     return live.length ? [...base, ...live] : base;
-  }, [messages.data, summaryMode, pending]);
+  }, [messages.data, baseRows, summaryMode, pending, anchored.active, anchored.rows]);
 
   // Prune optimistic rows once reflected in the cache so `pending` doesn't grow
   // over a long session. Same-ref return guards against a render loop.
@@ -618,9 +641,12 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
       el.scrollTop = el.scrollHeight;
       requestAnimationFrame(() => { autoScrollRef.current = false; });
     };
-    if (firstScrollRef.current) { firstScrollRef.current = false; toBottom(); }
+    // Anchored mode positions the viewport on a specific message; jumping to the
+    // bottom on first paint would undo exactly what the user clicked for.
+    if (firstScrollRef.current && !anchoredActiveRef.current) { firstScrollRef.current = false; toBottom(); }
     const ro = new ResizeObserver(() => {
       if (pendingRestoreRef.current) return;   // top prepend (load earlier), not tail growth
+      if (anchoredActiveRef.current) return;   // reading history at a fixed anchor
       if (pinnedRef.current) toBottom();
     });
     ro.observe(content);
@@ -1135,20 +1161,50 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
         </div>
       </div>
 
-      {findOpen && <ChatFind getViewport={getViewport} onClose={() => setFindOpen(false)} />}
+      {findOpen && (
+        <ChatFind sessionId={sessionId} getViewport={getViewport} onJump={anchored.jumpTo} onClose={() => setFindOpen(false)} />
+      )}
+
+      {/* Anchored mode banner: you're parked on a search hit, not at the live
+          tail. Without this the frozen timeline reads as a stuck session. */}
+      {anchored.active && (
+        <div className="shrink-0 flex items-center gap-2 border-b border-border bg-amber-500/10 px-3 h-9 text-xs">
+          <span className="text-amber-700 dark:text-amber-400">正在查看历史位置</span>
+          <button
+            type="button"
+            onClick={anchored.clear}
+            className="ml-auto rounded-md px-2 py-1 text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground"
+          >
+            回到最新 ↓
+          </button>
+        </div>
+      )}
 
       <ScrollArea ref={scrollRef} className="flex-1 min-h-0 bg-background">
         {/* overflow-x-clip guarantees the conversation never scrolls sideways as
             a whole; wide content (tables, code) scrolls within its own message.
             `clip` (not hidden) avoids forcing overflow-y to auto. */}
         <div className="px-4 py-4 max-w-3xl mx-auto overflow-x-clip [overflow-anchor:none]">
-          {messages.isPending ? (
+          {(anchored.active ? anchored.loading : messages.isPending && !baseRows) ? (
             <Skeleton className="h-32" />
           ) : view.length === 0 ? (
             <EmptyChat agentName={session?.agentName} onPickPrompt={pickPrompt} />
           ) : (
             <>
-              {(messages.data?.length ?? 0) >= limit && (
+              {anchored.active ? (
+                anchored.hasBefore && (
+                  <div className="flex justify-center pb-3">
+                    <button
+                      type="button"
+                      onClick={anchored.loadEarlier}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1 text-xs text-muted-foreground transition-colors cursor-pointer hover:border-foreground/30 hover:text-foreground hover:bg-accent/40"
+                    >
+                      ↑ load earlier
+                    </button>
+                  </div>
+                )
+              ) : (
+                (messages.data?.length ?? 0) >= limit && (
                 <div className="flex justify-center pb-3">
                   <button
                     type="button"
@@ -1159,6 +1215,7 @@ export function SessionPane({ sessionId }: { sessionId: string }) {
                     {messages.isFetching ? 'loading…' : '↑ load earlier'}
                   </button>
                 </div>
+                )
               )}
               {summaryMode && view.length === 0 ? (
                 <p className="text-center text-xs text-muted-foreground py-8">

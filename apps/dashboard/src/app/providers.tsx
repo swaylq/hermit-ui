@@ -9,6 +9,7 @@ import { trpc } from '@/lib/trpc';
 import { getActiveKey } from '@/lib/keyring';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { KeyboardShortcuts } from '@/components/keyboard-shortcuts';
+import { ChatCacheRoot } from '@/components/chat-cache-root';
 
 // Key storage moved to lib/keyring (multi-machine browser keyring). Re-export
 // the active-key getter so any importer of `@/app/providers` keeps working.
@@ -116,6 +117,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
           <ConfirmProvider>
             {children}
             <KeyboardShortcuts />
+            {/* Chat cache: one background sync for the whole app, and the global
+                search overlay it feeds. Both are singletons behind these mounts. */}
+            <ChatCacheRoot />
           </ConfirmProvider>
         </QueryClientProvider>
       </trpc.Provider>

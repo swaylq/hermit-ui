@@ -15,7 +15,7 @@ export interface Shortcut {
 }
 
 export const SHORTCUTS: Shortcut[] = [
-  { id: 'search', keys: ['⌘', 'K'], label: 'Focus search', group: 'Actions' },
+  { id: 'search', keys: ['⌘', 'K'], label: 'Search all messages', group: 'Actions' },
   { id: 'new-chat', keys: ['⌘', '⇧', 'N'], label: 'New chat', group: 'Actions' },
   { id: 'nav-chat', keys: ['⌘', '1'], label: 'Go to Chat', group: 'Navigation', href: '/chat' },
   { id: 'nav-agents', keys: ['⌘', '2'], label: 'Go to Agents', group: 'Navigation', href: '/agents' },

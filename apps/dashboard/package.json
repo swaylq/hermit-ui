@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "seed": "tsx scripts/seed-machine.ts",
     "migrate": "prisma migrate deploy",
-    "migrate:dev": "prisma migrate dev"
+    "migrate:dev": "prisma migrate dev",
+    "test": "tsx --test src/server/*.test.ts src/lib/chat-cache/*.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

@@ -93,7 +93,15 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
         lastId = visibleMessages[j].id;
         j++;
       }
-      out.push(<MessageRow key={`g-${m.id}-${lastId}`} role={m.role} content={combined} ts={m.createdAt} />);
+      // `data-msg-id` carries EVERY id folded into this row (consecutive
+       // tool-result rows are merged above), space-separated so a lookup can use
+       // the `[data-msg-id~="…"]` word-match selector. It's how a search hit
+       // scrolls to its message — see use-anchored-window.ts.
+      out.push(
+        <div key={`g-${m.id}-${lastId}`} data-msg-id={visibleMessages.slice(i, j).map((x) => x.id).join(' ')}>
+          <MessageRow role={m.role} content={combined} ts={m.createdAt} />
+        </div>
+      );
       i = j;
     } else {
       const streamingTail = !!streamingTailId && m.id === streamingTailId;
@@ -111,7 +119,11 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
       // every other row gets a stable `undefined` and its memo bails. Identical
       // output either way — non-ask rows never touch the map.
       const rowHasAsk = blocks.some((b) => b.type === 'tool_use' && (b as any).name === 'mcp__hermit__ask');
-      out.push(<MessageRow key={m.id} role={m.role} content={blocks} ts={m.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />);
+      out.push(
+        <div key={m.id} data-msg-id={m.id}>
+          <MessageRow role={m.role} content={blocks} ts={m.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
+        </div>
+      );
       i += 1;
     }
   }

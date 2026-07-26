@@ -280,3 +280,18 @@
   -webkit-mask: url(/logo-crab-mono.png) center / contain no-repeat;
   mask: url(/logo-crab-mono.png) center / contain no-repeat;
 }
+
+/* Jumping to a search hit scrolls its message into view — this says WHICH one.
+   A box-shadow ring rather than a background: message bubbles set their own
+   backgrounds, and tinting the wrapper would be invisible behind them. */
+@keyframes chat-anchor-flash {
+  0%, 55% { box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-amber-400) 70%, transparent); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
+.chat-anchor-flash {
+  border-radius: 0.75rem;
+  animation: chat-anchor-flash 1.6s ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-anchor-flash { animation-duration: 0.01ms; box-shadow: 0 0 0 3px transparent; }
+}

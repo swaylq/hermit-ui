@@ -9,6 +9,7 @@ import { prisma } from '../db';
 import { QUEUE_LIMIT } from '../../lib/chat-queue';
 import { stripNulDeep } from '../sanitize';
 import { capMessageContent } from '../message-cap';
+import { extractSearchText } from '../chat-text';
 
 const ContentBlock = z.union([
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -337,6 +338,184 @@ export const chatRouter = router({
         select: { id: true, role: true, content: true, createdAt: true },
       });
       return rows.reverse().map((r) => ({ ...r, content: capMessageContent(r.content) }));
+    }),
+
+  // ─── Local cache sync (browser IndexedDB) ─────────────────────────────────
+  // The browser keeps every session's PROSE (text blocks only, ~11 MB for the
+  // whole machine) so search covers all history instead of the loaded window.
+  // Three endpoints back it: a probe that says what changed, a delta fetch, and
+  // a window fetch for jumping to a hit outside the newest-N window.
+
+  // "What changed?" — one row per session that has messages: its watermark
+  // (MAX(updatedAt)) and row count, plus the metadata the search UI shows next
+  // to a hit. The client diffs this against what it has cached.
+  //
+  // The watermark is MAX(updatedAt), NOT ChatSession.lastMessageAt. lastMessageAt
+  // is deliberately NOT bumped for upsert-UPDATES (api/sync/chat-message keeps it
+  // still so a gateway reload doesn't flip every session to unread) — but the
+  // gateway rewrites the assistant row in place as a turn streams, so a
+  // lastMessageAt-based watermark would miss the entire live turn. updatedAt is
+  // @updatedAt, so it moves on insert AND in-place update; it's the same signal
+  // /api/chat/stream already polls.
+  //
+  // `count` catches the one thing a watermark can't: a DELETED row leaves the
+  // watermark untouched. Only undelivered queue rows can be deleted (dequeue /
+  // clearQueue) — history is append-only — but those carry user prose, so a
+  // count mismatch triggers a full resync of that session.
+  //
+  // Cost: the groupBy is an index-only scan on @@index([sessionId, updatedAt]) —
+  // measured 27 ms for 193k messages across 158 sessions, cheap enough to poll.
+  syncProbe: agentProcedure.query(async ({ ctx }) => {
+    const scope = { machineId: ctx.machine.id, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) };
+    const [sessions, groups] = await Promise.all([
+      prisma.chatSession.findMany({
+        where: scope,
+        select: { id: true, agentName: true, title: true, preview: true },
+      }),
+      prisma.chatMessage.groupBy({
+        by: ['sessionId'],
+        where: { session: scope },
+        _max: { updatedAt: true },
+        _count: { _all: true },
+      }),
+    ]);
+    const meta = new Map(sessions.map((s) => [s.id, s]));
+    const out: Array<{
+      sessionId: string;
+      agentName: string;
+      title: string | null;
+      preview: string | null;
+      watermark: number;
+      count: number;
+    }> = [];
+    for (const g of groups) {
+      const m = meta.get(g.sessionId);
+      if (!m) continue; // session vanished between the two queries
+      out.push({
+        sessionId: g.sessionId,
+        agentName: m.agentName,
+        title: m.title,
+        preview: m.preview,
+        watermark: g._max.updatedAt?.getTime() ?? 0,
+        count: g._count._all,
+      });
+    }
+    return out;
+  }),
+
+  // Delta fetch: the session's messages whose updatedAt is past the client's
+  // watermark, as PROSE ONLY (extractSearchText → text blocks). ~1.2% of the
+  // content column's bytes; see server/chat-text.ts.
+  //
+  // The cursor is (updatedAt, id), not updatedAt alone: batch inserts collide at
+  // millisecond resolution, so a bare `updatedAt > since` would re-fetch the tied
+  // rows forever (or, with `>=`, never advance) once more than `limit` rows share
+  // one millisecond. Rows with no prose at all (pure tool_result / thinking turns)
+  // are dropped here rather than stored empty — but they still MOVE the cursor,
+  // so the client's next `since` comes from the batch's last SCANNED row.
+  syncText: agentProcedure
+    .input(
+      z.object({
+        sessionId: z.string(),
+        since: z.number().int().nonnegative().default(0),
+        afterId: z.string().optional(),
+        limit: z.number().int().min(1).max(2000).default(1000),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const sinceDate = new Date(input.since);
+      const rows = await prisma.chatMessage.findMany({
+        where: {
+          sessionId: input.sessionId,
+          session: { machineId: ctx.machine.id, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+          ...(input.since > 0
+            ? {
+                OR: [
+                  { updatedAt: { gt: sinceDate } },
+                  ...(input.afterId ? [{ updatedAt: sinceDate, id: { gt: input.afterId } }] : []),
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+        take: input.limit,
+        select: { id: true, role: true, content: true, createdAt: true, updatedAt: true },
+      });
+      const last = rows[rows.length - 1];
+      // Primitives only — no Date in the payload. The sync engine talks to this
+      // endpoint over plain fetch (it runs outside React, so it has no tRPC
+      // client), and superjson's Date envelope would have to be decoded by hand.
+      // ISO strings are what the cache stores anyway.
+      return {
+        rows: rows
+          .map((r) => ({
+            id: r.id,
+            sessionId: input.sessionId,
+            role: r.role,
+            createdAt: r.createdAt.toISOString(),
+            text: extractSearchText(r.content),
+          }))
+          .filter((r) => r.text.length > 0),
+        // Cursor from the last SCANNED row (pre-filter) so prose-less rows can't
+        // stall the sync, and `done` from the scanned count for the same reason.
+        cursor: last ? { since: last.updatedAt.getTime(), afterId: last.id } : null,
+        done: rows.length < input.limit,
+      };
+    }),
+
+  // The window AROUND a specific message — how a search hit outside the newest-N
+  // window gets opened. listMessages only ever walks back from the newest row, so
+  // without this a hit 20,000 messages deep would need 100 "load earlier" clicks.
+  // Returns the same shape (and the same capMessageContent treatment) as
+  // listMessages so the timeline can render it interchangeably.
+  listMessagesAround: agentProcedure
+    .input(
+      z.object({
+        sessionId: z.string(),
+        messageId: z.string(),
+        before: z.number().int().min(0).max(200).default(40),
+        after: z.number().int().min(0).max(200).default(40),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = {
+        sessionId: input.sessionId,
+        session: { machineId: ctx.machine.id, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+      };
+      const anchor = await prisma.chatMessage.findFirst({
+        where: { ...scope, id: input.messageId },
+        select: { id: true, createdAt: true },
+      });
+      if (!anchor) return { rows: [], hasBefore: false, hasAfter: false };
+      // Ordering matches listMessages: (createdAt, id). "Before" walks back from
+      // the anchor in desc order then flips; "after" reads forward. The anchor
+      // itself comes from the `after` side so it's never duplicated.
+      const [before, after] = await Promise.all([
+        prisma.chatMessage.findMany({
+          where: {
+            ...scope,
+            OR: [{ createdAt: { lt: anchor.createdAt } }, { createdAt: anchor.createdAt, id: { lt: anchor.id } }],
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: input.before,
+          select: { id: true, role: true, content: true, createdAt: true },
+        }),
+        prisma.chatMessage.findMany({
+          where: {
+            ...scope,
+            OR: [{ createdAt: { gt: anchor.createdAt } }, { createdAt: anchor.createdAt, id: { gte: anchor.id } }],
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          take: input.after + 1, // +1 for the anchor row itself
+          select: { id: true, role: true, content: true, createdAt: true },
+        }),
+      ]);
+      const rows = [...before.reverse(), ...after].map((r) => ({ ...r, content: capMessageContent(r.content) }));
+      return {
+        rows,
+        hasBefore: before.length === input.before,
+        hasAfter: after.length === input.after + 1,
+      };
     }),
 
   // The pending dispatch queue for a session: user messages the gateway hasn't

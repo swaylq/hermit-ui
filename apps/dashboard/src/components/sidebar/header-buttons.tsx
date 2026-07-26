@@ -8,9 +8,32 @@
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
-import { Settings, Bell } from 'lucide-react';
+import { Settings, Bell, Search } from 'lucide-react';
 import { SETTINGS_HREFS, SETTINGS_ENTRY_HREF } from '@/lib/settings-nav';
 import { useNotifCounts } from './notifications-nav';
+import { openGlobalSearch } from '@/lib/chat-cache/search-bus';
+
+// Magnifier → the global message search overlay (every session's prose, served
+// from the local cache). A visible button rather than ⌘K alone: the keyboard
+// shortcuts only bind in the installed PWA (see lib/shortcuts.ts), and this has
+// to be reachable in a plain browser tab too.
+export function SearchButton({ collapsed }: { collapsed: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={openGlobalSearch}
+      title="Search messages"
+      aria-label="Search messages"
+      className={cn(
+        'inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer shrink-0',
+        'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground',
+        collapsed && 'lg:hidden',
+      )}
+    >
+      <Search className="h-4 w-4" />
+    </button>
+  );
+}
 
 // The hermit-crab button in the sidebar header → the dedicated 义脑 / Brain panel
 // (/brain). The orchestrator lives there, kept out of the worker agent lists. The
