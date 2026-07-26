@@ -49,6 +49,7 @@ model Machine {
   shareLinks          AgentShareLink[]
   hostStat            HostStat?
   knowledgeBases      KnowledgeBase[]
+  pushDevices         PushDevice[]
 }
 
 // Latest host-resource snapshot for a machine — RAM / swap / load / cpu, pushed by
@@ -701,4 +702,30 @@ model AgentSkillInstall {
   installedAt   DateTime @default(now())
 
   @@unique([machineId, agentName, skillName])
+}
+
+// An APNs-registered iOS device subscribed to ONE machine's notifications. The
+// native shell (apps/ios) never sees a machine key: it hands the device token to
+// the web layer, which registers it once per keyring entry through the normal
+// authenticated tRPC client — so a phone holding three machine keys gets three
+// rows and receives pushes from all three. See docs/ios-shell-design.md.
+model PushDevice {
+  id         String   @id @default(cuid())
+  token      String // APNs device token, lowercase hex
+  machineId  String
+  machine    Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  platform   String   @default("ios")
+  // Which APNs host this token is valid against — decided by the installed build's
+  // `aps-environment` entitlement, which the app reads from its embedded provisioning
+  // profile and reports at registration. An Xcode-installed build is "sandbox";
+  // TestFlight / App Store is "production". Sending to the wrong host fails with
+  // BadDeviceToken, so this is NOT guessable server-side.
+  apnsEnv    String   @default("sandbox")
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @updatedAt
+
+  // Re-registering the same device for the same machine is an upsert, not a new
+  // row — the app re-registers on every launch (tokens rotate on reinstall).
+  @@unique([token, machineId])
+  @@index([machineId])
 }

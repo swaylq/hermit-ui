@@ -15,6 +15,7 @@ import { secretsRouter } from './secrets';
 import { shareRouter } from './share';
 import { notificationsRouter } from './notifications';
 import { hostsRouter } from './hosts';
+import { pushRouter } from './push';
 
 export const appRouter = router({
   machines: machinesRouter,
@@ -33,6 +34,7 @@ export const appRouter = router({
   share: shareRouter,
   notifications: notificationsRouter,
   hosts: hostsRouter,
+  push: pushRouter,
 });
 
 export type AppRouter = typeof appRouter;

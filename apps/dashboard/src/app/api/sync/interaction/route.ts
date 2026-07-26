@@ -16,6 +16,8 @@ import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { resolveMachine } from '../route';
 import { stripNulDeep } from '@/server/sanitize';
+import { enqueuePush } from '@/server/push';
+import { blockedEvent } from '@/server/push/events';
 
 const CreateBody = z.object({
   sessionId: z.string().optional(),
@@ -73,6 +75,19 @@ export async function POST(req: NextRequest) {
     },
   });
   await prisma.chatSession.update({ where: { id: session.id }, data: { lastMessageAt: new Date() } });
+
+  // The agent is now stopped dead waiting on a human. This is the highest-value
+  // push there is, and unlike the others it bypasses quiet hours. Fire-and-forget:
+  // the blocked hook is already long-polling us and must not wait on APNs.
+  enqueuePush(
+    blockedEvent({
+      machineId: machine.id,
+      sessionId: session.id,
+      agentName: session.agentName,
+      kind: body.kind,
+      payload,
+    }),
+  );
 
   return NextResponse.json({ id: interaction.id });
 }

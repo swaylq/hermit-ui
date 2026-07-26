@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { hostHealth } from '@/lib/host-health';
 import { resolveMachine } from '../route';
+import { enqueuePush } from '@/server/push';
+import { hostEvent } from '@/server/push/events';
 
 const Stat = z.object({
   ramTotalMb: z.number().int().nullable().optional(),
@@ -40,7 +42,8 @@ export async function POST(req: NextRequest) {
   const newHealth = hostHealth(body.stat);
   const prevHealth = prev ? hostHealth(prev) : 'green';
   let redAlertAt = prev?.redAlertAt ?? null;
-  if (newHealth === 'red' && prevHealth !== 'red') redAlertAt = new Date();
+  const crossedIntoRed = newHealth === 'red' && prevHealth !== 'red';
+  if (crossedIntoRed) redAlertAt = new Date();
   else if (newHealth !== 'red') redAlertAt = null;
 
   const data = { ...body.stat, sampledAt: new Date(), redAlertAt };
@@ -49,5 +52,18 @@ export async function POST(req: NextRequest) {
     create: { machineId: machine.id, ...data },
     update: data,
   });
+
+  // Only on the CROSSING, matching redAlertAt's own semantics — this tick runs
+  // every ~30s, and a machine can sit red for hours.
+  if (crossedIntoRed) {
+    enqueuePush(
+      hostEvent({
+        machineId: machine.id,
+        machineName: machine.alias?.trim() || machine.name,
+        ramFreeMb: body.stat.ramFreeMb,
+        loadAvg1: body.stat.loadAvg1,
+      }),
+    );
+  }
   return NextResponse.json({ ok: true });
 }

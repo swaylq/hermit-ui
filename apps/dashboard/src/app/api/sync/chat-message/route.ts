@@ -8,6 +8,8 @@ import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { resolveMachine } from '../route';
 import { stripNulDeep } from '@/server/sanitize';
+import { enqueuePush } from '@/server/push';
+import { chatEvent } from '@/server/push/events';
 
 const Item = z.object({
   sessionId: z.string(),
@@ -55,6 +57,10 @@ export async function POST(req: NextRequest) {
   // Sessions that received a genuinely NEW message this batch → the only ones
   // whose lastMessageAt should advance.
   const freshSessions = new Set<string>();
+  // Last NEW assistant message per session, for the push notification. Re-pushed
+  // rows are excluded by the same isNew test as freshSessions, so a gateway
+  // restart re-tailing a transcript can't notify about hours-old replies.
+  const pushable = new Map<string, { agentName: string; content: unknown }>();
 
   // Cache session lookups within this batch: a streaming turn POSTs many items
   // for the SAME session, and re-reading the row per item is pure waste on the
@@ -113,6 +119,12 @@ export async function POST(req: NextRequest) {
     // we didn't find pre-existing. Re-pushed (already-existing) rows are updates.
     const isNew = !m.externalId || !existed.has(`${m.sessionId}|${m.externalId}`);
     if (isNew) freshSessions.add(m.sessionId);
+    // Overwrite, don't accumulate: a turn's LAST assistant message is the one
+    // worth putting on the lock screen (earlier ones are usually preamble before
+    // tool calls). chatEvent() drops it later if it carries no text at all.
+    if (isNew && m.role === 'assistant') {
+      pushable.set(m.sessionId, { agentName: session.agentName, content });
+    }
 
     if (m.externalId) {
       await prisma.chatMessage.upsert({
@@ -138,5 +150,14 @@ export async function POST(req: NextRequest) {
       data: { lastMessageAt: new Date() },
     });
   }
+
+  // Notify AFTER the writes land. enqueuePush debounces chat events ~20s per
+  // session, so a long streaming turn — which arrives as many of these batches —
+  // still results in exactly one notification carrying its final text.
+  for (const [sessionId, { agentName, content }] of pushable) {
+    const event = chatEvent({ machineId: machine.id, sessionId, agentName, content });
+    if (event) enqueuePush(event);
+  }
+
   return NextResponse.json({ ok: true, inserted });
 }
