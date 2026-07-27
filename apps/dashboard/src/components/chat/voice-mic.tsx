@@ -40,40 +40,18 @@ import {
   type VoiceRecorder,
 } from '@/lib/voice-capture';
 import { VoiceWave, type WavePhase } from '@/components/chat/voice-wave';
+import { FAB, HOLD_MS, useFabDock } from '@/components/chat/fab-dock';
 
 // 'arming' = waiting on the mic (device opening, or the user answering the
 // permission alert). Deliberately NOT expanded: the capsule means "we are
 // recording you", and showing it before a track exists is the bug this fixes.
 type Phase = 'idle' | 'arming' | 'recording' | 'transcribing' | 'error';
 
-const FAB = 56; // idle circle diameter (px)
 const EXP_MAX = 212; // expanded capsule width ceiling
-const DRAG_PX = 8; // early move beyond this = drag, not record
-const HOLD_MS = 180; // hold this long with no early move = locked recording
 const MIN_MS = 400; // shorter press = accidental tap, don't send
 const MAX_MS = 60_000; // recording ceiling
-const POS_KEY = 'hermit:voice-mic-pos';
 const SPRING = 'cubic-bezier(0.34, 1.35, 0.5, 1)';
 
-function clampPos(x: number, y: number) {
-  const maxX = Math.max(8, window.innerWidth - FAB - 8);
-  const maxY = Math.max(8, window.innerHeight - FAB - 8);
-  return { x: Math.min(Math.max(8, x), maxX), y: Math.min(Math.max(8, y), maxY) };
-}
-function defaultPos() {
-  return clampPos(window.innerWidth - FAB - 20, window.innerHeight - FAB - 120);
-}
-function loadPos(): { x: number; y: number } | null {
-  try {
-    const raw = localStorage.getItem(POS_KEY);
-    if (!raw) return null;
-    const p = JSON.parse(raw) as { x?: unknown; y?: unknown };
-    if (typeof p.x === 'number' && typeof p.y === 'number') return clampPos(p.x, p.y);
-  } catch {
-    /* private mode / bad json */
-  }
-  return null;
-}
 
 // memo: VoiceMic lives inside SessionPane, which re-renders on every SSE
 // streaming tick / poll. Its props (sessionId, hidden boolean, stable
@@ -90,11 +68,13 @@ export const VoiceMic = memo(function VoiceMic({
   hidden: boolean;
   onTranscript: (text: string) => void;
 }) {
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  // Position + dragging belong to the dock now — the mic is one button in a group
+  // that moves together. What stays here is what a PRESS means, which is the part
+  // with all the teeth (record vs drag vs ask-for-permission).
+  const dock = useFabDock();
   const [phase, setPhase] = useState<Phase>('idle');
   const [level, setLevel] = useState(0);
   const [hint, setHint] = useState<string | null>(null);
-  const [dragging, setDragging] = useState(false);
   const [startedAt, setStartedAt] = useState(0);
 
   const recorderRef = useRef<VoiceRecorder | null>(null);
@@ -114,12 +94,6 @@ export const VoiceMic = memo(function VoiceMic({
     pointerDown: false, // finger/button still down — false means nobody is holding
   });
 
-  useEffect(() => {
-    setPos(loadPos() ?? defaultPos());
-    const onResize = () => setPos((p) => (p ? clampPos(p.x, p.y) : p));
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
 
   // Release the warm mic on unmount (leaving the chat) so it doesn't linger.
   useEffect(() => () => releaseWarmMic(), []);
@@ -302,8 +276,7 @@ export const VoiceMic = memo(function VoiceMic({
       gg.pointerDown = true;
       gg.px = e.clientX;
       gg.py = e.clientY;
-      gg.fx = pos?.x ?? 0;
-      gg.fy = pos?.y ?? 0;
+      dock.onDown(e); // the dock decides whether this becomes a group drag
       setHint(null);
       // Open the mic only once the hold is confirmed, so a DRAG never opens it (no
       // stray mic indicator). Exception: on touch we open on pointerdown — only a
@@ -326,27 +299,30 @@ export const VoiceMic = memo(function VoiceMic({
         if (!touch) void beginRecording();
       }, HOLD_MS);
     },
-    [phase, pos, beginRecording],
+    [phase, beginRecording, dock],
   );
 
-  const onPointerMove = useCallback((e: ReactPointerEvent<HTMLButtonElement>) => {
-    const gg = g.current;
-    if (gg.mode === 'idle') return;
-    const dx = e.clientX - gg.px;
-    const dy = e.clientY - gg.py;
-    if (gg.mode === 'deciding' && Math.hypot(dx, dy) > DRAG_PX && Date.now() - gg.downAt < HOLD_MS) {
-      clearTimeout(gg.holdTimer);
-      gg.mode = 'dragging';
-      gg.needsAuth = false; // moving the button is not a request to be recorded
-      recorderRef.current?.cancel();
-      recorderRef.current = null;
-      setPhase('idle');
-      setHint(null);
-      setLevel(0);
-      setDragging(true);
-    }
-    if (gg.mode === 'dragging') setPos(clampPos(gg.fx + dx, gg.fy + dy));
-  }, []);
+  const onPointerMove = useCallback(
+    (e: ReactPointerEvent<HTMLButtonElement>) => {
+      const gg = g.current;
+      if (gg.mode === 'idle') return;
+      // The dock owns the drag threshold and moves the whole group; it tells us the
+      // moment this press stopped being a press. Everything below is the mic
+      // abandoning the recording it was about to make.
+      const isDrag = dock.onMove(e);
+      if (isDrag && gg.mode !== 'dragging') {
+        clearTimeout(gg.holdTimer);
+        gg.mode = 'dragging';
+        gg.needsAuth = false; // moving the button is not a request to be recorded
+        recorderRef.current?.cancel();
+        recorderRef.current = null;
+        setPhase('idle');
+        setHint(null);
+        setLevel(0);
+      }
+    },
+    [dock],
+  );
 
   const endGesture = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>) => {
@@ -358,19 +334,15 @@ export const VoiceMic = memo(function VoiceMic({
       gg.mode = 'idle';
       gg.pointerDown = false;
       gg.needsAuth = false;
-      if (mode === 'dragging') {
-        const np = clampPos(gg.fx + (e.clientX - gg.px), gg.fy + (e.clientY - gg.py));
-        setPos(np);
-        setDragging(false);
-        try { localStorage.setItem(POS_KEY, JSON.stringify(np)); } catch { /* private mode */ }
-        return;
-      }
+      // The dock persists the new position and reports whether this was a drag; a
+      // drag is never also a recording.
+      if (dock.onUp(e) || mode === 'dragging') return;
       // Unauthorized press → this release IS the permission request (its own
       // gesture, finger already up, so the alert can't strand the UI).
       if (needsAuth) { authorizeMic(); return; }
       if (mode === 'deciding' || mode === 'recording') void stopAndTranscribe();
     },
-    [stopAndTranscribe, authorizeMic],
+    [stopAndTranscribe, authorizeMic, dock],
   );
 
   // Safety net for a press that never gets its pointerup: the tab going away
@@ -396,17 +368,21 @@ export const VoiceMic = memo(function VoiceMic({
     return () => document.removeEventListener('visibilitychange', bail);
   }, []);
 
-  if (hidden || !pos) return null;
+  if (hidden) return null;
 
   // 'arming' stays a circle on purpose — the capsule is the "you are being
   // recorded" signal and must not appear before a mic track exists.
   const arming = phase === 'arming';
   const active = phase === 'recording' || phase === 'transcribing' || phase === 'error';
+  // The recording capsule grows sideways. The dock is anchored by its LEFT edge, so
+  // a capsule near the right edge has to grow leftwards instead — done with a
+  // negative margin rather than by moving the dock, which would drag the sibling
+  // button along with it.
   const vw = window.innerWidth;
   const expW = Math.min(EXP_MAX, vw - 24);
-  const expandsLeft = pos.x + expW + 8 > vw;
-  const left = active && expandsLeft ? Math.max(8, pos.x + FAB - expW) : pos.x;
+  const expandsLeft = dock.x + expW + 8 > vw;
   const width = active ? expW : FAB;
+  const shift = active && expandsLeft ? Math.min(dock.x - 8, expW - FAB) : 0;
 
   const elapsed = phase === 'recording' && startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
   const mmss = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
@@ -424,8 +400,8 @@ export const VoiceMic = memo(function VoiceMic({
 
   return (
     <div
-      className="fixed z-40 touch-none select-none"
-      style={{ left, top: pos.y, transition: dragging ? 'none' : `left 0.42s ${SPRING}` }}
+      className="relative"
+      style={{ marginLeft: -shift, transition: dock.dragging ? 'none' : `margin-left 0.42s ${SPRING}` }}
     >
       {!active && hint && (
         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap rounded-full bg-black/75 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
@@ -445,7 +421,7 @@ export const VoiceMic = memo(function VoiceMic({
           width,
           height: FAB,
           boxShadow: glow,
-          transition: dragging ? 'none' : `width 0.42s ${SPRING}, box-shadow 0.35s ease`,
+          transition: dock.dragging ? 'none' : `width 0.42s ${SPRING}, box-shadow 0.35s ease`,
         }}
       >
         {active && (
@@ -454,7 +430,7 @@ export const VoiceMic = memo(function VoiceMic({
           </div>
         )}
         <Mic
-          className="pointer-events-none absolute h-6 w-6 text-white/85 transition-all duration-200"
+          className="pointer-events-none absolute h-5 w-5 text-white/85 transition-all duration-200"
           style={{
             opacity: active || arming ? 0 : 1,
             transform: active || arming ? 'scale(0.5)' : 'scale(1)',

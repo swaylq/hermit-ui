@@ -6,7 +6,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   RotateCw, Trash2, Terminal, Pencil, ListCollapse, Search, FoldVertical, Sparkles,
-  MoreHorizontal, ChevronRight, SquarePen, Bot,
+  MoreHorizontal, ChevronRight, SquarePen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -37,6 +37,8 @@ import { TypingIndicator } from '@/components/chat/message-bits';
 import { MessageTimeline } from '@/components/chat/message-timeline';
 import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
 import { VoiceMic } from '@/components/chat/voice-mic';
+import { FabDock } from '@/components/chat/fab-dock';
+import { TakeoverFab } from '@/components/chat/takeover-fab';
 
 // isTouchPrimary (phone/tablet vs desktop) lives in @/lib/save-file — the
 // soft-keyboard return key inserts a newline there (a dedicated send button
@@ -1139,6 +1141,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     onSuccess: () => { utils.chat.getSession.invalidate({ sessionId }); utils.chat.listMessages.invalidate({ sessionId }); },
   });
 
+  // What's in the floating dock. The takeover button stays visible while a takeover
+  // is LIVE even though canTakeover has gone false — it's the way to take the
+  // conversation back, so it must not vanish the instant it starts working.
+  const showTakeoverFab = canTakeover || takenOver;
+  const showMicFab = !micHidden && !session?.closedAt;
+  const fabCount = (showTakeoverFab ? 1 : 0) + (showMicFab ? 1 : 0);
+
   const secondaryActions = (
     <>
       <button
@@ -1180,20 +1189,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       >
         <SquarePen className="h-4 w-4" />
       </button>
-      {/* Hand this conversation to the Brain. Hidden while one is already live —
-          the banner below owns that state, and its Release is the way out. */}
-      {canTakeover && (
-        <button
-          type="button"
-          onClick={() => { if (!requestTakeover.isPending) requestTakeover.mutate({ sessionId }); }}
-          disabled={!session || !!session?.closedAt || requestTakeover.isPending}
-          aria-label="hand this conversation to Brain"
-          title="义脑接管 — 让义脑读完这段对话，推断你想达成什么，然后替你继续和这个 agent 对话。你随时打字就收回。"
-          className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground disabled:cursor-wait disabled:opacity-50"
-        >
-          <Bot className="h-4 w-4" />
-        </button>
-      )}
       <ConfirmIconButton
         icon={FoldVertical}
         title="compact — summarize the conversation so the agent's context window shrinks (runs /compact, keeps continuity). THIS is what reduces a large context; restart only reloads the whole history via --resume."
@@ -1475,7 +1470,24 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         </div>
       )}
 
-        <VoiceMic sessionId={sessionId} hidden={micHidden || !!session?.closedAt} onTranscript={insertTranscript} />
+        {/* Floating button group — mic + Brain takeover, stacked, dragged together.
+            Rendered only when at least one of them is showing, so an empty dock
+            never sits in the corner catching touches. */}
+        {fabCount > 0 && (
+          <FabDock count={fabCount}>
+            {showTakeoverFab && (
+              <TakeoverFab
+                active={takenOver}
+                busy={requestTakeover.isPending || releaseTakeover.isPending}
+                onTakeover={() => requestTakeover.mutate({ sessionId })}
+                onRelease={() => releaseTakeover.mutate({ sessionId, reason: 'human' })}
+              />
+            )}
+            {showMicFab && (
+              <VoiceMic sessionId={sessionId} hidden={false} onTranscript={insertTranscript} />
+            )}
+          </FabDock>
+        )}
         <>
           <LoopBar
             loopState={sessionOne.data?.loopState}
