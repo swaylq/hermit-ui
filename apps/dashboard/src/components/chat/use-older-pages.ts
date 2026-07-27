@@ -73,7 +73,13 @@ export function useOlderPages(
   const [summaryRows, setSummaryRows] = useState<TimelineRow[]>([]);
   const rows = summary ? summaryRows : fullRows;
   const setRows = summary ? setSummaryRows : setFullRows;
-  const [serverSaysMore, setServerSaysMore] = useState<boolean | null>(null);
+  // "Is there more history?" is answered per mode, because the two pagers walk
+  // the same past at different rates — but it must be answered by WHICHEVER path
+  // served the page. Routing the server's answer into a field only full mode
+  // read is what left summary mode pulling forever at the end of a session.
+  const [fullSaysMore, setFullSaysMore] = useState<boolean | null>(null);
+  const [summarySaysMore, setSummarySaysMore] = useState<boolean | null>(null);
+  const setSaysMore = summary ? setSummarySaysMore : setFullSaysMore;
   const [loading, setLoading] = useState(false);
   const [servedFromCache, setServedFromCache] = useState(false);
   const inFlight = useRef(false);
@@ -90,8 +96,6 @@ export function useOlderPages(
       ? edge.createdAt
       : edge.createdAt.toISOString()
     : undefined;
-  // hasMore is per mode: the two pagers walk the same past at different rates.
-  const [summarySaysMore, setSummarySaysMore] = useState<boolean | null>(null);
 
   const loadMore = useCallback(() => {
     if (inFlight.current || !anchorId) return;
@@ -114,12 +118,12 @@ export function useOlderPages(
             const page = summaryPage(cached, { createdAt: anchorAt, id: anchorId }, SUMMARY_PAGE);
             if (page.rows.length > 0) {
               setRows((prev) => [...page.rows, ...prev]);
-              setSummarySaysMore(page.hasMore);
+              setSaysMore(page.hasMore);
               setServedFromCache(true);
               return;
             }
             // Nothing older in the cache: that IS the beginning of the session.
-            setSummarySaysMore(false);
+            setSaysMore(false);
             return;
           }
         }
@@ -147,7 +151,12 @@ export function useOlderPages(
           limit: OLDER_PAGE,
         });
         setServedFromCache(false);
-        setServerSaysMore(res.hasMore);
+        // A page that came back empty is the beginning of the session, whatever
+        // else anyone claims. Trusting only the reported flag is how a button
+        // ends up pulling forever: it stays offered, every scroll at the top
+        // fires another pull, each returns nothing, and the label flickers
+        // between "loading…" and "↑ load earlier" without the list moving.
+        setSaysMore(res.hasMore && res.rows.length > 0);
         if (res.rows.length > 0) {
           setRows((prev) => [...res.rows, ...prev]);
           // Persist so the NEXT walk back through this history needs no network.
@@ -174,7 +183,7 @@ export function useOlderPages(
   const reset = useCallback(() => {
     setFullRows([]);
     setSummaryRows([]);
-    setServerSaysMore(null);
+    setFullSaysMore(null);
     setSummarySaysMore(null);
     setServedFromCache(false);
   }, []);
@@ -182,7 +191,7 @@ export function useOlderPages(
   return {
     rows,
     // Whichever pager is driving answers for itself; until it has, trust the seed.
-    hasMore: (summary ? summarySaysMore : serverSaysMore) ?? mayHaveMore,
+    hasMore: (summary ? summarySaysMore : fullSaysMore) ?? mayHaveMore,
     loading,
     servedFromCache,
     loadMore,
