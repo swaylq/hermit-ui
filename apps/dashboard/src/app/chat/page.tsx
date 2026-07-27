@@ -667,11 +667,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // message the user was looking at and HELD there while the new history lays
   // out — see use-prepend-anchor.ts for why a one-shot height restore isn't
   // enough.
-  const markAutoScroll = useCallback(() => {
-    autoScrollRef.current = true;
-    requestAnimationFrame(() => { autoScrollRef.current = false; });
-  }, []);
-  const prependAnchor = usePrependAnchor(getViewport, markAutoScroll);
+  const prependAnchor = usePrependAnchor(getViewport);
   // Read by the scroll listener and the bottom-pin observer, neither of which
   // should re-subscribe when the anchor object identity changes.
   const prependAnchorRef = useRef(prependAnchor);
@@ -694,6 +690,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // listener reads the latest value without re-subscribing every render.
   const canLoadEarlierRef = useRef(false);
   canLoadEarlierRef.current = older.hasMore && !older.loading;
+  // Pull the next page of history. Cleared immediately so one fling fires one
+  // pull; recomputed from `older.loading` on the next render.
+  const pullEarlier = useCallback(() => {
+    if (!canLoadEarlierRef.current) return;
+    canLoadEarlierRef.current = false;
+    loadEarlier();
+  }, [loadEarlier]);
 
   // Anchored mode: viewing a window around one specific message (a search hit).
   // Frozen — see use-anchored-window.ts.
@@ -806,10 +809,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         return;
       }
 
-      // A real scroll: let the prepend anchor move with the user instead of
-      // pulling them back to where they were when the page was requested.
-      prependAnchorRef.current?.followUser();
-
       // Pin state follows INTENT, not geometry. Unpin only when the user
       // actually moved upward; re-pin whenever they're back at the end.
       //
@@ -823,17 +822,29 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       if (gap < 60) setPinned(true);
       else if (wentUp) setPinned(false);
 
-      // Infinite scroll up: near the top, pull the next page of history. Clear
-      // the debounce flag here (recomputed next render) so one fling fires once;
+      // Infinite scroll up: near the top, pull the next page of history.
       // loadEarlier anchors the scroll so the prepend doesn't yank the viewport.
-      if (st < 200 && canLoadEarlierRef.current && !prependAnchorRef.current?.isHolding()) {
-        canLoadEarlierRef.current = false;
-        loadEarlier();
-      }
+      if (st < 200) pullEarlier();
     };
     el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [getViewport, setPinned, loadEarlier]);
+    // A scroll event is not enough on its own. Once the viewport is clamped at
+    // the top the browser stops firing them, so someone who flings past the top
+    // and keeps pushing sits there with nothing happening — the pull that would
+    // have fetched the next page never gets a chance to run. The raw gesture
+    // still arrives, so use it as the second entry point.
+    const onReach = (e: Event) => {
+      if (el.scrollTop >= 200) return;
+      if (e.type === 'wheel' && (e as WheelEvent).deltaY >= 0) return; // scrolling away, not into, the top
+      pullEarlier();
+    };
+    el.addEventListener('wheel', onReach, { passive: true });
+    el.addEventListener('touchmove', onReach, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      el.removeEventListener('wheel', onReach);
+      el.removeEventListener('touchmove', onReach);
+    };
+  }, [getViewport, setPinned, pullEarlier]);
 
   // Hard initial scroll-to-bottom, fired ONCE when messages first land for this
   // session (keyed remount resets the guard). The RO+pinned chain above follows
