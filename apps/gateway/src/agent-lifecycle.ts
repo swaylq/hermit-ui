@@ -65,12 +65,16 @@ function walkCopy(src: string, dst: string, subs: Record<string, string>) {
 }
 
 // Overlay a marketplace template's files onto a freshly-scaffolded agent —
-// IDENTITY.md / AGENTS.md / .claude/skills/<n>/SKILL.md only (allow-listed),
-// with the same {{PLACEHOLDER}} substitution the base scaffold uses.
+// IDENTITY.md / AGENTS.md / PERSONA.md / USER.md / .claude/skills/<n>/SKILL.md only
+// (allow-listed), with the same {{PLACEHOLDER}} substitution the base scaffold uses.
+//
+// The allow-list is a silent filter: a path that isn't on it is skipped without a
+// word, so ADDING A SEED FILE MEANS ADDING IT HERE TOO. (USER.md — the Brain's read
+// on the human — is the Brain-template v6 addition.)
 function overlayTemplate(dir: string, files: unknown, subs: Record<string, string>) {
   if (!Array.isArray(files)) return;
   const root = path.resolve(dir);
-  const ALLOW = /^(IDENTITY\.md|AGENTS\.md|PERSONA\.md|\.claude\/skills\/[a-z0-9][a-z0-9-]{0,30}\/SKILL\.md)$/;
+  const ALLOW = /^(IDENTITY\.md|AGENTS\.md|PERSONA\.md|USER\.md|\.claude\/skills\/[a-z0-9][a-z0-9-]{0,30}\/SKILL\.md)$/;
   for (const f of files as Array<{ path?: unknown; content?: unknown; writeOnce?: unknown }>) {
     if (!f || typeof f.path !== 'string' || typeof f.content !== 'string') continue;
     if (f.path.includes('..') || !ALLOW.test(f.path)) continue;

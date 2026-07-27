@@ -332,11 +332,11 @@ const BRAIN_TOOLS = [
   {
     name: 'dispatch_answer',
     description:
-      "Answer the choice a dispatched agent is BLOCKED on — the `blocked` a dispatch_result/dispatch_list surfaced (a permission the agent wants, or an AskUserQuestion). Resolves it so the target continues. For a PERMISSION block pass approve:true|false (+ optional reason). For a QUESTION block pass answer (an option label, free text, or an array of labels for multi-select). SAFETY: only answer what you can decide SAFELY from the task's own context; for anything destructive, irreversible, spending money, or that you're unsure about, do NOT answer — leave it and tell the human instead.",
+      "Answer the choice an agent is BLOCKED on — the `blocked` a dispatch_result / dispatch_list / [takeover update] surfaced (a permission the agent wants, or an AskUserQuestion). Works for a dispatch AND for a conversation you're driving via takeover. Resolves it so the target continues. For a PERMISSION block pass approve:true|false (+ optional reason). For a QUESTION block pass answer (an option label, free text, or an array of labels for multi-select). SAFETY: only answer what you can decide SAFELY from the task's own context; for anything destructive, irreversible, spending money, or that you're unsure about, do NOT answer — leave it and tell the human instead.",
     inputSchema: {
       type: 'object',
       properties: {
-        sessionId: { type: 'string', description: 'The blocked dispatch session — its oldest pending choice is the one answered.' },
+        sessionId: { type: 'string', description: 'The blocked session (dispatch or takeover) — its oldest pending choice is the one answered.' },
         approve: { type: 'boolean', description: 'PERMISSION block only: true = allow, false = deny.' },
         answer: { description: 'QUESTION block only: the answer — an option label, free text, or an array of labels for multi-select.' },
         reason: { type: 'string', description: 'Optional note — the permission reason / your rationale.' },
@@ -371,6 +371,68 @@ const BRAIN_TOOLS = [
         intro: { type: 'string', description: 'The new intro text (1-3 sentences).' },
       },
       required: ['baseId', 'intro'],
+    },
+  },
+  // ── Takeover: driving a conversation the human handed you ──────────────────
+  // Distinct from dispatch. A dispatch is work YOU started on a worker; a takeover
+  // is a conversation the HUMAN was already having and asked you to carry on. Their
+  // earlier messages are the brief — read them before you say anything.
+  {
+    name: 'takeover_list',
+    description:
+      "The conversations the human has handed you to drive. Each is { sessionId, agentName, title, goal, turns, turnCap, working }. Check it when you get a [takeover update] you don't have context for, and to see how many messages you have left before a takeover is handed back automatically.",
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'takeover_read',
+    description:
+      "Read a conversation you're driving. Returns its messages with `authoredBy` on each: null = the HUMAN typed it (their intent — this is the brief), 'brain' = you said it earlier in this takeover. Call this FIRST after being handed a conversation, to work out what it's trying to achieve, and again after each [takeover update] to see what the agent replied.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'A sessionId from takeover_list or the [takeover] poke.' },
+        limit: { type: 'number', description: 'How many recent messages (default 40, max 100).' },
+      },
+      required: ['sessionId'],
+    },
+  },
+  {
+    name: 'takeover_say',
+    description:
+      "Say something to the agent in a conversation you're driving — as yourself, on the human's behalf. On your FIRST message you MUST pass `goal`: the thing you read the conversation as trying to achieve. It is shown to the human immediately, so a wrong reading gets corrected in seconds instead of after a dozen messages. Each call spends one of your turns; when they run out the takeover is handed back automatically, so don't chat — advance the work.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'A sessionId from takeover_list or the [takeover] poke.' },
+        text: { type: 'string', description: 'What to say to the agent.' },
+        goal: { type: 'string', description: 'REQUIRED on your first message: what this conversation is trying to achieve, in one line.' },
+      },
+      required: ['sessionId', 'text'],
+    },
+  },
+  {
+    name: 'takeover_release',
+    description:
+      "Hand a conversation back to the human, with a short summary of what happened while you drove it. Call it the moment the goal is met — and also the moment you're stuck, unsure, or facing anything destructive / irreversible / costly. Releasing early is always correct; there is no credit for using all your turns.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'The conversation to hand back.' },
+        summary: { type: 'string', description: 'One or two lines: what you did, where it stands, anything the human should pick up.' },
+      },
+      required: ['sessionId'],
+    },
+  },
+  {
+    name: 'user_messages',
+    description:
+      "Read what the HUMAN has actually typed across this machine's conversations, oldest first — the raw material for USER.md. Only their own messages: your takeover messages and the gateway's [dispatch update] pokes are excluded, so you can never mistake your own voice for theirs. Pass `since` (the synced-through watermark at the bottom of USER.md) to get only what's new; omit it for a first pass.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        since: { type: 'string', description: "ISO timestamp — the watermark from USER.md. Omit on a first pass." },
+        limit: { type: 'number', description: 'How many messages (default 200, max 400).' },
+      },
     },
   },
 ];
@@ -635,6 +697,76 @@ async function dispatchBrainTool(name, args) {
     if (typeof intro !== 'string') throw new Error('intro required');
     await trpcMutate('knowledge.setIntro', { id: baseId, intro });
     return JSON.stringify({ ok: true, baseId });
+  }
+
+  // ── Takeover ───────────────────────────────────────────────────────────────
+  if (name === 'takeover_list') {
+    const rows = (await trpcQuery('chat.listTakeovers', null)) || [];
+    return JSON.stringify({
+      takeovers: (Array.isArray(rows) ? rows : []).map((r) => ({
+        sessionId: r.id,
+        agentName: r.agentName,
+        title: r.title,
+        goal: r.takeoverGoal,
+        turns: r.takeoverTurns,
+        turnCap: r.turnCap,
+        working: r.state === 'working',
+      })),
+    });
+  }
+  if (name === 'takeover_read') {
+    const sessionId = args?.sessionId;
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    const limit = Math.min(Math.max(1, Number(args?.limit) || 40), 100);
+    const msgs = (await trpcQuery('chat.listMessages', { sessionId, limit })) || [];
+    // authoredBy is the whole point of this readout: without it the Brain cannot
+    // tell the human's intent from its own earlier messages in the same thread.
+    return JSON.stringify({
+      sessionId,
+      messages: (Array.isArray(msgs) ? msgs : []).map((m) => ({
+        role: m.role,
+        authoredBy: m.authoredBy ?? null,
+        who: m.role === 'user' ? (m.authoredBy === 'brain' ? 'you' : m.authoredBy === 'system' ? 'system' : 'human') : m.role,
+        text: textOf(m.content).slice(0, 4000),
+        at: m.createdAt,
+      })),
+    });
+  }
+  if (name === 'takeover_say') {
+    const sessionId = args?.sessionId;
+    const text = args?.text;
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    if (typeof text !== 'string' || !text.trim()) throw new Error('text required');
+    const goal = typeof args?.goal === 'string' && args.goal.trim() ? args.goal.trim() : undefined;
+    // The cap lives server-side; an over-cap send is REFUSED there and the takeover
+    // is handed back, so a rejection here is the system working, not a fault to retry.
+    await trpcMutate('chat.send', { sessionId, text: text.trim(), authoredBy: 'brain', ...(goal ? { goal } : {}) });
+    return JSON.stringify({ ok: true, sessionId });
+  }
+  if (name === 'takeover_release') {
+    const sessionId = args?.sessionId;
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    const summary = typeof args?.summary === 'string' ? args.summary.slice(0, 500) : undefined;
+    const r = await trpcMutate('chat.releaseTakeover', {
+      sessionId,
+      reason: 'done',
+      ...(summary ? { summary } : {}),
+    });
+    return JSON.stringify(r?.[0]?.result?.data?.json ?? { ok: true, sessionId });
+  }
+  if (name === 'user_messages') {
+    const since = typeof args?.since === 'string' && args.since.trim() ? args.since.trim() : null;
+    const limit = Math.min(Math.max(1, Number(args?.limit) || 200), 400);
+    const rows = (await trpcQuery('chat.humanMessages', { since, limit })) || [];
+    const list = Array.isArray(rows) ? rows : [];
+    return JSON.stringify({
+      count: list.length,
+      // The watermark to write back into USER.md — the last row's timestamp, so the
+      // next pass resumes exactly here. Null when nothing new came back, which is
+      // the signal to leave the existing watermark alone.
+      syncedThrough: list.length ? list[list.length - 1].at : null,
+      messages: list,
+    });
   }
   throw new Error(`unknown brain tool: ${name}`);
 }

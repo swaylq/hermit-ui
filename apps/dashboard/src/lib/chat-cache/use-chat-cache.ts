@@ -161,7 +161,15 @@ export function useCachedTimeline(sessionId: string | null): CachedFullRow[] | n
  */
 export function useTimelineWriteThrough(
   sessionId: string | null,
-  rows: Array<{ id: string; role: string; content: unknown; createdAt: Date | string }> | undefined
+  rows:
+    | Array<{
+        id: string;
+        role: string;
+        content: unknown;
+        createdAt: Date | string;
+        authoredBy?: string | null;
+      }>
+    | undefined
 ): void {
   const sig = rows ? `${rows.length}:${rows[rows.length - 1]?.id ?? ''}` : '';
   useEffect(() => {
@@ -175,6 +183,7 @@ export function useTimelineWriteThrough(
         role: r.role,
         content: r.content,
         createdAt: typeof r.createdAt === 'string' ? r.createdAt : r.createdAt.toISOString(),
+        authoredBy: r.authoredBy ?? null,
       }));
       // Swallow failures explicitly. This is a cache: a quota overrun, an
       // aborted transaction, or a value the structured-clone algorithm rejects

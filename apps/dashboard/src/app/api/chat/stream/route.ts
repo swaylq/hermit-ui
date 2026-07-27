@@ -95,7 +95,10 @@ export async function GET(req: NextRequest) {
               take: limit,
               // Same narrow shape as chat.listMessages so the client's
               // merge-by-id sees identical rows over both transports.
-              select: { id: true, role: true, content: true, createdAt: true },
+              // Same shape as chat.listMessages so the client's merge-by-id aligns —
+              // including authoredBy, or a Brain turn arriving live would render as
+              // the human's and only correct itself on the next full fetch.
+              select: { id: true, role: true, content: true, createdAt: true, authoredBy: true },
             });
             rows.reverse(); // newest window, ascending for the timeline
             sendMessages(rows.map((r) => ({ ...r, content: capMessageContent(r.content) })));

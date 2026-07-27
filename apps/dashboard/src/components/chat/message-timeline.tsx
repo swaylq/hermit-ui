@@ -30,7 +30,7 @@ function HarnessTerminatorRow({ ts }: { ts: Date | string }) {
   );
 }
 
-export const MessageTimeline = memo(function MessageTimeline({ messages, streamingTailId, dotClass }: { messages: Array<{ id: string; role: string; content: any; createdAt: Date | string }>; streamingTailId?: string | null; dotClass?: string }) {
+export const MessageTimeline = memo(function MessageTimeline({ messages, streamingTailId, dotClass }: { messages: Array<{ id: string; role: string; content: any; createdAt: Date | string; authoredBy?: string | null }>; streamingTailId?: string | null; dotClass?: string }) {
   // Insert date dividers when day rolls over. Also coalesce consecutive
   // tool-result-only messages into a single row so a parallel-fanout batch
   // (e.g. 6 Read calls → 6 result rows) collapses to one expandable chip.
@@ -121,7 +121,7 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
       const rowHasAsk = blocks.some((b) => b.type === 'tool_use' && (b as any).name === 'mcp__hermit__ask');
       out.push(
         <div key={m.id} data-msg-id={m.id}>
-          <MessageRow role={m.role} content={blocks} ts={m.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
+          <MessageRow role={m.role} authoredBy={m.authoredBy} content={blocks} ts={m.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
         </div>
       );
       i += 1;
@@ -130,7 +130,7 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
   return <div className="space-y-3">{out}</div>;
 });
 
-const MessageRow = memo(function MessageRow({ role, content, ts, streamingTail = false, typing = false, streamingDot, askCardByQuestion }: { role: string; content: Block[]; ts: Date | string; streamingTail?: boolean; typing?: boolean; streamingDot?: string; askCardByQuestion?: Map<string, any> }) {
+const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, streamingTail = false, typing = false, streamingDot, askCardByQuestion }: { role: string; authoredBy?: string | null; content: Block[]; ts: Date | string; streamingTail?: boolean; typing?: boolean; streamingDot?: string; askCardByQuestion?: Map<string, any> }) {
   // Tool-result-only rows belong with the assistant's preceding tool calls,
   // so we render them as condensed inline chips with no bubble.
   const allToolResults = content.length > 0 && content.every((b) => b.type === 'tool_result');
@@ -150,8 +150,17 @@ const MessageRow = memo(function MessageRow({ role, content, ts, streamingTail =
     );
   }
 
-  const isHumanUser = role === 'user';
-  const isSystem = role === 'system';
+  // A role='user' row is not automatically the human. During a Brain takeover the
+  // Brain speaks in this slot, and the gateway's watchers drop `[dispatch update]`
+  // pokes here too. Rendering all three identically would make a driven
+  // conversation unreadable after the fact — you could no longer tell which
+  // instructions were actually yours.
+  const byBrain = role === 'user' && authoredBy === 'brain';
+  const byMachine = role === 'user' && authoredBy === 'system';
+  const isHumanUser = role === 'user' && !byBrain && !byMachine;
+  // Machine pokes read as notices, not conversation — same treatment as the
+  // gateway's system banners.
+  const isSystem = role === 'system' || byMachine;
 
   // Group consecutive same-tool tool_use calls so a noisy claude turn doesn't
   // generate 12 individual cards.
@@ -179,7 +188,7 @@ const MessageRow = memo(function MessageRow({ role, content, ts, streamingTail =
   // placeholder text). They belong visually with the surrounding tool_result
   // chips, not as standalone cards with empty bodies. When this row is the
   // streaming tail, append a small dots chip at the end of the chip cluster.
-  if (!isHumanUser && !isSystem && !hasVisibleText && grouped.every((g) => g.kind === 'tool' || g.kind === 'thinking')) {
+  if (!isHumanUser && !byBrain && !isSystem && !hasVisibleText && grouped.every((g) => g.kind === 'tool' || g.kind === 'thinking')) {
     return (
       <div className="flex justify-start">
         <div className="min-w-0 max-w-[85%] space-y-1.5">
@@ -239,18 +248,29 @@ const MessageRow = memo(function MessageRow({ role, content, ts, streamingTail =
     );
   }
 
+  // Brain-spoken turns sit on the SENDER side — they're instructions to the agent,
+  // same as yours — but never wear your bubble. Outlined instead of solid, with a
+  // standing label: at a glance the right-hand column reads as "things said to this
+  // agent", and within it you can still see which ones you said.
+  const onSenderSide = isHumanUser || byBrain;
   return (
-    <div className={`group/msg flex ${isHumanUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`group/msg flex ${onSenderSide ? 'justify-end' : 'justify-start'}`}>
       <div
         className={cn(
           'min-w-0 max-w-[85%] space-y-2 text-sm',
-          isHumanUser
-            ? 'rounded-md px-3 py-2 bg-foreground text-background'
-            : 'text-foreground/90',
+          isHumanUser && 'rounded-md px-3 py-2 bg-foreground text-background',
+          byBrain && 'rounded-md px-3 py-2 border border-dashed border-foreground/30 bg-muted/40 text-foreground/90',
+          !onSenderSide && 'text-foreground/90',
         )}
       >
+        {byBrain && (
+          <div className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            <span aria-hidden="true">🦀</span>
+            <span>Brain</span>
+          </div>
+        )}
         {grouped.map((g, i) => (
-          <GroupView key={i} group={g} dark={false} typing={typing && !isHumanUser} />
+          <GroupView key={i} group={g} dark={false} typing={typing && !onSenderSide} />
         ))}
         {streamingTail && (
           <div className="flex">
@@ -259,7 +279,7 @@ const MessageRow = memo(function MessageRow({ role, content, ts, streamingTail =
         )}
         <div className={cn(
           'flex items-center gap-1.5 pt-0.5',
-          isHumanUser ? 'justify-end' : 'justify-start',
+          onSenderSide ? 'justify-end' : 'justify-start',
         )}>
           <div className={cn(
             'text-[10px] font-mono tabular-nums',

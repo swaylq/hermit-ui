@@ -16,6 +16,8 @@
 //   chat tick           2  s
 //   chat-cancel tick    1.5s
 //   chat-restart tick   2  s
+//   takeover watch      8  s  (reactive Brain poke while it drives a conversation
+//                              the human handed over, + the cap sweep)
 //   usage               30 min  (was 5 min — dashboard now relies on these
 //                                pushes exclusively, no on-demand ccusage)
 
@@ -163,6 +165,18 @@ async function pushDispatchWatch() {
   });
 }
 
+// Brain takeover-watcher: the same reactive loop for conversations the human handed
+// to the Brain (docs/brain-takeover-design.md). Faster than the dispatch watcher —
+// a takeover is a live conversation someone is watching, so a 30s gap between the
+// agent replying and the Brain noticing would read as the Brain having stalled.
+async function pushTakeoverWatch() {
+  await safe('takeover-watch', async () => {
+    const r = await api.runTakeoverWatch();
+    if (r.poked > 0) console.log(`[takeover-watch] poked brain about ${r.poked}/${r.scanned} takeover(s)`);
+    if (r.ended > 0) console.log(`[takeover-watch] auto-released ${r.ended} takeover(s) at their cap`);
+  });
+}
+
 function loop(fn: () => Promise<void>, ms: number) {
   setInterval(() => {
     fn().catch(() => {});
@@ -202,6 +216,7 @@ loop(pushChatTick, 2_000);
 loop(pushChatCancelTick, 1_500);
 loop(pushChatRestartTick, 2_000);
 loop(pushDispatchWatch, 30_000); // reactive Brain poke on dispatch block/finish
+loop(pushTakeoverWatch, 8_000); // reactive Brain poke on takeover block/finish + cap sweep
 loop(() => safe('hibernate-tick', chatHibernateTick), 3_000); // manual hibernate requests
 loop(() => safe('reaper', reaperTick), 10 * 60_000); // auto-reap idle sessions (resource governance)
 loop(() => safe('chrome-reaper', chromeReaperTick), 5 * 60_000); // reap idle per-agent Chrome (~1GB each) the session-reaper leaves orphaned

@@ -415,6 +415,25 @@ model ChatSession {
   // transition instead of every tick. NULL = never evaluated.
   dispatchNotify        String?
 
+  // ── Brain takeover (docs/brain-takeover-design.md) ──
+  // The human hands a NORMAL conversation to the Brain, which then talks to the
+  // agent on their behalf until it judges the goal met. Distinct from dispatch:
+  // dispatch OPENS a session on a target; takeover joins one the human was already
+  // having, so `origin` stays null and the human's own messages remain in place.
+  //
+  // Non-null = live takeover, and it holds the Brain's OWN chat session id (the
+  // poke target), exactly like dispatchedBySessionId above.
+  takeoverBySessionId String?
+  takeoverStartedAt   DateTime?
+  // Messages the Brain has sent in this takeover. chat.send increments it and
+  // REFUSES past the cap — the cap is enforced here, not by asking the Brain nicely.
+  takeoverTurns       Int       @default(0)
+  // What the Brain inferred it is driving toward, shown in the chat banner so the
+  // human can see a wrong reading immediately instead of after 12 turns.
+  takeoverGoal        String?
+  // Dedup marker for the takeover-watcher, same contract as dispatchNotify.
+  takeoverNotify      String?
+
   messages     ChatMessage[]
   interactions Interaction[]
 
@@ -449,6 +468,16 @@ model ChatMessage {
   deliveredAt DateTime?
   // Anthropic message id (msg_...) if known, useful for dedup on assistant rows.
   externalId  String?
+  // Who produced a role='user' row. NULL = the human typed it (also the value on
+  // every pre-takeover row, and on gateway-synced assistant/tool/system rows, which
+  // aren't user rows at all). 'brain' = the Brain said it during a takeover.
+  //
+  // Load-bearing in three places: the timeline renders the two visibly differently,
+  // the USER.md corpus counts ONLY human rows (else the Brain trains on its own
+  // words and drifts into a self-portrait), and the Brain re-reading a conversation
+  // it drove can tell its own turns from the human's. Not an authorization
+  // boundary — a machine key is trusted; this is provenance.
+  authoredBy  String?
   createdAt   DateTime    @default(now())
   // Bumped on every insert AND in-place upsert (the gateway updates a row by
   // externalId as its turn streams). The SSE stream uses MAX(updatedAt) + count
@@ -465,6 +494,11 @@ model ChatMessage {
   @@index([sessionId, createdAt])
   @@index([sessionId, deliveredAt])
   @@index([sessionId, updatedAt])
+  // The USER.md corpus scan (chat.humanMessages) is machine-wide and time-ordered —
+  // "every message the human typed since <watermark>" — which none of the
+  // session-keyed indexes above can serve. It needs a PARTIAL index (role='user'
+  // AND authoredBy IS NULL) that @@index can't express, so it lives as raw SQL in
+  // migration 20260727180000_brain_takeover.
 }
 
 // A blocking interaction a running claude turn needs the WEB user to resolve —

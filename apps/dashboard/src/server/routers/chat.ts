@@ -11,6 +11,15 @@ import { stripNulDeep } from '../sanitize';
 import { capMessageContent } from '../message-cap';
 import { extractSearchText, extractInteractionBlocks } from '../chat-text';
 import { generateSessionTitle } from '../session-title';
+import {
+  TAKEOVER_CONCURRENCY,
+  TAKEOVER_TURN_CAP,
+  checkLimits,
+  endNote,
+  startNote,
+  type TakeoverEndReason,
+} from '../../lib/takeover';
+import { HUMAN_MESSAGES_MAX, humanMessages } from '../user-profile';
 
 const ContentBlock = z.union([
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -75,6 +84,78 @@ async function reapCandidateIds(machineId: string, reapHours: number): Promise<s
       return last < cutoff;
     })
     .map((r) => r.id);
+}
+
+// Content cast used everywhere we write a message row: the column is opaque JSON,
+// Prisma wants Prisma.InputJsonValue, and the block-shaped union confuses inference.
+type MessageContent = Parameters<typeof prisma.chatMessage.create>[0]['data']['content'];
+const asContent = (blocks: Array<Record<string, unknown>>) => blocks as unknown as MessageContent;
+
+/**
+ * Drop a machine-generated prompt into an agent's session — the mechanism behind
+ * both watchers' `[dispatch update]` / `[takeover update]` pokes and the Brain's
+ * own nudges. Returns false when the target session is gone or closed.
+ *
+ * `authoredBy: 'system'` matters more than it looks: these rows are role 'user',
+ * and without the marker every poke the gateway ever generated would read as
+ * something the human typed and land in the USER.md corpus (server/user-profile.ts).
+ */
+async function pokeSession(sessionId: string, machineId: string, text: string): Promise<boolean> {
+  const target = await prisma.chatSession.findFirst({
+    where: { id: sessionId, machineId, closedAt: null },
+    select: { id: true },
+  });
+  if (!target) return false;
+  await prisma.chatMessage.create({
+    data: {
+      sessionId: target.id,
+      role: 'user',
+      content: asContent([{ type: 'text', text }]),
+      authoredBy: 'system',
+    },
+  });
+  await prisma.chatSession.update({ where: { id: target.id }, data: { lastMessageAt: new Date() } });
+  return true;
+}
+
+/**
+ * End a takeover: clear the routing fields and leave a system row in the
+ * conversation saying why. Idempotent — releasing an already-ended takeover is a
+ * no-op, which matters because three different paths can end one (the Brain
+ * releasing, a cap tripping, the human typing) and they can race.
+ */
+async function endTakeover(
+  sessionId: string,
+  reason: TakeoverEndReason,
+  summary?: string | null,
+): Promise<boolean> {
+  const cleared = await prisma.chatSession.updateMany({
+    where: { id: sessionId, takeoverBySessionId: { not: null } },
+    data: {
+      takeoverBySessionId: null,
+      takeoverStartedAt: null,
+      takeoverTurns: 0,
+      takeoverGoal: null,
+      takeoverNotify: null,
+    },
+  });
+  if (cleared.count === 0) return false; // already ended by whoever got there first
+  await prisma.chatMessage.create({
+    data: {
+      sessionId,
+      role: 'system',
+      content: asContent([{ type: 'text', text: endNote(reason, summary) }]),
+    },
+  });
+  return true;
+}
+
+/** The machine's Brain agent, or null if none is set up. */
+async function findBrainAgent(machineId: string) {
+  return prisma.agent.findFirst({
+    where: { machineId, isOrchestrator: true },
+    select: { name: true },
+  });
 }
 
 export const chatRouter = router({
@@ -173,6 +254,12 @@ export const chatRouter = router({
           rssMb: true,
           hibernatedAt: true,
           preview: true,
+          // Takeover state — drives the chat banner (whether the Brain is driving,
+          // what it thinks it's doing, and how much rope it has left).
+          takeoverBySessionId: true,
+          takeoverGoal: true,
+          takeoverTurns: true,
+          takeoverStartedAt: true,
         },
       });
       return s;
@@ -355,8 +442,10 @@ export const chatRouter = router({
         // Only the columns the timeline actually reads (`CachedMsg` in
         // chat/page.tsx) + matches the SSE stream's shape so merge-by-id aligns.
         // Skips deliveredAt/externalId/updatedAt/sessionId — pure per-row overhead
-        // multiplied across the window.
-        select: { id: true, role: true, content: true, createdAt: true },
+        // multiplied across the window. `authoredBy` IS carried: the timeline has to
+        // render a Brain-spoken turn differently from one the human typed, and it's
+        // a mostly-null short string.
+        select: { id: true, role: true, content: true, createdAt: true, authoredBy: true },
       });
       return rows.reverse().map((r) => ({ ...r, content: capMessageContent(r.content) }));
     }),
@@ -460,7 +549,7 @@ export const chatRouter = router({
         },
         orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
         take: input.limit,
-        select: { id: true, role: true, content: true, createdAt: true, updatedAt: true },
+        select: { id: true, role: true, content: true, createdAt: true, updatedAt: true, authoredBy: true },
       });
       const last = rows[rows.length - 1];
       // Primitives only — no Date in the payload. The sync engine talks to this
@@ -480,6 +569,9 @@ export const chatRouter = router({
               // Only present when there is something to carry, so the payload
               // for the 99% prose case is byte-identical to before.
               ...(blocks.length > 0 ? { blocks } : {}),
+              // Same reasoning: absent for the human-typed majority, so existing
+              // cached rows stay valid and only Brain/system rows grow a field.
+              ...(r.authoredBy ? { authoredBy: r.authoredBy } : {}),
             };
           })
           // A row earns its place by being readable: prose, or a card the user
@@ -530,7 +622,7 @@ export const chatRouter = router({
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: input.limit + 1, // one extra row answers hasMore without a COUNT
-        select: { id: true, role: true, content: true, createdAt: true },
+        select: { id: true, role: true, content: true, createdAt: true, authoredBy: true },
       });
       const hasMore = rows.length > input.limit;
       const page = hasMore ? rows.slice(0, input.limit) : rows;
@@ -575,7 +667,7 @@ export const chatRouter = router({
           },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           take: input.before,
-          select: { id: true, role: true, content: true, createdAt: true },
+          select: { id: true, role: true, content: true, createdAt: true, authoredBy: true },
         }),
         prisma.chatMessage.findMany({
           where: {
@@ -584,7 +676,7 @@ export const chatRouter = router({
           },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
           take: input.after + 1, // +1 for the anchor row itself
-          select: { id: true, role: true, content: true, createdAt: true },
+          select: { id: true, role: true, content: true, createdAt: true, authoredBy: true },
         }),
       ]);
       const rows = [...before.reverse(), ...after].map((r) => ({ ...r, content: capMessageContent(r.content) }));
@@ -708,6 +800,16 @@ export const chatRouter = router({
           )
           .max(10)
           .optional(),
+        // Provenance, not authorization. Only the Brain's takeover_say tool passes
+        // 'brain'; the browser composer never sets it. A machine key is already
+        // trusted with everything, so this labels rather than gates — but it is
+        // what keeps the Brain's own words out of the USER.md corpus, so it has to
+        // be recorded at the point of writing and can't be reconstructed later.
+        authoredBy: z.literal('brain').optional(),
+        // Set on the Brain's FIRST message of a takeover: what it read the
+        // conversation as being for. Surfaced in the chat banner immediately, so a
+        // misread is visible in one glance instead of twelve messages.
+        goal: z.string().max(500).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -715,6 +817,20 @@ export const chatRouter = router({
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
       ctx.assertAgent(s.agentName);
       if (s.closedAt) throw new Error('session is closed');
+
+      // ── Takeover gate ───────────────────────────────────────────────────────
+      // Brain-authored: there must BE a live takeover, and it must have road left.
+      // This is where the cap is real — a Brain that decides to keep going gets a
+      // refusal here, not a stern comment in a skill file.
+      const byBrain = input.authoredBy === 'brain';
+      if (byBrain) {
+        if (!s.takeoverBySessionId) throw new Error('no active takeover on this session');
+        const limit = checkLimits(s, Date.now());
+        if (limit.over) {
+          await endTakeover(input.sessionId, limit.reason);
+          throw new Error(`takeover ended: ${limit.reason} limit reached`);
+        }
+      }
 
       const text = input.text.trim();
       const images = input.images ?? [];
@@ -759,7 +875,12 @@ export const chatRouter = router({
       const msg = await prisma.chatMessage.create({
         // content is JSON in the DB; prisma wants Prisma.InputJsonValue, the
         // Record-shaped union confuses inference, hence the cast.
-        data: { sessionId: input.sessionId, role: 'user', content: stripNulDeep(content) as unknown as Parameters<typeof prisma.chatMessage.create>[0]['data']['content'] },
+        data: {
+          sessionId: input.sessionId,
+          role: 'user',
+          content: stripNulDeep(content) as unknown as Parameters<typeof prisma.chatMessage.create>[0]['data']['content'],
+          authoredBy: byBrain ? 'brain' : null,
+        },
       });
       // Clear any stale cancel signal from a previous turn so this new
       // turn isn't immediately killed by the gateway.
@@ -772,8 +893,24 @@ export const chatRouter = router({
           // set once (listSessions/getSession read this column instead of a
           // first-user-message subquery). Existing sessions are backfilled.
           ...(text && !s.preview ? { preview: text.replace(/\s+/g, ' ').trim().slice(0, 120) } : {}),
+          // Brain message: spend a turn, and record the goal it inferred (first
+          // message only — `goal ||` keeps a later call from rewriting it).
+          ...(byBrain
+            ? {
+                takeoverTurns: { increment: 1 },
+                ...(input.goal?.trim() && !s.takeoverGoal ? { takeoverGoal: input.goal.trim() } : {}),
+              }
+            : {}),
         },
       });
+
+      // The human typed into a conversation the Brain was driving → they have the
+      // wheel back, immediately. Reaching for the keyboard IS the intent; making
+      // them find a button first would mean their message lands mid-takeover and
+      // races the Brain's next one.
+      if (!byBrain && s.takeoverBySessionId) {
+        await endTakeover(input.sessionId, 'human');
+      }
       return msg;
     }),
 
@@ -1101,24 +1238,236 @@ export const chatRouter = router({
       if (!poke) continue; // working/idle: recorded only, no poke
 
       // Deliver the poke into the Brain session that owns this dispatch — but only
-      // if it's still open (a closed Brain chat can't act on it).
-      const brain = await prisma.chatSession.findFirst({
-        where: { id: r.dispatchedBySessionId!, machineId: ctx.machine.id, closedAt: null },
-        select: { id: true },
-      });
-      if (!brain) continue;
-      await prisma.chatMessage.create({
-        data: {
-          sessionId: brain.id,
-          role: 'user',
-          content: [{ type: 'text', text: poke }] as unknown as Parameters<
-            typeof prisma.chatMessage.create
-          >[0]['data']['content'],
-        },
-      });
-      await prisma.chatSession.update({ where: { id: brain.id }, data: { lastMessageAt: new Date() } });
-      poked++;
+      // if it's still open (a closed Brain chat can't act on it). Via pokeSession,
+      // which stamps authoredBy:'system': these are role 'user' rows, so unmarked
+      // they would read as things the human typed and skew the USER.md corpus.
+      if (await pokeSession(r.dispatchedBySessionId!, ctx.machine.id, poke)) poked++;
     }
     return { scanned: rows.length, poked };
+  }),
+
+  // ── Brain takeover ─────────────────────────────────────────────────────────
+  // The human hands a conversation they were already having to the Brain, which
+  // then talks to the agent for them. See docs/brain-takeover-design.md.
+
+  // Start a takeover. machineProcedure, NOT agentProcedure: a scoped agent-share
+  // key must not be able to hand its one agent to the machine-wide Brain — the
+  // Brain would then be acting inside a boundary the share link was drawn to
+  // exclude.
+  requestTakeover: machineProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
+      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      if (s.closedAt) throw new Error('session is closed');
+      if (s.takeoverBySessionId) return { ok: true, already: true as const };
+
+      const brainAgent = await findBrainAgent(ctx.machine.id);
+      if (!brainAgent) throw new Error('no Brain is set up on this machine');
+      // Handing the Brain a conversation with itself would make it its own driver
+      // and its own driven — an immediate poke loop with nothing to accomplish.
+      if (s.agentName === brainAgent.name) throw new Error('the Brain cannot take over its own conversation');
+
+      const live = await prisma.chatSession.count({
+        where: { machineId: ctx.machine.id, takeoverBySessionId: { not: null } },
+      });
+      if (live >= TAKEOVER_CONCURRENCY) {
+        throw new Error(`too many live takeovers (${TAKEOVER_CONCURRENCY}) — release one first`);
+      }
+
+      // The Brain needs a session of its own to be poked in. Reuse its most recent
+      // open one so takeovers land in the conversation the human is already reading,
+      // rather than scattering across new ones.
+      let brainSession = await prisma.chatSession.findFirst({
+        where: { machineId: ctx.machine.id, agentName: brainAgent.name, closedAt: null },
+        orderBy: { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+        select: { id: true },
+      });
+      if (!brainSession) {
+        brainSession = await prisma.chatSession.create({
+          data: { machineId: ctx.machine.id, agentName: brainAgent.name, title: 'Brain' },
+          select: { id: true },
+        });
+      }
+
+      await prisma.chatSession.update({
+        where: { id: input.sessionId },
+        data: {
+          takeoverBySessionId: brainSession.id,
+          takeoverStartedAt: new Date(),
+          takeoverTurns: 0,
+          takeoverGoal: null,
+          takeoverNotify: null,
+        },
+      });
+      await prisma.chatMessage.create({
+        data: { sessionId: input.sessionId, role: 'system', content: asContent([{ type: 'text', text: startNote() }]) },
+      });
+
+      await pokeSession(
+        brainSession.id,
+        ctx.machine.id,
+        `[takeover] The human handed you their conversation with ${s.agentName} (session ${input.sessionId}). ` +
+          `Read it with takeover_read({ sessionId: "${input.sessionId}" }), work out what it is trying to achieve, ` +
+          `then drive it with takeover_say — passing that goal on your FIRST message so the human can see your reading. ` +
+          `You have ${TAKEOVER_TURN_CAP} messages. Release it with takeover_release as soon as the goal is met.`,
+      );
+      return { ok: true, already: false as const, brainSessionId: brainSession.id };
+    }),
+
+  // Hand the conversation back. Used by the banner's Release button and by the
+  // Brain's takeover_release tool.
+  releaseTakeover: machineProcedure
+    .input(
+      z.object({
+        sessionId: z.string(),
+        summary: z.string().max(500).optional(),
+        // 'human' when a person clicked Release; 'done' when the Brain judged the
+        // goal met. Anything else is decided server-side by the caps.
+        reason: z.enum(['human', 'done']).default('human'),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({
+        where: { id: input.sessionId },
+        select: { machineId: true },
+      });
+      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      const ended = await endTakeover(input.sessionId, input.reason, input.summary);
+      return { ok: true, ended };
+    }),
+
+  // The Brain's view of what it is currently driving. Also what the sidebar could
+  // use later; for now it backs the takeover_list tool.
+  listTakeovers: machineProcedure.query(async ({ ctx }) => {
+    const rows = await prisma.chatSession.findMany({
+      where: { machineId: ctx.machine.id, takeoverBySessionId: { not: null } },
+      select: {
+        id: true,
+        agentName: true,
+        title: true,
+        state: true,
+        takeoverGoal: true,
+        takeoverTurns: true,
+        takeoverStartedAt: true,
+      },
+      orderBy: { takeoverStartedAt: 'asc' },
+    });
+    return rows.map((r) => ({ ...r, turnCap: TAKEOVER_TURN_CAP }));
+  }),
+
+  // ── USER.md corpus ─────────────────────────────────────────────────────────
+
+  // Everything the human typed on this machine after `since`, oldest first. Backs
+  // the Brain's `user_messages` tool, which folds each batch into USER.md and
+  // records the watermark in the file itself — so this stays stateless and there's
+  // no DB/file sync to drift. See server/user-profile.ts for why the filter is
+  // as paranoid as it is.
+  humanMessages: machineProcedure
+    .input(
+      z.object({
+        since: z.coerce.date().nullish(),
+        limit: z.number().int().min(1).max(HUMAN_MESSAGES_MAX).default(200),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      return humanMessages(ctx.machine.id, { since: input.since, limit: input.limit });
+    }),
+
+  // The Persona panel's "Regenerate" button. Nudges the Brain to redo its read of
+  // the human now instead of waiting for the nightly dream.
+  requestUserProfileRefresh: machineProcedure.mutation(async ({ ctx }) => {
+    const brainAgent = await findBrainAgent(ctx.machine.id);
+    if (!brainAgent) throw new Error('no Brain is set up on this machine');
+    const brainSession = await prisma.chatSession.findFirst({
+      where: { machineId: ctx.machine.id, agentName: brainAgent.name, closedAt: null },
+      orderBy: { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+      select: { id: true },
+    });
+    if (!brainSession) throw new Error('the Brain has no open conversation to work in');
+    const ok = await pokeSession(
+      brainSession.id,
+      ctx.machine.id,
+      '[user profile] Refresh USER.md now, following the "Read the human" step of your `dreaming` skill: ' +
+        'read USER.md for its synced-through watermark, pull the new messages with user_messages, ' +
+        'fold them into the existing read rather than rewriting it, and update the watermark.',
+    );
+    return { ok };
+  }),
+
+  // Gateway tick. Same contract as runDispatchWatch — compute a "needs Brain?"
+  // signature per live takeover, poke only on a transition — with one addition: it
+  // is also where the caps are swept, so a takeover whose Brain simply stopped
+  // talking still gets handed back instead of sitting open forever.
+  runTakeoverWatch: gatewayProcedure.mutation(async ({ ctx }) => {
+    const rows = await prisma.chatSession.findMany({
+      where: { machineId: ctx.machine.id, takeoverBySessionId: { not: null } },
+      select: {
+        id: true,
+        agentName: true,
+        state: true,
+        closedAt: true,
+        takeoverNotify: true,
+        takeoverBySessionId: true,
+        takeoverTurns: true,
+        takeoverStartedAt: true,
+        takeoverGoal: true,
+      },
+    });
+    if (rows.length === 0) return { scanned: 0, poked: 0, ended: 0 };
+
+    let poked = 0;
+    let ended = 0;
+    for (const r of rows) {
+      if (r.closedAt) {
+        if (await endTakeover(r.id, 'closed')) ended++;
+        continue;
+      }
+      const limit = checkLimits(r, Date.now());
+      if (limit.over) {
+        if (await endTakeover(r.id, limit.reason)) ended++;
+        continue;
+      }
+
+      const pending = await prisma.interaction.findFirst({
+        where: { sessionId: r.id, status: 'pending' },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, kind: true },
+      });
+
+      let sig: string;
+      let poke: string | null = null;
+      const left = TAKEOVER_TURN_CAP - r.takeoverTurns;
+      if (pending) {
+        sig = `blocked:${pending.id}`;
+        poke =
+          `[takeover update] ${r.agentName} is BLOCKED on a ${pending.kind} in the conversation you're driving ` +
+          `(session ${r.id}). Answer it with dispatch_answer({ sessionId: "${r.id}", … }) if it's safe and obvious; ` +
+          `if it's destructive / irreversible / spends money / you're unsure, do NOT answer — release the takeover and tell the human.`;
+      } else if (r.state !== 'working') {
+        const lastA = await prisma.chatMessage.findFirst({
+          where: { sessionId: r.id, role: 'assistant' },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+        });
+        if (lastA) {
+          sig = `done:${lastA.id}`;
+          poke =
+            `[takeover update] ${r.agentName} finished a turn in the conversation you're driving (session ${r.id}). ` +
+            `Read it with takeover_read, then either send the next message with takeover_say (${left} left) ` +
+            `or, if ${r.takeoverGoal ? `"${r.takeoverGoal.slice(0, 160)}"` : 'the goal'} is met, call takeover_release with a short summary.`;
+        } else {
+          sig = 'idle';
+        }
+      } else {
+        sig = 'working';
+      }
+
+      if (sig === r.takeoverNotify) continue;
+      await prisma.chatSession.update({ where: { id: r.id }, data: { takeoverNotify: sig } });
+      if (!poke) continue;
+      if (await pokeSession(r.takeoverBySessionId!, ctx.machine.id, poke)) poked++;
+    }
+    return { scanned: rows.length, poked, ended };
   }),
 });

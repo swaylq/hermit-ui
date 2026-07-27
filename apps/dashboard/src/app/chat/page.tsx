@@ -6,7 +6,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   RotateCw, Trash2, Terminal, Pencil, ListCollapse, Search, FoldVertical, Sparkles,
-  MoreHorizontal, ChevronRight, SquarePen,
+  MoreHorizontal, ChevronRight, SquarePen, Bot,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -22,6 +22,8 @@ import { authedFetch } from '@/lib/asst-fetch';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { useScope } from '@/lib/use-scope';
 import { LoopBar } from '@/components/chat/loop-bar';
+import { TakeoverBar } from '@/components/chat/takeover-bar';
+import { TAKEOVER_TURN_CAP } from '@/lib/takeover';
 import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
 import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
@@ -1115,6 +1117,28 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // The header's secondary actions, rendered TWICE (inline on ≥sm, in the mobile
   // tray on phones) — one definition so the two can't drift. Only one is visible
   // at a time, so the duplicated ConfirmIconButton arm-state is harmless.
+  // ── Brain takeover ────────────────────────────────────────────────────────
+  // Not gated on agents.list: that query is deliberately disabled while a session
+  // is open (P1-3), and re-enabling it just to learn the Brain's name would undo
+  // that. The two cases worth hiding for are cheap to read off the session itself —
+  // a scoped share key (requestTakeover is machineProcedure and would 403) and a
+  // dispatch session (already the Brain's own work). The Brain-can't-drive-itself
+  // case is enforced server-side, and its chats don't appear on this page anyway.
+  // Read off sessionOne (getSession), not `session` — which prefers the
+  // listSessions row. Same call the LoopBar makes for `loopState`: that 5s poll is
+  // machine-wide and was deliberately slimmed (P1-2), so per-session state belongs
+  // on the single-row query, which polls at the same 5s anyway.
+  const takeover = sessionOne.data;
+  const takenOver = !!takeover?.takeoverBySessionId;
+  const canTakeover =
+    !scope.scoped && !!session && !session.closedAt && session.origin !== 'dispatch' && !takenOver;
+  const requestTakeover = trpc.chat.requestTakeover.useMutation({
+    onSuccess: () => { utils.chat.getSession.invalidate({ sessionId }); utils.chat.listMessages.invalidate({ sessionId }); },
+  });
+  const releaseTakeover = trpc.chat.releaseTakeover.useMutation({
+    onSuccess: () => { utils.chat.getSession.invalidate({ sessionId }); utils.chat.listMessages.invalidate({ sessionId }); },
+  });
+
   const secondaryActions = (
     <>
       <button
@@ -1156,6 +1180,20 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       >
         <SquarePen className="h-4 w-4" />
       </button>
+      {/* Hand this conversation to the Brain. Hidden while one is already live —
+          the banner below owns that state, and its Release is the way out. */}
+      {canTakeover && (
+        <button
+          type="button"
+          onClick={() => { if (!requestTakeover.isPending) requestTakeover.mutate({ sessionId }); }}
+          disabled={!session || !!session?.closedAt || requestTakeover.isPending}
+          aria-label="hand this conversation to Brain"
+          title="义脑接管 — 让义脑读完这段对话，推断你想达成什么，然后替你继续和这个 agent 对话。你随时打字就收回。"
+          className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground disabled:cursor-wait disabled:opacity-50"
+        >
+          <Bot className="h-4 w-4" />
+        </button>
+      )}
       <ConfirmIconButton
         icon={FoldVertical}
         title="compact — summarize the conversation so the agent's context window shrinks (runs /compact, keeps continuity). THIS is what reduces a large context; restart only reloads the whole history via --resume."
@@ -1447,6 +1485,18 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             disabled={!!session?.closedAt}
             sessionId={sessionId}
           />
+          {/* Directly above the composer: the Brain's stated goal sits where the
+              human's eyes already are when they're about to type — which is also
+              the gesture that takes the conversation back. */}
+          {takenOver && takeover && (
+            <TakeoverBar
+              goal={takeover.takeoverGoal}
+              turns={takeover.takeoverTurns}
+              turnCap={TAKEOVER_TURN_CAP}
+              releasing={releaseTakeover.isPending}
+              onRelease={() => releaseTakeover.mutate({ sessionId, reason: 'human' })}
+            />
+          )}
           <QueueBar
             items={displayQueue}
             onCancel={(id) => {
