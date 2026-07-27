@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildExcerpt, cleanTitle, shouldRefresh, TITLE_MAX } from './session-title';
+import { buildExcerpt, cleanTitle, hasChinese, shouldRefresh, TITLE_MAX } from './session-title';
 
 test('strips the wrappers models add', () => {
   assert.equal(cleanTitle('“本地聊天缓存方案”'), '本地聊天缓存方案');
@@ -79,4 +79,29 @@ test('order is preserved even after trimming', () => {
 
 test('empty input produces an empty excerpt', () => {
   assert.equal(buildExcerpt([]), '');
+});
+
+// Titles are always Chinese. This is the check that catches a model answering in
+// English anyway, so it has to be right about the edges.
+test('recognises Chinese', () => {
+  assert.equal(hasChinese('修复滚动跳变'), true);
+  assert.equal(hasChinese('Postgres 索引调优'), true); // mixed is fine — identifiers may stay Latin
+  assert.equal(hasChinese('会'), true);
+});
+
+test('rejects an answer with no Chinese at all', () => {
+  assert.equal(hasChinese('Scoped CSS divider fix'), false);
+  assert.equal(hasChinese('Documenting divider gotcha'), false);
+  assert.equal(hasChinese(''), false);
+  assert.equal(hasChinese('123 — !?'), false);
+});
+
+test('kana alone is not Chinese', () => {
+  // A Japanese answer is as wrong here as an English one.
+  assert.equal(hasChinese('スクロール修正'), true); // contains 修正, kanji → accepted
+  assert.equal(hasChinese('スクロール'), false);
+});
+
+test('full-width punctuation alone does not count as Chinese', () => {
+  assert.equal(hasChinese('（）：、'), false);
 });

@@ -20,6 +20,8 @@
 // same unit — a session can log hundreds of tool rows without the user saying
 // anything, and none of that changes what the session is about.
 //
+// Labels are always Simplified Chinese, whatever language the session runs in.
+//
 // A title the USER typed is never touched — chat.setTitle marks the row
 // `titleAuto = false` and that ends it. Failure is silent and leaves whatever
 // was there; a missing title is cosmetic, never a broken session.
@@ -45,11 +47,29 @@ const SYSTEM = [
   'You label a chat conversation, given everything the user has asked in it.',
   'Reply with ONLY the label: what this conversation is for, as a noun phrase.',
   'Weight the most recent requests most heavily — the label should say where the conversation has got to.',
-  'Write it in the language the USER writes in, even when their messages quote English code, logs or output.',
-  'At most 20 characters for Chinese/Japanese/Korean, at most 6 words otherwise.',
+  // Always Chinese, whatever the conversation is in. The sidebar is read by one
+  // person and mixed-language labels are harder to scan than translated ones.
+  'ALWAYS write the label in Simplified Chinese, even if the conversation is entirely in English. Translate as needed.',
+  'Proper nouns and code identifiers may stay in their original form (Postgres, IndexedDB, tsconfig).',
+  'At most 20 Chinese characters.',
   'No quotes, no trailing punctuation, no prefix like "标题:" or "Title:".',
-  'Be concrete. "修复滚动跳变" not "技术讨论"; "Postgres index tuning" not "A question".',
+  'Be concrete. "修复滚动跳变" not "技术讨论"; "Postgres 索引调优" not "一个问题".',
 ].join(' ');
+
+// Retry prompt for the rare answer that comes back with no Chinese in it at all.
+const SYSTEM_ZH_RETRY = SYSTEM + ' Your previous answer was not in Chinese. Reply again, in Simplified Chinese.';
+
+/**
+ * Does this label actually contain Chinese? Used to catch the occasional
+ * English answer — a label made only of Latin identifiers ("Scoped CSS divider
+ * fix") is exactly what we're trying not to ship.
+ *
+ * CJK Unified Ideographs, plus the Extension A block; deliberately not matching
+ * kana, since a Japanese answer is as wrong here as an English one.
+ */
+export function hasChinese(s: string): boolean {
+  return /[\u3400-\u4dbf\u4e00-\u9fff]/.test(s);
+}
 
 /** Strip the ways a model still occasionally wraps or prefixes its answer. */
 export function cleanTitle(raw: string): string {
@@ -141,19 +161,29 @@ export async function generateSessionTitle(
   // `preview` to do the job.
   if (texts.length === 0) return { title: session.title, generated: false };
 
+  const excerpt = buildExcerpt(texts);
+  const ask = (system: string) =>
+    openrouterChat(
+      key,
+      MODEL,
+      [
+        { role: 'system', content: system },
+        { role: 'user', content: excerpt },
+      ],
+      { temperature: 0.3, reasoningOff: true, timeoutMs: 20_000, title: 'hermit-ui session title' }
+    );
+
   let title: string;
   try {
-    title = cleanTitle(
-      await openrouterChat(
-        key,
-        MODEL,
-        [
-          { role: 'system', content: SYSTEM },
-          { role: 'user', content: buildExcerpt(texts) },
-        ],
-        { temperature: 0.3, reasoningOff: true, timeoutMs: 20_000, title: 'hermit-ui session title' }
-      )
-    );
+    title = cleanTitle(await ask(SYSTEM));
+    // One retry when the answer came back with no Chinese in it. Rare enough to
+    // be worth the call, and the alternative is an English label in a sidebar
+    // the instruction says should be Chinese. If the retry fails too we keep
+    // what we have — a slightly wrong label beats an unnamed session.
+    if (title && !hasChinese(title)) {
+      const second = cleanTitle(await ask(SYSTEM_ZH_RETRY));
+      if (second && hasChinese(second)) title = second;
+    }
   } catch {
     return { title: session.title, generated: false };
   }
