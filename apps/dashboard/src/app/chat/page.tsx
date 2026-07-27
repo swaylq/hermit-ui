@@ -52,6 +52,11 @@ import { VoiceMic } from '@/components/chat/voice-mic';
 // history is now paged separately by useOlderPages.
 const INITIAL_WINDOW = 60;
 
+// How long the message pane keeps re-asserting the bottom after its size
+// changes. Covers a multi-step composer growth (each new line is its own resize,
+// and the browser's own scroll adjustment lands a frame later).
+const SETTLE_AFTER_RESIZE_MS = 400;
+
 // useLayoutEffect on the client (runs before the browser paints — used to restore
 // scroll position synchronously after a history prepend so there's no visible
 // lurch), plain useEffect on the server to dodge React's SSR warning.
@@ -222,24 +227,27 @@ type TimelineMsg = { id: string; role: string; content: any; createdAt: Date | s
 // answer), or — for a turn with no tools — all its text rows. Human-user and
 // system rows (prompts, restart/interaction notices) are always kept so the
 // conversation still reads as Q→A.
-// Summary mode: what to keep when the user asks for the short version.
+// Summary mode: the conversation, without the machinery.
 //
-// It used to keep ONLY the closing reply of each turn — everything the agent
-// said while working, and every trace of what it did, was dropped. That reads
-// as "the agent answered out of nowhere"; you lose the thread of how it got
-// there. So keep the narration and the SHAPE of the work, and drop the bulk:
+// Two failed shapes got us here. First it kept only the CLOSING reply of each
+// turn — a 60-row conversation became 5 rows and answers arrived from nowhere.
+// Then it kept the prose plus `tool_use` chips, which restored the thread but
+// put the machinery back on screen; the chips are what you turn summary mode ON
+// to escape.
+//
+// So: everything a person said or was told, and nothing about how it was
+// carried out.
 //
 //   keep   user messages, system messages
-//   keep   every assistant `text` block — including mid-turn narration, which
-//          is usually the most informative part of the process
-//   keep   `tool_use` blocks, so you can see WHAT ran (the timeline already
-//          collapses consecutive same-name calls into one "Bash × 7" chip)
-//   drop   `tool_result` — the outputs are the bulk (621 MB of the 904 MB
-//          content column live here), and they're what "summary" is escaping
-//   drop   `thinking`, and the harness terminator rows
+//   keep   every assistant `text` block — including the mid-turn narration,
+//          which is where the agent explains what it found and why it's about
+//          to do something. That IS the useful signal.
+//   drop   `tool_use`, `tool_result`, `thinking`, the harness terminator, and
+//          images (attachments belong to the full view)
 //
-// A message left with nothing after filtering disappears entirely.
-const SUMMARY_KEEP = new Set(['text', 'tool_use']);
+// A message left with nothing after filtering disappears entirely, so a turn
+// that was purely mechanical collapses to nothing rather than to an empty bubble.
+const SUMMARY_KEEP = new Set(['text']);
 // Filtered content arrays are cached against the ORIGINAL array, so toggling
 // summary mode or re-rendering on a stream tick hands memo(MessageRow) the same
 // object identity it saw last time instead of forcing a full re-render.
@@ -249,12 +257,9 @@ function summarizeContent(content: unknown): unknown[] | null {
   if (!Array.isArray(content)) return null;
   const cached = summaryContentCache.get(content);
   if (cached !== undefined) return cached;
-  const kept = content.filter((b: any) => {
-    if (!b || typeof b !== 'object' || !SUMMARY_KEEP.has(b.type)) return false;
-    if (b.type === 'text') return typeof b.text === 'string' && b.text.trim().length > 0;
-    return true;
-  });
-  // All-tool_use with no prose is still worth showing — that IS the process.
+  const kept = content.filter(
+    (b: any) => b && typeof b === 'object' && SUMMARY_KEEP.has(b.type) && typeof b.text === 'string' && b.text.trim().length > 0
+  );
   // Return the ORIGINAL array when nothing was dropped, so memo(MessageRow)
   // sees an unchanged `content` prop for the many messages that are pure prose.
   const result = kept.length === 0 ? null : kept.length === content.length ? content : kept;
@@ -568,13 +573,17 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   });
   const autoTitleAsked = useRef<string | null>(null);
   useEffect(() => {
-    if (!sessionId || session?.title) return;
+    // Fires on every open, titled or not: the server answers from two indexed
+    // queries unless the conversation has actually moved on, so this costs
+    // nothing in the common case and lets a long-running session's title keep
+    // up with what it turned into.
+    if (!sessionId) return;
     if ((messages.data?.length ?? 0) < 2) return;
     if (autoTitleAsked.current === sessionId) return;
     autoTitleAsked.current = sessionId;
     autoTitleMut.mutate({ sessionId, force: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, session?.title, messages.data?.length]);
+  }, [sessionId, messages.data?.length]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -601,6 +610,18 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // True while WE scroll programmatically, so the scroll listener doesn't misread
   // the in-between position and unpin the user mid-follow.
   const autoScrollRef = useRef(false);
+  // Viewport height as of the last scroll event — how the scroll listener tells
+  // "the pane resized under me" from "the user scrolled".
+  const lastClientHeightRef = useRef(0);
+  // Scroll position as of the last scroll event, so we can tell which DIRECTION
+  // the user moved. Only an upward move means "I want to read history".
+  const lastScrollTopRef = useRef(0);
+  // While the pane is settling after a size change, the bottom is re-asserted
+  // every frame and NOTHING is read as user intent. Needed because a composer
+  // growth does not land in one step: the stick takes, and then the browser
+  // pulls scrollTop back by the exact height the composer gained — which is
+  // indistinguishable, event-by-event, from the user scrolling up.
+  const settleUntilRef = useRef(0);
   // Treat the very first paint as a "scroll to bottom" regardless of position.
   const firstScrollRef = useRef(true);
 
@@ -725,12 +746,28 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     // Anchored mode positions the viewport on a specific message; jumping to the
     // bottom on first paint would undo exactly what the user clicked for.
     if (firstScrollRef.current && !anchoredActiveRef.current) { firstScrollRef.current = false; toBottom(); }
+    // Re-assert the bottom every frame until the settling window closes, so a
+    // single assignment losing a race to the browser's own adjustment doesn't
+    // leave the conversation parked short of the end.
+    const settle = () => {
+      if (Date.now() > settleUntilRef.current) return;
+      if (pinnedRef.current && !prependAnchorRef.current?.isHolding() && !anchoredActiveRef.current) toBottom();
+      requestAnimationFrame(settle);
+    };
     const ro = new ResizeObserver(() => {
       if (prependAnchorRef.current?.isHolding()) return; // holding a read position after a prepend
       if (anchoredActiveRef.current) return;   // reading history at a fixed anchor
+      const first = Date.now() > settleUntilRef.current;
+      settleUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
       if (pinnedRef.current) toBottom();
+      if (first) requestAnimationFrame(settle);
     });
     ro.observe(content);
+    // ALSO watch the viewport itself. The composer grows as you type a multi-line
+    // message, which shrinks this pane from the bottom — the content is
+    // untouched, so a content-only observer never fires and the last messages
+    // slide behind the composer while the view sits there looking stuck.
+    ro.observe(el);
     return () => ro.disconnect();
   }, [getViewport]);
 
@@ -742,16 +779,54 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   useEffect(() => {
     const el = getViewport();
     if (!el) return;
+    lastClientHeightRef.current = el.clientHeight;
+    lastScrollTopRef.current = el.scrollTop;
     const onScroll = () => {
+      // Update the baselines FIRST, even for scrolls we caused — otherwise the
+      // next comparison is made against a stale position.
+      const st = el.scrollTop;
+      const wentUp = st < lastScrollTopRef.current - 2;
+      lastScrollTopRef.current = st;
+      const h = el.clientHeight;
+      const resized = h !== lastClientHeightRef.current;
+      lastClientHeightRef.current = h;
       if (autoScrollRef.current) return;
+
+      // The pane changed size under us — growing the composer shrinks this
+      // viewport from the bottom. That's layout, not a decision to read history.
+      if (resized) settleUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
+      // Inside the settling window nothing is a verdict on intent; the rAF loop
+      // started by the ResizeObserver is holding the bottom.
+      if (Date.now() < settleUntilRef.current) {
+        if (pinnedRef.current) {
+          autoScrollRef.current = true;
+          el.scrollTop = el.scrollHeight;
+          requestAnimationFrame(() => { autoScrollRef.current = false; });
+        }
+        return;
+      }
+
       // A real scroll: let the prepend anchor move with the user instead of
       // pulling them back to where they were when the page was requested.
       prependAnchorRef.current?.followUser();
-      setPinned(el.scrollHeight - el.scrollTop - el.clientHeight < 60);
+
+      // Pin state follows INTENT, not geometry. Unpin only when the user
+      // actually moved upward; re-pin whenever they're back at the end.
+      //
+      // Deriving it from the gap alone (`setPinned(gap < 60)`) looked
+      // equivalent and wasn't: scroll events are dispatched asynchronously and
+      // routinely outlive the one-frame guard on our own auto-scrolls, so a
+      // late event would arrive after the composer had grown, see a large gap
+      // nobody asked for, and quietly unpin — stranding the conversation short
+      // of the end with a "↓ latest" pill.
+      const gap = el.scrollHeight - st - h;
+      if (gap < 60) setPinned(true);
+      else if (wentUp) setPinned(false);
+
       // Infinite scroll up: near the top, pull the next page of history. Clear
       // the debounce flag here (recomputed next render) so one fling fires once;
       // loadEarlier anchors the scroll so the prepend doesn't yank the viewport.
-      if (el.scrollTop < 200 && canLoadEarlierRef.current && !prependAnchorRef.current?.isHolding()) {
+      if (st < 200 && canLoadEarlierRef.current && !prependAnchorRef.current?.isHolding()) {
         canLoadEarlierRef.current = false;
         loadEarlier();
       }
@@ -984,7 +1059,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       const ta = taRef.current;
       if (!ta) return;
       e.preventDefault();
-      ta.focus();
+      ta.focus({ preventScroll: true });
       // Land caret at the end so users can immediately continue typing.
       const len = ta.value.length;
       ta.setSelectionRange(len, len);

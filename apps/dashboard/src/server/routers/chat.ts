@@ -306,7 +306,14 @@ export const chatRouter = router({
       const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
       ctx.assertAgent(s.agentName);
-      return prisma.chatSession.update({ where: { id: input.id }, data: { title: input.title } });
+      // A human named it → mark it theirs, so the auto-titler leaves it alone
+      // from here on (see server/session-title.ts). An empty string clears the
+      // name and hands the session back to the auto-titler.
+      const named = input.title.trim();
+      return prisma.chatSession.update({
+        where: { id: input.id },
+        data: named ? { title: named, titleAuto: false } : { title: null, titleAuto: false, titleMsgCount: null },
+      });
     }),
 
   // Summarize the opening exchange into a session title. Idempotent by default:
@@ -316,11 +323,10 @@ export const chatRouter = router({
   autoTitle: agentProcedure
     .input(z.object({ sessionId: z.string(), force: z.boolean().default(false) }))
     .mutation(async ({ ctx, input }) => {
-      const title = await generateSessionTitle(input.sessionId, ctx.machine.id, {
+      return generateSessionTitle(input.sessionId, ctx.machine.id, {
         force: input.force,
         scopedAgent: ctx.scopedAgent,
       });
-      return { title };
     }),
 
   listMessages: agentProcedure

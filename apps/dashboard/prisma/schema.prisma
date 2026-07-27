@@ -322,6 +322,14 @@ model ChatSession {
   machine           Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
   agentName         String
   title             String?
+  // Who wrote `title`. Machine-generated titles may be refreshed as the
+  // conversation grows; a title the USER typed is never touched again.
+  // See server/session-title.ts.
+  titleAuto         Boolean   @default(false)
+  // Message count when the auto title was last generated — the cheap "has this
+  // conversation moved on enough to be worth re-reading?" signal, so opening a
+  // session doesn't burn a model call every time.
+  titleMsgCount     Int?
   // Denormalized sidebar preview: the first user message's first text block,
   // whitespace-collapsed + sliced to 120 chars. Set once by chat.send (+ a one-time
   // backfill) so listSessions/getSession read a column instead of a per-session

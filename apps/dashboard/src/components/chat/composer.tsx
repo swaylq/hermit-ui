@@ -172,7 +172,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
       requestAnimationFrame(() => {
         const el = taRef.current;
         if (!el) return;
-        el.focus();
+        el.focus({ preventScroll: true });
         el.setSelectionRange(text.length, text.length);
         el.style.height = 'auto';
         el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
@@ -186,7 +186,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
       requestAnimationFrame(() => {
         const el = taRef.current;
         if (!el) return;
-        el.focus();
+        el.focus({ preventScroll: true });
         el.setSelectionRange(el.value.length, el.value.length);
         el.style.height = 'auto';
         el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
@@ -397,7 +397,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   useEffect(() => { setSlashIdx(0); }, [slashPrefix]);
   const pickCommand = useCallback((cmd: (typeof SLASH_COMMANDS)[number]) => {
     setDraft(cmd.needsArgs ? cmd.name + ' ' : cmd.name);
-    taRef.current?.focus();
+    taRef.current?.focus({ preventScroll: true });
   }, [setDraft, taRef]);
 
   // Most slash commands (/status, /clear, /model, …) print to claude's TUI
@@ -578,7 +578,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
           {draft.length > 0 && !disabled && (
             <button
               type="button"
-              onClick={() => { setDraft(''); taRef.current?.focus(); }}
+              onClick={() => { setDraft(''); taRef.current?.focus({ preventScroll: true }); }}
               aria-label="clear draft"
               title="Clear"
               className="h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
