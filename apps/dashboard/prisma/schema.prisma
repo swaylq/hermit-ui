@@ -326,10 +326,11 @@ model ChatSession {
   // conversation grows; a title the USER typed is never touched again.
   // See server/session-title.ts.
   titleAuto         Boolean   @default(false)
-  // Message count when the auto title was last generated — the cheap "has this
-  // conversation moved on enough to be worth re-reading?" signal, so opening a
-  // session doesn't burn a model call every time.
-  titleMsgCount     Int?
+  // How many messages the USER had sent when the auto title was last generated.
+  // The title is derived from the user's own messages, so this is what "has
+  // anything new been asked?" is measured in — counting every row would let
+  // tool traffic alone trip a refresh.
+  titleUserMsgCount Int?
   // Denormalized sidebar preview: the first user message's first text block,
   // whitespace-collapsed + sliced to 120 chars. Set once by chat.send (+ a one-time
   // backfill) so listSessions/getSession read a column instead of a per-session

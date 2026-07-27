@@ -1,23 +1,24 @@
-// Naming a chat session after what it is doing LATELY.
+// Naming a chat session after what the USER has been asking it for.
 //
-// The sidebar used to show the first user message (ChatSession.preview). That's
-// the opening line — the setup, not the subject — and in a session that runs for
-// days it stops describing anything you care about. What you want from the list
-// is "what is this one working on right now", so that is what the title means
-// here: a label over the RECENT end of the conversation, not a summary of the
-// whole thing.
+// The sidebar used to show the first user message (ChatSession.preview): the
+// opening line, which is the setup rather than the subject, and which stops
+// describing anything useful once a session runs for days.
 //
-// Two consequences follow from that definition:
-//   · read only the last few messages. The opening is deliberately NOT sampled;
-//     including it would drag the title back toward whatever the session
-//     started as, which is exactly the staleness we're trying to remove.
-//   · refresh often. A stale title defeats the purpose, so the gate is a flat
-//     "some new conversation has happened", not anything proportional — a long
-//     session needs re-reading just as often as a short one, arguably more.
+// The title is built from the user's own messages — all of them. That's the
+// thread of intent through a session: what was asked, and what it turned into.
+// The agent's replies are deliberately NOT read. They are long, they narrate
+// process, and a title drawn from them drifts toward whatever tool the agent
+// happened to be running rather than what the session is for.
 //
-// Cost stays bounded because the trigger is OPENING a session, not message
-// volume: however busy a session gets between visits, one visit costs at most
-// one call, and revisiting with nothing new costs none.
+// "The user's messages" means the ones a person typed — `role: 'user'` alone
+// also covers tool results and images the agent pulled in mid-task, which are
+// role 'user' in Anthropic's format. The marker is `externalId: null`: the
+// composer never sets one, every row synced from the transcript carries one.
+// This is the same distinction USER_QUEUE_FILTER draws in routers/chat.ts.
+//
+// Refreshed every REFRESH_AFTER_USER_MESSAGES new user messages, counted in the
+// same unit — a session can log hundreds of tool rows without the user saying
+// anything, and none of that changes what the session is about.
 //
 // A title the USER typed is never touched — chat.setTitle marks the row
 // `titleAuto = false` and that ends it. Failure is silent and leaves whatever
@@ -28,25 +29,23 @@ import { extractSearchText } from './chat-text';
 import { openrouterChat } from './openrouter';
 
 const MODEL = process.env.OPENROUTER_TITLE_MODEL || 'deepseek/deepseek-v4-flash';
-// How many recent messages with prose to show the model. A handful of exchanges
-// is enough to say what's going on, and keeps the call small.
-const SAMPLE_MESSAGES = 8;
-const SAMPLE_CHARS = 2500;
 export const TITLE_MAX = 40;
-// New messages required before the title is re-derived. Most rows in a working
-// session are tool traffic with no prose, so this is roughly a handful of real
-// exchanges — recent enough to stay true, coarse enough that reopening a
-// session you were just in costs nothing.
-const REFRESH_AFTER_MESSAGES = 30;
+// New user messages required before the title is re-derived.
+const REFRESH_AFTER_USER_MESSAGES = 5;
+// Per-message and total caps on what gets sent. Generous enough that an ordinary
+// session is included in full; a very long one keeps its most recent asks, which
+// are the ones that describe where it has got to.
+const PER_MESSAGE_CHARS = 400;
+const TOTAL_CHARS = 4000;
+
+// Human-composed user messages — see the note above about externalId.
+const HUMAN_USER = { role: 'user', externalId: null } as const;
 
 const SYSTEM = [
-  'You label an ongoing chat conversation with what it is CURRENTLY working on.',
-  'You are shown only its most recent messages.',
-  'Reply with ONLY the label: the specific task or topic in play, as a noun phrase.',
-  // The USER's language, not the transcript's: a Chinese conversation quoting
-  // English tool output was coming back with an English title, and it's the
-  // user who reads the sidebar.
-  'Write the label in the language the USER writes in, even when the excerpt quotes English code, logs or output.',
+  'You label a chat conversation, given everything the user has asked in it.',
+  'Reply with ONLY the label: what this conversation is for, as a noun phrase.',
+  'Weight the most recent requests most heavily — the label should say where the conversation has got to.',
+  'Write it in the language the USER writes in, even when their messages quote English code, logs or output.',
   'At most 20 characters for Chinese/Japanese/Korean, at most 6 words otherwise.',
   'No quotes, no trailing punctuation, no prefix like "标题:" or "Title:".',
   'Be concrete. "修复滚动跳变" not "技术讨论"; "Postgres index tuning" not "A question".',
@@ -62,10 +61,37 @@ export function cleanTitle(raw: string): string {
   return t.length > TITLE_MAX ? t.slice(0, TITLE_MAX) : t;
 }
 
-/** Has enough new conversation happened to be worth re-reading? */
-export function shouldRefresh(previousCount: number | null, currentCount: number): boolean {
-  if (previousCount == null) return true; // titled before we tracked counts
-  return currentCount - previousCount >= REFRESH_AFTER_MESSAGES;
+/**
+ * Has the user said enough new things to be worth re-reading?
+ *
+ * Counted in USER messages, so a session that runs a thousand tool calls
+ * without being asked anything new keeps its title — and five real requests
+ * refresh it however long the session already is.
+ */
+export function shouldRefresh(previousUserCount: number | null, currentUserCount: number): boolean {
+  if (previousUserCount == null) return true; // titled before we tracked this
+  return currentUserCount - previousUserCount >= REFRESH_AFTER_USER_MESSAGES;
+}
+
+/**
+ * Assemble the excerpt the model is asked to label: the user's messages, oldest
+ * to newest, trimmed to fit. Exported for tests — the trimming rules are the
+ * part worth pinning down.
+ */
+export function buildExcerpt(texts: string[]): string {
+  const clipped = texts.map((t) => (t.length > PER_MESSAGE_CHARS ? t.slice(0, PER_MESSAGE_CHARS) + '…' : t));
+  // Keep the most recent messages when the whole set won't fit: they say where
+  // the conversation has got to, which is what the label is for.
+  const kept: string[] = [];
+  let budget = TOTAL_CHARS;
+  for (let i = clipped.length - 1; i >= 0; i--) {
+    if (clipped[i].length > budget) break;
+    kept.unshift(clipped[i]);
+    budget -= clipped[i].length;
+  }
+  // Always include at least the latest one, even if it alone exceeds the budget.
+  if (kept.length === 0 && clipped.length > 0) kept.push(clipped[clipped.length - 1].slice(0, TOTAL_CHARS));
+  return kept.join('\n\n');
 }
 
 /**
@@ -85,7 +111,7 @@ export async function generateSessionTitle(
       machineId,
       ...(opts.scopedAgent ? { agentName: opts.scopedAgent } : {}),
     },
-    select: { id: true, title: true, titleAuto: true, titleMsgCount: true },
+    select: { id: true, title: true, titleAuto: true, titleUserMsgCount: true },
   });
   if (!session) return { title: null, generated: false };
 
@@ -94,43 +120,26 @@ export async function generateSessionTitle(
     return { title: session.title, generated: false };
   }
 
-  const count = await prisma.chatMessage.count({ where: { sessionId } });
+  const userCount = await prisma.chatMessage.count({ where: { sessionId, ...HUMAN_USER } });
 
-  // Nothing meaningful has happened since we last looked. This is the common
+  // The user hasn't said enough new since we last looked. This is the common
   // path — no model call, no tokens.
-  if (session.title && session.titleAuto && !opts.force && !shouldRefresh(session.titleMsgCount, count)) {
+  if (session.title && session.titleAuto && !opts.force && !shouldRefresh(session.titleUserMsgCount, userCount)) {
     return { title: session.title, generated: false };
   }
 
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) return { title: session.title, generated: false };
 
-  // The RECENT end, newest-first from the database. `take` is generous because
-  // most rows carry no prose at all.
-  const recent = await prisma.chatMessage.findMany({
-    where: { sessionId },
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    take: SAMPLE_MESSAGES * 6,
-    select: { role: true, content: true },
+  const rows = await prisma.chatMessage.findMany({
+    where: { sessionId, ...HUMAN_USER },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { content: true },
   });
-
-  const lines: string[] = [];
-  let budget = SAMPLE_CHARS;
-  for (const r of recent) {
-    const text = extractSearchText(r.content);
-    if (!text) continue;
-    // Take the TAIL of a long message: the end of a turn is where it says what
-    // it actually did; the beginning is preamble.
-    const slice = text.length > 600 ? text.slice(-600) : text;
-    const capped = slice.slice(0, Math.min(slice.length, budget));
-    if (!capped) break;
-    lines.push(`${r.role === 'user' ? 'User' : 'Assistant'}: ${capped}`);
-    budget -= capped.length;
-    if (lines.length >= SAMPLE_MESSAGES || budget <= 0) break;
-  }
-  // One line of prose is not a conversation; leave `preview` to do the job.
-  if (lines.length === 0) return { title: session.title, generated: false };
-  lines.reverse(); // oldest → newest, so the model reads it as a conversation
+  const texts = rows.map((r) => extractSearchText(r.content)).filter((t) => t.length > 0);
+  // Nothing the user actually typed (an image-only opener, say) — leave
+  // `preview` to do the job.
+  if (texts.length === 0) return { title: session.title, generated: false };
 
   let title: string;
   try {
@@ -140,7 +149,7 @@ export async function generateSessionTitle(
         MODEL,
         [
           { role: 'system', content: SYSTEM },
-          { role: 'user', content: lines.join('\n\n') },
+          { role: 'user', content: buildExcerpt(texts) },
         ],
         { temperature: 0.3, reasoningOff: true, timeoutMs: 20_000, title: 'hermit-ui session title' }
       )
@@ -159,7 +168,7 @@ export async function generateSessionTitle(
       machineId,
       ...(opts.force ? {} : { OR: [{ title: null }, { titleAuto: true }] }),
     },
-    data: { title, titleAuto: true, titleMsgCount: count },
+    data: { title, titleAuto: true, titleUserMsgCount: userCount },
   });
   if (res.count === 0) {
     const current = await prisma.chatSession.findUnique({ where: { id: sessionId }, select: { title: true } });

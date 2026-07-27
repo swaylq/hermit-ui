@@ -312,7 +312,7 @@ export const chatRouter = router({
       const named = input.title.trim();
       return prisma.chatSession.update({
         where: { id: input.id },
-        data: named ? { title: named, titleAuto: false } : { title: null, titleAuto: false, titleMsgCount: null },
+        data: named ? { title: named, titleAuto: false } : { title: null, titleAuto: false, titleUserMsgCount: null },
       });
     }),
 
