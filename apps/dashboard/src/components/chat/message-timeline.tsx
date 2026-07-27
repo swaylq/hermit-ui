@@ -8,6 +8,7 @@
 // module-private, called only from within this cluster.
 
 import { memo, useState, useCallback } from 'react';
+import { useTimelineWindow, WINDOW_ROW_ATTR } from '@/components/chat/use-timeline-window';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { TimeAgo } from '@/components/time-ago';
@@ -30,7 +31,7 @@ function HarnessTerminatorRow({ ts }: { ts: Date | string }) {
   );
 }
 
-export const MessageTimeline = memo(function MessageTimeline({ messages, streamingTailId, dotClass }: { messages: Array<{ id: string; role: string; content: any; createdAt: Date | string; authoredBy?: string | null }>; streamingTailId?: string | null; dotClass?: string }) {
+export const MessageTimeline = memo(function MessageTimeline({ messages, streamingTailId, dotClass, getViewport }: { messages: Array<{ id: string; role: string; content: any; createdAt: Date | string; authoredBy?: string | null }>; streamingTailId?: string | null; dotClass?: string; getViewport?: () => HTMLElement | null }) {
   // Insert date dividers when day rolls over. Also coalesce consecutive
   // tool-result-only messages into a single row so a parallel-fanout batch
   // (e.g. 6 Read calls → 6 result rows) collapses to one expandable chip.
@@ -62,19 +63,23 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
     return !blocks.every((b) => (b?.kind ?? 'question') === 'question' && askedQuestions.has(b?.payload?.question));
   });
 
-  const out: React.ReactNode[] = [];
+  // Items rather than a flat node list: a long timeline renders only the slice
+  // near the viewport (see use-timeline-window.ts), which means the list has to
+  // be sliceable and every item has to carry a stable key to remember its
+  // measured height by.
+  const out: Array<{ key: string; node: React.ReactNode }> = [];
   let prevDay: Date | string | null = null;
   let i = 0;
   while (i < visibleMessages.length) {
     const m = visibleMessages[i];
     if (!prevDay || !isSameDay(prevDay, m.createdAt)) {
-      out.push(<DateDivider key={`d-${m.id}`} day={m.createdAt} />);
+      out.push({ key: `d-${m.id}`, node: <DateDivider key={`d-${m.id}`} day={m.createdAt} /> });
       prevDay = m.createdAt;
     }
     // Harness "No response requested." terminator → render as a small dashed
     // pill explaining what actually ended the turn, not as a normal bubble.
     if (m.role === 'assistant' && isHarnessTerminator(m.content)) {
-      out.push(<HarnessTerminatorRow key={m.id} ts={m.createdAt} />);
+      out.push({ key: m.id, node: <HarnessTerminatorRow key={m.id} ts={m.createdAt} /> });
       i += 1;
       continue;
     }
@@ -97,11 +102,14 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
        // tool-result rows are merged above), space-separated so a lookup can use
        // the `[data-msg-id~="…"]` word-match selector. It's how a search hit
        // scrolls to its message — see use-anchored-window.ts.
-      out.push(
-        <div key={`g-${m.id}-${lastId}`} data-msg-id={visibleMessages.slice(i, j).map((x) => x.id).join(' ')}>
-          <MessageRow role={m.role} content={combined} ts={m.createdAt} />
-        </div>
-      );
+      out.push({
+        key: `g-${m.id}-${lastId}`,
+        node: (
+          <div key={`g-${m.id}-${lastId}`} data-msg-id={visibleMessages.slice(i, j).map((x) => x.id).join(' ')} {...{ [WINDOW_ROW_ATTR]: `g-${m.id}-${lastId}` }}>
+            <MessageRow role={m.role} content={combined} ts={m.createdAt} />
+          </div>
+        ),
+      });
       i = j;
     } else {
       const streamingTail = !!streamingTailId && m.id === streamingTailId;
@@ -119,16 +127,35 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
       // every other row gets a stable `undefined` and its memo bails. Identical
       // output either way — non-ask rows never touch the map.
       const rowHasAsk = blocks.some((b) => b.type === 'tool_use' && (b as any).name === 'mcp__hermit__ask');
-      out.push(
-        <div key={m.id} data-msg-id={m.id}>
-          <MessageRow role={m.role} authoredBy={m.authoredBy} content={blocks} ts={m.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
-        </div>
-      );
+      out.push({
+        key: m.id,
+        node: (
+          <div key={m.id} data-msg-id={m.id} {...{ [WINDOW_ROW_ATTR]: m.id }}>
+            <MessageRow role={m.role} authoredBy={m.authoredBy} content={blocks} ts={m.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
+          </div>
+        ),
+      });
       i += 1;
     }
   }
-  return <div className="space-y-3">{out}</div>;
+  return <TimelineBody items={out} getViewport={getViewport} />;
 });
+
+// Rendering half of MessageTimeline, split out only so the windowing hook has a
+// component of its own to live in — the hook must run on every render, and
+// MessageTimeline's body is a long straight-line build of `items`.
+function TimelineBody({ items, getViewport }: { items: Array<{ key: string; node: React.ReactNode }>; getViewport?: () => HTMLElement | null }) {
+  const keys = items.map((it) => it.key);
+  const noViewport = useCallback(() => null, []);
+  const win = useTimelineWindow(keys, getViewport ?? noViewport);
+  return (
+    <div className="space-y-3">
+      {win.padTop > 0 && <div data-window-spacer="top" style={{ height: win.padTop }} aria-hidden />}
+      {items.slice(win.start, win.end).map((it) => it.node)}
+      {win.padBottom > 0 && <div data-window-spacer="bottom" style={{ height: win.padBottom }} aria-hidden />}
+    </div>
+  );
+}
 
 const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, streamingTail = false, typing = false, streamingDot, askCardByQuestion }: { role: string; authoredBy?: string | null; content: Block[]; ts: Date | string; streamingTail?: boolean; typing?: boolean; streamingDot?: string; askCardByQuestion?: Map<string, any> }) {
   // Tool-result-only rows belong with the assistant's preceding tool calls,

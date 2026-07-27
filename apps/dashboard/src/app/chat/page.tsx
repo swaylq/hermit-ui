@@ -1439,7 +1439,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   只显示总结回复 · 本轮还在进行，暂无最终回复
                 </p>
               ) : (
-                <MessageTimeline messages={view} streamingTailId={streamingTailId} dotClass={status.dot} />
+                <MessageTimeline messages={view} streamingTailId={streamingTailId} dotClass={status.dot} getViewport={getViewport} />
               )}
             </>
           )}
