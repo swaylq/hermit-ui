@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "next build",
+    "build:check": "next build --experimental-build-mode compile",
     "start": "tsx server.ts",
     "next:start": "next start -p ${PORT:-4101}",
     "lint": "eslint",
