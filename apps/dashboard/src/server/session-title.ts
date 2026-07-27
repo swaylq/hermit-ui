@@ -1,64 +1,55 @@
-// Auto-titling a chat session.
+// Naming a chat session after what it is doing LATELY.
 //
-// The sidebar has always shown the first user message as a session's name
-// (ChatSession.preview). That's a decent stand-in and a poor title: the opening
-// line of a conversation is usually the setup, not the subject, and two sessions
-// that both start "帮我看下这个" are indistinguishable a week later.
+// The sidebar used to show the first user message (ChatSession.preview). That's
+// the opening line — the setup, not the subject — and in a session that runs for
+// days it stops describing anything you care about. What you want from the list
+// is "what is this one working on right now", so that is what the title means
+// here: a label over the RECENT end of the conversation, not a summary of the
+// whole thing.
 //
-// So summarize the opening exchange into a short label. Deliberately narrow:
-//   · a title the USER typed is never touched — chat.setTitle marks the row
-//     `titleAuto = false` and that's the end of it;
-//   · a MACHINE title is refreshed only when the conversation has genuinely
-//     moved on (doubled in length, and by at least REFRESH_MIN_GROWTH
-//     messages), and the refresh is given the old title so it EXTENDS rather
-//     than replaces — a long session's title tracks what it became;
-//   · every other call short-circuits on two cheap indexed queries and spends
-//     no tokens at all, so the client can fire this on every open;
-//   · reads only the first few messages' prose — the topic is established
-//     early, and the whole point is to stay cheap;
-//   · failure is silent and leaves `preview` in place. A missing title is a
-//     cosmetic loss, never a broken session.
+// Two consequences follow from that definition:
+//   · read only the last few messages. The opening is deliberately NOT sampled;
+//     including it would drag the title back toward whatever the session
+//     started as, which is exactly the staleness we're trying to remove.
+//   · refresh often. A stale title defeats the purpose, so the gate is a flat
+//     "some new conversation has happened", not anything proportional — a long
+//     session needs re-reading just as often as a short one, arguably more.
+//
+// Cost stays bounded because the trigger is OPENING a session, not message
+// volume: however busy a session gets between visits, one visit costs at most
+// one call, and revisiting with nothing new costs none.
+//
+// A title the USER typed is never touched — chat.setTitle marks the row
+// `titleAuto = false` and that ends it. Failure is silent and leaves whatever
+// was there; a missing title is cosmetic, never a broken session.
 
 import { prisma } from './db';
 import { extractSearchText } from './chat-text';
 import { openrouterChat } from './openrouter';
 
 const MODEL = process.env.OPENROUTER_TITLE_MODEL || 'deepseek/deepseek-v4-flash';
-// Enough messages to see what the conversation turned out to be about, not so
-// many that a long session costs real tokens.
+// How many recent messages with prose to show the model. A handful of exchanges
+// is enough to say what's going on, and keeps the call small.
 const SAMPLE_MESSAGES = 8;
-const SAMPLE_CHARS = 3000;
+const SAMPLE_CHARS = 2500;
 export const TITLE_MAX = 40;
-// When to re-title a session that already has a machine title. Both must hold,
-// so a refresh costs at most O(log n) model calls over a session's whole life:
-// a 26k-message session re-titles ~9 times, not 26k times.
-const REFRESH_FACTOR = 2;
-const REFRESH_MIN_GROWTH = 40;
-
-/** Should a machine-written title be re-derived yet? */
-export function shouldRefresh(previousCount: number | null, currentCount: number): boolean {
-  if (previousCount == null) return true; // titled before we tracked counts
-  return currentCount >= previousCount * REFRESH_FACTOR && currentCount >= previousCount + REFRESH_MIN_GROWTH;
-}
+// New messages required before the title is re-derived. Most rows in a working
+// session are tool traffic with no prose, so this is roughly a handful of real
+// exchanges — recent enough to stay true, coarse enough that reopening a
+// session you were just in costs nothing.
+const REFRESH_AFTER_MESSAGES = 30;
 
 const SYSTEM = [
-  'You name chat conversations.',
-  'Read the excerpt and reply with ONLY a title: the specific subject or task, as a noun phrase.',
-  'Use the same language the conversation is in.',
+  'You label an ongoing chat conversation with what it is CURRENTLY working on.',
+  'You are shown only its most recent messages.',
+  'Reply with ONLY the label: the specific task or topic in play, as a noun phrase.',
+  // The USER's language, not the transcript's: a Chinese conversation quoting
+  // English tool output was coming back with an English title, and it's the
+  // user who reads the sidebar.
+  'Write the label in the language the USER writes in, even when the excerpt quotes English code, logs or output.',
   'At most 20 characters for Chinese/Japanese/Korean, at most 6 words otherwise.',
   'No quotes, no trailing punctuation, no prefix like "标题:" or "Title:".',
   'Be concrete. "修复滚动跳变" not "技术讨论"; "Postgres index tuning" not "A question".',
-].join(' ');
-
-// Refreshing an existing title is a different job from naming a blank session:
-// the point is continuity. A conversation that started on caching and moved to
-// scrolling should read as covering both, not silently become "滚动修复" and lose
-// its own history.
-const REFRESH_SYSTEM = [
-  SYSTEM,
-  'You are UPDATING an existing title because the conversation has continued.',
-  'Keep it if it still fits. Widen or replace it only if the conversation has genuinely moved on.',
-  'Obey the same length limit.',
 ].join(' ');
 
 /** Strip the ways a model still occasionally wraps or prefixes its answer. */
@@ -71,11 +62,17 @@ export function cleanTitle(raw: string): string {
   return t.length > TITLE_MAX ? t.slice(0, TITLE_MAX) : t;
 }
 
+/** Has enough new conversation happened to be worth re-reading? */
+export function shouldRefresh(previousCount: number | null, currentCount: number): boolean {
+  if (previousCount == null) return true; // titled before we tracked counts
+  return currentCount - previousCount >= REFRESH_AFTER_MESSAGES;
+}
+
 /**
- * Generate and store a title for `sessionId`. Returns the title, or null when
- * there was nothing to work with / no API key / the model failed.
+ * Generate and store a title for `sessionId`.
  *
- * `force` regenerates even if a title already exists (the manual button).
+ * `generated` reports whether a model call actually happened, so callers — and
+ * tests — can see the cost. `force` regenerates regardless: the manual button.
  */
 export async function generateSessionTitle(
   sessionId: string,
@@ -92,16 +89,15 @@ export async function generateSessionTitle(
   });
   if (!session) return { title: null, generated: false };
 
-  // A name the user chose is final. Only an explicit `force` (the regenerate
-  // button) may override it.
+  // A name the user chose is final. Only an explicit `force` may override it.
   if (session.title && !session.titleAuto && !opts.force) {
     return { title: session.title, generated: false };
   }
 
   const count = await prisma.chatMessage.count({ where: { sessionId } });
 
-  // Already titled by us, and the conversation hasn't moved on enough to be
-  // worth re-reading. This is the common path — no model call, no tokens.
+  // Nothing meaningful has happened since we last looked. This is the common
+  // path — no model call, no tokens.
   if (session.title && session.titleAuto && !opts.force && !shouldRefresh(session.titleMsgCount, count)) {
     return { title: session.title, generated: false };
   }
@@ -109,55 +105,32 @@ export async function generateSessionTitle(
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) return { title: session.title, generated: false };
 
-  const rows = await prisma.chatMessage.findMany({
+  // The RECENT end, newest-first from the database. `take` is generous because
+  // most rows carry no prose at all.
+  const recent = await prisma.chatMessage.findMany({
     where: { sessionId },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    take: SAMPLE_MESSAGES * 4, // most rows are tool traffic with no prose
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: SAMPLE_MESSAGES * 6,
     select: { role: true, content: true },
   });
-  // On a REFRESH, the opening messages are exactly what the existing title
-  // already covers — read the recent end instead, so the update reflects what
-  // the conversation has become.
-  const refreshing = !!session.title;
-  const recent = refreshing
-    ? await prisma.chatMessage.findMany({
-        where: { sessionId },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: SAMPLE_MESSAGES * 4,
-        select: { role: true, content: true },
-      })
-    : [];
 
-  const excerpt = (source: typeof rows, budget: number): string[] => {
-    const lines: string[] = [];
-    let left = budget;
-    for (const r of source) {
-      const text = extractSearchText(r.content);
-      if (!text) continue;
-      const slice = text.slice(0, Math.min(600, left));
-      lines.push(`${r.role === 'user' ? 'User' : 'Assistant'}: ${slice}`);
-      left -= slice.length;
-      if (lines.length >= SAMPLE_MESSAGES || left <= 0) break;
-    }
-    return lines;
-  };
-
-  const opening = excerpt(rows, refreshing ? SAMPLE_CHARS / 2 : SAMPLE_CHARS);
-  const latest = refreshing ? excerpt(recent.reverse(), SAMPLE_CHARS / 2) : [];
+  const lines: string[] = [];
+  let budget = SAMPLE_CHARS;
+  for (const r of recent) {
+    const text = extractSearchText(r.content);
+    if (!text) continue;
+    // Take the TAIL of a long message: the end of a turn is where it says what
+    // it actually did; the beginning is preamble.
+    const slice = text.length > 600 ? text.slice(-600) : text;
+    const capped = slice.slice(0, Math.min(slice.length, budget));
+    if (!capped) break;
+    lines.push(`${r.role === 'user' ? 'User' : 'Assistant'}: ${capped}`);
+    budget -= capped.length;
+    if (lines.length >= SAMPLE_MESSAGES || budget <= 0) break;
+  }
   // One line of prose is not a conversation; leave `preview` to do the job.
-  if (opening.length === 0 && latest.length === 0) return { title: session.title, generated: false };
-
-  const userContent = refreshing
-    ? [
-        `Existing title: ${session.title}`,
-        '',
-        'How it began:',
-        opening.join('\n\n'),
-        '',
-        'Where it is now:',
-        latest.join('\n\n'),
-      ].join('\n')
-    : opening.join('\n\n');
+  if (lines.length === 0) return { title: session.title, generated: false };
+  lines.reverse(); // oldest → newest, so the model reads it as a conversation
 
   let title: string;
   try {
@@ -166,8 +139,8 @@ export async function generateSessionTitle(
         key,
         MODEL,
         [
-          { role: 'system', content: refreshing ? REFRESH_SYSTEM : SYSTEM },
-          { role: 'user', content: userContent },
+          { role: 'system', content: SYSTEM },
+          { role: 'user', content: lines.join('\n\n') },
         ],
         { temperature: 0.3, reasoningOff: true, timeoutMs: 20_000, title: 'hermit-ui session title' }
       )

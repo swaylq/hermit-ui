@@ -25,36 +25,32 @@ test('empty in, empty out — the caller falls back to the preview', () => {
   assert.equal(cleanTitle('""'), '');
 });
 
-// The refresh gate is the whole token-cost story: it decides how often a
-// long-running session is re-read by the model.
+// The refresh gate. The title means "what is this session doing lately", so it
+// is flat — a long session needs re-reading as often as a short one — and the
+// cost is bounded by how often you OPEN a session, not by message volume.
 test('a session titled before counts were tracked refreshes once', () => {
   assert.equal(shouldRefresh(null, 12), true);
 });
 
-test('does not refresh until the conversation has really moved on', () => {
+test('a handful of new messages is not yet worth re-reading', () => {
   assert.equal(shouldRefresh(10, 11), false);
-  assert.equal(shouldRefresh(10, 20), false); // doubled, but only +10
-  assert.equal(shouldRefresh(10, 49), false); // +39, one short
-  assert.equal(shouldRefresh(10, 50), true); // doubled AND +40
+  assert.equal(shouldRefresh(10, 29), false);
 });
 
-test('a big session needs proportionally more growth, not a fixed amount', () => {
-  assert.equal(shouldRefresh(1000, 1200), false);
-  assert.equal(shouldRefresh(1000, 2000), true);
+test('refreshes once real conversation has accumulated', () => {
+  assert.equal(shouldRefresh(10, 40), true);
+  assert.equal(shouldRefresh(10, 500), true);
 });
 
-test('refreshes stay logarithmic over a session lifetime', () => {
-  // The cost bound that justifies calling autoTitle on every open.
-  let titledAt = 4;
-  let calls = 0;
-  for (let n = 4; n <= 30_000; n++) {
-    if (shouldRefresh(titledAt, n)) {
-      calls++;
-      titledAt = n;
-    }
-  }
-  assert.ok(calls <= 12, `expected a handful of refreshes over 30k messages, got ${calls}`);
-  assert.ok(calls >= 5, `expected the title to keep up at all, got ${calls}`);
+test('the gate does NOT scale with session size — recency matters equally at any length', () => {
+  // The old proportional gate made a 1000-message session wait for another
+  // 1000; a title about "lately" must not get harder to refresh over time.
+  assert.equal(shouldRefresh(1000, 1030), true);
+  assert.equal(shouldRefresh(10, 40), true);
+});
+
+test('reopening with nothing new costs nothing', () => {
+  assert.equal(shouldRefresh(250, 250), false);
 });
 
 test('never refreshes backwards', () => {
