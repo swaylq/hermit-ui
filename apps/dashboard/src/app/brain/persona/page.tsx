@@ -5,7 +5,7 @@
 //
 //   PERSONA.md — who the BRAIN is. Yours to edit. Voice, how it hands out work, how
 //     cautious it is. Machine-managed content never touches this file.
-//   USER.md    — who YOU are, as the Brain currently reads you. The Brain writes it
+//   USER-PROFILE.md    — who YOU are, as the Brain currently reads you. The Brain writes it
 //     in its nightly dream from what you've actually typed; you read it and, if it
 //     has you wrong, that's the signal to correct it.
 //
@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Markdown } from '@/components/markdown';
 
 const PERSONA_PATH = 'PERSONA.md';
-const USER_PROFILE_PATH = 'USER.md';
+const USER_PROFILE_PATH = 'USER-PROFILE.md';
 
 function PersonaEditor({ agentName }: { agentName: string }) {
   const utils = trpc.useUtils();

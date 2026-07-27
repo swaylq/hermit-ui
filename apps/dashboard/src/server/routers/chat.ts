@@ -98,7 +98,7 @@ const asContent = (blocks: Array<Record<string, unknown>>) => blocks as unknown 
  *
  * `authoredBy: 'system'` matters more than it looks: these rows are role 'user',
  * and without the marker every poke the gateway ever generated would read as
- * something the human typed and land in the USER.md corpus (server/user-profile.ts).
+ * something the human typed and land in the USER-PROFILE.md corpus (server/user-profile.ts).
  */
 async function pokeSession(sessionId: string, machineId: string, text: string): Promise<boolean> {
   const target = await prisma.chatSession.findFirst({
@@ -803,7 +803,7 @@ export const chatRouter = router({
         // Provenance, not authorization. Only the Brain's takeover_say tool passes
         // 'brain'; the browser composer never sets it. A machine key is already
         // trusted with everything, so this labels rather than gates — but it is
-        // what keeps the Brain's own words out of the USER.md corpus, so it has to
+        // what keeps the Brain's own words out of the USER-PROFILE.md corpus, so it has to
         // be recorded at the point of writing and can't be reconstructed later.
         authoredBy: z.literal('brain').optional(),
         // Set on the Brain's FIRST message of a takeover: what it read the
@@ -1240,7 +1240,7 @@ export const chatRouter = router({
       // Deliver the poke into the Brain session that owns this dispatch — but only
       // if it's still open (a closed Brain chat can't act on it). Via pokeSession,
       // which stamps authoredBy:'system': these are role 'user' rows, so unmarked
-      // they would read as things the human typed and skew the USER.md corpus.
+      // they would read as things the human typed and skew the USER-PROFILE.md corpus.
       if (await pokeSession(r.dispatchedBySessionId!, ctx.machine.id, poke)) poked++;
     }
     return { scanned: rows.length, poked };
@@ -1356,10 +1356,10 @@ export const chatRouter = router({
     return rows.map((r) => ({ ...r, turnCap: TAKEOVER_TURN_CAP }));
   }),
 
-  // ── USER.md corpus ─────────────────────────────────────────────────────────
+  // ── USER-PROFILE.md corpus ─────────────────────────────────────────────────────────
 
   // Everything the human typed on this machine after `since`, oldest first. Backs
-  // the Brain's `user_messages` tool, which folds each batch into USER.md and
+  // the Brain's `user_messages` tool, which folds each batch into USER-PROFILE.md and
   // records the watermark in the file itself — so this stays stateless and there's
   // no DB/file sync to drift. See server/user-profile.ts for why the filter is
   // as paranoid as it is.
@@ -1388,8 +1388,8 @@ export const chatRouter = router({
     const ok = await pokeSession(
       brainSession.id,
       ctx.machine.id,
-      '[user profile] Refresh USER.md now, following the "Read the human" step of your `dreaming` skill: ' +
-        'read USER.md for its synced-through watermark, pull the new messages with user_messages, ' +
+      '[user profile] Refresh USER-PROFILE.md now, following the "Read the human" step of your `dreaming` skill: ' +
+        'read USER-PROFILE.md for its synced-through watermark, pull the new messages with user_messages, ' +
         'fold them into the existing read rather than rewriting it, and update the watermark.',
     );
     return { ok };

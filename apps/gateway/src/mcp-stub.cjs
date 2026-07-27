@@ -426,11 +426,11 @@ const BRAIN_TOOLS = [
   {
     name: 'user_messages',
     description:
-      "Read what the HUMAN has actually typed across this machine's conversations, oldest first — the raw material for USER.md. Only their own messages: your takeover messages and the gateway's [dispatch update] pokes are excluded, so you can never mistake your own voice for theirs. Pass `since` (the synced-through watermark at the bottom of USER.md) to get only what's new; omit it for a first pass.",
+      "Read what the HUMAN has actually typed across this machine's conversations, oldest first — the raw material for USER-PROFILE.md. Only their own messages: your takeover messages and the gateway's [dispatch update] pokes are excluded, so you can never mistake your own voice for theirs. Pass `since` (the synced-through watermark at the bottom of USER-PROFILE.md) to get only what's new; omit it for a first pass.",
     inputSchema: {
       type: 'object',
       properties: {
-        since: { type: 'string', description: "ISO timestamp — the watermark from USER.md. Omit on a first pass." },
+        since: { type: 'string', description: "ISO timestamp — the watermark from USER-PROFILE.md. Omit on a first pass." },
         limit: { type: 'number', description: 'How many messages (default 200, max 400).' },
       },
     },
@@ -761,7 +761,7 @@ async function dispatchBrainTool(name, args) {
     const list = Array.isArray(rows) ? rows : [];
     return JSON.stringify({
       count: list.length,
-      // The watermark to write back into USER.md — the last row's timestamp, so the
+      // The watermark to write back into USER-PROFILE.md — the last row's timestamp, so the
       // next pass resumes exactly here. Null when nothing new came back, which is
       // the signal to leave the existing watermark alone.
       syncedThrough: list.length ? list[list.length - 1].at : null,

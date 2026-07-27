@@ -1,7 +1,7 @@
-// The USER.md corpus filter. This is the test that matters most in the takeover
+// The USER-PROFILE.md corpus filter. This is the test that matters most in the takeover
 // feature: if it ever loosens, the Brain starts reading its OWN takeover messages
 // and the gateway's pokes back as things the human said, summarises that into
-// USER.md, and then acts on it. The drift is silent and compounding — nothing
+// USER-PROFILE.md, and then acts on it. The drift is silent and compounding — nothing
 // crashes, the Brain just gradually becomes a portrait of itself.
 
 import { test } from 'node:test';
@@ -34,7 +34,7 @@ test('`since` becomes a strict greater-than, so the watermark row is not re-read
 });
 
 test('a null `since` is treated as "no watermark", not as a filter', () => {
-  // USER.md's seeded watermark is the literal string `never`; the tool maps that to
+  // USER-PROFILE.md's seeded watermark is the literal string `never`; the tool maps that to
   // null, and null must scan from the beginning rather than produce `gt: null`.
   assert.equal('createdAt' in corpusQuery('m1', { since: null }).where, false);
 });

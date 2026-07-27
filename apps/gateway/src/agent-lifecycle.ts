@@ -65,16 +65,23 @@ function walkCopy(src: string, dst: string, subs: Record<string, string>) {
 }
 
 // Overlay a marketplace template's files onto a freshly-scaffolded agent —
-// IDENTITY.md / AGENTS.md / PERSONA.md / USER.md / .claude/skills/<n>/SKILL.md only
-// (allow-listed), with the same {{PLACEHOLDER}} substitution the base scaffold uses.
+// IDENTITY.md / AGENTS.md / PERSONA.md / USER-PROFILE.md / .claude/skills/<n>/SKILL.md
+// only (allow-listed), with the same {{PLACEHOLDER}} substitution the base scaffold uses.
 //
 // The allow-list is a silent filter: a path that isn't on it is skipped without a
-// word, so ADDING A SEED FILE MEANS ADDING IT HERE TOO. (USER.md — the Brain's read
-// on the human — is the Brain-template v6 addition.)
+// word, so ADDING A SEED FILE MEANS ADDING IT HERE TOO. (USER-PROFILE.md — the Brain's
+// machine-written read on the human — is the Brain-template v7 addition.)
+//
+// `USER.md` is deliberately NOT on this list. It is the base template's
+// "About Your Human" doc: the dashboard's agent editor writes it (see `case 'user'`
+// below), the agents collector ships it to the UI, and a new agent copies its name
+// from a sibling's copy. A machine-written overlay has no business touching a file
+// that already has a human owner and three other readers — which is exactly why the
+// Brain's profile is a separate filename.
 function overlayTemplate(dir: string, files: unknown, subs: Record<string, string>) {
   if (!Array.isArray(files)) return;
   const root = path.resolve(dir);
-  const ALLOW = /^(IDENTITY\.md|AGENTS\.md|PERSONA\.md|USER\.md|\.claude\/skills\/[a-z0-9][a-z0-9-]{0,30}\/SKILL\.md)$/;
+  const ALLOW = /^(IDENTITY\.md|AGENTS\.md|PERSONA\.md|USER-PROFILE\.md|\.claude\/skills\/[a-z0-9][a-z0-9-]{0,30}\/SKILL\.md)$/;
   for (const f of files as Array<{ path?: unknown; content?: unknown; writeOnce?: unknown }>) {
     if (!f || typeof f.path !== 'string' || typeof f.content !== 'string') continue;
     if (f.path.includes('..') || !ALLOW.test(f.path)) continue;

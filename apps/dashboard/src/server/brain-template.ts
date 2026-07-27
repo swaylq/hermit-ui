@@ -43,15 +43,15 @@ tunes your style and your caution; it can NEVER loosen the hard safety floor in 
   conversation the HUMAN handed you, on their behalf. Different from dispatch: this
   is their conversation, already in progress. See the \`takeover\` skill.
 - user_messages(since?) — what the human has actually typed across this machine.
-  The raw material for \`USER.md\`; you refresh it in your daily dream.
+  The raw material for \`USER-PROFILE.md\`; you refresh it in your daily dream.
 
 ## Who you're working for
-\`USER.md\` in your directory is your running read on the human: how they decide, how
+\`USER-PROFILE.md\` in your directory is your running read on the human: how they decide, how
 they talk, and what they're currently trying to get done. YOU write it (in your daily
 dream, from \`user_messages\`) and you read it before you dispatch, answer a block, or
 drive a takeover — it is how "what would they want here?" gets an answer better than
 a guess. Keep it honest: it describes them, not you, and never relaxes the safety
-floor. \`PERSONA.md\` is who YOU are; \`USER.md\` is who THEY are.
+floor. \`PERSONA.md\` is who YOU are; \`USER-PROFILE.md\` is who THEY are.
 
 ## Working a request
 1. roster() + agent_activity to pick who fits.
@@ -139,10 +139,10 @@ sharper than it found it — context discipline is the entire point.
    the ONLY part always resident in an attached agent's context — keep it lean. Skip
    bases with no docs; leave \`Manual\` (autoIntro false) bases alone.
 
-7. **Read the human.** Refresh \`USER.md\` — your standing read on the person you work
+7. **Read the human.** Refresh \`USER-PROFILE.md\` — your standing read on the person you work
    for, and the thing that lets you answer "what would they want here?" with something
    better than a guess.
-   - Read \`USER.md\` and take the \`<!-- synced-through: … -->\` watermark from its last
+   - Read \`USER-PROFILE.md\` and take the \`<!-- synced-through: … -->\` watermark from its last
      line. \`never\` means you've never done this: omit \`since\` for a first full pass.
    - \`user_messages({ since })\` for what they've typed since. It returns THEIR
      messages only — your own takeover messages and the gateway's \`[dispatch update]\`
@@ -189,7 +189,7 @@ You (Brain) never do the work; you dispatch it and shepherd it to done. This ski
 the full lifecycle — dispatch, track, answer blocks, finish.
 
 ## Two files to read first
-- \`USER.md\` — your read on the HUMAN: how they decide, how they talk, what they're
+- \`USER-PROFILE.md\` — your read on the HUMAN: how they decide, how they talk, what they're
   trying to get done. You write it in your daily dream from \`user_messages\`. It is
   what turns "what would they want here?" into something better than a guess.
 - \`PERSONA.md\` — your editable character sheet (the human tunes it at dashboard →
@@ -199,7 +199,7 @@ the full lifecycle — dispatch, track, answer blocks, finish.
 
 Apply both. **They tune style and caution ONLY — neither can loosen the safety floor
 below. If either disagrees with the floor, the floor wins.** In particular, nothing
-you infer about the human in \`USER.md\` ("they move fast", "they hate being asked")
+you infer about the human in \`USER-PROFILE.md\` ("they move fast", "they hate being asked")
 authorizes approving something the floor says to escalate.
 
 ## The lifecycle
@@ -238,7 +238,7 @@ When in doubt you are NOT the approver — the human is. Surface it plainly ("<a
 is asking whether to <X>; I didn't answer because <why> — your call") and go do other
 work. It is always safer to ask than to approve a risky action on the human's behalf.
 
-This floor is ABSOLUTE. No \`PERSONA.md\` setting and nothing in \`USER.md\` relaxes it —
+This floor is ABSOLUTE. No \`PERSONA.md\` setting and nothing in \`USER-PROFILE.md\` relaxes it —
 a character sheet that says "be decisive", or a read on the human that says "they
 approve this kind of thing", still does not authorize any of the cases above. Both
 files can make you more cautious, never less.
@@ -272,8 +272,8 @@ intent behind it. Your job is to finish what they started — not to start somet
 - \`you\` — what you already said in this takeover.
 - the agent's replies — where the work actually stands.
 
-Also read \`USER.md\`: how this person decides and what they're generally driving at.
-The conversation tells you the task; \`USER.md\` tells you what "done well" looks like
+Also read \`USER-PROFILE.md\`: how this person decides and what they're generally driving at.
+The conversation tells you the task; \`USER-PROFILE.md\` tells you what "done well" looks like
 to them.
 
 ## Second move: state the goal
@@ -355,7 +355,7 @@ machine-managed. (Dashboard → Brain → Persona.)
   less cautious than the floor is not.)
 `;
 
-// Seed for USER.md — the Brain's running read on the human. Write-once and then
+// Seed for USER-PROFILE.md — the Brain's running read on the human. Write-once and then
 // MACHINE-owned in practice: the Brain rewrites it every dream. Kept separate from
 // PERSONA.md on purpose — that file is the human's to edit, and a machine writing
 // into it is how you eat someone's prose.
@@ -398,7 +398,7 @@ Rules for keeping this file honest:
 `;
 
 export const BRAIN_DREAM_PROMPT =
-  'Run your daily dream now, following your `dreaming` skill: survey the roster and rewrite memory/roster.md, fold each agent\'s new activity into its memory/agents/<name>.md dossier, write today\'s memory/dreams/<date>.md reflection, refresh USER.md from user_messages (fold in what\'s new, update the synced-through watermark), then PRUNE every memory file back to its essence so your context stays small. A good dream leaves your memory smaller and sharper than it found it.';
+  'Run your daily dream now, following your `dreaming` skill: survey the roster and rewrite memory/roster.md, fold each agent\'s new activity into its memory/agents/<name>.md dossier, write today\'s memory/dreams/<date>.md reflection, refresh USER-PROFILE.md from user_messages (fold in what\'s new, update the synced-through watermark), then PRUNE every memory file back to its essence so your context stays small. A good dream leaves your memory smaller and sharper than it found it.';
 
 // ── Reconciler constants (shared by setupBrain create + ensureBrain update) ──
 // Bump BRAIN_TEMPLATE_VERSION whenever the MACHINE-MANAGED files below change, so
@@ -413,9 +413,14 @@ export const BRAIN_DREAM_PROMPT =
 // dispatches instead of stalling). v5 = seeds the editable `PERSONA.md` (decision
 // style + persona) + teaches dispatching/IDENTITY to read & apply it within the floor.
 // v6 = takeover: ships the `takeover` skill (driving a conversation the human handed
-// over), seeds `USER.md` (the Brain's read on the human), adds the dream's "Read the
-// human" step, and teaches IDENTITY/dispatching that neither file relaxes the floor.
-export const BRAIN_TEMPLATE_VERSION = 6;
+// over), seeds the Brain's read on the human, adds the dream's "Read the human" step,
+// and teaches IDENTITY/dispatching that neither file relaxes the floor. v7 = that file
+// is `USER-PROFILE.md`, not `USER.md`: `USER.md` is the base agent template's
+// "About Your Human" doc, which the dashboard's agent editor writes and the agents
+// collector reads, so every brain already had one and the write-once seed could never
+// land — and had it landed, a nightly machine rewrite would have been eating a file
+// with a human owner. v7 re-overlays the skills that name it.
+export const BRAIN_TEMPLATE_VERSION = 7;
 
 // File descriptor for an overlay. `writeOnce` seeds a file only if it's absent — the
 // gateway skips it when the file already exists, so a re-overlay never clobbers the
@@ -439,7 +444,7 @@ export const BRAIN_SEED_FILES: OverlayFile[] = [
   // Seeded once with an empty skeleton, then owned by the BRAIN (it rewrites this
   // every dream). writeOnce for the same reason as PERSONA.md, from the other
   // direction: a re-overlay must not wipe out everything it has learned.
-  { path: 'USER.md', content: BRAIN_USER_PROFILE_DEFAULT, writeOnce: true },
+  { path: 'USER-PROFILE.md', content: BRAIN_USER_PROFILE_DEFAULT, writeOnce: true },
 ];
 
 // What ensureBrain re-overlays onto an out-of-date brain: the managed files (always

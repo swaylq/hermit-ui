@@ -53,6 +53,6 @@ export function buildTemplate(agent: AgentForTemplate): {
   }
 
   const kept = files.map((f) => f.path);
-  const stripped = ['USER.md', 'TOOLS.md（账号 / 密钥）', 'memory/（Claude Code auto-memory）', 'evolution/（accounts · heartbeat · reflections · lessons）'];
+  const stripped = ['USER.md', 'USER-PROFILE.md（义脑对用户的读解）', 'TOOLS.md（账号 / 密钥）', 'memory/（Claude Code auto-memory）', 'evolution/（accounts · heartbeat · reflections · lessons）'];
   return { files, basePersona: extractPersona(agent.identityText), kept, stripped };
 }

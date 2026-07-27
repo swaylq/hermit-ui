@@ -1,6 +1,6 @@
 # 义脑接管 + 用户画像 — 设计
 
-**Goal:** 两件事。① 任何一个对话都可以交给义脑接管，由它替你继续和那个 agent 对话，直到把你想做的事推完。② 义脑维护一份对**你**的读解（`USER.md`）——你怎么做决定、怎么说话、在做什么——从你真正打过的字里总结，每晚做梦时刷新。
+**Goal:** 两件事。① 任何一个对话都可以交给义脑接管，由它替你继续和那个 agent 对话，直到把你想做的事推完。② 义脑维护一份对**你**的读解（`USER-PROFILE.md`）——你怎么做决定、怎么说话、在做什么——从你真正打过的字里总结，每晚做梦时刷新。
 
 **Non-goals(v1):** 义脑自己发起接管（永远由人交出）、跨机器接管、接管别人分享给你的 agent、在接管里改 PERSONA、把画像做成结构化字段（它就是一份 markdown）。
 
@@ -96,7 +96,7 @@ authoredBy String?   // null = 你打的；'brain' = 义脑；'system' = 网关 
 
 ---
 
-## USER.md — 它学到的你
+## USER-PROFILE.md — 它学到的你
 
 ### 为什么不写进 PERSONA.md
 
@@ -121,7 +121,7 @@ externalId IS NULL     — 排掉网关同步回来的 transcript 行
 
 ### 增量：水位线在文件里
 
-义脑把 `<!-- synced-through: <iso> -->` 写在 `USER.md` 末尾，下次只拉之后的新消息，**折进已有内容而不是重写**。服务端因此完全无状态，没有 DB↔文件的同步可漂。
+义脑把 `<!-- synced-through: <iso> -->` 写在 `USER-PROFILE.md` 末尾，下次只拉之后的新消息，**折进已有内容而不是重写**。服务端因此完全无状态，没有 DB↔文件的同步可漂。
 
 和会话自动标题那套是同一个模式（`titleMsgCount` 水位线 + 「延展而不是替换」）。
 
@@ -136,11 +136,11 @@ externalId IS NULL     — 排掉网关同步回来的 transcript 行
 ## Brain 模板 v6
 
 - 新增 managed skill `takeover`（驱动别人对话的完整生命周期）
-- 新增 write-once 种子 `USER.md`
+- 新增 write-once 种子 `USER-PROFILE.md`
 - `dreaming` skill 加第 7 步「Read the human」
-- `dispatching` skill + IDENTITY 改成读两个文件，并明确 **`USER.md` 同样不能松动安全底线**——「他这种事一般都批」不是批准权
+- `dispatching` skill + IDENTITY 改成读两个文件，并明确 **`USER-PROFILE.md` 同样不能松动安全底线**——「他这种事一般都批」不是批准权
 
-⚠️ 网关的 overlay 白名单（`agent-lifecycle.ts`）是**静默过滤**：不在名单上的路径被无声跳过。加种子文件必须同时加白名单，`USER.md` 已加。
+⚠️ 网关的 overlay 白名单（`agent-lifecycle.ts`）是**静默过滤**：不在名单上的路径被无声跳过。加种子文件必须同时加白名单，`USER-PROFILE.md` 已加。
 
 ---
 
@@ -168,7 +168,7 @@ externalId IS NULL     — 排掉网关同步回来的 transcript 行
 
 ### 端到端没做
 
-真接管一次（推目标 → 驱动几轮 → 交还）、撞上限强制交还、做一次梦看 `USER.md` 只吃到人类消息——这三样都需要活的义脑 + 真 agent，没做。逻辑正确和编译通过不等于跑得通。
+真接管一次（推目标 → 驱动几轮 → 交还）、撞上限强制交还、做一次梦看 `USER-PROFILE.md` 只吃到人类消息——这三样都需要活的义脑 + 真 agent，没做。逻辑正确和编译通过不等于跑得通。
 
 ---
 

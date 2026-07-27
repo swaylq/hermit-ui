@@ -1,4 +1,4 @@
-// The corpus behind USER.md — the Brain's running read on how the human decides,
+// The corpus behind USER-PROFILE.md — the Brain's running read on how the human decides,
 // how they talk, and what they're currently trying to get done.
 // See docs/brain-takeover-design.md.
 //
@@ -53,7 +53,7 @@ export interface CorpusRow {
  * only a comment.
  *
  * Oldest-first and cursor-shaped on purpose: the Brain folds each batch into the
- * existing USER.md and records a watermark, so a big backlog is absorbed over
+ * existing USER-PROFILE.md and records a watermark, so a big backlog is absorbed over
  * several passes rather than truncated to "the most recent N" — which would keep
  * re-reading the same recent slice and never reach the rest.
  */
