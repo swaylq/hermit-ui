@@ -21,8 +21,9 @@
 import { useCallback, useRef, useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { currentScope } from '@/lib/chat-cache/sync';
-import { getFullRows, putFullRows } from '@/lib/chat-cache/db';
+import { getFullRows, putFullRows, getSessionText, getSessions } from '@/lib/chat-cache/db';
 import type { CachedFullRow } from '@/lib/chat-cache/types';
+import { summaryPage, type CachedRow } from '@/lib/chat-cache/summary-page';
 
 // Messages per "load earlier". Deliberately one screenful-ish rather than a big
 // slab: 200 messages of markdown parse + syntax highlight blocks the main thread
@@ -31,6 +32,12 @@ import type { CachedFullRow } from '@/lib/chat-cache/types';
 // keep each step under a frame budget the anchor can ride, and make the
 // scrollbar grow in gentle steps instead of one lurch.
 export const OLDER_PAGE = 60;
+
+// Summary mode pages out of the local cache, so a page can be counted in rows
+// the reader will actually SEE rather than in raw messages that mostly get
+// filtered away — and it costs no request, so it can afford to be generous.
+// 40 prose rows is several screens.
+export const SUMMARY_PAGE = 40;
 
 export type TimelineRow = { id: string; role: string; content: unknown; createdAt: Date | string };
 
@@ -53,18 +60,38 @@ export type OlderPages = {
  */
 export function useOlderPages(
   sessionId: string,
-  windowOldestId: string | undefined,
-  mayHaveMore: boolean
+  windowOldest: { id: string; createdAt: Date | string } | undefined,
+  mayHaveMore: boolean,
+  summary: boolean
 ): OlderPages {
-  const [rows, setRows] = useState<TimelineRow[]>([]);
+  // History is accumulated PER MODE. The two are different projections of the
+  // same past — summary rows carry prose and cards, full rows carry everything —
+  // so showing one where the other is expected would be a quiet lie. Keeping
+  // both means toggling costs you your place in the other mode's history, not
+  // the history itself: toggle back and it is still there.
+  const [fullRows, setFullRows] = useState<TimelineRow[]>([]);
+  const [summaryRows, setSummaryRows] = useState<TimelineRow[]>([]);
+  const rows = summary ? summaryRows : fullRows;
+  const setRows = summary ? setSummaryRows : setFullRows;
   const [serverSaysMore, setServerSaysMore] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
   const [servedFromCache, setServedFromCache] = useState(false);
   const inFlight = useRef(false);
   const utils = trpc.useUtils();
 
-  // The row a new page attaches above: the oldest we already hold.
-  const anchorId = rows.length > 0 ? rows[0].id : windowOldestId;
+  // The row a new page attaches above: the oldest we already hold. Carried as
+  // (createdAt, id) because the summary pager positions by ORDER — the row the
+  // timeline starts at is usually a tool result, which has no prose and so is
+  // absent from the prose cache entirely.
+  const edge = rows.length > 0 ? rows[0] : windowOldest;
+  const anchorId = edge?.id;
+  const anchorAt = edge
+    ? typeof edge.createdAt === 'string'
+      ? edge.createdAt
+      : edge.createdAt.toISOString()
+    : undefined;
+  // hasMore is per mode: the two pagers walk the same past at different rates.
+  const [summarySaysMore, setSummarySaysMore] = useState<boolean | null>(null);
 
   const loadMore = useCallback(() => {
     if (inFlight.current || !anchorId) return;
@@ -73,6 +100,29 @@ export function useOlderPages(
     void (async () => {
       try {
         const scope = currentScope();
+
+        // ── summary mode: straight off the disk ──────────────────────────────
+        // The search cache holds every message's prose for the whole workspace,
+        // and prose is exactly what summary mode renders — so this page costs no
+        // request at all. Only for sessions the sync has actually completed
+        // (a `sessions` row exists); anything else falls through to the server.
+        // Old history is append-only, so "synced once" means "has all of it".
+        if (summary && scope && anchorId && anchorAt) {
+          const synced = (await getSessions(scope)).some((x) => x.sessionId === sessionId);
+          if (synced) {
+            const cached = (await getSessionText(scope, sessionId)) as CachedRow[];
+            const page = summaryPage(cached, { createdAt: anchorAt, id: anchorId }, SUMMARY_PAGE);
+            if (page.rows.length > 0) {
+              setRows((prev) => [...page.rows, ...prev]);
+              setSummarySaysMore(page.hasMore);
+              setServedFromCache(true);
+              return;
+            }
+            // Nothing older in the cache: that IS the beginning of the session.
+            setSummarySaysMore(false);
+            return;
+          }
+        }
 
         // ── cache first ──────────────────────────────────────────────────────
         // Only use the cache when it covers a WHOLE page. A partial hit would
@@ -119,18 +169,20 @@ export function useOlderPages(
         setLoading(false);
       }
     })();
-  }, [anchorId, sessionId, utils]);
+  }, [anchorId, anchorAt, sessionId, utils, summary, setRows]);
 
   const reset = useCallback(() => {
-    setRows([]);
+    setFullRows([]);
+    setSummaryRows([]);
     setServerSaysMore(null);
+    setSummarySaysMore(null);
     setServedFromCache(false);
   }, []);
 
   return {
     rows,
-    // The server's answer wins once we have one; until then trust the seed.
-    hasMore: serverSaysMore ?? mayHaveMore,
+    // Whichever pager is driving answers for itself; until it has, trust the seed.
+    hasMore: (summary ? summarySaysMore : serverSaysMore) ?? mayHaveMore,
     loading,
     servedFromCache,
     loadMore,

@@ -9,7 +9,7 @@ import { prisma } from '../db';
 import { QUEUE_LIMIT } from '../../lib/chat-queue';
 import { stripNulDeep } from '../sanitize';
 import { capMessageContent } from '../message-cap';
-import { extractSearchText } from '../chat-text';
+import { extractSearchText, extractInteractionBlocks } from '../chat-text';
 import { generateSessionTitle } from '../session-title';
 
 const ContentBlock = z.union([
@@ -469,14 +469,22 @@ export const chatRouter = router({
       // ISO strings are what the cache stores anyway.
       return {
         rows: rows
-          .map((r) => ({
-            id: r.id,
-            sessionId: input.sessionId,
-            role: r.role,
-            createdAt: r.createdAt.toISOString(),
-            text: extractSearchText(r.content),
-          }))
-          .filter((r) => r.text.length > 0),
+          .map((r) => {
+            const blocks = extractInteractionBlocks(r.content);
+            return {
+              id: r.id,
+              sessionId: input.sessionId,
+              role: r.role,
+              createdAt: r.createdAt.toISOString(),
+              text: extractSearchText(r.content),
+              // Only present when there is something to carry, so the payload
+              // for the 99% prose case is byte-identical to before.
+              ...(blocks.length > 0 ? { blocks } : {}),
+            };
+          })
+          // A row earns its place by being readable: prose, or a card the user
+          // was shown. Interaction cards have no prose and used to be dropped.
+          .filter((r) => r.text.length > 0 || r.blocks),
         // Cursor from the last SCANNED row (pre-filter) so prose-less rows can't
         // stall the sync, and `done` from the scanned count for the same reason.
         cursor: last ? { since: last.updatedAt.getTime(), afterId: last.id } : null,

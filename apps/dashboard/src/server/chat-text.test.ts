@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractSearchText } from './chat-text';
+import { extractSearchText, extractInteractionBlocks } from './chat-text';
 
 test('keeps text blocks, joined by newline', () => {
   const out = extractSearchText([
@@ -44,4 +44,19 @@ test('survives malformed content without throwing', () => {
 
 test('skips whitespace-only text blocks', () => {
   assert.equal(extractSearchText([{ type: 'text', text: '   ' }, { type: 'text', text: 'x' }]), 'x');
+});
+
+test('interaction cards are carried alongside prose, not instead of it', () => {
+  const card = { type: 'interaction', kind: 'question', status: 'resolved', payload: { options: [] } };
+  assert.deepEqual(extractInteractionBlocks([card]), [card]);
+  // The card rows that matter carry no prose at all — every no-prose system row
+  // in a 336-row production sample was one of these.
+  assert.equal(extractSearchText([card]), '');
+});
+
+test('ordinary content yields no cards', () => {
+  assert.deepEqual(extractInteractionBlocks([{ type: 'text', text: 'hello' }]), []);
+  assert.deepEqual(extractInteractionBlocks([{ type: 'tool_use', name: 'Bash' }]), []);
+  assert.deepEqual(extractInteractionBlocks('a string'), []);
+  assert.deepEqual(extractInteractionBlocks(null), []);
 });

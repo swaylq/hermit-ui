@@ -27,3 +27,20 @@ export function extractSearchText(content: unknown): string {
   }
   return parts.join('\n').trim();
 }
+
+// The renderable blocks a summary reader would see that are NOT prose.
+//
+// Interaction cards — a permission request, a question and the option that was
+// chosen — are real conversation: they are what the agent asked and what the
+// person answered. They carry no `text` block, so the prose projection above
+// misses them, and history served from the cache would quietly lose them
+// (measured: 0–6 per session, every no-prose system row in a 336-row sample).
+//
+// Kept as blocks rather than flattened to text so the timeline renders the same
+// card it renders from the server.
+export function extractInteractionBlocks(content: unknown): unknown[] {
+  if (!Array.isArray(content)) return [];
+  return content.filter(
+    (b) => b && typeof b === 'object' && (b as { type?: unknown }).type === 'interaction'
+  );
+}

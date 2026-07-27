@@ -19,7 +19,12 @@
 import type { CachedText, CachedSession, CachedFullRow, FullMeta } from './types';
 
 const DB_PREFIX = 'hermit-chat-cache';
-const DB_VERSION = 1;
+// 2: `text` rows gained `blocks`, so interaction cards survive in cache-served
+// history. The projection changed, not the schema — but a delta sync only
+// refetches what MOVED, so old rows would keep their old shape forever. Wiping
+// the bookkeeping on upgrade makes the next pass a full refetch (~11 MB,
+// background, behind the usual "正在建立本地索引…" line).
+const DB_VERSION = 2;
 
 export const STORE_TEXT = 'text';
 export const STORE_SESSIONS = 'sessions';
@@ -92,7 +97,19 @@ function openAt(scope: string, version: number | undefined): Promise<IDBDatabase
     } catch {
       return resolve(null);
     }
-    req.onupgradeneeded = () => createMissingStores(req.result);
+    req.onupgradeneeded = (e) => {
+      const db = req.result;
+      createMissingStores(db);
+      // Re-derive everything projected by a previous version.
+      if ((e as IDBVersionChangeEvent).oldVersion > 0 && (e as IDBVersionChangeEvent).oldVersion < 2) {
+        const tx = req.transaction;
+        if (tx) {
+          for (const store of [STORE_TEXT, STORE_SESSIONS]) {
+            if (db.objectStoreNames.contains(store)) tx.objectStore(store).clear();
+          }
+        }
+      }
+    };
     req.onsuccess = () => {
       const db = req.result;
       db.onversionchange = () => {

@@ -9,6 +9,11 @@ export type CachedText = {
   role: string;
   createdAt: string; // ISO — kept as a string so it survives structured-clone
   text: string;
+  // Renderable blocks that carry no prose — interaction cards (a question and
+  // the option that was picked). Absent for the overwhelming majority of rows.
+  // Present so summary-mode history served from this cache is complete; search
+  // ignores them, exactly as it ignored these rows before.
+  blocks?: unknown[];
 };
 
 // Per-session sync bookkeeping + the metadata a search hit renders with. Mirrors

@@ -655,8 +655,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // local cache whenever it has the page. See use-older-pages.ts.
   const older = useOlderPages(
     sessionId,
-    windowRows?.[0]?.id,
-    (messages.data?.length ?? 0) >= limit
+    windowRows?.[0],
+    (messages.data?.length ?? 0) >= limit,
+    summaryMode
   );
   const baseRows = useMemo(
     () => (older.rows.length > 0 ? [...older.rows, ...(windowRows ?? [])] : windowRows),
