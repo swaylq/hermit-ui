@@ -10,6 +10,7 @@ import { QUEUE_LIMIT } from '../../lib/chat-queue';
 import { stripNulDeep } from '../sanitize';
 import { capMessageContent } from '../message-cap';
 import { extractSearchText } from '../chat-text';
+import { generateSessionTitle } from '../session-title';
 
 const ContentBlock = z.union([
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -306,6 +307,20 @@ export const chatRouter = router({
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
       ctx.assertAgent(s.agentName);
       return prisma.chatSession.update({ where: { id: input.id }, data: { title: input.title } });
+    }),
+
+  // Summarize the opening exchange into a session title. Idempotent by default:
+  // a session that already has a title returns it untouched, so the client can
+  // fire this on every open without guarding. `force` is the manual regenerate.
+  // See server/session-title.ts.
+  autoTitle: agentProcedure
+    .input(z.object({ sessionId: z.string(), force: z.boolean().default(false) }))
+    .mutation(async ({ ctx, input }) => {
+      const title = await generateSessionTitle(input.sessionId, ctx.machine.id, {
+        force: input.force,
+        scopedAgent: ctx.scopedAgent,
+      });
+      return { title };
     }),
 
   listMessages: agentProcedure

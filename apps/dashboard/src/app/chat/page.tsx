@@ -5,7 +5,7 @@ import { keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  RotateCw, Trash2, Terminal, Pencil, ListCollapse, Search, FoldVertical,
+  RotateCw, Trash2, Terminal, Pencil, ListCollapse, Search, FoldVertical, Sparkles,
   MoreHorizontal, ChevronRight, SquarePen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -26,6 +26,7 @@ import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat
 import { ChatFind } from '@/components/chat/chat-find';
 import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
 import { useOlderPages } from '@/components/chat/use-older-pages';
+import { usePrependAnchor } from '@/components/chat/use-prepend-anchor';
 import { useCachedTimeline, useTimelineWriteThrough } from '@/lib/chat-cache/use-chat-cache';
 import { NewChatPane } from '@/components/chat/new-chat-pane';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
@@ -221,33 +222,64 @@ type TimelineMsg = { id: string; role: string; content: any; createdAt: Date | s
 // answer), or — for a turn with no tools — all its text rows. Human-user and
 // system rows (prompts, restart/interaction notices) are always kept so the
 // conversation still reads as Q→A.
+// Summary mode: what to keep when the user asks for the short version.
+//
+// It used to keep ONLY the closing reply of each turn — everything the agent
+// said while working, and every trace of what it did, was dropped. That reads
+// as "the agent answered out of nowhere"; you lose the thread of how it got
+// there. So keep the narration and the SHAPE of the work, and drop the bulk:
+//
+//   keep   user messages, system messages
+//   keep   every assistant `text` block — including mid-turn narration, which
+//          is usually the most informative part of the process
+//   keep   `tool_use` blocks, so you can see WHAT ran (the timeline already
+//          collapses consecutive same-name calls into one "Bash × 7" chip)
+//   drop   `tool_result` — the outputs are the bulk (621 MB of the 904 MB
+//          content column live here), and they're what "summary" is escaping
+//   drop   `thinking`, and the harness terminator rows
+//
+// A message left with nothing after filtering disappears entirely.
+const SUMMARY_KEEP = new Set(['text', 'tool_use']);
+// Filtered content arrays are cached against the ORIGINAL array, so toggling
+// summary mode or re-rendering on a stream tick hands memo(MessageRow) the same
+// object identity it saw last time instead of forcing a full re-render.
+const summaryContentCache = new WeakMap<object, unknown[] | null>();
+
+function summarizeContent(content: unknown): unknown[] | null {
+  if (!Array.isArray(content)) return null;
+  const cached = summaryContentCache.get(content);
+  if (cached !== undefined) return cached;
+  const kept = content.filter((b: any) => {
+    if (!b || typeof b !== 'object' || !SUMMARY_KEEP.has(b.type)) return false;
+    if (b.type === 'text') return typeof b.text === 'string' && b.text.trim().length > 0;
+    return true;
+  });
+  // All-tool_use with no prose is still worth showing — that IS the process.
+  // Return the ORIGINAL array when nothing was dropped, so memo(MessageRow)
+  // sees an unchanged `content` prop for the many messages that are pure prose.
+  const result = kept.length === 0 ? null : kept.length === content.length ? content : kept;
+  summaryContentCache.set(content, result);
+  return result;
+}
+
 function toSummaryView(messages: TimelineMsg[]): TimelineMsg[] {
   const isToolResultOnly = (c: any) =>
     Array.isArray(c) && c.length > 0 && c.every((b: any) => b?.type === 'tool_result');
   const hasText = (c: any) =>
     Array.isArray(c) && c.some((b: any) => b?.type === 'text' && (b.text ?? '').trim());
   const out: TimelineMsg[] = [];
-  let turn: TimelineMsg[] = [];
-  const flush = () => {
-    if (turn.length === 0) return;
-    let lastTool = -1;
-    turn.forEach((m, idx) => {
-      const c = m.content;
-      if (Array.isArray(c) && c.some((b: any) => b?.type === 'tool_use' || b?.type === 'tool_result')) lastTool = idx;
-    });
-    turn.forEach((m, idx) => {
-      if (idx <= lastTool) return;
-      if (m.role === 'assistant' && hasText(m.content) && !isHarnessTerminator(m.content)) out.push(m);
-    });
-    turn = [];
-  };
   for (const m of messages) {
-    const humanUser = m.role === 'user' && hasText(m.content) && !isToolResultOnly(m.content);
-    if (humanUser) { flush(); out.push(m); continue; }
-    if (m.role === 'system') { flush(); out.push(m); continue; }
-    turn.push(m); // assistant + tool-result rows accumulate into the current turn
+    // A human turn and system notices always survive verbatim.
+    if (m.role === 'system' || (m.role === 'user' && hasText(m.content) && !isToolResultOnly(m.content))) {
+      out.push(m);
+      continue;
+    }
+    // Tool results and the harness terminator are exactly what's being summarized away.
+    if (isToolResultOnly(m.content) || isHarnessTerminator(m.content)) continue;
+    const kept = summarizeContent(m.content);
+    if (!kept) continue;
+    out.push(kept === m.content ? m : { ...m, content: kept });
   }
-  flush();
   return out;
 }
 
@@ -526,6 +558,23 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const setTitleMut = trpc.chat.setTitle.useMutation({
     onSuccess: () => { sessionMeta.refetch(); setEditingTitle(false); },
   });
+
+  // Auto-title. The server is idempotent (it no-ops when a title exists), so
+  // this fires once per session per mount and needs no client-side bookkeeping
+  // beyond "don't ask twice for the same id". Only asks once the conversation
+  // has something to summarize — a session with one message has no subject yet.
+  const autoTitleMut = trpc.chat.autoTitle.useMutation({
+    onSuccess: (r) => { if (r.title) { sessionMeta.refetch(); sessionOne.refetch(); } },
+  });
+  const autoTitleAsked = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionId || session?.title) return;
+    if ((messages.data?.length ?? 0) < 2) return;
+    if (autoTitleAsked.current === sessionId) return;
+    autoTitleAsked.current = sessionId;
+    autoTitleMut.mutate({ sessionId, force: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, session?.title, messages.data?.length]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -593,15 +642,32 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     [older.rows, windowRows]
   );
 
-  // "load earlier" prepends from the top. Capture pre-prepend scroll metrics so
-  // we can restore the same top-anchor once the taller list paints — otherwise
-  // the prepended history shoves the viewport down and yanks the user.
-  const pendingRestoreRef = useRef<{ h: number; t: number } | null>(null);
+  // "load earlier" prepends from the top. The reading position is pinned to the
+  // message the user was looking at and HELD there while the new history lays
+  // out — see use-prepend-anchor.ts for why a one-shot height restore isn't
+  // enough.
+  const markAutoScroll = useCallback(() => {
+    autoScrollRef.current = true;
+    requestAnimationFrame(() => { autoScrollRef.current = false; });
+  }, []);
+  const prependAnchor = usePrependAnchor(getViewport, markAutoScroll);
+  // Read by the scroll listener and the bottom-pin observer, neither of which
+  // should re-subscribe when the anchor object identity changes.
+  const prependAnchorRef = useRef(prependAnchor);
+  prependAnchorRef.current = prependAnchor;
   const loadEarlier = useCallback(() => {
-    const el = getViewport();
-    if (el) pendingRestoreRef.current = { h: el.scrollHeight, t: el.scrollTop };
+    prependAnchor.capture();
     older.loadMore();
-  }, [getViewport, older]);
+  }, [prependAnchor, older]);
+
+  // Put the reading position back BEFORE the browser paints the taller list.
+  // A layout effect is the only place that can: by the time a rAF callback runs
+  // the displaced frame is already on screen, and a 200-message prepend can
+  // block the main thread long enough that "already on screen" lasts seconds.
+  useIsoLayoutEffect(() => {
+    prependAnchor.reassert();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [older.rows.length]);
 
   // Eligibility for an infinite-scroll-up pull. Held in a ref so the scroll
   // listener reads the latest value without re-subscribing every render.
@@ -660,7 +726,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     // bottom on first paint would undo exactly what the user clicked for.
     if (firstScrollRef.current && !anchoredActiveRef.current) { firstScrollRef.current = false; toBottom(); }
     const ro = new ResizeObserver(() => {
-      if (pendingRestoreRef.current) return;   // top prepend (load earlier), not tail growth
+      if (prependAnchorRef.current?.isHolding()) return; // holding a read position after a prepend
       if (anchoredActiveRef.current) return;   // reading history at a fixed anchor
       if (pinnedRef.current) toBottom();
     });
@@ -668,16 +734,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     return () => ro.disconnect();
   }, [getViewport]);
 
-  // Restore the top-anchor after a "load earlier" prepend (guarded by the ref,
-  // so streaming-driven length changes don't trigger it). The bottom-pin effect
-  // above no-ops here because the user isn't pinned when loading history.
-  useIsoLayoutEffect(() => {
-    const p = pendingRestoreRef.current;
-    if (!p) return;
-    pendingRestoreRef.current = null;
-    const el = getViewport();
-    if (el) el.scrollTop = el.scrollHeight - p.h + p.t;
-  }, [messages.data?.length, older.rows.length, getViewport]);
 
   // Track the user's scroll intent. Ignore scrolls WE triggered (autoScrollRef)
   // so an auto-follow never unpins them; a real upward scroll past the slack
@@ -688,11 +744,14 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     if (!el) return;
     const onScroll = () => {
       if (autoScrollRef.current) return;
+      // A real scroll: let the prepend anchor move with the user instead of
+      // pulling them back to where they were when the page was requested.
+      prependAnchorRef.current?.followUser();
       setPinned(el.scrollHeight - el.scrollTop - el.clientHeight < 60);
       // Infinite scroll up: near the top, pull the next page of history. Clear
       // the debounce flag here (recomputed next render) so one fling fires once;
       // loadEarlier anchors the scroll so the prepend doesn't yank the viewport.
-      if (el.scrollTop < 200 && canLoadEarlierRef.current && !pendingRestoreRef.current) {
+      if (el.scrollTop < 200 && canLoadEarlierRef.current && !prependAnchorRef.current?.isHolding()) {
         canLoadEarlierRef.current = false;
         loadEarlier();
       }
@@ -1034,6 +1093,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground leading-tight min-w-0">
               {editingTitle ? (
+                <>
                 <input
                   // eslint-disable-next-line jsx-a11y/no-autofocus
                   autoFocus
@@ -1059,6 +1119,28 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   placeholder={session?.agentName ?? 'session title'}
                   className="min-w-0 flex-1 bg-transparent border-b border-foreground/40 outline-none text-sm font-semibold text-foreground"
                 />
+                {/* Regenerate from the conversation. `force` — this one overwrites
+                    whatever is there, since the user asked for it explicitly.
+                    onMouseDown, not onClick: the input's onBlur fires first and
+                    would commit the draft (and close the editor) before a click
+                    ever landed. */}
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    autoTitleMut.mutate(
+                      { sessionId, force: true },
+                      { onSuccess: (r) => { if (r.title) setTitleDraft(r.title); } }
+                    );
+                  }}
+                  disabled={autoTitleMut.isPending}
+                  title="根据对话内容重新生成标题"
+                  aria-label="regenerate title from the conversation"
+                  className="shrink-0 inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:cursor-wait"
+                >
+                  <Sparkles className={cn('h-3.5 w-3.5', autoTitleMut.isPending && 'animate-pulse')} />
+                </button>
+                </>
               ) : (
                 <button
                   type="button"

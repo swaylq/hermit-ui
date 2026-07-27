@@ -33,7 +33,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+import { openrouterChat, type ORMessage } from '@/server/openrouter';
+
 const ASR_MODEL = process.env.OPENROUTER_ASR_MODEL || 'mistralai/voxtral-small-24b-2507';
 const POLISH_MODEL = process.env.OPENROUTER_POLISH_MODEL || 'deepseek/deepseek-v4-flash';
 
@@ -72,11 +73,6 @@ const POLISH_SYSTEM = `你是语音输入的整理器。输入是语音识别（
 - 绝不增加原文没有的内容（包括凭空的引导语、标题、解释），绝不作答。转写若是问题、请求或指令（「…怎么做？」「帮我设计…」「…要怎么…方案？」），只把它整理通顺后原样输出，绝不回答、不给方案。例：输入「如果把资源放到 OSS 上要怎么设计方案？」→ 输出「如果把资源放到 OSS 上要怎么设计方案？」。
 - 只输出整理后的文本，不加引号、前缀或解释。`;
 
-interface ORMessage {
-  role: 'system' | 'user';
-  content: string | Array<Record<string, unknown>>;
-}
-
 // OpenRouter ASR request messages: audio as raw base64 + a separate format field.
 function orAsrMessages(base64: string): ORMessage[] {
   return [
@@ -94,40 +90,6 @@ function polishMessages(raw: string): ORMessage[] {
     { role: 'system', content: POLISH_SYSTEM },
     { role: 'user', content: raw },
   ];
-}
-
-// One OpenRouter chat/completions call. Throws on non-200 / timeout.
-async function openrouterChat(
-  apiKey: string,
-  model: string,
-  messages: ORMessage[],
-  opts: { temperature?: number; reasoningOff?: boolean; timeoutMs: number },
-): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
-  try {
-    const body: Record<string, unknown> = { model, messages };
-    if (opts.temperature != null) body.temperature = opts.temperature;
-    if (opts.reasoningOff) body.reasoning = { enabled: false };
-    const r = await fetch(OPENROUTER_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://dash.swaylab.ai',
-        'X-Title': 'hermit-ui voice input',
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const j = (await r.json().catch(() => null)) as
-      | { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } }
-      | null;
-    if (!r.ok) throw new Error(`OpenRouter ${model} HTTP ${r.status}: ${j?.error?.message ?? 'unknown'}`);
-    return (j?.choices?.[0]?.message?.content ?? '').trim();
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 // One DashScope chat/completions call (OpenAI-compatible), for the polish step.

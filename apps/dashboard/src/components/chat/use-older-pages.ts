@@ -24,7 +24,13 @@ import { currentScope } from '@/lib/chat-cache/sync';
 import { getFullRows, putFullRows } from '@/lib/chat-cache/db';
 import type { CachedFullRow } from '@/lib/chat-cache/types';
 
-export const OLDER_PAGE = 200;
+// Messages per "load earlier". Deliberately one screenful-ish rather than a big
+// slab: 200 messages of markdown parse + syntax highlight blocks the main thread
+// for seconds, and during that block nothing — not even the scroll anchor — can
+// run, so the user watches the conversation sit visibly displaced. Smaller pages
+// keep each step under a frame budget the anchor can ride, and make the
+// scrollbar grow in gentle steps instead of one lurch.
+export const OLDER_PAGE = 60;
 
 export type TimelineRow = { id: string; role: string; content: unknown; createdAt: Date | string };
 
