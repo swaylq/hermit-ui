@@ -47,11 +47,16 @@ export function TakeoverBar({
         ? { text: `Waiting for ${agentName}…`, busy: true }
         : { text: 'Waiting for the next step…', busy: false };
   return (
-    // pr-16 keeps the Release button clear of the floating button dock, which is a
-    // draggable z-40 layer that lives in the bottom-right by default. Two controls in
-    // the same corner, one of them floating, is a collision you only see on a phone.
-    <div className="shrink-0 border-t border-border bg-muted/50 py-2 pl-3 pr-16">
-      <div className="flex items-start gap-2">
+    // Same container as ComposeBar and LoopBar (mx-auto w-full max-w-3xl px-3), so
+    // this lines up with the composer box and the suggestion chips instead of running
+    // edge-to-edge under a centred column. mt-2 because LoopBar only pads its top —
+    // without it the banner's border sits flush against the chips.
+    //
+    // pr-16 on the inner row keeps Release clear of the floating mic, a draggable
+    // z-40 layer parked bottom-right. Two controls in one corner, one of them
+    // floating over the other, is a collision you only see on a phone.
+    <div className="mx-auto mt-2 w-full max-w-3xl shrink-0 px-3">
+      <div className="flex items-start gap-2 rounded-xl border border-border bg-muted/50 py-2 pl-3 pr-16">
         <Bot className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
