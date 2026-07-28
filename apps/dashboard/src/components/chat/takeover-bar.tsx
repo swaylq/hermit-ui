@@ -15,15 +15,37 @@ export function TakeoverBar({
   goal,
   turns,
   turnCap,
+  agentName,
+  agentWorking,
+  brainWorking,
+  drafting,
   onRelease,
   releasing,
 }: {
   goal: string | null;
   turns: number;
   turnCap: number;
+  agentName: string;
+  /** The agent is mid-turn — the Brain is waiting on it. */
+  agentWorking: boolean;
+  /** The Brain is mid-turn — reading the reply and deciding what to do. */
+  brainWorking: boolean;
+  /** The Brain is composing a message (its text is ghosted in the composer). */
+  drafting: boolean;
   onRelease: () => void;
   releasing: boolean;
 }) {
+  // The gap this closes: between an agent finishing and the Brain's next move there
+  // is up to a minute of reading and deciding. Without a word for it the banner reads
+  // "Brain is driving" while nothing visibly happens, and a working feature looks
+  // stalled. Name whichever thing is actually happening.
+  const activity = drafting
+    ? { text: 'Brain is writing a reply…', busy: true }
+    : brainWorking
+      ? { text: 'Brain is reading the reply and deciding…', busy: true }
+      : agentWorking
+        ? { text: `Waiting for ${agentName}…`, busy: true }
+        : { text: 'Waiting for the next step…', busy: false };
   return (
     // pr-16 keeps the Release button clear of the floating button dock, which is a
     // draggable z-40 layer that lives in the bottom-right by default. Two controls in
@@ -43,8 +65,13 @@ export function TakeoverBar({
           <p className="mt-0.5 text-xs text-muted-foreground">
             {goal ? goal : <span className="italic">Reading the conversation…</span>}
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground/70">
-            Type anything to take it back.
+          <p className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
+            {activity.busy && (
+              <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400" />
+            )}
+            <span>{activity.text}</span>
+            <span className="text-muted-foreground/40">·</span>
+            <span>Type anything to take it back.</span>
           </p>
         </div>
         <button

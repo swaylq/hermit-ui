@@ -265,7 +265,19 @@ export const chatRouter = router({
           takeoverDraft: true,
         },
       });
-      return s;
+      // While a takeover is live, also report whether the BRAIN itself is mid-turn.
+      // Between the agent finishing and the Brain's next move there's a minute of
+      // nothing visible — it's reading and deciding — and with no signal for that the
+      // feature looks stalled when it's working. One PK lookup, only when a takeover
+      // is actually running.
+      if (s?.takeoverBySessionId) {
+        const brain = await prisma.chatSession.findUnique({
+          where: { id: s.takeoverBySessionId },
+          select: { state: true },
+        });
+        return { ...s, takeoverBrainState: brain?.state ?? null };
+      }
+      return s ? { ...s, takeoverBrainState: null } : s;
     }),
 
   // Mark a session read = now. Was browser localStorage (per-device); now a DB

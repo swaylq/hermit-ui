@@ -1505,6 +1505,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               goal={takeover.takeoverGoal}
               turns={takeover.takeoverTurns}
               turnCap={TAKEOVER_TURN_CAP}
+              agentName={session?.agentName ?? 'the agent'}
+              agentWorking={session?.state === 'working'}
+              brainWorking={takeover?.takeoverBrainState === 'working'}
+              drafting={!!takeover?.takeoverDraft}
               releasing={releaseTakeover.isPending}
               onRelease={() => releaseTakeover.mutate({ sessionId, reason: 'human' })}
             />
