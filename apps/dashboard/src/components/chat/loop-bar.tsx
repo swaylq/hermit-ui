@@ -46,6 +46,7 @@ export const LoopBar = memo(function LoopBar({
   onStartLoop,
   onStartCron,
   onStartAutonomy,
+  takeover,
   disabled,
   sessionId,
 }: {
@@ -53,6 +54,14 @@ export const LoopBar = memo(function LoopBar({
   onStartLoop: () => void;
   onStartCron: () => void;
   onStartAutonomy: () => void;
+  /**
+   * The Brain-takeover control, when this session can have one. It sits FIRST in
+   * this row — handing the conversation over belongs with "start a loop" and "run to
+   * done": they're all "let it run without me", chosen at the moment you'd otherwise
+   * type. It was a floating button; a floating button is for something you reach for
+   * mid-scroll, and this isn't that.
+   */
+  takeover?: { active: boolean; busy: boolean; onToggle: () => void } | null;
   disabled?: boolean;
   sessionId: string;
 }) {
@@ -96,6 +105,28 @@ export const LoopBar = memo(function LoopBar({
           <LoopCard key={typeof l.id === 'string' ? l.id : `loop-${i}`} loop={l} sessionId={sessionId} onDelete={onDeleteLoop} />
         ))}
         <div className="flex items-center gap-2 flex-wrap">
+          {takeover && (
+            <button
+              type="button"
+              onClick={takeover.onToggle}
+              disabled={takeover.busy}
+              aria-pressed={takeover.active}
+              title={
+                takeover.active
+                  ? '义脑正在开车 — 点一下收回（你直接打字也会收回）'
+                  : '义脑接管 — 它读完这段对话，推断你想达成什么，替你继续'
+              }
+              className={cn(
+                'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border text-[12px] transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60',
+                takeover.active
+                  ? 'border-indigo-400/50 bg-indigo-500/10 text-indigo-500 hover:bg-indigo-500/15'
+                  : 'border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40',
+              )}
+            >
+              <span aria-hidden="true">🦀</span>
+              {takeover.active ? '义脑驾驶中 · 收回' : '义脑接管'}
+            </button>
+          )}
           {!disabled && (
             <button
               type="button"

@@ -38,7 +38,6 @@ import { MessageTimeline } from '@/components/chat/message-timeline';
 import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
 import { VoiceMic } from '@/components/chat/voice-mic';
 import { FabDock } from '@/components/chat/fab-dock';
-import { TakeoverFab } from '@/components/chat/takeover-fab';
 
 // isTouchPrimary (phone/tablet vs desktop) lives in @/lib/save-file — the
 // soft-keyboard return key inserts a newline there (a dedicated send button
@@ -1144,9 +1143,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // What's in the floating dock. The takeover button stays visible while a takeover
   // is LIVE even though canTakeover has gone false — it's the way to take the
   // conversation back, so it must not vanish the instant it starts working.
-  const showTakeoverFab = canTakeover || takenOver;
+  // The takeover chip stays visible while a takeover is LIVE even though canTakeover
+  // has gone false — it's the way to take the conversation back.
+  const showTakeover = canTakeover || takenOver;
   const showMicFab = !micHidden && !session?.closedAt;
-  const fabCount = (showTakeoverFab ? 1 : 0) + (showMicFab ? 1 : 0);
 
   const secondaryActions = (
     <>
@@ -1470,22 +1470,12 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         </div>
       )}
 
-        {/* Floating button group — mic + Brain takeover, stacked, dragged together.
-            Rendered only when at least one of them is showing, so an empty dock
-            never sits in the corner catching touches. */}
-        {fabCount > 0 && (
-          <FabDock count={fabCount}>
-            {showTakeoverFab && (
-              <TakeoverFab
-                active={takenOver}
-                busy={requestTakeover.isPending || releaseTakeover.isPending}
-                onTakeover={() => requestTakeover.mutate({ sessionId })}
-                onRelease={() => releaseTakeover.mutate({ sessionId, reason: 'human' })}
-              />
-            )}
-            {showMicFab && (
-              <VoiceMic sessionId={sessionId} hidden={false} onTranscript={insertTranscript} />
-            )}
+        {/* The mic floats alone. Takeover moved into the suggestion row above the
+            composer — it's a decision you make instead of typing, not something you
+            reach for mid-scroll. */}
+        {showMicFab && (
+          <FabDock count={1}>
+            <VoiceMic sessionId={sessionId} hidden={false} onTranscript={insertTranscript} />
           </FabDock>
         )}
         <>
@@ -1494,6 +1484,18 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             onStartLoop={startLoop}
             onStartCron={startCron}
             onStartAutonomy={startAutonomy}
+            takeover={
+              showTakeover
+                ? {
+                    active: takenOver,
+                    busy: requestTakeover.isPending || releaseTakeover.isPending,
+                    onToggle: () =>
+                      takenOver
+                        ? releaseTakeover.mutate({ sessionId, reason: 'human' })
+                        : requestTakeover.mutate({ sessionId }),
+                  }
+                : null
+            }
             disabled={!!session?.closedAt}
             sessionId={sessionId}
           />

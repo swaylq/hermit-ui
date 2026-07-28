@@ -1,19 +1,16 @@
 'use client';
 
-// The floating button group on the chat page — the voice mic and the Brain-takeover
-// button, stacked and dragged as one unit.
+// The floating button dock on the chat page. Currently it holds one thing — the
+// voice mic — since Brain-takeover moved into the suggestion row above the composer.
 //
-// Why a shared dock rather than two draggable buttons: two independently-placed FABs
-// on a phone screen is two things to move out of the way, and they inevitably end up
-// overlapping each other. One group, one position, one drag.
+// It stays a dock rather than collapsing back into the mic because the split is the
+// useful part: the dock owns geometry (position, clamping, persistence, drag) and the
+// button owns what a press MEANS. The mic's press is a 180ms race between record /
+// drag / ask-for-permission with real teeth in it, and that logic is much easier to
+// keep correct when it isn't also doing arithmetic on viewport edges.
 //
-// The dock owns geometry (position, clamping, persistence) and the drag gesture.
-// It does NOT own what a press MEANS — the mic's press-to-talk and the takeover
-// button's tap have different semantics and different failure modes, so each button
-// keeps its own handler and just asks the dock "was that a drag?".
-//
-// Stacking is VERTICAL on purpose: the mic expands sideways into a capsule while
-// recording, and a horizontal group would be underneath it.
+// Buttons stack vertically if more are ever added: the mic expands sideways into a
+// capsule while recording, so a horizontal row would end up underneath it.
 
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
