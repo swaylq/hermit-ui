@@ -45,7 +45,7 @@ function PersonaEditor({ agentName }: { agentName: string }) {
   const dirty = draft != null && draft !== serverText;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+    <div className="flex flex-col gap-3 p-4 lg:min-h-0 lg:flex-1">
       <p className="text-xs leading-relaxed text-muted-foreground">
         Your Brain’s editable decision-style &amp; persona. It’s read before every
         dispatch and before answering a blocked agent — shaping how work is handed out
@@ -59,7 +59,7 @@ function PersonaEditor({ agentName }: { agentName: string }) {
         disabled={q.isPending}
         spellCheck={false}
         placeholder="# Persona & decision style…"
-        className="flex-1 min-h-[300px] w-full rounded-md border border-border bg-background p-3 font-mono text-[12px] leading-relaxed outline-none focus:border-foreground/30 resize-none"
+        className="h-[55vh] w-full shrink-0 rounded-md border border-border bg-background p-3 font-mono text-[12px] leading-relaxed outline-none focus:border-foreground/30 resize-none lg:h-auto lg:min-h-[300px] lg:shrink lg:flex-1"
       />
       <div className="flex items-center gap-2 shrink-0">
         <Button
@@ -106,7 +106,7 @@ function UserProfileView({ agentName }: { agentName: string }) {
   const never = !syncedThrough || syncedThrough === 'never';
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+    <div className="flex flex-col gap-3 p-4 lg:min-h-0 lg:flex-1">
       <p className="text-xs leading-relaxed text-muted-foreground">
         What your Brain has worked out about you — how you decide, how you like to be
         answered, and what you’re currently working on — from the messages you’ve
@@ -114,7 +114,7 @@ function UserProfileView({ agentName }: { agentName: string }) {
         dispatches work or answers on your behalf.{' '}
         <strong className="text-foreground/80">It never loosens the safety floor.</strong>
       </p>
-      <div className="min-h-[300px] flex-1 overflow-auto rounded-md border border-border bg-background p-3 text-sm">
+      <div className="h-[55vh] shrink-0 overflow-auto rounded-md border border-border bg-background p-3 text-sm lg:h-auto lg:min-h-[300px] lg:shrink lg:flex-1">
         {q.isPending ? (
           <span className="text-xs text-muted-foreground">loading…</span>
         ) : body ? (
@@ -162,12 +162,19 @@ export default function BrainPersonaPage() {
         // Side by side on a wide screen, stacked on a phone. Two panes rather than
         // two tabs so the contrast is visible at a glance: this is who the Brain is,
         // that is who it thinks you are.
-        <div className="flex min-h-0 flex-1 flex-col divide-y divide-border lg:flex-row lg:divide-x lg:divide-y-0">
-          <section className="flex min-h-0 flex-1 flex-col lg:w-1/2">
+        //
+        // The two layouts need OPPOSITE scroll models, and conflating them is what
+        // broke this on a phone. Wide: one row, each pane owns the full height and
+        // scrolls inside itself. Narrow: the panes stack, so they can't both claim
+        // the height — they take their natural size and the PAGE scrolls. (<html> is
+        // overflow-hidden app-wide, so a page that doesn't declare a scroll container
+        // doesn't scroll at all; it just overflows and paints on top of itself.)
+        <div className="flex min-h-0 flex-1 flex-col divide-y divide-border overflow-y-auto lg:flex-row lg:divide-x lg:divide-y-0 lg:overflow-hidden">
+          <section className="flex shrink-0 flex-col lg:min-h-0 lg:w-1/2 lg:shrink lg:flex-1">
             <h2 className="shrink-0 px-4 pt-4 text-sm font-medium">Persona</h2>
             <PersonaEditor key={`p-${brain.name}`} agentName={brain.name} />
           </section>
-          <section className="flex min-h-0 flex-1 flex-col lg:w-1/2">
+          <section className="flex shrink-0 flex-col lg:min-h-0 lg:w-1/2 lg:shrink lg:flex-1">
             <h2 className="shrink-0 px-4 pt-4 text-sm font-medium">What it’s learned about you</h2>
             <UserProfileView key={`u-${brain.name}`} agentName={brain.name} />
           </section>
