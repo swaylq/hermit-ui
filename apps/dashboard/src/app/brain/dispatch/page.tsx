@@ -26,7 +26,7 @@ function BrainDispatchInner() {
   const isDispatch =
     !!sessionParam &&
     (sessions.data ?? []).some(
-      (s) => s.id === sessionParam && (s.origin === 'dispatch' || (s.title ?? '').startsWith('Brain →')),
+      (s) => s.id === sessionParam && (s.origin === 'dispatch' || s.origin === 'takeover' || (s.title ?? '').startsWith('Brain →')),
     );
 
   if (sessionParam && isDispatch) return <SessionPane key={sessionParam} sessionId={sessionParam} />;

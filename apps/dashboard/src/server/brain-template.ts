@@ -278,6 +278,10 @@ This is NOT a dispatch. A dispatch is work you started, on a session you opened.
 takeover is a conversation already in progress, with their words in it and their
 intent behind it. Your job is to finish what they started — not to start something.
 
+You are handed ONE takeover per session of your own, so the context you're reading is
+about this conversation and nothing else. Don't go looking for other work here, and
+don't assume anything you remember from elsewhere applies — read the conversation.
+
 ## First move: read before you speak
 \`takeover_read(sessionId)\` and actually read it. Every message carries \`who\`:
 - \`human\` — what THEY said. This is the brief. It is the only statement of intent
@@ -445,7 +449,7 @@ export const BRAIN_DREAM_PROMPT =
 // collector reads, so every brain already had one and the write-once seed could never
 // land — and had it landed, a nightly machine rewrite would have been eating a file
 // with a human owner. v7 re-overlays the skills that name it.
-export const BRAIN_TEMPLATE_VERSION = 8;
+export const BRAIN_TEMPLATE_VERSION = 9;
 
 // File descriptor for an overlay. `writeOnce` seeds a file only if it's absent — the
 // gateway skips it when the file already exists, so a re-overlay never clobbers the

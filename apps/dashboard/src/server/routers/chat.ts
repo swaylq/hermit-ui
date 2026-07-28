@@ -1295,20 +1295,28 @@ export const chatRouter = router({
         throw new Error(`too many live takeovers (${TAKEOVER_CONCURRENCY}) — release one first`);
       }
 
-      // The Brain needs a session of its own to be poked in. Reuse its most recent
-      // open one so takeovers land in the conversation the human is already reading,
-      // rather than scattering across new ones.
-      let brainSession = await prisma.chatSession.findFirst({
-        where: { machineId: ctx.machine.id, agentName: brainAgent.name, closedAt: null },
-        orderBy: { lastMessageAt: { sort: 'desc', nulls: 'last' } },
+      // A DEDICATED Brain session per takeover.
+      //
+      // This used to reuse the Brain's most recently active conversation, which was
+      // wrong three ways: it injected `[takeover update]` pokes and the Brain's
+      // driving reasoning into whatever the human was discussing with it at the time;
+      // several concurrent takeovers all landed in one context, leaving the Brain to
+      // keep unrelated jobs straight; and "most recently active" moves as the human
+      // chats, so which session a takeover landed in was effectively arbitrary.
+      //
+      // One conversation driven, one Brain session driving it. Marked
+      // origin:'takeover' so the Brain panel and the sidebar leave it alone — like
+      // origin:'dispatch' before it — and so the daily dream can reap the finished
+      // ones.
+      const brainSession = await prisma.chatSession.create({
+        data: {
+          machineId: ctx.machine.id,
+          agentName: brainAgent.name,
+          title: `Takeover · ${s.agentName}`,
+          origin: 'takeover',
+        },
         select: { id: true },
       });
-      if (!brainSession) {
-        brainSession = await prisma.chatSession.create({
-          data: { machineId: ctx.machine.id, agentName: brainAgent.name, title: 'Brain' },
-          select: { id: true },
-        });
-      }
 
       await prisma.chatSession.update({
         where: { id: input.sessionId },
@@ -1454,6 +1462,30 @@ export const chatRouter = router({
         takeoverGoal: true,
       },
     });
+    // Reap the Brain-side scaffolding. Each takeover gets its own Brain session, so
+    // without this they accumulate one live claude process per takeover ever started.
+    // Only ones with no takeover still pointing at them, and idle for a while — the
+    // Brain calls takeover_release from INSIDE its session, so closing the moment a
+    // takeover ends would cut off the turn that ended it.
+    const REAP_IDLE_MS = 5 * 60_000;
+    const stale = await prisma.chatSession.findMany({
+      where: {
+        machineId: ctx.machine.id,
+        origin: 'takeover',
+        closedAt: null,
+        lastMessageAt: { lt: new Date(Date.now() - REAP_IDLE_MS) },
+        NOT: { state: 'working' },
+      },
+      select: { id: true },
+    });
+    if (stale.length > 0) {
+      const live = new Set(rows.map((r) => r.takeoverBySessionId));
+      const done = stale.filter((x) => !live.has(x.id)).map((x) => x.id);
+      if (done.length > 0) {
+        await prisma.chatSession.updateMany({ where: { id: { in: done } }, data: { closedAt: new Date() } });
+      }
+    }
+
     if (rows.length === 0) return { scanned: 0, poked: 0, ended: 0 };
 
     let poked = 0;

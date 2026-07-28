@@ -71,7 +71,11 @@ function BrainChatLanding() {
     { enabled: !!brain, refetchInterval: 10_000 },
   );
   // listSessions is newest-first; default into the most recent open conversation.
-  const latest = (sessions.data ?? []).find((s) => !s.closedAt) ?? sessions.data?.[0];
+  // Skip the Brain's machine-made sessions: a per-takeover session (origin
+  // 'takeover') is scaffolding for a conversation elsewhere, not the conversation
+  // the human has with the Brain, and landing on one would hide their actual chat.
+  const own = (s: { origin?: string | null }) => s.origin !== 'takeover' && s.origin !== 'dispatch';
+  const latest = (sessions.data ?? []).find((s) => !s.closedAt && own(s)) ?? (sessions.data ?? []).find(own);
   useEffect(() => {
     if (latest) router.replace(`/brain?session=${encodeURIComponent(latest.id)}`);
   }, [latest, router]);
