@@ -25,7 +25,10 @@ export function TakeoverBar({
   releasing: boolean;
 }) {
   return (
-    <div className="shrink-0 border-t border-border bg-muted/50 px-3 py-2">
+    // pr-16 keeps the Release button clear of the floating button dock, which is a
+    // draggable z-40 layer that lives in the bottom-right by default. Two controls in
+    // the same corner, one of them floating, is a collision you only see on a phone.
+    <div className="shrink-0 border-t border-border bg-muted/50 py-2 pl-3 pr-16">
       <div className="flex items-start gap-2">
         <Bot className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div className="min-w-0 flex-1">
