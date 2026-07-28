@@ -13,7 +13,7 @@
 // banner above the composer carries an explicit Release as well, so this is the
 // shortcut, not the only way out.
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { Bot, Loader2 } from 'lucide-react';
 import { FAB, useFabDock } from '@/components/chat/fab-dock';
@@ -33,9 +33,15 @@ export function TakeoverFab({
   const dock = useFabDock();
   const [hint, setHint] = useState<string | null>(null);
 
+  // Which pointer is actually pressing THIS button. Handing a conversation to the
+  // Brain is a real action, so it fires only for a pointerup that closes a press we
+  // saw begin here — not for a stray pointerup, and not for a cancel.
+  const pressed = useRef<number | null>(null);
+
   const onPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>) => {
       e.currentTarget.setPointerCapture(e.pointerId);
+      pressed.current = e.pointerId;
       dock.onDown(e);
       setHint(null);
     },
@@ -44,6 +50,7 @@ export function TakeoverFab({
 
   const onPointerMove = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>) => {
+      if (pressed.current !== e.pointerId) return;
       dock.onMove(e);
     },
     [dock],
@@ -56,14 +63,29 @@ export function TakeoverFab({
       } catch {
         /* not captured */
       }
+      const wasPress = pressed.current === e.pointerId;
+      pressed.current = null;
       // A drag is not a tap. Without this, nudging the group aside would hand your
       // conversation to the Brain.
       if (dock.onUp(e)) return;
-      if (busy) return;
+      if (!wasPress || busy) return;
       if (active) onRelease();
       else onTakeover();
     },
     [dock, busy, active, onRelease, onTakeover],
+  );
+
+  // A CANCEL is the gesture being taken away — a scroll claiming the touch, the
+  // element going away, the browser interrupting. It is emphatically not a tap, and
+  // treating it as one means a flick that happens to start on this button hands the
+  // conversation over.
+  const onPointerCancel = useCallback(
+    (e: ReactPointerEvent<HTMLButtonElement>) => {
+      pressed.current = null;
+      dock.onUp(e);
+      setHint(null);
+    },
+    [dock],
   );
 
   return (
@@ -78,7 +100,7 @@ export function TakeoverFab({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
+        onPointerCancel={onPointerCancel}
         onPointerEnter={() => setHint(active ? '义脑在开车 — 点一下收回' : '义脑接管这段对话')}
         onPointerLeave={() => setHint(null)}
         aria-label={active ? '收回对话（义脑正在接管）' : '让义脑接管这段对话'}
