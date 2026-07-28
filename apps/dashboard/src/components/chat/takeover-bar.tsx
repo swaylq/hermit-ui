@@ -50,11 +50,10 @@ export function TakeoverBar({
     // edge-to-edge under a centred column. mt-2 because LoopBar only pads its top —
     // without it the banner's border sits flush against the chips.
     //
-    // pr-16 on the inner row keeps Release clear of the floating mic, a draggable
-    // z-40 layer parked bottom-right. Two controls in one corner, one of them
-    // floating over the other, is a collision you only see on a phone.
+    // No dodge for the floating mic any more: the dock is clamped above this whole
+    // control stack, so it can't reach the Release button (or the chips above it).
     <div className="mx-auto mt-2 w-full max-w-3xl shrink-0 px-3">
-      <div className="flex items-start gap-2 rounded-xl border border-border bg-muted/50 py-2 pl-3 pr-16">
+      <div className="flex items-start gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2">
         <Bot className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -73,13 +72,16 @@ export function TakeoverBar({
           <p className="mt-0.5 text-xs text-muted-foreground">
             {goal ? goal : <span className="italic">Reading the conversation…</span>}
           </p>
-          <p className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
+          {/* Inline text, not a flex row: as three flex children these wrapped into
+              two ragged columns on a phone with the separator orphaned between them.
+              It reads as one sentence, so it should wrap as one. */}
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/70">
             {activity.busy && (
-              <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-blue-500" />
+              <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500 align-middle" />
             )}
-            <span>{activity.text}</span>
-            <span className="text-muted-foreground/40">·</span>
-            <span>Type anything to take it back.</span>
+            {activity.text}
+            <span className="mx-1 text-muted-foreground/40">·</span>
+            Type anything to take it back.
           </p>
         </div>
         <button

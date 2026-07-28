@@ -30,22 +30,29 @@ const SPRING = 'cubic-bezier(0.34, 1.35, 0.5, 1)';
  * Clamp to the viewport. `height` is the whole stack, so dragging the group to the
  * bottom edge doesn't push the lower button off-screen.
  */
-function clampPos(x: number, y: number, height: number) {
+/**
+ * Clamp to the usable area. `height` is the whole stack, so dragging to the bottom
+ * edge can't push the lower button off-screen; `bottomInset` is the control stack
+ * (suggestions, takeover banner, queue, composer), which the dock must stay ABOVE.
+ * Floating over the transcript is the point; floating over a button you're trying to
+ * press is a bug — it was covering "Run to done".
+ */
+function clampPos(x: number, y: number, height: number, bottomInset = 0) {
   const maxX = Math.max(8, window.innerWidth - FAB - 8);
-  const maxY = Math.max(8, window.innerHeight - height - 8);
+  const maxY = Math.max(8, window.innerHeight - bottomInset - height - 8);
   return { x: Math.min(Math.max(8, x), maxX), y: Math.min(Math.max(8, y), maxY) };
 }
 
-function defaultPos(height: number) {
-  return clampPos(window.innerWidth - FAB - 20, window.innerHeight - height - 120, height);
+function defaultPos(height: number, bottomInset: number) {
+  return clampPos(window.innerWidth - FAB - 20, window.innerHeight - height - 120, height, bottomInset);
 }
 
-function loadPos(height: number): { x: number; y: number } | null {
+function loadPos(height: number, bottomInset: number): { x: number; y: number } | null {
   try {
     const raw = localStorage.getItem(POS_KEY);
     if (!raw) return null;
     const p = JSON.parse(raw) as { x?: unknown; y?: unknown };
-    if (typeof p.x === 'number' && typeof p.y === 'number') return clampPos(p.x, p.y, height);
+    if (typeof p.x === 'number' && typeof p.y === 'number') return clampPos(p.x, p.y, height, bottomInset);
   } catch {
     /* private mode / bad json */
   }
@@ -77,7 +84,7 @@ export function useFabDock(): DockApi {
   return ctx;
 }
 
-export function FabDock({ count, children }: { count: number; children: React.ReactNode }) {
+export function FabDock({ count, bottomInset = 0, children }: { count: number; bottomInset?: number; children: React.ReactNode }) {
   // Total stack height drives clamping; it changes when the takeover button appears
   // or disappears, so it's derived from the live button count rather than a constant.
   const height = count * FAB + Math.max(0, count - 1) * GAP;
@@ -90,7 +97,7 @@ export function FabDock({ count, children }: { count: number; children: React.Re
   // this runs exactly once.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mount gate reading window/localStorage
-    setPos(loadPos(height) ?? defaultPos(height));
+    setPos(loadPos(height, bottomInset) ?? defaultPos(height, bottomInset));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount gate; later height changes go through the render-time clamp below
   }, []);
 
@@ -131,10 +138,10 @@ export function FabDock({ count, children }: { count: number; children: React.Re
         gg.drag = true;
         setDragging(true);
       }
-      if (gg.drag) setPos(clampPos(gg.fx + dx, gg.fy + dy, height));
+      if (gg.drag) setPos(clampPos(gg.fx + dx, gg.fy + dy, height, bottomInset));
       return gg.drag;
     },
-    [height],
+    [height, bottomInset],
   );
 
   const onUp = useCallback(
@@ -144,7 +151,7 @@ export function FabDock({ count, children }: { count: number; children: React.Re
       gg.down = false;
       if (!gg.drag) return false;
       gg.drag = false;
-      const np = clampPos(gg.fx + (e.clientX - gg.px), gg.fy + (e.clientY - gg.py), height);
+      const np = clampPos(gg.fx + (e.clientX - gg.px), gg.fy + (e.clientY - gg.py), height, bottomInset);
       setPos(np);
       setDragging(false);
       try {
@@ -154,14 +161,14 @@ export function FabDock({ count, children }: { count: number; children: React.Re
       }
       return true;
     },
-    [height],
+    [height, bottomInset],
   );
 
   if (!pos) return null;
   // Clamp at RENDER time, not in an effect: the correct position is a pure function
   // of the stored point, the current stack height and the viewport, so deriving it
   // keeps a button appearing/disappearing from needing a state write.
-  const view = clampPos(pos.x, pos.y, height);
+  const view = clampPos(pos.x, pos.y, height, bottomInset);
 
   return (
     <DockContext.Provider value={{ dragging, x: view.x, onDown, onMove, onUp }}>

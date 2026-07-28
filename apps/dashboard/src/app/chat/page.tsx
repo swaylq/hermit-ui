@@ -1147,6 +1147,20 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const showTakeover = canTakeover || takenOver;
   const showMicFab = !micHidden && !session?.closedAt;
 
+  // How tall the bottom control stack is (suggestions + takeover banner + queue +
+  // composer). The floating mic is clamped above it, so it can never land on a chip
+  // you're trying to press — which it did, hiding "Run to done". Measured rather than
+  // guessed because the stack changes height as the banner and queue come and go.
+  const bottomStackRef = useRef<HTMLDivElement | null>(null);
+  const [bottomStackH, setBottomStackH] = useState(0);
+  useEffect(() => {
+    const el = bottomStackRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setBottomStackH(entry.contentRect.height));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const secondaryActions = (
     <>
       <button
@@ -1473,11 +1487,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             composer — it's a decision you make instead of typing, not something you
             reach for mid-scroll. */}
         {showMicFab && (
-          <FabDock count={1}>
+          <FabDock count={1} bottomInset={bottomStackH}>
             <VoiceMic sessionId={sessionId} hidden={false} onTranscript={insertTranscript} />
           </FabDock>
         )}
-        <>
+        <div ref={bottomStackRef}>
           <LoopBar
             loopState={sessionOne.data?.loopState}
             onStartLoop={startLoop}
@@ -1600,7 +1614,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             taRef={taRef}
             history={sentHistory}
           />
-        </>
+        </div>
     </>
   );
 }
