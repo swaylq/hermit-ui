@@ -399,7 +399,7 @@ const BRAIN_TOOLS = [
   {
     name: 'takeover_say',
     description:
-      "Say something to the agent in a conversation you're driving — as yourself, on the human's behalf. On your FIRST message you MUST pass `goal`: the thing you read the conversation as trying to achieve. It is shown to the human immediately, so a wrong reading gets corrected in seconds instead of after a dozen messages. Each call spends one of your turns; when they run out the takeover is handed back automatically, so don't chat — advance the work.",
+      "Say something to the agent in a conversation you're driving — as yourself, on the human's behalf. The human WATCHES it land: your text appears ghosted in their composer for a few seconds before it sends, which is also their window to take the conversation back — so this call pauses briefly, and that pause is the feature, not a stall. On your FIRST message you MUST pass `goal`: the thing you read the conversation as trying to achieve. It is shown to the human immediately, so a wrong reading gets corrected in seconds instead of after a dozen messages. Each call spends one of your turns; when they run out the takeover is handed back automatically, so don't chat — advance the work.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -676,7 +676,9 @@ async function dispatchBrainTool(name, args) {
       if (!answers || answers.length === 0) throw new Error('this is a QUESTION block — pass answer (an option label, free text, or an array)');
       decision = { answers: answers.map((x) => x.slice(0, 4000)) };
     }
-    await trpcMutate('interaction.resolve', { id: p.id, decision });
+    // answeredBy stamps the card: a choice the Brain made for the human must not
+    // look like one the human made.
+    await trpcMutate('interaction.resolve', { id: p.id, decision, answeredBy: 'brain' });
     return JSON.stringify({ ok: true, sessionId, agent: s.agentName, kind: p.kind, decision });
   }
   if (name === 'kb_list') {
@@ -740,7 +742,20 @@ async function dispatchBrainTool(name, args) {
     const goal = typeof args?.goal === 'string' && args.goal.trim() ? args.goal.trim() : undefined;
     // The cap lives server-side; an over-cap send is REFUSED there and the takeover
     // is handed back, so a rejection here is the system working, not a fault to retry.
-    await trpcMutate('chat.send', { sessionId, text: text.trim(), authoredBy: 'brain', ...(goal ? { goal } : {}) });
+    const body = text.trim();
+    // Show the sentence being written before it lands. The human sees it ghosted in
+    // the composer, which is both the point (they watch you work rather than finding
+    // a message that appeared) and their window to take the wheel back first.
+    // Best-effort: never let the decoration stop the message.
+    try {
+      await trpcMutate('chat.setTakeoverDraft', { sessionId, text: body });
+      // Roughly reading speed, floored so a one-liner still registers and capped so a
+      // long message doesn't stall the turn.
+      await sleep(Math.min(6000, 1200 + body.length * 25));
+    } catch (e) {
+      // draft is cosmetic — carry on
+    }
+    await trpcMutate('chat.send', { sessionId, text: body, authoredBy: 'brain', ...(goal ? { goal } : {}) });
     return JSON.stringify({ ok: true, sessionId });
   }
   if (name === 'takeover_release') {

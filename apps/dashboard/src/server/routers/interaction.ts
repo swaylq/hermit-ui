@@ -50,7 +50,15 @@ export const interactionRouter = router({
   // rewrite the inline card message so the SSE stream re-renders it as resolved.
   // The blocked hook / ask tool sees status!=pending on its next poll and runs.
   resolve: agentProcedure
-    .input(z.object({ id: z.string(), decision: DecisionInput }))
+    .input(z.object({
+      id: z.string(),
+      decision: DecisionInput,
+      // Provenance, same idea as ChatMessage.authoredBy: only the Brain's
+      // dispatch_answer passes this. A choice made on the human's behalf must be
+      // distinguishable from one they made — it's the first thing you'd want to
+      // check after the fact.
+      answeredBy: z.literal('brain').optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const i = await prisma.interaction.findUnique({
         where: { id: input.id },
@@ -65,6 +73,7 @@ export const interactionRouter = router({
         data: {
           status: 'resolved',
           decision: input.decision as object,
+          answeredBy: input.answeredBy ?? null,
           resolvedAt: new Date(),
         },
       });
@@ -79,7 +88,7 @@ export const interactionRouter = router({
         const blocks = Array.isArray(dup.content) ? (dup.content as Array<Record<string, unknown>>) : [];
         const next = blocks.map((b) =>
           b && b.type === 'interaction'
-            ? { ...b, status: 'resolved', decision: input.decision }
+            ? { ...b, status: 'resolved', decision: input.decision, answeredBy: input.answeredBy ?? null }
             : b,
         );
         await prisma.chatMessage.update({ where: { id: dup.id }, data: { content: next as object } });

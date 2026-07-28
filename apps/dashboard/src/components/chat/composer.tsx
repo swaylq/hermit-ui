@@ -124,6 +124,8 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   awaitingInput?: boolean;
   sending: boolean;
   inFlight: boolean;
+  /** What the Brain is composing right now, while it drives this conversation. */
+  brainDraft?: string | null;
   queueFull: boolean;
   stopping: boolean;
   onStop: () => void;
@@ -144,6 +146,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   awaitingInput = false,
   sending,
   inFlight,
+  brainDraft,
   queueFull,
   stopping,
   onStop,
@@ -413,6 +416,9 @@ export const ComposeBar = forwardRef<ComposerHandle, {
 
   // While the assistant is producing output, swap the send button for a stop.
   const showStop = inFlight && !disabled;
+  // The Brain's in-progress sentence shows only while the box is otherwise empty —
+  // the moment you start typing, the composer is yours and the ghost gets out.
+  const showBrainGhost = !!brainDraft && draft.length === 0 && !disabled;
   const canSend = !sending && !disabled && !awaitingInput && !queueFull && uploadingCount === 0 && (draft.trim().length > 0 || readyAttachments.length > 0);
 
   return (
@@ -506,6 +512,22 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             </button>
           </div>
 
+          {/* The Brain typing, where you would type. Ghosted and pointer-events-none,
+              so it reads as "something is being written here" without taking the
+              input away — tapping still focuses the real textarea, and typing is
+              what takes the conversation back. Hidden the moment you have your own
+              draft, because then the box is yours. */}
+          {showBrainGhost && (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-y-0 left-11 right-12 flex items-center overflow-hidden"
+            >
+              <span className="line-clamp-2 text-base sm:text-[15px] leading-relaxed text-muted-foreground/70">
+                {brainDraft}
+                <span className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[3px] animate-pulse bg-muted-foreground/70 align-middle" />
+              </span>
+            </div>
+          )}
           <textarea
             ref={taRef}
             value={draft}
@@ -557,7 +579,9 @@ export const ComposeBar = forwardRef<ComposerHandle, {
               submit();
             }}
             placeholder={
-              disabled
+              showBrainGhost
+                ? ''
+                : disabled
                 ? 'session is closed'
                 : awaitingInput
                 ? '↑ respond above to continue'

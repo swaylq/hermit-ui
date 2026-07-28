@@ -1527,6 +1527,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             sending={send.isPending}
             inFlight={isInFlight}
             queueFull={queueLen >= QUEUE_LIMIT}
+            brainDraft={takenOver ? takeover?.takeoverDraft : null}
             stopping={cancelTurn.isPending}
             onStop={() => cancelTurn.mutate({ sessionId })}
             onSend={(text, images, files) => {

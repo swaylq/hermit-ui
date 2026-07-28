@@ -433,6 +433,12 @@ model ChatSession {
   takeoverGoal        String?
   // Dedup marker for the takeover-watcher, same contract as dispatchNotify.
   takeoverNotify      String?
+  // What the Brain is CURRENTLY composing, shown ghosted in the composer before it
+  // sends. The point is that its turns don't appear fully-formed out of nowhere: you
+  // watch the sentence arrive, and those seconds are your window to take the wheel
+  // back before it lands. Cleared when the message is written.
+  takeoverDraft       String?
+  takeoverDraftAt     DateTime?
 
   messages     ChatMessage[]
   interactions Interaction[]
@@ -521,6 +527,10 @@ model Interaction {
   // permission: { behavior: "allow" | "deny", reason? }
   // question:   { answers: string[] }   (custom free-text answer ⇒ answers:[text])
   decision   Json?
+  // Who answered: NULL = the human clicked it, 'brain' = the Brain answered on their
+  // behalf (dispatch or takeover). Without this a decision the Brain made looks
+  // exactly like one you made, which is precisely the thing you'd want to audit.
+  answeredBy String?
   createdAt  DateTime    @default(now())
   resolvedAt DateTime?
 

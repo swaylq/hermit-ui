@@ -34,6 +34,9 @@ export function InteractionCard({ block }: { block: any }) {
   const payload = block?.payload ?? {};
   const status: string = block?.status ?? 'pending';
   const decision = block?.decision ?? null;
+  // Who decided. A Brain answer is labelled: it acted for you, and "which of these
+  // did I actually agree to?" is exactly the question you'd ask later.
+  const byBrain = block?.answeredBy === 'brain';
   const id: string = block?.interactionId ?? '';
   const resolved = status !== 'pending';
   const busy = resolve.isPending;
@@ -51,6 +54,11 @@ export function InteractionCard({ block }: { block: any }) {
         <span className="font-medium text-foreground/70">{kind === 'permission' ? 'Permission' : 'Asked'}</span>
         {' · '}
         {summary}
+        {byBrain && (
+          <span className="ml-1.5 rounded-full border border-dashed border-foreground/25 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            🦀 by Brain
+          </span>
+        )}
       </div>
     );
   }

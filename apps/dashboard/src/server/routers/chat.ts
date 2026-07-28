@@ -137,6 +137,8 @@ async function endTakeover(
       takeoverTurns: 0,
       takeoverGoal: null,
       takeoverNotify: null,
+      takeoverDraft: null,
+      takeoverDraftAt: null,
     },
   });
   if (cleared.count === 0) return false; // already ended by whoever got there first
@@ -260,6 +262,7 @@ export const chatRouter = router({
           takeoverGoal: true,
           takeoverTurns: true,
           takeoverStartedAt: true,
+          takeoverDraft: true,
         },
       });
       return s;
@@ -895,6 +898,11 @@ export const chatRouter = router({
           ...(text && !s.preview ? { preview: text.replace(/\s+/g, ' ').trim().slice(0, 120) } : {}),
           // Brain message: spend a turn, and record the goal it inferred (first
           // message only — `goal ||` keeps a later call from rewriting it).
+          // The ghost draft has become a real message; clear it either way, so a
+          // human message interrupting mid-type doesn't leave the Brain's half-
+          // finished sentence sitting in the composer.
+          takeoverDraft: null,
+          takeoverDraftAt: null,
           ...(byBrain
             ? {
                 takeoverTurns: { increment: 1 },
@@ -1313,6 +1321,26 @@ export const chatRouter = router({
           `You have ${TAKEOVER_TURN_CAP} messages. Release it with takeover_release as soon as the goal is met.`,
       );
       return { ok: true, already: false as const, brainSessionId: brainSession.id };
+    }),
+
+  // The Brain announcing what it is ABOUT to send. The composer renders this ghosted
+  // for a few seconds before the message actually lands, which is what turns a Brain
+  // turn from "a message appeared" into something you watched being typed — and gives
+  // you a beat to take the wheel back first.
+  //
+  // Best-effort by design: it only decorates. A failure here must never stop the
+  // Brain from actually saying its piece, and a stale draft is cleared by the next
+  // send, a release, or the watcher.
+  setTakeoverDraft: machineProcedure
+    .input(z.object({ sessionId: z.string(), text: z.string().max(4000).nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      const text = input.text?.trim() || null;
+      await prisma.chatSession.updateMany({
+        // Only while a takeover is live — nothing else may put words in the composer.
+        where: { id: input.sessionId, machineId: ctx.machine.id, takeoverBySessionId: { not: null } },
+        data: { takeoverDraft: text, takeoverDraftAt: text ? new Date() : null },
+      });
+      return { ok: true };
     }),
 
   // Hand the conversation back. Used by the banner's Release button and by the
