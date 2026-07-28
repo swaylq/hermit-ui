@@ -23,7 +23,6 @@ import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { useScope } from '@/lib/use-scope';
 import { LoopBar } from '@/components/chat/loop-bar';
 import { TakeoverBar } from '@/components/chat/takeover-bar';
-import { TAKEOVER_TURN_CAP } from '@/lib/takeover';
 import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
 import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
@@ -1506,7 +1505,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             <TakeoverBar
               goal={takeover.takeoverGoal}
               turns={takeover.takeoverTurns}
-              turnCap={TAKEOVER_TURN_CAP}
               agentName={session?.agentName ?? 'the agent'}
               agentWorking={session?.state === 'working'}
               brainWorking={takeover?.takeoverBrainState === 'working'}

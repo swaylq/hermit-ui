@@ -1,63 +1,37 @@
-// Brain takeover — limits and lifecycle text. See docs/brain-takeover-design.md.
+// Brain takeover — lifecycle text and the one remaining guard.
+// See docs/brain-takeover-design.md.
 //
-// The Brain drives a conversation the human was already having, sending messages
-// to the agent on their behalf until it judges the goal met. Two things have to be
-// true for that to be safe to hand a machine:
+// A takeover runs until it's DONE. It used to also stop at 12 messages or 30 minutes,
+// which was the wrong shape: those caps fired in the middle of real work and handed a
+// half-finished job back, which is exactly the interruption the feature exists to
+// avoid. The stopping conditions that survive are the ones that mean something:
 //
-//   1. It has to STOP on its own schedule OR ours, whichever comes first. The caps
-//      below are ours, and they're enforced in `chat.send` — a Brain that decides
-//      to keep going simply gets its 13th message rejected. Asking the Brain nicely
-//      in a skill is guidance; this is the guarantee.
-//   2. The human has to be able to take the wheel back instantly. Typing into the
-//      session does it (chat.send ends the takeover when a human-authored message
-//      arrives), so the reflex — just answer — is also the escape hatch.
+//   · the Brain judges the goal met and releases;
+//   · the Brain hits the safety floor and needs a decision only the human can make;
+//   · the human types, or clicks Release — instant, and the reason the rest can be
+//     unbounded: you are never more than one keystroke from having it back;
+//   · the session closes.
+//
+// What keeps this from running away isn't a counter, it's the shape of the loop: the
+// Brain only wakes when the AGENT produces something (the watcher pokes on a real
+// transition, never on a timer), so it can't spin on its own. A Brain talking to an
+// agent in circles is a judgement failure, and the `takeover` skill names it as one.
 //
 // Plain module with no server-only imports — same reason lib/chat-queue.ts exists:
-// the tRPC router ENFORCES these limits and the chat page DISPLAYS them, and the two
-// must never be able to disagree about the numbers. Also keeps the arithmetic
-// unit-testable without a database.
-
-/** Brain messages allowed per takeover before it's handed back automatically. */
-export const TAKEOVER_TURN_CAP = 12;
-
-/** Wall-clock ceiling on a single takeover. Whichever cap trips first wins. */
-export const TAKEOVER_MAX_AGE_MS = 30 * 60_000;
+// the router and the chat page must not be able to disagree about these numbers.
 
 /**
- * Live takeovers allowed per machine. Each one is the Brain driving a real claude
- * process, so this is the difference between "an assistant is working on something"
- * and "the whole fleet is talking to itself".
+ * Live takeovers allowed per machine. NOT a limit on how long or how hard the Brain
+ * works — it's a resource guard. Each takeover holds its own Brain session, i.e. a
+ * live claude process, and this machine has an OOM history. Raise it freely; it only
+ * exists so a burst of handovers can't take the host down.
  */
-export const TAKEOVER_CONCURRENCY = 3;
+export const TAKEOVER_CONCURRENCY = 8;
 
 export type TakeoverEndReason =
   | 'done' // the Brain judged the goal met and released
-  | 'turns' // hit TAKEOVER_TURN_CAP
-  | 'age' // hit TAKEOVER_MAX_AGE_MS
   | 'human' // the human typed into the session, or clicked Release
   | 'closed'; // the session was closed / deleted underneath it
-
-export interface TakeoverState {
-  takeoverTurns: number;
-  takeoverStartedAt: Date | null;
-}
-
-export type LimitCheck = { over: false } | { over: true; reason: 'turns' | 'age' };
-
-/**
- * Has this takeover run out of road? Evaluated before each Brain message, so the
- * cap is a refusal at the boundary rather than a cleanup after the fact.
- *
- * A null `takeoverStartedAt` means the row isn't in a takeover at all; callers
- * check that separately, and age is simply not enforced here.
- */
-export function checkLimits(s: TakeoverState, now: number): LimitCheck {
-  if (s.takeoverTurns >= TAKEOVER_TURN_CAP) return { over: true, reason: 'turns' };
-  if (s.takeoverStartedAt && now - s.takeoverStartedAt.getTime() >= TAKEOVER_MAX_AGE_MS) {
-    return { over: true, reason: 'age' };
-  }
-  return { over: false };
-}
 
 /**
  * The system row written into the conversation when a takeover ends. It goes in
@@ -68,13 +42,9 @@ export function endNote(reason: TakeoverEndReason, summary?: string | null): str
   const head =
     reason === 'done'
       ? 'Brain finished and handed the conversation back.'
-      : reason === 'turns'
-        ? `Brain reached its ${TAKEOVER_TURN_CAP}-message limit and handed the conversation back.`
-        : reason === 'age'
-          ? `Brain reached its ${Math.round(TAKEOVER_MAX_AGE_MS / 60_000)}-minute limit and handed the conversation back.`
-          : reason === 'human'
-            ? 'You took the conversation back.'
-            : 'Takeover ended — the session closed.';
+      : reason === 'human'
+        ? 'You took the conversation back.'
+        : 'Takeover ended — the session closed.';
   const tail = summary?.trim() ? ` ${summary.trim()}` : '';
   return `[takeover] ${head}${tail}`.slice(0, 500);
 }

@@ -1,71 +1,22 @@
-// The limits that make it safe to hand the Brain a live conversation. These decide
-// when it stops talking on someone's behalf, so the boundaries — exactly at the cap,
-// exactly at the clock — are the point.
+// What a takeover says when it ends. The caps that used to live here are gone — a
+// takeover now runs until the goal is met, the safety floor is hit, or the human
+// takes it back — so what's left to protect is the transcript: whoever reads this
+// conversation later has to be able to tell why the Brain stopped driving.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  TAKEOVER_MAX_AGE_MS,
-  TAKEOVER_TURN_CAP,
-  checkLimits,
-  endNote,
-  startNote,
-} from './takeover';
-
-const NOW = 1_800_000_000_000;
-const fresh = (turns: number, ageMs = 0) => ({
-  takeoverTurns: turns,
-  takeoverStartedAt: new Date(NOW - ageMs),
-});
-
-test('a takeover with room left is allowed to continue', () => {
-  assert.deepEqual(checkLimits(fresh(0), NOW), { over: false });
-  assert.deepEqual(checkLimits(fresh(TAKEOVER_TURN_CAP - 1), NOW), { over: false });
-});
-
-test('the turn cap trips exactly AT the cap, not after it', () => {
-  // takeoverTurns counts messages already sent, so at === cap the next one would be
-  // number cap+1. Off-by-one here is the difference between 12 and 13 messages.
-  assert.deepEqual(checkLimits(fresh(TAKEOVER_TURN_CAP), NOW), { over: true, reason: 'turns' });
-});
-
-test('a Brain that somehow overshot is still stopped', () => {
-  assert.deepEqual(checkLimits(fresh(TAKEOVER_TURN_CAP + 5), NOW), { over: true, reason: 'turns' });
-});
-
-test('the age cap trips exactly at the ceiling', () => {
-  assert.deepEqual(checkLimits(fresh(0, TAKEOVER_MAX_AGE_MS - 1), NOW), { over: false });
-  assert.deepEqual(checkLimits(fresh(0, TAKEOVER_MAX_AGE_MS), NOW), { over: true, reason: 'age' });
-});
-
-test('turns are reported before age when both have tripped', () => {
-  // Not arbitrary: the end-of-takeover note tells the human WHY it stopped, and
-  // "used all its messages" is the more actionable of the two.
-  assert.deepEqual(
-    checkLimits(fresh(TAKEOVER_TURN_CAP, TAKEOVER_MAX_AGE_MS * 2), NOW),
-    { over: true, reason: 'turns' },
-  );
-});
-
-test('a missing start time disables the age cap without breaking the turn cap', () => {
-  // takeoverStartedAt is null when the row isn't in a takeover at all; callers check
-  // that separately, so this must not throw or spuriously report an age overrun.
-  assert.deepEqual(checkLimits({ takeoverTurns: 0, takeoverStartedAt: null }, NOW), { over: false });
-  assert.deepEqual(
-    checkLimits({ takeoverTurns: TAKEOVER_TURN_CAP, takeoverStartedAt: null }, NOW),
-    { over: true, reason: 'turns' },
-  );
-});
+import { TAKEOVER_CONCURRENCY, endNote, startNote } from './takeover';
 
 test('every end reason produces a distinct, human-readable note', () => {
-  const notes = (['done', 'turns', 'age', 'human', 'closed'] as const).map((r) => endNote(r));
+  const notes = (['done', 'human', 'closed'] as const).map((r) => endNote(r));
   for (const n of notes) assert.ok(n.startsWith('[takeover] '), n);
   assert.equal(new Set(notes).size, notes.length, 'reasons must be distinguishable in the transcript');
 });
 
-test('the cap notes name the actual limits, so the numbers can never drift from the code', () => {
-  assert.match(endNote('turns'), new RegExp(String(TAKEOVER_TURN_CAP)));
-  assert.match(endNote('age'), new RegExp(String(Math.round(TAKEOVER_MAX_AGE_MS / 60_000))));
+test('no end note claims a limit was reached — there are none left to reach', () => {
+  for (const r of ['done', 'human', 'closed'] as const) {
+    assert.doesNotMatch(endNote(r), /limit|minute|message budget/i, r);
+  }
 });
 
 test("the Brain's summary is appended to the end note", () => {
@@ -86,6 +37,15 @@ test('end notes stay within the appendSystemNote length limit', () => {
 });
 
 test('the start note tells the human how to take the conversation back', () => {
-  // Typing is the escape hatch, and it's only discoverable if we say so.
+  // Typing is the escape hatch, and with no time or turn limit behind it, it is the
+  // ONLY thing that reliably ends a takeover the human no longer wants. It has to be
+  // discoverable, so it is stated in the transcript itself.
   assert.match(startNote(), /take it back/i);
+});
+
+test('concurrency stays bounded — it guards the host, not the Brain', () => {
+  // Each takeover holds a live claude process. This is the one number that must not
+  // quietly become unlimited along with the rest.
+  assert.ok(Number.isInteger(TAKEOVER_CONCURRENCY) && TAKEOVER_CONCURRENCY > 0);
+  assert.ok(TAKEOVER_CONCURRENCY <= 32, 'a burst of handovers must not be able to OOM the machine');
 });

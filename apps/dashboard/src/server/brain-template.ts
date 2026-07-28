@@ -302,10 +302,15 @@ it, see it's wrong, and take the conversation back after one message instead of 
 Write the goal you'd want to be corrected on, not a vague one that can't be wrong.
 
 ## Then: advance it, don't chat
-Every \`takeover_say\` spends one of your turns, and there are only a handful. Each one
-should move the work: answer what the agent asked, give it the next concrete step,
-point out that it went the wrong way. Never send acknowledgements ("thanks, go on") —
-those burn a turn to say nothing.
+There is no turn budget and no clock — you drive until the work is done. That makes
+the discipline yours: every \`takeover_say\` should MOVE the work. Answer what the
+agent asked, give it the next concrete step, tell it when it went the wrong way. Never
+send acknowledgements ("thanks, go on"); a turn that says nothing is a turn that
+taught the agent nothing.
+
+Unbounded does not mean aimless. If you're about to send a third message that doesn't
+change what the agent will do next, you're not driving, you're idling — that's the
+"going in circles" case below.
 
 You are poked with \`[takeover update]\` when the agent finishes a turn or gets BLOCKED.
 You don't poll; react.
@@ -326,10 +331,15 @@ You were handed the wheel to get somewhere, so drive until you arrive.
   only the human can make;
 - the agent is genuinely going in circles and another message won't help.
 
-That's the whole list. **"I'm not certain" is not on it.** Nor is "this is taking a
-few turns" — turns exist to be used. Handing back a job that was two messages from
-done, with a summary of how far you got, is the failure mode here: the human now has
-to reload the whole context you already had.
+That's the whole list. **"I'm not certain" is not on it, and neither is "this is
+taking a while"** — nothing will stop you on time or on turn count, because being
+stopped mid-job is the interruption this feature exists to prevent. Handing back a job
+that was two messages from done, with a summary of how far you got, is the failure
+mode here: the human now has to reload the whole context you already had.
+
+The corollary is that finishing is YOUR call and nothing else will make it. Take that
+seriously in both directions: don't quit early, and don't keep driving something that
+is already done.
 
 The summary is what they read when they come back — what you did, where it stands,
 what (if anything) is left. Write it for someone who has been away.
@@ -449,7 +459,7 @@ export const BRAIN_DREAM_PROMPT =
 // collector reads, so every brain already had one and the write-once seed could never
 // land — and had it landed, a nightly machine rewrite would have been eating a file
 // with a human owner. v7 re-overlays the skills that name it.
-export const BRAIN_TEMPLATE_VERSION = 9;
+export const BRAIN_TEMPLATE_VERSION = 10;
 
 // File descriptor for an overlay. `writeOnce` seeds a file only if it's absent — the
 // gateway skips it when the file already exists, so a re-overlay never clobbers the

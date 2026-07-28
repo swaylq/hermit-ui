@@ -14,7 +14,6 @@ import { cn } from '@/lib/utils';
 export function TakeoverBar({
   goal,
   turns,
-  turnCap,
   agentName,
   agentWorking,
   brainWorking,
@@ -24,7 +23,6 @@ export function TakeoverBar({
 }: {
   goal: string | null;
   turns: number;
-  turnCap: number;
   agentName: string;
   /** The agent is mid-turn — the Brain is waiting on it. */
   agentWorking: boolean;
@@ -61,9 +59,14 @@ export function TakeoverBar({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium">Brain is driving this conversation</span>
-            <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
-              {turns}/{turnCap}
-            </span>
+            {/* A running count, not a budget — there's no ceiling to show it against.
+                Kept because "how many turns has it taken" is worth knowing at a glance
+                when you're deciding whether to let it keep going. */}
+            {turns > 0 && (
+              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+                {turns} turn{turns === 1 ? '' : 's'}
+              </span>
+            )}
           </div>
           {/* The inferred goal, verbatim. Deliberately not truncated to one line —
               a goal you can't fully read is a goal you can't check. */}

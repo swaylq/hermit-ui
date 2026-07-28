@@ -13,8 +13,6 @@ import { extractSearchText, extractInteractionBlocks } from '../chat-text';
 import { generateSessionTitle } from '../session-title';
 import {
   TAKEOVER_CONCURRENCY,
-  TAKEOVER_TURN_CAP,
-  checkLimits,
   endNote,
   startNote,
   type TakeoverEndReason,
@@ -840,11 +838,6 @@ export const chatRouter = router({
       const byBrain = input.authoredBy === 'brain';
       if (byBrain) {
         if (!s.takeoverBySessionId) throw new Error('no active takeover on this session');
-        const limit = checkLimits(s, Date.now());
-        if (limit.over) {
-          await endTakeover(input.sessionId, limit.reason);
-          throw new Error(`takeover ended: ${limit.reason} limit reached`);
-        }
       }
 
       const text = input.text.trim();
@@ -1338,7 +1331,9 @@ export const chatRouter = router({
         `[takeover] The human handed you their conversation with ${s.agentName} (session ${input.sessionId}). ` +
           `Read it with takeover_read({ sessionId: "${input.sessionId}" }), work out what it is trying to achieve, ` +
           `then drive it with takeover_say — passing that goal on your FIRST message so the human can see your reading. ` +
-          `You have ${TAKEOVER_TURN_CAP} messages. Release it with takeover_release as soon as the goal is met.`,
+          `Drive it until the goal is met, then release it with takeover_release. There is no message budget — ` +
+          `take as many turns as the work needs, and stop when it's done, when you hit the safety floor, or when ` +
+          `the agent is genuinely going in circles.`,
       );
       return { ok: true, already: false as const, brainSessionId: brainSession.id };
     }),
@@ -1401,7 +1396,7 @@ export const chatRouter = router({
       },
       orderBy: { takeoverStartedAt: 'asc' },
     });
-    return rows.map((r) => ({ ...r, turnCap: TAKEOVER_TURN_CAP }));
+    return rows;
   }),
 
   // ── USER-PROFILE.md corpus ─────────────────────────────────────────────────────────
@@ -1495,12 +1490,6 @@ export const chatRouter = router({
         if (await endTakeover(r.id, 'closed')) ended++;
         continue;
       }
-      const limit = checkLimits(r, Date.now());
-      if (limit.over) {
-        if (await endTakeover(r.id, limit.reason)) ended++;
-        continue;
-      }
-
       const pending = await prisma.interaction.findFirst({
         where: { sessionId: r.id, status: 'pending' },
         orderBy: { createdAt: 'asc' },
@@ -1509,7 +1498,6 @@ export const chatRouter = router({
 
       let sig: string;
       let poke: string | null = null;
-      const left = TAKEOVER_TURN_CAP - r.takeoverTurns;
       if (pending) {
         sig = `blocked:${pending.id}`;
         poke =
@@ -1526,7 +1514,7 @@ export const chatRouter = router({
           sig = `done:${lastA.id}`;
           poke =
             `[takeover update] ${r.agentName} finished a turn in the conversation you're driving (session ${r.id}). ` +
-            `Read it with takeover_read, then either send the next message with takeover_say (${left} left) ` +
+            `Read it with takeover_read, then either send the next message with takeover_say ` +
             `or, if ${r.takeoverGoal ? `"${r.takeoverGoal.slice(0, 160)}"` : 'the goal'} is met, call takeover_release with a short summary.`;
         } else {
           sig = 'idle';

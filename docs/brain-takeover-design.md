@@ -31,12 +31,11 @@
                     └─ poke 义脑："去读 session X，推断目标，然后驱动它"
 
 义脑 ──takeover_read──▶ 读对话（每条带 who: human / you / system）
-     ──takeover_say───▶ chat.send({authoredBy:'brain', goal})  ← 上限在这里强制
+     ──takeover_say───▶ chat.send({authoredBy:'brain', goal})
      ──dispatch_answer▶ 解开 agent 卡住的选择（安全底线原样适用）
      ──takeover_release▶ 交还 + 总结
 
 网关 runTakeoverWatch（8s）
-     ├─ 扫上限：超了就强制交还，不指望义脑自觉
      └─ 算签名（blocked / done），变化时 poke 义脑
 
 你打字 ──▶ chat.send（无 authoredBy）──▶ 立即结束接管
@@ -64,13 +63,20 @@ authoredBy String?   // null = 你打的；'brain' = 义脑；'system' = 网关 
 
 两条索引：`takeoverBySessionId` 的部分索引给 watcher 轮询；`(createdAt) WHERE role='user' AND authoredBy IS NULL` 的部分索引给画像的增量扫描（人类消息在参考机器上约占 19 万条里的 1%，所以这个索引很小）。
 
-## 止损：在服务端，不靠嘱咐
+## 止损：只保留有意义的那几个
 
-**上限 12 条 / 30 分钟 / 每机同时 3 个接管**（`lib/takeover.ts`）。
+**接管不设时长和轮数上限**（2026-07-28 起）。原来有 12 条 / 30 分钟两道闸，实测是错的形状：它们在活儿干到一半时触发，把没做完的工作交还回来——而那正是这个功能存在的目的所要避免的打断。
 
-真正管用的是**发送端拒绝**：`chat.send` 带 `authoredBy:'brain'` 时先 `checkLimits`，超了就结束接管并抛错。义脑就算决定继续也发不出第 13 条。watcher 那层的上限清扫是第二道——专治「义脑不说话了，接管挂在那儿」。
+留下的终止条件都是有含义的：
 
-写在 skill 里的话是指引；写在这里的才是保证。
+- 义脑判断达成，主动 `takeover_release`
+- 义脑撞上安全底线，需要只有你能做的决定
+- **你打字，或点 Release** —— 立即生效，也正是其余部分可以无限的原因：你永远离「收回」只有一个按键
+- 会话被关闭
+
+**为什么这样不会跑飞**：不是靠计数器，是靠循环的形状。义脑只在**agent 真的产出了东西**时被唤醒（watcher 只在真实状态跃迁时 poke，从不定时触发），所以它无法自己空转。义脑和 agent 来回打转属于判断失误，`takeover` skill 里点名了这种情况。
+
+**唯一保留的数字是并发数**（`TAKEOVER_CONCURRENCY`，现为 8）。它**不是**对义脑干多久多狠的限制，而是资源闸：每个接管持有一个自己的义脑会话，也就是一个活的 claude 进程，而这台机器有 OOM 前科。可以随便调高，它只是防止一次性交出太多把宿主打垮。
 
 **你打字即收回**：`chat.send` 收到没有 `authoredBy` 的消息且接管中，立刻 `endTakeover(reason:'human')`。伸手就是意图，不该先让你找按钮——否则你的消息会落在接管中间，和义脑的下一条抢。
 
@@ -86,7 +92,7 @@ authoredBy String?   // null = 你打的；'brain' = 义脑；'system' = 网关 
 
 | 工具 | 作用 |
 |---|---|
-| `takeover_list` | 我在驱动哪些对话：目标、轮数/上限、working |
+| `takeover_list` | 我在驱动哪些对话：目标、已用轮数、working |
 | `takeover_read` | 读对话，每条带 `who`（human / you / system） |
 | `takeover_say` | 以义脑身份发言，第一条必须带 `goal` |
 | `takeover_release` | 交还 + 总结 |
