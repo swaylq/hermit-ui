@@ -67,7 +67,7 @@ export function TakeoverBar({
           </p>
           <p className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
             {activity.busy && (
-              <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400" />
+              <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-blue-500" />
             )}
             <span>{activity.text}</span>
             <span className="text-muted-foreground/40">·</span>

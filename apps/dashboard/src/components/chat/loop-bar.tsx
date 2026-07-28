@@ -6,7 +6,7 @@
 // LoopBar is consumed outside (by SessionPane); the rest stay module-private.
 
 import { memo, useState, useMemo } from 'react';
-import { X, ChevronDown } from 'lucide-react';
+import { X, ChevronDown, Bot } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
@@ -111,20 +111,23 @@ export const LoopBar = memo(function LoopBar({
               onClick={takeover.onToggle}
               disabled={takeover.busy}
               aria-pressed={takeover.active}
+              aria-label={takeover.active ? '收回对话（义脑正在接管）' : '让义脑接管这段对话'}
               title={
                 takeover.active
                   ? '义脑正在开车 — 点一下收回（你直接打字也会收回）'
                   : '义脑接管 — 它读完这段对话，推断你想达成什么，替你继续'
               }
               className={cn(
-                'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border text-[12px] transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60',
+                // Icon-only, sized to match the text chips beside it so the row keeps
+                // one baseline. State lives in colour here rather than in a word,
+                // which is why the active blue has to be unmistakable.
+                'inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60',
                 takeover.active
-                  ? 'border-indigo-400/50 bg-indigo-500/10 text-indigo-500 hover:bg-indigo-500/15'
+                  ? 'border-blue-500 bg-blue-500 text-white hover:bg-blue-600'
                   : 'border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40',
               )}
             >
-              <span aria-hidden="true">🦀</span>
-              {takeover.active ? '义脑驾驶中 · 收回' : '义脑接管'}
+              <Bot className="h-4 w-4" aria-hidden="true" />
             </button>
           )}
           {!disabled && (
