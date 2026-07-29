@@ -541,6 +541,11 @@ export function RecentSessions() {
     },
     onSettled: () => utils.sessionGroups.list.invalidate(),
   });
+  const removeGroup = trpc.sessionGroups.remove.useMutation({
+    // Both lists move: the drawer goes, and its sessions (groupId now null, the FK
+    // is ON DELETE SET NULL) reappear in the flat recents.
+    onSuccess: () => { utils.sessionGroups.list.invalidate(); utils.chat.listSessions.invalidate(); },
+  });
   const visible = useMemo(() => {
     // Hidden sessions drop out of the list unless the footer toggle is on.
     let rows = showHidden ? baseRows : baseRows.filter((s) => !s.hiddenAt);
@@ -722,6 +727,29 @@ export function RecentSessions() {
                 });
                 if (!name || name === g.name) return;
                 renameGroup.mutate({ id: g.id, name });
+              },
+            },
+            {
+              label: 'Delete group',
+              icon: <Trash2 className="h-3.5 w-3.5" />,
+              danger: true,
+              onClick: async () => {
+                const g = groups.find((x) => x.id === groupMenu.id);
+                if (!g) return;
+                const n = g.sessionCount;
+                if (await confirm({
+                  title: 'Delete group',
+                  // Say what survives: this empties a drawer, it does not delete
+                  // conversations (the router never touches them).
+                  message: n === 0
+                    ? `Delete “${g.name}”? It’s empty.`
+                    : n === 1
+                      ? `Delete “${g.name}”? The conversation in it is kept — it goes back to the recents list.`
+                      : `Delete “${g.name}”? The ${n} conversations in it are kept — they go back to the recents list.`,
+                  confirmLabel: 'Delete',
+                  danger: true,
+                }))
+                  removeGroup.mutate({ id: g.id });
               },
             },
           ]}
