@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { resolveMachine } from '../route';
+import { stripNulDeep } from '@/server/sanitize';
 import { enqueuePush } from '@/server/push';
 import { cronEvent } from '@/server/push/events';
 
@@ -77,6 +78,39 @@ export async function POST(req: NextRequest) {
     });
   }
   await prisma.cron.update({ where: { id: body.cronId }, data: { lastStatus: body.status } });
+
+  // Deliver the report. A cron runs isolated so it can't grow a conversation's
+  // context, but its RESULT belongs where you read things — /cron is a page you have
+  // to remember to visit. Posted as an assistant row stamped authoredBy:'cron', so
+  // the timeline can mark it as a scheduled report rather than something the agent
+  // said to you just now.
+  if (cron.reportSessionId && body.output?.trim()) {
+    const target = await prisma.chatSession.findFirst({
+      where: { id: cron.reportSessionId, machineId: machine.id, closedAt: null },
+      select: { id: true },
+    });
+    if (target) {
+      const label = cron.title?.trim() || cron.agentName;
+      const header = body.status === 'ok' ? label : `${label} — ${body.status}`;
+      await prisma.chatMessage.create({
+        data: {
+          sessionId: target.id,
+          role: 'assistant',
+          authoredBy: 'cron',
+          // externalId keyed on the run so a gateway retry of the same finish can't
+          // post the report twice.
+          externalId: body.runId ? `cron-report-${body.runId}` : null,
+          content: stripNulDeep([
+            { type: 'text', text: `**${header}**\n\n${body.output.trim()}` },
+          ]) as unknown as Parameters<typeof prisma.chatMessage.create>[0]['data']['content'],
+        },
+      });
+      await prisma.chatSession.update({
+        where: { id: target.id },
+        data: { lastMessageAt: new Date() },
+      });
+    }
+  }
 
   // Only failures are pushed — a fleet's worth of successful daily crons would be
   // pure noise, and they're already visible in the dashboard's cron page.

@@ -431,6 +431,23 @@ function CronDetail({ id }: { id: string }) {
                     <span className="text-muted-foreground w-14 shrink-0">下次</span>
                     <span className="tabular-nums">{queued ? '即将运行…' : cron.nextFire ? new Date(cron.nextFire).toLocaleString() : '—'}</span>
                   </div>
+                  {/* Where the result goes. Worth stating on the detail view: a cron
+                      that reports into a conversation behaves very differently from
+                      one that only files a run here, and you can't tell them apart
+                      from the run list alone. */}
+                  <div className="flex gap-2">
+                    <span className="text-muted-foreground w-14 shrink-0">报告</span>
+                    {cron.reportSessionId ? (
+                      <a
+                        href={`/chat?session=${encodeURIComponent(cron.reportSessionId)}`}
+                        className="text-foreground/80 underline underline-offset-2 hover:text-foreground"
+                      >
+                        发到创建它的对话
+                      </a>
+                    ) : (
+                      <span className="text-muted-foreground">仅记录在这里</span>
+                    )}
+                  </div>
                   <div>
                     <div className="text-muted-foreground mb-1">prompt</div>
                     <div className="whitespace-pre-wrap rounded-md bg-muted/40 p-2 font-mono text-xs text-foreground/90">{cron.prompt}</div>

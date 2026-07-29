@@ -184,6 +184,10 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
   // instructions were actually yours.
   const byBrain = role === 'user' && authoredBy === 'brain';
   const byMachine = role === 'user' && authoredBy === 'system';
+  // A scheduled run reporting in. It's an assistant row, but it did NOT arrive
+  // because you just said something — labelling it keeps the transcript honest about
+  // which replies were answers to you.
+  const byCron = role === 'assistant' && authoredBy === 'cron';
   const isHumanUser = role === 'user' && !byBrain && !byMachine;
   // Machine pokes read as notices, not conversation — same treatment as the
   // gateway's system banners.
@@ -294,6 +298,12 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
           <div className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             <span aria-hidden="true">🦀</span>
             <span>Brain</span>
+          </div>
+        )}
+        {byCron && (
+          <div className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            <span aria-hidden="true">⏰</span>
+            <span>Scheduled</span>
           </div>
         )}
         {grouped.map((g, i) => (

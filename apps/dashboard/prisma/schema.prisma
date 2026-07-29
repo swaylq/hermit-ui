@@ -442,6 +442,7 @@ model ChatSession {
 
   messages     ChatMessage[]
   interactions Interaction[]
+  cronReports  Cron[]       @relation("CronReports")
 
   @@index([machineId, agentName])
   @@index([machineId, closedAt])
@@ -617,6 +618,14 @@ model Cron {
   intervalSec Int // base period: fire every N seconds
   jitterSec   Int     @default(0) // ± uniform random applied to each fire
   enabled     Boolean @default(true)
+
+  // Where this cron's report lands. A cron runs ISOLATED — a throwaway pane, so a
+  // daily job can't grow a chat's context without bound — but its result should still
+  // arrive somewhere you actually read, not only in /cron. Defaults to the session the
+  // cron was created from: you asked for it in a conversation, so it reports back
+  // there. NULL = /cron only (an older cron, or one deliberately kept quiet).
+  reportSessionId String?
+  reportSession   ChatSession? @relation("CronReports", fields: [reportSessionId], references: [id], onDelete: SetNull)
 
   lastFire   DateTime?
   nextFire   DateTime? // lastFire + intervalSec ± jitter; runner reads this

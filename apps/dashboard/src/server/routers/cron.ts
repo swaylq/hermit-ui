@@ -28,6 +28,8 @@ const CronInput = z.object({
   intervalSec: z.number().int().min(60).max(604_800), // 1 min … 7 days
   jitterSec: z.number().int().min(0).max(86_400).default(0),
   enabled: z.boolean().default(true),
+  // Where finished runs report. Null keeps a cron silent (visible only in /cron).
+  reportSessionId: z.string().nullable().optional(),
 });
 
 export const cronRouter = router({
@@ -208,6 +210,9 @@ export const cronRouter = router({
           intervalSec: input.intervalSec,
           jitterSec: input.jitterSec,
           title: input.title,
+          // You asked for this schedule in a conversation, so that's where its
+          // reports come back. Overridable later via `update`.
+          reportSessionId: input.sessionId,
           nextFire: new Date(),
         },
       });

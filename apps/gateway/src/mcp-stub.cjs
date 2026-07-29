@@ -197,7 +197,7 @@ const TOOLS = [
   {
     name: 'cron_create',
     description:
-      "Schedule a durable recurring task for THIS agent. Every intervalMinutes (± jitterMinutes of random float), the gateway runs `prompt` as a fresh claude turn in this agent's directory and records the result. It survives restarts and shows on the dashboard /cron page. Use when the user asks for a 定时任务 / scheduled / recurring task. For an in-conversation loop whose results stream into THIS chat, use the loop skill instead.",
+      "Schedule a durable recurring task for THIS agent. Every intervalMinutes (± jitterMinutes of random float), the gateway runs `prompt` as a fresh claude turn in this agent's directory — an ISOLATED turn, so a daily job never grows this conversation's context — and then posts its result back into THIS chat as a report, as well as recording it on the dashboard /cron page. It survives restarts. Because the result lands in the chat, write `prompt` so its final message IS the report you want to read: lead with the outcome, not with what you are about to do. Use when the user asks for a 定时任务 / scheduled / recurring task. For a loop whose every intermediate step streams into this chat, use the loop skill instead.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -878,7 +878,7 @@ async function dispatchTool(name, args) {
       title,
     });
     const created = res?.[0]?.result?.data?.json;
-    return `ok — cron scheduled: every ${intervalMinutes}m${jitterMinutes ? ` ±${jitterMinutes}m` : ''}${created?.id ? `, id ${created.id}` : ''}. Manage it on the dashboard /cron page.`;
+    return `ok — cron scheduled: every ${intervalMinutes}m${jitterMinutes ? ` ±${jitterMinutes}m` : ''}${created?.id ? `, id ${created.id}` : ''}. Each run reports back into THIS conversation; full history on the dashboard /cron page.`;
   }
   if (name === 'cron_list') {
     const list = (await trpcQuery('cron.listForSession', { sessionId: SESSION_ID })) || [];
