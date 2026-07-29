@@ -17,7 +17,7 @@
 import { useState, useCallback, useMemo, useEffect, memo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil } from 'lucide-react';
+import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, MessageSquare, Bot } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
@@ -27,6 +27,7 @@ import { sessionStatusView } from '@/lib/session-status';
 import { isSessionUnread } from '@/lib/session-read';
 import { useLiveWorking } from '@/lib/session-live';
 import { usePins, togglePin } from '@/lib/session-pins';
+import { useSessionView, setSessionView, useAgentDrawers, setAgentDrawer, type SessionView } from '@/lib/session-view';
 import { useLongPress } from '@/lib/use-long-press';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { ContextMenu } from '@/components/ui/context-menu';
@@ -390,6 +391,37 @@ const SessionRow = memo(function SessionRow({
   );
 });
 
+// How the session list is arranged, as a segmented pair in the section header.
+// Two buttons rather than one toggling button: the current arrangement is stated,
+// not implied by an icon you'd have to decode. Icons match the nav (a chat is
+// MessageSquare, an agent is Bot) so the by-agent view reads as "the Agents idea,
+// applied here".
+function ViewToggle({ view }: { view: SessionView }) {
+  const item = (v: SessionView, label: string, Icon: typeof Bot) => (
+    <button
+      type="button"
+      onClick={() => setSessionView(v)}
+      aria-pressed={view === v}
+      title={label}
+      aria-label={label}
+      className={cn(
+        'inline-flex h-5 w-5 items-center justify-center rounded transition-colors cursor-pointer',
+        view === v
+          ? 'bg-sidebar-accent text-sidebar-foreground'
+          : 'text-muted-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
+      )}
+    >
+      <Icon className="h-3 w-3" />
+    </button>
+  );
+  return (
+    <div className="ml-auto flex items-center gap-0.5 self-center" role="group" aria-label="arrange sessions">
+      {item('recents', 'Recent conversations', MessageSquare)}
+      {item('agents', 'Grouped by agent', Bot)}
+    </div>
+  );
+}
+
 // The /chat session list — per-agent sessions with live-working dots, unread
 // state, pins, a context menu, hide/hibernate/restart actions, and long-press on
 // touch. Rendered by AppSidebar; the heaviest of the three worker Recent* lists.
@@ -406,6 +438,10 @@ export function RecentSessions() {
   const promptFor = usePrompt();
   const liveWorkingSince = useLiveWorking();
   const pins = usePins();
+  // Which arrangement, and which agent drawers the user has opened/shut in the
+  // by-agent one. Both are local view state (lib/session-view).
+  const view = useSessionView();
+  const agentDrawers = useAgentDrawers();
   // Custom right-click menu: viewport coords + the session it targets, or null.
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   // Touch long-press opens the SAME menu — phones have no right-click.
@@ -580,11 +616,52 @@ export function RecentSessions() {
     return by;
   }, [baseRows, showHidden]);
 
+  // ── By-agent view ─────────────────────────────────────────────────────────
+  // A different lens on the same sessions, not a second filing system: the manual
+  // groups are ignored here, so a session filed into a drawer still appears under
+  // its agent. Nothing is written — switching back leaves the groups as they were.
+  const agentSections = useMemo(() => {
+    if (view !== 'agents') return [];
+    let rows = showHidden ? baseRows : baseRows.filter((s) => !s.hiddenAt);
+    if (filter) rows = rows.filter((s) => s.agentName === filter);
+    const by = new Map<string, SessionListItem[]>();
+    for (const s of rows) {
+      const arr = by.get(s.agentName);
+      if (arr) arr.push(s);
+      else by.set(s.agentName, [s]);
+    }
+    // baseRows is recency-ordered, so an agent's first appearance orders the
+    // sections: whoever you talked to last is on top. Pins float within a section.
+    return Array.from(by, ([name, list]) => ({
+      name,
+      rows: pins.size
+        ? [...list].sort((a, b) => (pins.has(b.id) ? 1 : 0) - (pins.has(a.id) ? 1 : 0))
+        : list,
+    }));
+  }, [view, baseRows, showHidden, filter, pins]);
+
+  // The agent whose session is open — its drawer starts open so switching views
+  // doesn't lose sight of where you are.
+  const activeAgentName = useMemo(
+    () => (sessions.data ?? []).find((s) => s.id === activeId)?.agentName,
+    [sessions.data, activeId],
+  );
+
+  // A search returns one flat list of hits in EITHER view — making you open
+  // drawers to find a hit would be worse than no grouping at all.
+  const searching = q.trim().length > 0;
+  const byAgent = view === 'agents' && !searching;
+  const shownCount = byAgent ? agentSections.reduce((n, s) => n + s.rows.length, 0) : visible.length;
+  const nothingToShow = byAgent
+    ? agentSections.length === 0
+    : visible.length === 0 && (searching || grouped.size === 0);
+
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">
       <div className="px-3 pb-1 flex items-baseline gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
-        <span>Recents</span>
-        <span className="tabular-nums text-muted-foreground/50">{visible.length}</span>
+        <span>{view === 'agents' ? 'By agent' : 'Recents'}</span>
+        <span className="tabular-nums text-muted-foreground/50">{shownCount}</span>
+        {(sessions.data?.length ?? 0) > 0 && <ViewToggle view={view} />}
       </div>
       {menu && (
         <ContextMenu
@@ -820,16 +897,58 @@ export function RecentSessions() {
               <div key={i} className="h-8 rounded-md bg-sidebar-accent/40 animate-pulse" />
             ))}
           </div>
-        ) : visible.length === 0 && grouped.size === 0 ? (
+        ) : nothingToShow ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">
             {q.trim() ? `No chats match “${q.trim()}”.` : filter ? `no sessions for ${filter}.` : 'no chats yet — start a New chat.'}
           </p>
+        ) : byAgent ? (
+          <>
+            {agentSections.map((sec) => {
+              // Shut by default — at this many sessions the useful thing is the
+              // index of agents. The one you're reading starts open, until you say
+              // otherwise (lib/session-view stores only explicit clicks).
+              const open = agentDrawers[sec.name] ?? sec.name === activeAgentName;
+              return (
+                <div key={sec.name} className="mb-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setAgentDrawer(sec.name, !open)}
+                    aria-expanded={open}
+                    className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground cursor-pointer"
+                  >
+                    <ChevronRight
+                      className={cn('h-3 w-3 shrink-0 transition-transform', open && 'rotate-90')}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 truncate font-mono">{sec.name}</span>
+                    <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/50">{sec.rows.length}</span>
+                  </button>
+                  {open && (
+                    <ul className="space-y-px pl-2">
+                      {sec.rows.map((s) => (
+                        <SessionRow
+                          key={s.id}
+                          session={s}
+                          active={activeId === s.id}
+                          liveAt={liveWorkingSince(s.id)}
+                          pinned={pins.has(s.id)}
+                          onPrefetch={prefetchSession}
+                          onOpenMenu={openMenuAt}
+                          longPress={longPress}
+                        />
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            })}
+          </>
         ) : (
           <>
             {/* Drawers first, then whatever is still loose. Hidden while searching:
                 a search should return one flat list of hits, not make you open
                 folders to find them. */}
-            {!q.trim() &&
+            {!searching &&
               groups.map((g) => {
                 const rows = grouped.get(g.id) ?? [];
                 return (
