@@ -195,7 +195,7 @@ function NewCronForm() {
         <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
           Title <span className="text-muted-foreground/60 normal-case">(optional)</span>
         </span>
-        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. 每日早报" className="mt-1.5 text-base sm:text-sm" />
+        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Daily brief" className="mt-1.5 text-base sm:text-sm" />
       </label>
 
       <label className="block">
@@ -212,11 +212,11 @@ function NewCronForm() {
       <div className="space-y-2">
         <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Schedule</span>
         <div className="flex flex-wrap items-center gap-2 text-[13px]">
-          <span className="text-muted-foreground">每</span>
+          <span className="text-muted-foreground">every</span>
           <Input type="number" min={1} value={every} onChange={(e) => setEvery(e.target.value)} className="h-9 w-20" />
-          <span className="text-muted-foreground">分钟，浮动 ±</span>
+          <span className="text-muted-foreground">min, jitter ±</span>
           <Input type="number" min={0} value={jitter} onChange={(e) => setJitter(e.target.value)} className="h-9 w-20" />
-          <span className="text-muted-foreground">分钟</span>
+          <span className="text-muted-foreground">min</span>
         </div>
         <div className="flex flex-wrap gap-1.5">
           {CRON_PRESETS.map(([label, m]) => (
@@ -408,11 +408,11 @@ function CronDetail({ id }: { id: string }) {
               {editing ? (
                 <>
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-muted-foreground">每</span>
+                    <span className="text-muted-foreground">every</span>
                     <Input type="number" min={1} value={draftEvery} onChange={(e) => setDraftEvery(e.target.value)} className="h-8 w-20" />
-                    <span className="text-muted-foreground">分钟，浮动 ±</span>
+                    <span className="text-muted-foreground">min, jitter ±</span>
                     <Input type="number" min={0} value={draftJitter} onChange={(e) => setDraftJitter(e.target.value)} className="h-8 w-20" />
-                    <span className="text-muted-foreground">分钟</span>
+                    <span className="text-muted-foreground">min</span>
                   </div>
                   <textarea
                     value={draftPrompt}
@@ -424,28 +424,28 @@ function CronDetail({ id }: { id: string }) {
               ) : (
                 <>
                   <div className="flex gap-2">
-                    <span className="text-muted-foreground w-14 shrink-0">节奏</span>
-                    <span>每 {fmtDur(cron.intervalSec)}{cron.jitterSec > 0 ? `，时间浮动 ±${fmtDur(cron.jitterSec)}` : ''}</span>
+                    <span className="text-muted-foreground w-14 shrink-0">Every</span>
+                    <span>{fmtDur(cron.intervalSec)}{cron.jitterSec > 0 ? ` ±${fmtDur(cron.jitterSec)}` : ''}</span>
                   </div>
                   <div className="flex gap-2">
-                    <span className="text-muted-foreground w-14 shrink-0">下次</span>
-                    <span className="tabular-nums">{queued ? '即将运行…' : cron.nextFire ? new Date(cron.nextFire).toLocaleString() : '—'}</span>
+                    <span className="text-muted-foreground w-14 shrink-0">Next</span>
+                    <span className="tabular-nums">{queued ? 'starting soon…' : cron.nextFire ? new Date(cron.nextFire).toLocaleString() : '—'}</span>
                   </div>
                   {/* Where the result goes. Worth stating on the detail view: a cron
                       that reports into a conversation behaves very differently from
                       one that only files a run here, and you can't tell them apart
                       from the run list alone. */}
                   <div className="flex gap-2">
-                    <span className="text-muted-foreground w-14 shrink-0">报告</span>
+                    <span className="text-muted-foreground w-14 shrink-0">Reports</span>
                     {cron.reportSessionId ? (
                       <a
                         href={`/chat?session=${encodeURIComponent(cron.reportSessionId)}`}
                         className="text-foreground/80 underline underline-offset-2 hover:text-foreground"
                       >
-                        发到创建它的对话
+                        into the chat that created it
                       </a>
                     ) : (
-                      <span className="text-muted-foreground">仅记录在这里</span>
+                      <span className="text-muted-foreground">here only</span>
                     )}
                   </div>
                   <div>
@@ -461,7 +461,7 @@ function CronDetail({ id }: { id: string }) {
             <div className="px-1 pb-1.5 flex items-center justify-between gap-2">
               <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Runs · {runs.length}
-                {unreadRuns > 0 && <span className="ml-1.5 normal-case text-rose-500">· {unreadRuns} 未读</span>}
+                {unreadRuns > 0 && <span className="ml-1.5 normal-case text-rose-500">· {unreadRuns} unread</span>}
               </span>
               {unreadRuns > 0 && (
                 <button
@@ -470,12 +470,12 @@ function CronDetail({ id }: { id: string }) {
                   disabled={markAllRead.isPending}
                   className="text-[11px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                 >
-                  全部已读
+                  Mark all read
                 </button>
               )}
             </div>
             {queued && (
-              <p className="px-1 pb-1.5 text-xs text-amber-600">▶ 已触发，将在 ≤15s 内开始并出现在下方</p>
+              <p className="px-1 pb-1.5 text-xs text-amber-600">▶ Triggered — it starts within 15s and appears below</p>
             )}
             {runs.length === 0 ? (
               <p className="px-1 text-xs text-muted-foreground">No runs yet — fires on schedule, or hit “Run now”.</p>
@@ -535,7 +535,7 @@ const CronRunRow = memo(function CronRunRow({
           <span
             className={cn('h-1.5 w-1.5 rounded-full shrink-0', unread ? 'bg-rose-500' : 'bg-transparent')}
             aria-hidden="true"
-            title={unread ? '未读' : undefined}
+            title={unread ? 'unread' : undefined}
           />
           <CronStatusBadge status={run.status} enabled />
           <span className="tabular-nums text-muted-foreground">{relTime(run.firedAt)}</span>

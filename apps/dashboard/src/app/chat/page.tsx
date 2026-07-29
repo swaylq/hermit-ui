@@ -1168,7 +1168,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         onClick={() => setFindOpen((v) => !v)}
         aria-pressed={findOpen}
         aria-label="find in conversation"
-        title="在本会话中查找 (⌘F)"
+        title="Find in this conversation (⌘F)"
         className={cn(
           'inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer',
           findOpen ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -1181,7 +1181,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         onClick={toggleSummary}
         aria-pressed={summaryMode}
         aria-label="toggle summary-only view"
-        title={summaryMode ? '当前：只看总结回复 — 点击显示完整过程' : '只看 agent 的总结回复，隐藏中间过程（工具调用等）'}
+        title={summaryMode ? 'Showing replies only — click for the full run' : 'Show only what was said, hiding tool calls and intermediate steps'}
         className={cn(
           'inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer',
           summaryMode ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -1197,7 +1197,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         }}
         disabled={!session?.agentName || newAgentChat.isPending}
         aria-label="new chat with this agent"
-        title={session?.agentName ? `和 ${session.agentName} 新开一个对话` : '和当前 agent 新开一个对话'}
+        title={session?.agentName ? `New chat with ${session.agentName}` : 'New chat with this agent'}
         className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground disabled:cursor-wait disabled:opacity-50"
       >
         <SquarePen className="h-4 w-4" />
@@ -1267,7 +1267,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                     );
                   }}
                   disabled={autoTitleMut.isPending}
-                  title="根据对话内容重新生成标题"
+                  title="Regenerate the title from the conversation"
                   aria-label="regenerate title from the conversation"
                   className="shrink-0 inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:cursor-wait"
                 >
@@ -1303,7 +1303,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                 // detail sheet's deep link (same one the sidebar's Agents entry uses).
                 <Link
                   href={`/agents?name=${encodeURIComponent(session.agentName)}`}
-                  title={`打开 ${session.agentName} 的 agent 详情`}
+                  title={`Open ${session.agentName} details`}
                   className="min-w-0 max-w-[9rem] truncate text-foreground/70 transition-colors hover:text-foreground hover:underline underline-offset-2"
                 >
                   {session.agentName}
@@ -1362,7 +1362,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             onClick={() => setMoreOpen((v) => !v)}
             aria-expanded={moreOpen}
             aria-label={moreOpen ? 'hide more actions' : 'more actions'}
-            title="更多操作"
+            title="More actions"
             className={cn(
               'sm:hidden inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer',
               moreOpen ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -1399,13 +1399,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           tail. Without this the frozen timeline reads as a stuck session. */}
       {anchored.active && (
         <div className="shrink-0 flex items-center gap-2 border-b border-border bg-amber-500/10 px-3 h-9 text-xs">
-          <span className="text-amber-700 dark:text-amber-400">正在查看历史位置</span>
+          <span className="text-amber-700 dark:text-amber-400">Viewing earlier history</span>
           <button
             type="button"
             onClick={anchored.clear}
             className="ml-auto rounded-md px-2 py-1 text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground"
           >
-            回到最新 ↓
+            Jump to latest ↓
           </button>
         </div>
       )}
@@ -1449,7 +1449,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               )}
               {summaryMode && view.length === 0 ? (
                 <p className="text-center text-xs text-muted-foreground py-8">
-                  只显示总结回复 · 本轮还在进行，暂无最终回复
+                  Replies only · this turn is still running, no final reply yet
                 </p>
               ) : (
                 <MessageTimeline messages={view} streamingTailId={streamingTailId} dotClass={status.dot} getViewport={getViewport} />
@@ -1627,11 +1627,16 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 const LOOP_TEMPLATE =
   '开启循环任务：每 1 小时，<要做的事>。每轮做完都自己测试验证一遍，再把结果（含验证结论）发到这个对话；达成 <完成条件> 后自动停止。';
 
-// Cron sibling of LOOP_TEMPLATE. The cron skill matches on 定时/每 X/cron and
-// creates a DURABLE background task via mcp__hermit__cron_create — results land
-// on the /cron page, not in this chat (that is what makes it a cron, not a loop).
+// Cron sibling of LOOP_TEMPLATE. The cron skill matches on 定时/每 X/cron and creates
+// a DURABLE background task via mcp__hermit__cron_create. What separates it from a
+// loop is no longer "where the result goes" — a cron now reports into the chat that
+// created it too — it's that each run is an ISOLATED turn, so a daily job never grows
+// this conversation's context, and it survives restarts.
+//
+// Prompt templates stay in Chinese on purpose: they are typed at the AGENT, and the
+// English rule covers the product's own UI, not what you say to an agent.
 const CRON_TEMPLATE =
-  '开启定时任务：每 60 分钟（时间上下浮动 ±10 分钟），<要做的事>。后台定时跑，结果记录到 /cron 页面（不发到这个对话）。';
+  '开启定时任务：每 60 分钟（时间上下浮动 ±10 分钟），<要做的事>。每次独立后台运行（不占用本对话上下文），跑完把结果发回这个对话，完整历史在 /cron 页面。';
 
 // One-shot autonomy nudge (NOT a recurring task): tells the agent to proceed with
 // its own recommendation and stop asking for confirmation until the work is done.

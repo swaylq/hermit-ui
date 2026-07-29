@@ -111,11 +111,11 @@ export const LoopBar = memo(function LoopBar({
               onClick={takeover.onToggle}
               disabled={takeover.busy}
               aria-pressed={takeover.active}
-              aria-label={takeover.active ? '收回对话（义脑正在接管）' : '让义脑接管这段对话'}
+              aria-label={takeover.active ? 'Take the conversation back (Brain is driving)' : 'Let Brain take over this conversation'}
               title={
                 takeover.active
-                  ? '义脑正在开车 — 点一下收回（你直接打字也会收回）'
-                  : '义脑接管 — 它读完这段对话，推断你想达成什么，替你继续'
+                  ? 'Brain is driving — click to take it back (typing does too)'
+                  : 'Brain takeover — it reads this conversation, works out what you are after, and carries on for you'
               }
               className={cn(
                 // Icon-only, sized to match the text chips beside it so the row keeps
@@ -198,13 +198,13 @@ function LoopCard({ loop, sessionId, onDelete }: { loop: LoopEntry; sessionId: s
           <span className="text-muted-foreground truncate hidden sm:inline">· {loop.prompt}</span>
         )}
         <span className="ml-auto flex items-center gap-2 shrink-0 text-muted-foreground">
-          {runCount != null && <span className="tabular-nums">已跑 {runCount}</span>}
+          {runCount != null && <span className="tabular-nums">{runCount} run{runCount === 1 ? '' : 's'}</span>}
           <span className="text-[10px] uppercase tracking-wide">{status}</span>
           {stopped && onDelete && (
             <button
               type="button"
-              aria-label="删除已停止的循环"
-              title="删除（从面板移除，不再显示）"
+              aria-label="delete stopped loop"
+              title="Delete — removes it from this panel for good"
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -226,12 +226,12 @@ function LoopCard({ loop, sessionId, onDelete }: { loop: LoopEntry; sessionId: s
           bounded scroll region (not nested) avoids a scroll-trap on mobile;
           overscroll-contain keeps the scroll from chaining into the chat. */}
       <div className="border-t border-border px-3 py-2 text-[12px] space-y-1 max-h-[40vh] overflow-y-auto overscroll-contain">
-        {loop.prompt && <LoopDetail k="任务" v={loop.prompt} />}
-        <LoopDetail k="节奏" v={schedule} />
-        {loop.kind && <LoopDetail k="类型" v={loop.kind} />}
-        {runCount != null && <LoopDetail k="已运行" v={`${runCount} 次`} />}
-        {loop.lastRunAt && <LoopDetail k="上次" v={new Date(loop.lastRunAt).toLocaleString()} />}
-        {loop.createdAt && <LoopDetail k="开始" v={new Date(loop.createdAt).toLocaleString()} />}
+        {loop.prompt && <LoopDetail k="Task" v={loop.prompt} />}
+        <LoopDetail k="Every" v={schedule} />
+        {loop.kind && <LoopDetail k="Kind" v={loop.kind} />}
+        {runCount != null && <LoopDetail k="Runs" v={`${runCount}`} />}
+        {loop.lastRunAt && <LoopDetail k="Last" v={new Date(loop.lastRunAt).toLocaleString()} />}
+        {loop.createdAt && <LoopDetail k="Started" v={new Date(loop.createdAt).toLocaleString()} />}
         <LoopRuns
           sessionId={sessionId}
           loopId={id}
@@ -239,7 +239,7 @@ function LoopCard({ loop, sessionId, onDelete }: { loop: LoopEntry; sessionId: s
           fallback={typeof loop.lastResult === 'string' ? loop.lastResult : null}
         />
         <div className="text-muted-foreground/60 text-[11px] pt-1.5 mt-1 border-t border-border/60">
-          {id.slice(0, 12)} · 结果持续发到本对话 · 重启即停
+          {id.slice(0, 12)} · results keep landing in this chat · a restart stops it
         </div>
       </div>
     </details>
@@ -302,7 +302,7 @@ function LoopRuns({
     return (
       <div className="pt-1">
         <div className="text-muted-foreground/70 text-[11px] mb-0.5">
-          上次结果{q.isFetching ? ' · 加载每轮…' : ''}
+          Last result{q.isFetching ? ' · loading rounds…' : ''}
         </div>
         <div className="text-foreground/90 whitespace-pre-wrap">{fallback}</div>
       </div>
@@ -311,8 +311,8 @@ function LoopRuns({
   return (
     <div className="pt-1">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-muted-foreground/70 text-[11px]">每轮结果 ({runs.length})</span>
-        <span className="text-muted-foreground/40 text-[10px]">最新在上 · 点开看完整</span>
+        <span className="text-muted-foreground/70 text-[11px]">Rounds ({runs.length})</span>
+        <span className="text-muted-foreground/40 text-[10px]">newest first · click to expand</span>
       </div>
       {/* No inner max-h — the parent panel owns the single scroll region. */}
       <div className="-mx-1 px-1 space-y-1">
@@ -336,7 +336,7 @@ function LoopRunRow({ run }: { run: LoopRun }) {
       >
         <span className="font-mono text-[11px] text-muted-foreground shrink-0">run {run.run}</span>
         <span className="text-muted-foreground/45 text-[10px] tabular-nums shrink-0 hidden sm:inline">{relTime(run.createdAt)}</span>
-        <span className="truncate text-foreground/85 text-[12px] min-w-0 flex-1">{run.summary || '(无摘要)'}</span>
+        <span className="truncate text-foreground/85 text-[12px] min-w-0 flex-1">{run.summary || '(no summary)'}</span>
         <ChevronDown className={cn('h-3 w-3 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} aria-hidden="true" />
       </button>
       {open && (

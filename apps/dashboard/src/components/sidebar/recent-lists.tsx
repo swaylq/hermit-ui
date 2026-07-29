@@ -83,7 +83,7 @@ const CronRow = memo(function CronRow({ cron: c, active }: { cron: CronListItem;
               {c.unreadCount > 0 && (
                 <span
                   className="shrink-0 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-mono tabular-nums leading-none"
-                  title={`${c.unreadCount} 条未读执行`}
+                  title={`${c.unreadCount} unread run${c.unreadCount === 1 ? '' : 's'}`}
                 >
                   {c.unreadCount}
                 </span>
@@ -128,7 +128,7 @@ export function RecentCrons() {
         <span className="tabular-nums text-muted-foreground/50">{visible.length}</span>
       </div>
       {(crons.data?.length ?? 0) > 0 && (
-        <SidebarFindInput value={q} onChange={setQ} placeholder="搜索 cron / agent" label="search crons by title or agent" />
+        <SidebarFindInput value={q} onChange={setQ} placeholder="Search crons" label="search crons by title or agent" />
       )}
       <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
         {crons.isPending ? (
@@ -140,7 +140,7 @@ export function RecentCrons() {
         ) : allCrons.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">no crons yet — start with “New cron”.</p>
         ) : visible.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">没有匹配 “{q.trim()}” 的 cron。</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground">No crons match “{q.trim()}”.</p>
         ) : (
           <ul className="space-y-px">
             {visible.map((c) => (
@@ -254,7 +254,7 @@ export function RecentAgents() {
         <span className="tabular-nums text-muted-foreground/50">{visible.length}</span>
       </div>
       {(agents.data?.length ?? 0) > 0 && (
-        <SidebarFindInput value={q} onChange={setQ} placeholder="搜索 agent" label="search agents by name" />
+        <SidebarFindInput value={q} onChange={setQ} placeholder="Search agents" label="search agents by name" />
       )}
       <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
         {agents.isPending ? (
@@ -266,7 +266,7 @@ export function RecentAgents() {
         ) : workers.length === 0 && pendingAdds.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">no agents yet — start with “New agent”.</p>
         ) : visible.length === 0 && pendingAdds.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">没有匹配 “{q.trim()}” 的 agent。</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground">No agents match “{q.trim()}”.</p>
         ) : (
           <ul className="space-y-px">
             {visible.map((a) => (
@@ -586,23 +586,23 @@ export function RecentSessions() {
             ...groups
               .filter((g) => g.id !== (sessions.data ?? []).find((x) => x.id === menu.id)?.groupId)
               .map((g) => ({
-                label: `移到「${g.name}」`,
+                label: `Move to ${g.name}`,
                 icon: <FolderOpen className="h-3.5 w-3.5" />,
                 onClick: () => assignGroup.mutate({ sessionId: menu.id, groupId: g.id }),
               })),
             ...((sessions.data ?? []).find((x) => x.id === menu.id)?.groupId
               ? [{
-                  label: '移出分组',
+                  label: 'Remove from group',
                   icon: <FolderOpen className="h-3.5 w-3.5" />,
                   onClick: () => assignGroup.mutate({ sessionId: menu.id, groupId: null }),
                 }]
               : []),
             {
-              label: '新建分组…',
+              label: 'New group…',
               icon: <FolderPlus className="h-3.5 w-3.5" />,
               onClick: async () => {
                 const id = menu.id;
-                const name = window.prompt('分组名称');
+                const name = window.prompt('Group name');
                 if (!name?.trim()) return;
                 const g = await createGroup.mutateAsync({ name: name.trim() });
                 await assignGroup.mutateAsync({ sessionId: id, groupId: g.id });
@@ -681,7 +681,7 @@ export function RecentSessions() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }}
-              placeholder="搜索标题 / agent"
+              placeholder="Search chats"
               aria-label="search recents by title or agent"
               className={cn(
                 'h-8 w-full rounded-lg border border-sidebar-border bg-sidebar/60 pl-7 text-[12px] text-sidebar-foreground/90 placeholder:text-muted-foreground/50 outline-none transition-colors hover:border-sidebar-foreground/20 focus-visible:border-sidebar-foreground/40 focus-visible:ring-1 focus-visible:ring-sidebar-foreground/15',
@@ -738,7 +738,7 @@ export function RecentSessions() {
           </div>
         ) : visible.length === 0 && grouped.size === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">
-            {q.trim() ? `没有匹配 “${q.trim()}” 的会话。` : filter ? `no sessions for ${filter}.` : 'no chats yet — start a New chat.'}
+            {q.trim() ? `No chats match “${q.trim()}”.` : filter ? `no sessions for ${filter}.` : 'no chats yet — start a New chat.'}
           </p>
         ) : (
           <>
@@ -766,7 +766,7 @@ export function RecentSessions() {
                     {!g.collapsed && (
                       <ul className="space-y-px pl-2">
                         {rows.length === 0 ? (
-                          <li className="px-2 py-1 text-[11px] text-muted-foreground/60">空</li>
+                          <li className="px-2 py-1 text-[11px] text-muted-foreground/60">empty</li>
                         ) : (
                           rows.map((s) => (
                             <SessionRow
