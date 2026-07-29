@@ -17,7 +17,7 @@
 import { useState, useCallback, useMemo, useEffect, memo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen } from 'lucide-react';
+import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
@@ -30,7 +30,7 @@ import { usePins, togglePin } from '@/lib/session-pins';
 import { useLongPress } from '@/lib/use-long-press';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { ContextMenu } from '@/components/ui/context-menu';
-import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useConfirm, usePrompt } from '@/components/ui/confirm-dialog';
 import { SidebarFindInput } from '@/components/sidebar/sidebar-find-input';
 import { TrashedAgents } from '@/components/sidebar/trashed-agents';
 import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
@@ -45,6 +45,10 @@ function fmtEvery(sec: number): string {
   if (sec % 60 === 0) return `every ${sec / 60}m`;
   return `every ${sec}s`;
 }
+
+// Mirrors the server's own limit (sessionGroups router, `Name`) so the field stops
+// where zod would have rejected.
+const GROUP_NAME_MAX = 40;
 
 // tone → cron dot bg (this site's own visual map; the status→tone grouping is shared).
 // Note: an unknown/ok status both render emerald here (matches the prior fall-through).
@@ -399,6 +403,7 @@ export function RecentSessions() {
   const orchestratorName = (orchestratorsQ.data ?? []).find((a) => a.isOrchestrator)?.name;
   const utils = trpc.useUtils();
   const confirm = useConfirm();
+  const promptFor = usePrompt();
   const liveWorkingSince = useLiveWorking();
   const pins = usePins();
   // Custom right-click menu: viewport coords + the session it targets, or null.
@@ -406,6 +411,10 @@ export function RecentSessions() {
   // Touch long-press opens the SAME menu — phones have no right-click.
   const openMenuAt = useCallback((id: string, x: number, y: number) => setMenu({ x, y, id }), []);
   const longPress = useLongPress(openMenuAt);
+  // The same two gestures on a group HEADER open the group's own menu.
+  const [groupMenu, setGroupMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const openGroupMenuAt = useCallback((id: string, x: number, y: number) => setGroupMenu({ x, y, id }), []);
+  const groupLongPress = useLongPress(openGroupMenuAt);
 
   // Hidden sessions are dropped from the list; a footer toggle reveals them.
   const [showHidden, setShowHidden] = useState(false);
@@ -522,6 +531,16 @@ export function RecentSessions() {
   const createGroup = trpc.sessionGroups.create.useMutation({
     onSuccess: () => utils.sessionGroups.list.invalidate(),
   });
+  const renameGroup = trpc.sessionGroups.rename.useMutation({
+    // Optimistic for the same reason as setCollapsed: the new name is already on
+    // screen in the dialog, so the header shouldn't lag a round-trip behind it.
+    onMutate: async ({ id, name }) => {
+      utils.sessionGroups.list.setData(undefined, (old) =>
+        old?.map((g) => (g.id === id ? { ...g, name } : g)),
+      );
+    },
+    onSettled: () => utils.sessionGroups.list.invalidate(),
+  });
   const visible = useMemo(() => {
     // Hidden sessions drop out of the list unless the footer toggle is on.
     let rows = showHidden ? baseRows : baseRows.filter((s) => !s.hiddenAt);
@@ -602,9 +621,17 @@ export function RecentSessions() {
               icon: <FolderPlus className="h-3.5 w-3.5" />,
               onClick: async () => {
                 const id = menu.id;
-                const name = window.prompt('Group name');
-                if (!name?.trim()) return;
-                const g = await createGroup.mutateAsync({ name: name.trim() });
+                // The app's own dialog, not window.prompt — same portal, dim and
+                // Esc/Enter handling as every confirm in here (and it survives an
+                // installed PWA, where the native prompt is a system sheet).
+                const name = await promptFor({
+                  title: 'New group',
+                  placeholder: 'Group name',
+                  confirmLabel: 'Create',
+                  maxLength: GROUP_NAME_MAX,
+                });
+                if (!name) return;
+                const g = await createGroup.mutateAsync({ name });
                 await assignGroup.mutateAsync({ sessionId: id, groupId: g.id });
               },
             },
@@ -666,6 +693,35 @@ export function RecentSessions() {
                   danger: true,
                 }))
                   deleteSession.mutate({ id });
+              },
+            },
+          ]}
+        />
+      )}
+      {/* A group's own menu — right-click (or long-press) its header. Renaming a
+          drawer isn't something you do while working, so it stays off the header
+          rather than parking an edit button on every one of them. */}
+      {groupMenu && (
+        <ContextMenu
+          x={groupMenu.x}
+          y={groupMenu.y}
+          onClose={() => setGroupMenu(null)}
+          items={[
+            {
+              label: 'Rename…',
+              icon: <Pencil className="h-3.5 w-3.5" />,
+              onClick: async () => {
+                const g = groups.find((x) => x.id === groupMenu.id);
+                if (!g) return;
+                const name = await promptFor({
+                  title: 'Rename group',
+                  defaultValue: g.name,
+                  placeholder: 'Group name',
+                  confirmLabel: 'Rename',
+                  maxLength: GROUP_NAME_MAX,
+                });
+                if (!name || name === g.name) return;
+                renameGroup.mutate({ id: g.id, name });
               },
             },
           ]}
@@ -753,8 +809,13 @@ export function RecentSessions() {
                     <button
                       type="button"
                       onClick={() => setCollapsed.mutate({ id: g.id, collapsed: !g.collapsed })}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        openGroupMenuAt(g.id, e.clientX, e.clientY);
+                      }}
+                      {...groupLongPress(g.id)}
                       aria-expanded={!g.collapsed}
-                      className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground cursor-pointer"
+                      className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground cursor-pointer select-none [-webkit-touch-callout:none]"
                     >
                       <ChevronRight
                         className={cn('h-3 w-3 shrink-0 transition-transform', !g.collapsed && 'rotate-90')}
