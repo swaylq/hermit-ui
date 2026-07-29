@@ -17,7 +17,7 @@
 import { useState, useCallback, useMemo, useEffect, memo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, MessageSquare, Bot } from 'lucide-react';
+import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
@@ -391,34 +391,30 @@ const SessionRow = memo(function SessionRow({
   );
 });
 
-// How the session list is arranged, as a segmented pair in the section header.
-// Two buttons rather than one toggling button: the current arrangement is stated,
-// not implied by an icon you'd have to decode. Icons match the nav (a chat is
-// MessageSquare, an agent is Bot) so the by-agent view reads as "the Agents idea,
-// applied here".
+// How the session list is arranged: one tree button in the section header. Lit =
+// the agent tree; unlit = the list the way you filed it yourself (your groups,
+// then the loose recents). One control with a state, not two competing ones —
+// which is also why the header label says which arrangement you're looking at.
 function ViewToggle({ view }: { view: SessionView }) {
-  const item = (v: SessionView, label: string, Icon: typeof Bot) => (
+  const on = view === 'agents';
+  return (
     <button
       type="button"
-      onClick={() => setSessionView(v)}
-      aria-pressed={view === v}
-      title={label}
-      aria-label={label}
+      onClick={() => setSessionView(on ? 'recents' : 'agents')}
+      aria-pressed={on}
+      aria-label="Group by agent"
+      title={on ? 'Grouped by agent — click for your own groups' : 'Group by agent'}
       className={cn(
-        'inline-flex h-5 w-5 items-center justify-center rounded transition-colors cursor-pointer',
-        view === v
+        // h-6 rather than h-5: the glyph is small, but this gets pressed with a
+        // thumb in the installed PWA.
+        'ml-auto inline-flex h-6 w-6 shrink-0 items-center justify-center self-center rounded-md transition-colors cursor-pointer',
+        on
           ? 'bg-sidebar-accent text-sidebar-foreground'
           : 'text-muted-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
       )}
     >
-      <Icon className="h-3 w-3" />
+      <ListTree className="h-3.5 w-3.5" />
     </button>
-  );
-  return (
-    <div className="ml-auto flex items-center gap-0.5 self-center" role="group" aria-label="arrange sessions">
-      {item('recents', 'Recent conversations', MessageSquare)}
-      {item('agents', 'Grouped by agent', Bot)}
-    </div>
   );
 }
 
