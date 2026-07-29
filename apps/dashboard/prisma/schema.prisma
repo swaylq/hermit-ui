@@ -50,6 +50,7 @@ model Machine {
   hostStat            HostStat?
   knowledgeBases      KnowledgeBase[]
   pushDevices         PushDevice[]
+  sessionGroups       SessionGroup[]
 }
 
 // Latest host-resource snapshot for a machine — RAM / swap / load / cpu, pushed by
@@ -443,6 +444,11 @@ model ChatSession {
   messages     ChatMessage[]
   interactions Interaction[]
   cronReports  Cron[]       @relation("CronReports")
+  // Which sidebar drawer this session lives in. NULL = ungrouped, i.e. it stays in
+  // the flat recency list. SET NULL on delete: removing a drawer must not remove the
+  // conversations in it.
+  groupId String?
+  group   SessionGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
   @@index([machineId, agentName])
   @@index([machineId, closedAt])
@@ -461,6 +467,29 @@ model ChatSession {
   // `CREATE INDEX ... WHERE <col> IS NOT NULL` in migration
   // 20260715170000_chatsession_poller_indexes (this repo applies migrations via
   // `migrate deploy`, never `migrate dev`).
+}
+
+// A named, collapsible drawer in the sidebar's session list.
+//
+// The list is recency-ordered, which is right for "what was I just doing" and wrong
+// for 70 open sessions — and cron mailboxes made it worse by bumping themselves to the
+// top every time a schedule reported. Groups let the noise be folded away WITHOUT
+// giving up the flat recent list: a grouped session leaves the recents, an ungrouped
+// one stays exactly where it was.
+model SessionGroup {
+  id        String   @id @default(cuid())
+  machineId String
+  machine   Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  name      String
+  sortOrder Int      @default(0)
+  // Collapsed state lives in the DB, not localStorage: the same person on a phone and
+  // a laptop wants the same drawers shut (the ChatSession.lastReadAt precedent).
+  collapsed Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  sessions ChatSession[]
+
+  @@index([machineId, sortOrder])
 }
 
 model ChatMessage {

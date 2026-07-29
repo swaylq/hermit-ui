@@ -17,7 +17,7 @@
 import { useState, useCallback, useMemo, useEffect, memo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon } from 'lucide-react';
+import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
@@ -499,6 +499,29 @@ export function RecentSessions() {
     [sessions.data, orchestratorName],
   );
   const hiddenCount = useMemo(() => baseRows.filter((s) => s.hiddenAt).length, [baseRows]);
+
+  // ── Groups ────────────────────────────────────────────────────────────────
+  // Drawers above the recents. A grouped session LEAVES the flat list — that's the
+  // whole mechanism: the list stays recency-ordered and short, and the noise (70 open
+  // sessions, cron mailboxes bumping themselves to the top on every report) folds away
+  // without being hidden.
+  const groupsQ = trpc.sessionGroups.list.useQuery(undefined, { staleTime: 30_000 });
+  const groups = groupsQ.data ?? [];
+  const setCollapsed = trpc.sessionGroups.setCollapsed.useMutation({
+    onMutate: async ({ id, collapsed }) => {
+      // Optimistic: a drawer must open on the click, not on the round-trip.
+      utils.sessionGroups.list.setData(undefined, (old) =>
+        old?.map((g) => (g.id === id ? { ...g, collapsed } : g)),
+      );
+    },
+    onSettled: () => utils.sessionGroups.list.invalidate(),
+  });
+  const assignGroup = trpc.sessionGroups.assign.useMutation({
+    onSuccess: () => { utils.chat.listSessions.invalidate(); utils.sessionGroups.list.invalidate(); },
+  });
+  const createGroup = trpc.sessionGroups.create.useMutation({
+    onSuccess: () => utils.sessionGroups.list.invalidate(),
+  });
   const visible = useMemo(() => {
     // Hidden sessions drop out of the list unless the footer toggle is on.
     let rows = showHidden ? baseRows : baseRows.filter((s) => !s.hiddenAt);
@@ -511,11 +534,27 @@ export function RecentSessions() {
           s.agentName.toLowerCase().includes(needle),
       );
     }
+    // A grouped session lives in its drawer, not here — UNLESS you're searching, in
+    // which case you want to find it wherever it is.
+    if (!needle) rows = rows.filter((s) => !s.groupId);
     // Pinned sessions float to the top — a stable sort keeps the lastMessageAt
     // order within the pinned and unpinned groups.
     if (pins.size) rows = [...rows].sort((a, b) => (pins.has(b.id) ? 1 : 0) - (pins.has(a.id) ? 1 : 0));
     return rows;
   }, [baseRows, showHidden, filter, q, pins]);
+
+  // Sessions per drawer, in the same recency order the flat list uses.
+  const grouped = useMemo(() => {
+    const rows = showHidden ? baseRows : baseRows.filter((s) => !s.hiddenAt);
+    const by = new Map<string, typeof rows>();
+    for (const s of rows) {
+      if (!s.groupId) continue;
+      const arr = by.get(s.groupId);
+      if (arr) arr.push(s);
+      else by.set(s.groupId, [s]);
+    }
+    return by;
+  }, [baseRows, showHidden]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">
@@ -542,6 +581,33 @@ export function RecentSessions() {
                 onClick: () => setHidden.mutate({ id: menu.id, hidden: !isHidden }),
               };
             })(),
+            // Filing lives next to Pin/Hide because it's the same kind of act: deciding
+            // where something sits, not doing anything to the conversation itself.
+            ...groups
+              .filter((g) => g.id !== (sessions.data ?? []).find((x) => x.id === menu.id)?.groupId)
+              .map((g) => ({
+                label: `移到「${g.name}」`,
+                icon: <FolderOpen className="h-3.5 w-3.5" />,
+                onClick: () => assignGroup.mutate({ sessionId: menu.id, groupId: g.id }),
+              })),
+            ...((sessions.data ?? []).find((x) => x.id === menu.id)?.groupId
+              ? [{
+                  label: '移出分组',
+                  icon: <FolderOpen className="h-3.5 w-3.5" />,
+                  onClick: () => assignGroup.mutate({ sessionId: menu.id, groupId: null }),
+                }]
+              : []),
+            {
+              label: '新建分组…',
+              icon: <FolderPlus className="h-3.5 w-3.5" />,
+              onClick: async () => {
+                const id = menu.id;
+                const name = window.prompt('分组名称');
+                if (!name?.trim()) return;
+                const g = await createGroup.mutateAsync({ name: name.trim() });
+                await assignGroup.mutateAsync({ sessionId: id, groupId: g.id });
+              },
+            },
             {
               label: 'Compact',
               icon: <FoldVertical className="h-3.5 w-3.5" />,
@@ -670,25 +736,71 @@ export function RecentSessions() {
               <div key={i} className="h-8 rounded-md bg-sidebar-accent/40 animate-pulse" />
             ))}
           </div>
-        ) : visible.length === 0 ? (
+        ) : visible.length === 0 && grouped.size === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">
             {q.trim() ? `没有匹配 “${q.trim()}” 的会话。` : filter ? `no sessions for ${filter}.` : 'no chats yet — start a New chat.'}
           </p>
         ) : (
-          <ul className="space-y-px">
-            {visible.map((s) => (
-              <SessionRow
-                key={s.id}
-                session={s}
-                active={activeId === s.id}
-                liveAt={liveWorkingSince(s.id)}
-                pinned={pins.has(s.id)}
-                onPrefetch={prefetchSession}
-                onOpenMenu={openMenuAt}
-                longPress={longPress}
-              />
-            ))}
-          </ul>
+          <>
+            {/* Drawers first, then whatever is still loose. Hidden while searching:
+                a search should return one flat list of hits, not make you open
+                folders to find them. */}
+            {!q.trim() &&
+              groups.map((g) => {
+                const rows = grouped.get(g.id) ?? [];
+                return (
+                  <div key={g.id} className="mb-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setCollapsed.mutate({ id: g.id, collapsed: !g.collapsed })}
+                      aria-expanded={!g.collapsed}
+                      className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground cursor-pointer"
+                    >
+                      <ChevronRight
+                        className={cn('h-3 w-3 shrink-0 transition-transform', !g.collapsed && 'rotate-90')}
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 truncate">{g.name}</span>
+                      <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/50">{rows.length}</span>
+                    </button>
+                    {!g.collapsed && (
+                      <ul className="space-y-px pl-2">
+                        {rows.length === 0 ? (
+                          <li className="px-2 py-1 text-[11px] text-muted-foreground/60">空</li>
+                        ) : (
+                          rows.map((s) => (
+                            <SessionRow
+                              key={s.id}
+                              session={s}
+                              active={activeId === s.id}
+                              liveAt={liveWorkingSince(s.id)}
+                              pinned={pins.has(s.id)}
+                              onPrefetch={prefetchSession}
+                              onOpenMenu={openMenuAt}
+                              longPress={longPress}
+                            />
+                          ))
+                        )}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
+            <ul className="space-y-px">
+              {visible.map((s) => (
+                <SessionRow
+                  key={s.id}
+                  session={s}
+                  active={activeId === s.id}
+                  liveAt={liveWorkingSince(s.id)}
+                  pinned={pins.has(s.id)}
+                  onPrefetch={prefetchSession}
+                  onOpenMenu={openMenuAt}
+                  longPress={longPress}
+                />
+              ))}
+            </ul>
+          </>
         )}
       </div>
       {hiddenCount > 0 && (

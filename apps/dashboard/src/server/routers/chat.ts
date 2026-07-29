@@ -192,6 +192,9 @@ export const chatRouter = router({
           lastReadAt: true,
           closedAt: true,
           hiddenAt: true,
+          // Which sidebar drawer this session is filed in; null = it stays in the
+          // flat recents list.
+          groupId: true,
           restartRequestedAt: true,
           alive: true,
           state: true,
