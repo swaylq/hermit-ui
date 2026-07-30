@@ -27,32 +27,32 @@ const POS_KEY = 'hermit:voice-mic-pos'; // unchanged: an existing position carri
 const SPRING = 'cubic-bezier(0.34, 1.35, 0.5, 1)';
 
 /**
- * Clamp to the viewport. `height` is the whole stack, so dragging the group to the
- * bottom edge doesn't push the lower button off-screen.
+ * Clamp to the VIEWPORT, and to nothing else. Anywhere on screen is a legal place to
+ * park this — over the transcript, over the composer, on top of the suggestion chips.
+ * It used to also be held above the bottom control stack so it couldn't cover a chip;
+ * that turned out to be the wrong trade, because it also refused the spot the user was
+ * aiming at. Landing on a button is now the user's call, and one drag undoes it.
+ *
+ * The viewport bound stays, and it isn't a restriction so much as the way back: the
+ * position persists, so a button dragged off-screen would be gone for good. `height` is
+ * the whole stack, so the bottom edge can't push a lower button out of sight either.
  */
-/**
- * Clamp to the usable area. `height` is the whole stack, so dragging to the bottom
- * edge can't push the lower button off-screen; `bottomInset` is the control stack
- * (suggestions, takeover banner, queue, composer), which the dock must stay ABOVE.
- * Floating over the transcript is the point; floating over a button you're trying to
- * press is a bug — it was covering "Run to done".
- */
-function clampPos(x: number, y: number, height: number, bottomInset = 0) {
+function clampPos(x: number, y: number, height: number) {
   const maxX = Math.max(8, window.innerWidth - FAB - 8);
-  const maxY = Math.max(8, window.innerHeight - bottomInset - height - 8);
+  const maxY = Math.max(8, window.innerHeight - height - 8);
   return { x: Math.min(Math.max(8, x), maxX), y: Math.min(Math.max(8, y), maxY) };
 }
 
-function defaultPos(height: number, bottomInset: number) {
-  return clampPos(window.innerWidth - FAB - 20, window.innerHeight - height - 120, height, bottomInset);
+function defaultPos(height: number) {
+  return clampPos(window.innerWidth - FAB - 20, window.innerHeight - height - 120, height);
 }
 
-function loadPos(height: number, bottomInset: number): { x: number; y: number } | null {
+function loadPos(height: number): { x: number; y: number } | null {
   try {
     const raw = localStorage.getItem(POS_KEY);
     if (!raw) return null;
     const p = JSON.parse(raw) as { x?: unknown; y?: unknown };
-    if (typeof p.x === 'number' && typeof p.y === 'number') return clampPos(p.x, p.y, height, bottomInset);
+    if (typeof p.x === 'number' && typeof p.y === 'number') return clampPos(p.x, p.y, height);
   } catch {
     /* private mode / bad json */
   }
@@ -84,7 +84,7 @@ export function useFabDock(): DockApi {
   return ctx;
 }
 
-export function FabDock({ count, bottomInset = 0, children }: { count: number; bottomInset?: number; children: React.ReactNode }) {
+export function FabDock({ count, children }: { count: number; children: React.ReactNode }) {
   // Total stack height drives clamping; it changes when the takeover button appears
   // or disappears, so it's derived from the live button count rather than a constant.
   const height = count * FAB + Math.max(0, count - 1) * GAP;
@@ -97,7 +97,7 @@ export function FabDock({ count, bottomInset = 0, children }: { count: number; b
   // this runs exactly once.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mount gate reading window/localStorage
-    setPos(loadPos(height, bottomInset) ?? defaultPos(height, bottomInset));
+    setPos(loadPos(height) ?? defaultPos(height));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount gate; later height changes go through the render-time clamp below
   }, []);
 
@@ -138,10 +138,10 @@ export function FabDock({ count, bottomInset = 0, children }: { count: number; b
         gg.drag = true;
         setDragging(true);
       }
-      if (gg.drag) setPos(clampPos(gg.fx + dx, gg.fy + dy, height, bottomInset));
+      if (gg.drag) setPos(clampPos(gg.fx + dx, gg.fy + dy, height));
       return gg.drag;
     },
-    [height, bottomInset],
+    [height],
   );
 
   const onUp = useCallback(
@@ -151,7 +151,7 @@ export function FabDock({ count, bottomInset = 0, children }: { count: number; b
       gg.down = false;
       if (!gg.drag) return false;
       gg.drag = false;
-      const np = clampPos(gg.fx + (e.clientX - gg.px), gg.fy + (e.clientY - gg.py), height, bottomInset);
+      const np = clampPos(gg.fx + (e.clientX - gg.px), gg.fy + (e.clientY - gg.py), height);
       setPos(np);
       setDragging(false);
       try {
@@ -161,19 +161,24 @@ export function FabDock({ count, bottomInset = 0, children }: { count: number; b
       }
       return true;
     },
-    [height, bottomInset],
+    [height],
   );
 
   if (!pos) return null;
   // Clamp at RENDER time, not in an effect: the correct position is a pure function
   // of the stored point, the current stack height and the viewport, so deriving it
   // keeps a button appearing/disappearing from needing a state write.
-  const view = clampPos(pos.x, pos.y, height, bottomInset);
+  const view = clampPos(pos.x, pos.y, height);
 
   return (
     <DockContext.Provider value={{ dragging, x: view.x, onDown, onMove, onUp }}>
       <div
-        className="fixed z-40 flex touch-none select-none flex-col items-end"
+        // Above the page chrome it can now be parked on (composer bar, install
+        // prompt — both z-50), or dropping it there would strand it: the thing on top
+        // would swallow the next press and it could never be picked up again. Still
+        // below menus (100), the lightbox (100) and dialogs (200/300), which SHOULD
+        // cover it.
+        className="fixed z-[70] flex touch-none select-none flex-col items-end"
         style={{
           left: view.x,
           top: view.y,
