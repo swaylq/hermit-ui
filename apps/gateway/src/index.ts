@@ -173,7 +173,7 @@ async function pushTakeoverWatch() {
   await safe('takeover-watch', async () => {
     const r = await api.runTakeoverWatch();
     if (r.poked > 0) console.log(`[takeover-watch] poked brain about ${r.poked}/${r.scanned} takeover(s)`);
-    if (r.ended > 0) console.log(`[takeover-watch] auto-released ${r.ended} takeover(s) at their cap`);
+    if (r.ended > 0) console.log(`[takeover-watch] released ${r.ended} takeover(s) whose session closed`);
   });
 }
 

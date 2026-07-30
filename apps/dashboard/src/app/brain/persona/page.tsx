@@ -50,8 +50,9 @@ function PersonaEditor({ agentName }: { agentName: string }) {
         Your Brain’s editable decision-style &amp; persona. It’s read before every
         dispatch and before answering a blocked agent — shaping how work is handed out
         and how choices are made, <strong className="text-foreground/80">within</strong>{' '}
-        the hard safety floor (destructive / irreversible / costly / uncertain always
-        escalate to you). Markdown.
+        the hard safety floor (destructive, costly, secrets &amp; infrastructure,
+        outward-facing, or your own commitments always escalate to you — being unsure
+        doesn’t, and neither does a routine redeploy of committed code). Markdown.
       </p>
       <textarea
         value={value}

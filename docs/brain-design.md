@@ -195,7 +195,8 @@ happens to poll. Both are now closed:
 - The **safety rule** (taught in the new `dispatching` brain skill + inlined in every
   poke): the brain answers ONLY safe, obvious choices; anything destructive,
   irreversible, spending money, touching infra/credentials, or uncertain is escalated
-  to the human, never auto-approved.
+  to the human, never auto-approved. *(Amended 2026-07-30 — see "Aggressiveness" below:
+  uncertainty alone no longer escalates, and a routine redeploy is carved out.)*
 
 **Persona & decision style (built 2026-07-09).** An editable doc that shapes *how* the
 brain dispatches and *how* it helps a blocked agent decide — a character sheet, not new
@@ -213,9 +214,29 @@ plumbing.
   both tell the brain to read `PERSONA.md` and apply it when dispatching / answering.
 - **Safety interaction (hard invariant):** the persona tunes voice + risk posture
   **within** the safety floor only. It can make the brain *more* cautious, never less —
-  no `PERSONA.md` wording relaxes the "escalate destructive / irreversible / costly /
-  outward / uncertain" floor. This is stated in both the persona section and the safety
-  section of the `dispatching` skill, and in the seed doc itself.
+  no `PERSONA.md` wording relaxes the floor. This is stated in both the persona section
+  and the safety section of the `dispatching` skill, and in the seed doc itself.
+
+**Aggressiveness (2026-07-30, `BRAIN_TEMPLATE_VERSION` 10→11).** Two changes, both in
+prompt text — no plumbing, no schema:
+
+- **Uncertainty is not an escalation reason.** The `dispatching` skill already said so;
+  the `takeover` skill and all three watcher pokes still said "or you're unsure → don't
+  answer", which is the text the brain actually reads at decision time. They now name the
+  floor as a list of ACTIONS and say plainly that "I'm unsure" isn't on it.
+- **One carve-out in the floor: a routine redeploy.** Shipping already-committed code
+  through a project's own documented deploy path is the brain's to approve, gated on all
+  four of: committed (and pushed, if the deploy pulls); the project's normal
+  script/pipeline; builds *before* it switches; ends in a health check with "go back" =
+  redeploy the previous commit. Everything that merely looks like a deploy stays the
+  human's — non-reversible migrations, secrets/DNS/TLS/billing, a service's or domain's
+  FIRST deploy, package releases and anything else outward-facing, someone else's project.
+  On failure: fix forward if the cause is ordinary; a rollback that would discard someone
+  else's deployed version, or a second unexplained failure, escalates.
+
+The invariant survives: the floor is still the only authority, `PERSONA.md` and
+`USER-PROFILE.md` still can't loosen it, and the carve-out is written INTO the floor
+rather than left for the brain to infer from either file.
 
 ---
 

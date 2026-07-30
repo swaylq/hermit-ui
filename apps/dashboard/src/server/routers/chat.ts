@@ -1206,8 +1206,10 @@ export const chatRouter = router({
           const toolName = typeof pl.tool === 'string' ? pl.tool : '?';
           poke =
             `[dispatch update] ${r.agentName} is BLOCKED — it wants to run tool "${toolName}". ` +
-            `Answer with dispatch_answer({ sessionId: "${r.id}", approve: true|false }) if you can decide SAFELY from the task; ` +
-            `if it's destructive / irreversible / spends money / you're unsure, don't answer — tell the human.`;
+            `Answer with dispatch_answer({ sessionId: "${r.id}", approve: true|false }) — deciding is the default. ` +
+            `Only the five on your floor go to the human (destructive/irreversible, costly, ` +
+            `secrets·DNS·TLS·billing, outward-facing, their own commitments); "I'm unsure" is not one of them, ` +
+            `and neither is a routine redeploy of committed code through the project's own deploy path.`;
         } else {
           const questionText = typeof pl.question === 'string' ? pl.question : '';
           const rawOptions = Array.isArray(pl.options) ? pl.options : [];
@@ -1224,7 +1226,7 @@ export const chatRouter = router({
           poke =
             `[dispatch update] ${r.agentName} is BLOCKED on a question: "${questionText.slice(0, 300)}". ` +
             (opts.length ? `Options: ${opts.join(' | ')}. ` : '') +
-            `Answer with dispatch_answer({ sessionId: "${r.id}", answer: "…" }) if the choice is safe/obvious; otherwise escalate to the human.`;
+            `Answer with dispatch_answer({ sessionId: "${r.id}", answer: "…" }) — escalate only if answering it would cross your floor.`;
         }
       } else if (r.state !== 'working') {
         // Settled (not mid-turn): if there's an assistant reply, treat the newest
@@ -1505,8 +1507,10 @@ export const chatRouter = router({
         sig = `blocked:${pending.id}`;
         poke =
           `[takeover update] ${r.agentName} is BLOCKED on a ${pending.kind} in the conversation you're driving ` +
-          `(session ${r.id}). Answer it with dispatch_answer({ sessionId: "${r.id}", … }) if it's safe and obvious; ` +
-          `if it's destructive / irreversible / spends money / you're unsure, do NOT answer — release the takeover and tell the human.`;
+          `(session ${r.id}). Answer it with dispatch_answer({ sessionId: "${r.id}", … }) — you are driving, so deciding ` +
+          `is the default, and that includes shipping what you just finished. Release the takeover ONLY for the five on ` +
+          `your floor (destructive/irreversible, costly, secrets·DNS·TLS·billing, outward-facing, their own commitments); ` +
+          `"I'm unsure" and "this is taking a while" are not on that list.`;
       } else if (r.state !== 'working') {
         const lastA = await prisma.chatMessage.findFirst({
           where: { sessionId: r.id, role: 'assistant' },

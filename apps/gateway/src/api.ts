@@ -166,8 +166,9 @@ export const api = {
 
   // ── Brain takeover-watcher (docs/brain-takeover-design.md) ──────────────────
   // Same shape as the dispatch watcher, for conversations the human handed to the
-  // Brain. It also SWEEPS THE CAPS: a takeover whose Brain went quiet still gets
-  // handed back, so `ended` is the count that was force-released this pass.
+  // Brain. There are no turn/time caps to sweep any more (see lib/takeover.ts —
+  // being stopped mid-job is what this feature exists to prevent), so `ended` is
+  // just the takeovers released this pass because their session closed.
   runTakeoverWatch: async (): Promise<{ scanned: number; poked: number; ended: number }> => {
     const j = await post('/api/trpc/chat.runTakeoverWatch?batch=1', { '0': { json: null } });
     return j?.[0]?.result?.data?.json ?? { scanned: 0, poked: 0, ended: 0 };
