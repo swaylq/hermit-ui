@@ -9,6 +9,7 @@ import { relTime } from '@/lib/format';
 import { UsageSection } from '@/components/usage-section';
 import { UsageSparkline } from '@/components/usage-sparkline';
 import { SettingsTabs } from '@/components/settings-tabs';
+import { parseResetText, untilText, formatShanghai, crossesDay, DISPLAY_TZ_LABEL } from '@/lib/reset-time';
 
 function fmtUSD(n: number | null | undefined): string {
   if (n == null) return '-';
@@ -41,6 +42,20 @@ function pctTextColor(pct: number): string {
   return 'text-emerald-600 dark:text-emerald-400';
 }
 
+/**
+ * A clock for the countdowns. Every "resets in …" on this page is derived from it, so
+ * one timer keeps them all honest — without it they'd only move when a query polled
+ * (2–5 min) and could sit a whole minute stale.
+ */
+function useNow(everyMs = 30_000): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), everyMs);
+    return () => clearInterval(t);
+  }, [everyMs]);
+  return now;
+}
+
 function AnimatedBar({ pct, color }: { pct: number; color: string }) {
   const target = Math.max(0, Math.min(100, pct));
   const [width, setWidth] = useState(0);
@@ -59,7 +74,6 @@ function AnimatedBar({ pct, color }: { pct: number; color: string }) {
 }
 
 export default function UsagePage() {
-  const me = trpc.machines.me.useQuery();
   // Gateway pushes UsageWindow every 30 min; polling here at 5 min is "fresh
   // enough" without burning DB reads. We also refetch on window-focus by
   // default (tRPC's standard react-query behaviour) so coming back to the tab
@@ -67,14 +81,10 @@ export default function UsagePage() {
   const windows = trpc.usage.windows.useQuery(undefined, { refetchInterval: 5 * 60_000 });
   // The accurate one — real Claude Max plan % scraped from `claude /usage`.
   const plan = trpc.usage.planUsage.useQuery(undefined, { refetchInterval: 2 * 60_000 });
+  const now = useNow();
 
   const fiveHour = windows.data?.find((w) => w.kind === 'fiveHour');
   const weekly = windows.data?.find((w) => w.kind === 'weekly');
-
-  const limit5h = me.data?.fiveHourLimitUsd ?? null;
-  const limitWk = me.data?.weeklyLimitUsd ?? null;
-  const pct5h = fiveHour && limit5h ? (fiveHour.costUSD / limit5h) * 100 : null;
-  const pctWk = weekly && limitWk ? (weekly.costUSD / limitWk) * 100 : null;
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
@@ -99,11 +109,12 @@ export default function UsagePage() {
               </Card>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <PlanBar label="Session (5h)" pct={plan.data.sessionPct} reset={plan.data.sessionResetText} />
+                <PlanBar label="Session (5h)" pct={plan.data.sessionPct} reset={plan.data.sessionResetText} now={now} />
                 <PlanBar
                   label="Weekly"
                   pct={plan.data.weekPct}
                   reset={plan.data.weekResetText}
+                  now={now}
                   sub={plan.data.weekSonnetPct != null ? `Sonnet ${plan.data.weekSonnetPct}%` : null}
                 />
               </div>
@@ -120,15 +131,13 @@ export default function UsagePage() {
           title="5h cost (est.)"
           subtitle="ccusage estimate · rolling 5h block"
           window={fiveHour}
-          limit={limit5h}
-          pct={pct5h}
+          now={now}
         />
         <WindowCard
           title="Weekly cost (est.)"
           subtitle="ccusage estimate · ISO week (Mon–Sun UTC)"
           window={weekly}
-          limit={limitWk}
-          pct={pctWk}
+          now={now}
         />
       </section>
 
@@ -148,8 +157,28 @@ export default function UsagePage() {
 
 // Real Claude Max plan window — the % is authoritative (from `claude /usage`),
 // no dollar limit guessing involved.
-function PlanBar({ label, pct, reset, sub }: { label: string; pct: number | null; reset: string | null; sub?: string | null }) {
+//
+// The reset arrives as whatever the /usage panel drew ("5:20am (Asia/Shanghai)"),
+// which is a clock reading in whichever zone the gateway's machine is on and tells
+// you nothing about how long you've got. Parsed into an instant it becomes both:
+// stated in Shanghai, plus the time left. If the format is one we can't read, the raw
+// string still shows — worse than a countdown, better than a blank.
+function PlanBar({
+  label,
+  pct,
+  reset,
+  now,
+  sub,
+}: {
+  label: string;
+  pct: number | null;
+  reset: string | null;
+  now: Date;
+  sub?: string | null;
+}) {
   const p = pct ?? 0;
+  const at = parseResetText(reset, now);
+  const left = at ? untilText(at, now) : '';
   return (
     <Card className="p-4 space-y-2">
       <div className="flex items-baseline justify-between">
@@ -159,26 +188,40 @@ function PlanBar({ label, pct, reset, sub }: { label: string; pct: number | null
         </span>
       </div>
       <AnimatedBar pct={p} color={pctBarColor(p)} />
-      <div className="flex items-center justify-between text-[11px] text-muted-foreground min-h-[14px]">
-        <span>{reset ? `resets ${reset}` : ''}</span>
-        {sub && <span className="tabular-nums">{sub}</span>}
+      <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground min-h-[14px]">
+        <span className="truncate">
+          {at ? (
+            <>
+              resets <span className="tabular-nums text-foreground/70">{formatShanghai(at, { withDate: true })}</span>{' '}
+              {DISPLAY_TZ_LABEL}
+              {left && <> · in <span className="tabular-nums text-foreground/70">{left}</span></>}
+            </>
+          ) : reset ? (
+            `resets ${reset}`
+          ) : (
+            ''
+          )}
+        </span>
+        {sub && <span className="shrink-0 tabular-nums">{sub}</span>}
       </div>
     </Card>
   );
 }
 
+// A ccusage cost window. It carries NO percentage and NO budget: the cost is token
+// counts × API list price, which is not what a Max subscription charges, so a "% of
+// $X" built on it was a guess wearing a number's clothes. What's left is the estimate
+// itself (a fine activity gauge), the window's own clock, and when it rolls over.
 function WindowCard({
   title,
   subtitle,
   window: w,
-  limit,
-  pct,
+  now,
 }: {
   title: string;
   subtitle: string;
   window: { startTime: Date | string; endTime: Date | string; costUSD: number; totalTokens: number; isActive: boolean } | undefined;
-  limit: number | null;
-  pct: number | null;
+  now: Date;
 }) {
   if (!w) {
     return (
@@ -192,7 +235,10 @@ function WindowCard({
     );
   }
   const elapsed = windowElapsed(w.startTime, w.endTime);
-  const costPctClamped = pct != null ? Math.min(100, pct) : null;
+  const left = untilText(w.endTime, now);
+  // A 5h block usually starts and ends on the same Shanghai day; a weekly one never
+  // does. Show the date only when the two ends disagree about it.
+  const withDate = crossesDay(w.startTime, w.endTime);
   return (
     <Card className="p-5 space-y-5">
       <div className="flex items-start justify-between gap-3">
@@ -211,14 +257,9 @@ function WindowCard({
         <div className="font-mono leading-none text-4xl sm:text-5xl tracking-tight tabular-nums">
           {fmtUSD(w.costUSD)}
         </div>
-        {limit != null && costPctClamped != null ? (
-          <div className="font-mono text-xs text-muted-foreground space-y-0.5 text-right">
-            <div>of {fmtUSD(limit)} budget</div>
-            <div className={`text-sm font-medium ${pctTextColor(costPctClamped)}`}>{costPctClamped.toFixed(0)}%</div>
-          </div>
-        ) : (
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground max-w-[12rem] text-right leading-snug">
-            set a limit above to track % of budget
+        {left && (
+          <div className="text-xs text-muted-foreground text-right leading-snug">
+            resets in <span className="font-mono font-medium text-foreground/80 tabular-nums">{left}</span>
           </div>
         )}
       </div>
@@ -228,9 +269,13 @@ function WindowCard({
           <span>{elapsed.hours}h window elapsed</span>
           <span className={`font-mono ${pctTextColor(elapsed.pct)}`}>{elapsed.pct.toFixed(0)}%</span>
         </div>
+        {/* Both ends in Shanghai — the window's own boundaries are UTC-derived, and a
+            device-local render meant the same window read differently per device. */}
         <div className="flex items-baseline justify-between text-[10px] font-mono text-muted-foreground/80">
-          <span>{new Date(w.startTime).toLocaleString()}</span>
-          <span>{new Date(w.endTime).toLocaleString()}</span>
+          <span>{formatShanghai(w.startTime, { withDate })}</span>
+          <span>
+            {formatShanghai(w.endTime, { withDate })} {DISPLAY_TZ_LABEL}
+          </span>
         </div>
       </div>
 
