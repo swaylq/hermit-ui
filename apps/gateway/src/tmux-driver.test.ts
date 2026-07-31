@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg } from '@hermit-ui/tmux-driver';
+import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg, chunkLiteral } from '@hermit-ui/tmux-driver';
 
 describe('tmuxPaneName', () => {
   it('keeps the last 12 id chars behind the hermit- prefix', () => {
@@ -114,5 +114,55 @@ describe('parseClaudeSessionIdArg', () => {
     assert.equal(parseClaudeSessionIdArg('claude --dangerously-skip-permissions'), null);
     assert.equal(parseClaudeSessionIdArg('-zsh'), null);
     assert.equal(parseClaudeSessionIdArg('claude --session-id not-a-uuid'), null);
+  });
+});
+
+// The send-keys size rule. tmux packs a command into one 16 KiB imsg and refuses
+// anything larger ("command too long"), which is how a 21 KB pasted document — a
+// single 20.5 KB line — never reached the pane and left the chat on "starting"
+// (2026-07-31). Chunking has to respect BOTH the byte ceiling and character
+// boundaries: this text is routinely Chinese, 3 bytes per char.
+describe('chunkLiteral', () => {
+  const bytes = (s: string) => Buffer.byteLength(s, 'utf8');
+
+  it('leaves a line that already fits as one piece', () => {
+    assert.deepEqual(chunkLiteral('hello'), ['hello']);
+    assert.deepEqual(chunkLiteral(''), ['']);
+  });
+
+  it('splits an oversized ASCII line into pieces under the ceiling', () => {
+    const line = 'a'.repeat(20_000);
+    const pieces = chunkLiteral(line);
+    assert.ok(pieces.length > 1);
+    for (const p of pieces) assert.ok(bytes(p) <= 4096, `piece is ${bytes(p)} bytes`);
+    assert.equal(pieces.join(''), line);
+  });
+
+  it('never splits a multi-byte character — pieces rejoin byte-identical', () => {
+    const line = '金融产品网络营销管理办法'.repeat(600); // ~21 KB of 3-byte chars
+    const pieces = chunkLiteral(line);
+    assert.ok(pieces.length > 1);
+    for (const p of pieces) {
+      assert.ok(bytes(p) <= 4096);
+      // A cut mid-sequence would show up as U+FFFD on the decode round-trip.
+      assert.equal(Buffer.from(p, 'utf8').toString('utf8'), p);
+      assert.ok(!p.includes('�'));
+    }
+    assert.equal(pieces.join(''), line);
+  });
+
+  it('keeps surrogate pairs whole', () => {
+    const line = '🐟'.repeat(2000); // 4 bytes each
+    const pieces = chunkLiteral(line);
+    for (const p of pieces) {
+      assert.ok(bytes(p) <= 4096);
+      assert.ok(!p.includes('�'));
+    }
+    assert.equal(pieces.join(''), line);
+  });
+
+  it('honours a custom ceiling, and a char wider than it still goes out whole', () => {
+    assert.deepEqual(chunkLiteral('abcdef', 2), ['ab', 'cd', 'ef']);
+    assert.deepEqual(chunkLiteral('🐟🐟', 2), ['🐟', '🐟']);
   });
 });

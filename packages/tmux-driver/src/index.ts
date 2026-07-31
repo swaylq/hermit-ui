@@ -179,6 +179,47 @@ export function ensureSession(opts: EnsureOpts): { name: string; created: boolea
 }
 
 /**
+ * tmux packs a whole command into ONE imsg to its server (MAX_IMSGSIZE 16384), and
+ * refuses anything bigger outright: `send-keys -l -- <huge>` dies with "command too
+ * long" and the message never reaches the pane. Measured on tmux 3.6a: 16300 bytes of
+ * text goes through, 16380 does not.
+ *
+ * 4 KiB per call keeps a wide margin for the rest of the argv, and costs a couple of
+ * extra round-trips on the rare long paste. (Incident 2026-07-31: a 21 KB regulation
+ * pasted into one 20.5 KB LINE, which was sent as a single send-keys — the chat sat on
+ * "starting" with only a gateway error to show for it.)
+ */
+const SEND_CHUNK_BYTES = 4096;
+
+/**
+ * Split one line into send-keys-sized pieces, never mid-character: chunking by BYTES
+ * would cut a UTF-8 sequence in half and put mojibake in the composer, and this text
+ * is routinely Chinese (3 bytes/char). Pieces are typed into the same composer in
+ * order, so the buffer ends up identical either way.
+ *
+ * Exported for the unit test — the size rule is the whole point of the function.
+ */
+export function chunkLiteral(line: string, maxBytes = SEND_CHUNK_BYTES): string[] {
+  if (Buffer.byteLength(line, 'utf8') <= maxBytes) return [line];
+  const out: string[] = [];
+  let buf = '';
+  let bytes = 0;
+  for (const ch of line) {
+    // Iterating a string yields whole code points, so a surrogate pair stays intact.
+    const n = Buffer.byteLength(ch, 'utf8');
+    if (bytes + n > maxBytes && buf) {
+      out.push(buf);
+      buf = '';
+      bytes = 0;
+    }
+    buf += ch;
+    bytes += n;
+  }
+  if (buf) out.push(buf);
+  return out;
+}
+
+/**
  * Send a user message to the pane. Submits with Enter on the next line so
  * claude treats the buffer as a complete turn. Backslash-escapes any embedded
  * Enter via Alt+Enter so a multi-line paste doesn't accidentally submit early.
@@ -195,10 +236,14 @@ export function sendKeys(sessionId: string, text: string): void {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line.length > 0) {
-      // `--` terminates option parsing so a line starting with `-` (markdown
+      // One line can be far bigger than tmux will carry in a single command (a
+      // pasted document is often one enormous paragraph), so send it in pieces.
+      // `--` terminates option parsing so a piece starting with `-` (markdown
       // bullets, LaTeX, diffs) is sent as literal text, not mistaken for a flag.
-      const r = tmux(['send-keys', '-t', `${name}.0`, '-l', '--', line]);
-      if (!r.ok) throw new Error(`tmux send-keys (literal) failed: ${r.stderr || 'exit ' + r.status}`);
+      for (const piece of chunkLiteral(line)) {
+        const r = tmux(['send-keys', '-t', `${name}.0`, '-l', '--', piece]);
+        if (!r.ok) throw new Error(`tmux send-keys (literal) failed: ${r.stderr || 'exit ' + r.status}`);
+      }
     }
     if (i < lines.length - 1) {
       // Mid-message line break: M-Enter ("Alt+Enter") inserts a newline in
