@@ -71,6 +71,16 @@ export function UsageSection() {
           ))}
         </tbody>
       </table>
+      {/* Say what a column MEANS, because the honest answer isn't "cost on that day".
+          ccusage reports a session's lifetime total against its last-activity date, so
+          a conversation that ran for a week lands whole on the day it last ran. Each
+          session is counted exactly once — that part is now enforced by the writer
+          replacing its window rather than adding to it. */}
+      <p className="border-t px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+        Each session counts once, on the day it was <em>last</em> active — so a conversation that ran all
+        week lands whole on its final day. Read the columns as “sessions last used in this window”, not
+        “spent that day”.
+      </p>
     </Card>
   );
 }

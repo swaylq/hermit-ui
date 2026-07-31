@@ -33,7 +33,11 @@ export const api = {
   syncSessionSnapshots: (items: any[]) => post('/api/sync/session-snapshot', { items }),
   // Host-level RAM/swap/load/cpu snapshot → upserts HostStat (resource governance).
   syncHostStat: (stat: any) => post('/api/sync/host-stat', { stat }),
-  syncUsage: (items: any[]) => post('/api/sync/usage', { items }),
+  // `replaceSince` (first batch of a run only) tells the dashboard to drop every
+  // bucket from that instant on before taking these rows — the window is a snapshot,
+  // not an accumulation. See collect/usage.ts:usageWindowStart.
+  syncUsage: (items: any[], replaceSince?: string) =>
+    post('/api/sync/usage', replaceSince ? { items, replaceSince } : { items }),
   syncUsageWindows: (items: any[]) => post('/api/sync/usage-window', { items }),
   // Real Claude Max plan consumption scraped from `claude /usage` (the only
   // source for the true 5h/weekly window %; ccusage is a cost estimate).

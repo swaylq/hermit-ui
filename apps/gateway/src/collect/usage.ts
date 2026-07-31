@@ -81,6 +81,22 @@ function startOfUTCDay(dateStr: string): Date {
   return d;
 }
 
+/**
+ * The oldest bucket a run of `collectUsage(daysBack)` can produce. The push sends it
+ * as the REPLACE boundary, so the dashboard drops everything from here on and takes
+ * this run as the truth for the window.
+ *
+ * That replace is not housekeeping, it's the fix for a 6× overcount. A `ccusage
+ * session` row carries the session's LIFETIME total against its LAST-activity date,
+ * so while a session stays alive its whole running total is refiled onto each new
+ * day it touches — and an upsert-only writer leaves every previous day's copy behind.
+ * One long-lived session was banking its entire history once per day it was used:
+ * asst read $27.4k over 30 days against $3.7k of actual session totals (2026-07-31).
+ */
+export function usageWindowStart(daysBack = 35): Date {
+  return startOfUTCDay(new Date(Date.now() - daysBack * 86_400_000).toISOString().slice(0, 10));
+}
+
 export async function collectUsage(daysBack = 35): Promise<UsageRow[]> {
   const since = new Date(Date.now() - daysBack * 86_400_000).toISOString().slice(0, 10);
   // Async spawn (not spawnSync) — ccusage takes 15-44s and must NOT freeze the

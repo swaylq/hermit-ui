@@ -24,7 +24,7 @@
 import { collectAgentsFromList } from './collect/agents';
 import { collectSessionSnapshots } from './collect/session-snapshot';
 import { collectHostStat } from './collect/host-stat';
-import { collectUsage } from './collect/usage';
+import { collectUsage, usageWindowStart } from './collect/usage';
 import { collectUsageWindows } from './collect/window';
 import { collectPlanUsage } from './collect/plan-usage';
 import { api } from './api';
@@ -113,11 +113,18 @@ async function pushHostStat() {
 
 async function pushUsage() {
   await safe('usage', async () => {
-    const items = await collectUsage(35);
+    const DAYS = 35;
+    const items = await collectUsage(DAYS);
+    // Nothing collected means ccusage failed, not that usage is zero — send nothing,
+    // and in particular do NOT ask the dashboard to replace the window with nothing.
     if (items.length === 0) return;
     const batch = 50;
     for (let i = 0; i < items.length; i += batch) {
-      await api.syncUsage(items.slice(i, i + batch));
+      // The FIRST batch carries the replace boundary: the dashboard clears the window
+      // and takes this run as its truth (see usageWindowStart — an upsert-only writer
+      // kept every day's copy of a live session's running total). Later batches just
+      // add to the window this one opened.
+      await api.syncUsage(items.slice(i, i + batch), i === 0 ? usageWindowStart(DAYS).toISOString() : undefined);
     }
   });
 }
