@@ -103,6 +103,56 @@ export function cronEvent(args: {
   };
 }
 
+/**
+ * The human asked something and nothing answered it. See server/unanswered.ts.
+ *
+ * The body leads with their own words, because the question is what tells them
+ * instantly whether this matters — `查看为什么线上挂了` reads very differently from
+ * `顺便看看那个 typo`. Runtime state trails it as triage, and is deliberately NOT part
+ * of the decision to send.
+ */
+export function unansweredEvent(args: {
+  machineId: string;
+  sessionId: string;
+  agentName: string;
+  content: unknown;
+  waitedMinutes: number;
+  state: string;
+}): PushEvent {
+  const asked = previewText(args.content);
+  const quoted = asked ? `“${asked.slice(0, 90)}” · ` : '';
+  return {
+    kind: 'stall',
+    machineId: args.machineId,
+    title: `${args.agentName} never answered`,
+    body: `${quoted}${args.waitedMinutes} min, no reply · ${args.state}`,
+    path: `/chat?session=${args.sessionId}`,
+    // Same key as chatEvent / blockedEvent: one session, one lock-screen slot.
+    collapseKey: args.sessionId,
+    sessionId: args.sessionId,
+  };
+}
+
+/**
+ * The unanswered check itself is failing. A monitor that goes quiet is
+ * indistinguishable from a monitor with nothing to report, so its own breakage is
+ * an alert rather than a log line nobody reads.
+ */
+export function unansweredFailureEvent(args: {
+  machineId: string;
+  message: string;
+  failures: number;
+}): PushEvent {
+  return {
+    kind: 'stall',
+    machineId: args.machineId,
+    title: 'Unanswered-check is failing',
+    body: `${args.failures}x in a row · ${args.message.slice(0, 100)}`,
+    path: '/system',
+    collapseKey: `unanswered-failure-${args.machineId}`,
+  };
+}
+
 /** A machine crossed into red resource pressure. */
 export function hostEvent(args: {
   machineId: string;

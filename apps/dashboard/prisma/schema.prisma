@@ -441,6 +441,20 @@ model ChatSession {
   takeoverDraft       String?
   takeoverDraftAt     DateTime?
 
+  // ── Unanswered-message alert (docs/unanswered-alert-design.md) ──
+  // The human's message id this session was flagged on, i.e. the newest message in
+  // the conversation was one THEY typed and it went unanswered past the threshold.
+  // Set by the sweep when it alerts, cleared the moment any non-human row lands.
+  //
+  // It is the dedup key, not just a marker: the alert is a TRANSITION, so a session
+  // sitting stalled for hours pushes once. A follow-up message has a different id,
+  // which re-arms the clock — which is right, since it's a second unanswered ask.
+  unansweredMsgId      String?
+  // What "mark all read" acknowledged, so the inbox item can be dismissed without
+  // the next sweep instantly re-raising it (unansweredMsgId itself must survive —
+  // clearing it would re-fire the push). Mirrors HostStat.redAlertAt/alertReadAt.
+  unansweredAckedMsgId String?
+
   messages     ChatMessage[]
   interactions Interaction[]
   cronReports  Cron[]       @relation("CronReports")
@@ -467,6 +481,10 @@ model ChatSession {
   // `CREATE INDEX ... WHERE <col> IS NOT NULL` in migration
   // 20260715170000_chatsession_poller_indexes (this repo applies migrations via
   // `migrate deploy`, never `migrate dev`).
+  //
+  // A fifth partial index — (machineId) WHERE unansweredMsgId IS NOT NULL — backs the
+  // always-on inbox's stall lookup, which normally matches zero rows. Raw SQL for the
+  // same reason, in migration 20260802010000_unanswered_alert.
 }
 
 // A named, collapsible drawer in the sidebar's session list.

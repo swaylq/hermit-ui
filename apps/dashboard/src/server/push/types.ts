@@ -1,12 +1,14 @@
 // Shape of a push-worthy event. Produced at the four gateway write points
-// (chat-message / interaction / cron-run / host-stat sync routes), consumed by
-// server/push/index.ts. See docs/ios-shell-design.md.
+// (chat-message / interaction / cron-run / host-stat sync routes) plus the
+// unanswered-message sweep, consumed by server/push/index.ts.
+// See docs/ios-shell-design.md and docs/unanswered-alert-design.md.
 
 export type PushKind =
   | 'blocked' // an agent is stopped waiting on a permission / question decision
   | 'chat' // an agent replied in a session
   | 'cron' // a scheduled task finished badly (timeout / error / no_output)
-  | 'host'; // a machine crossed into red resource pressure
+  | 'host' // a machine crossed into red resource pressure
+  | 'stall'; // the human asked something and nothing answered (server/unanswered.ts)
 
 export interface PushEvent {
   kind: PushKind;

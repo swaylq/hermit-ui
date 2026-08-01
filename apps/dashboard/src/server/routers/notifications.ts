@@ -5,6 +5,11 @@
 // .lastReadAt and CronRun.readAt that the chat sidebar and /cron page use, so a
 // "read" here clears the red dot everywhere and vice-versa.
 //
+// Two alert conditions ride alongside the unread items: host pressure, and sessions
+// where the human asked something and nothing answered. Neither is "unread" — you
+// SENT the stalled message, so its session is the most-read thing you own — which is
+// exactly why they need their own row here. See docs/unanswered-alert-design.md.
+//
 // Owner-only: every procedure is machineProcedure, which rejects scoped share
 // keys — a shared single-agent link never sees the global inbox.
 
@@ -38,6 +43,16 @@ function firstText(content: unknown): string | null {
   }
   return null;
 }
+
+// The sessions the unanswered sweep has flagged and "mark all read" hasn't yet
+// acknowledged. Reads the persisted flag through its partial index rather than
+// recomputing the predicate — this runs on the always-on 5s poll, and normally matches
+// zero rows. Raising/clearing the flag is the sweep's job (server/unanswered.ts).
+//
+// A plain `acked IS NULL` suffices for "not yet acknowledged" because the sweep resets
+// unansweredAckedMsgId to null every time it writes a new unansweredMsgId — so a
+// non-null ack always refers to the flag currently sitting in the row, never a stale one.
+const PENDING_UNANSWERED = { unansweredMsgId: { not: null }, unansweredAckedMsgId: null } as const;
 
 type UnreadSession = { id: string; lastMessageAt: Date | null; lastReadAt: Date | null };
 function isUnread(s: UnreadSession): boolean {
@@ -74,7 +89,7 @@ export const notificationsRouter = router({
       // Batch 1 — all independent: recent sessions (no message bodies; the first
       // page JS-filters unread, later pages skip chat since it all rides page one),
       // the machine's cron ids, and the host stat (first page only).
-      const [sessionRows, cronIdRows, hostStat] = await Promise.all([
+      const [sessionRows, cronIdRows, hostStat, stalledRows] = await Promise.all([
         before
           ? Promise.resolve([])
           : prisma.chatSession.findMany({
@@ -85,6 +100,12 @@ export const notificationsRouter = router({
             }),
         prisma.cron.findMany({ where: { machineId }, select: { id: true } }),
         before ? Promise.resolve(null) : prisma.hostStat.findUnique({ where: { machineId } }),
+        before
+          ? Promise.resolve([])
+          : prisma.chatSession.findMany({
+              where: { machineId, ...PENDING_UNANSWERED },
+              select: { id: true, agentName: true, title: true, unansweredMsgId: true },
+            }),
       ]);
       const cronIds = cronIdRows.map((c) => c.id);
       const unreadSessions = sessionRows.filter(isUnread);
@@ -95,7 +116,7 @@ export const notificationsRouter = router({
       // session. (An earlier `distinct: ['sessionId']` here made Prisma fetch a whole
       // session's message history in-memory — the inbox's real ~0.8s "still slow" cost;
       // findFirst on the (sessionId, createdAt) index is ~1ms.)
-      const [cronRuns, latestMsgs] = await Promise.all([
+      const [cronRuns, latestMsgs, stalledMsgs] = await Promise.all([
         cronIds.length > 0
           ? prisma.cronRun.findMany({
               where: { cronId: { in: cronIds }, readAt: null, status: { not: 'running' }, ...(before ? { firedAt: { lt: before } } : {}) },
@@ -120,6 +141,15 @@ export const notificationsRouter = router({
                 }),
               ),
             ).then((rows) => rows.filter((r): r is NonNullable<typeof r> => r != null))
+          : Promise.resolve([]),
+        // The flagged message itself, for its text and its timestamp. Point lookups by
+        // id, and there are normally none — the whole fleet raised three of these in
+        // two months.
+        stalledRows.length > 0
+          ? prisma.chatMessage.findMany({
+              where: { id: { in: stalledRows.map((s) => s.unansweredMsgId as string) } },
+              select: { id: true, content: true, createdAt: true },
+            })
           : Promise.resolve([]),
       ]);
 
@@ -163,13 +193,35 @@ export const notificationsRouter = router({
           }]
         : [];
 
+      // A stalled session is NOT unread (you sent the last message, so you've read
+      // every word in it) — which is precisely why it needs its own item. `at` is when
+      // the question was asked, so it sorts into the timeline at the moment it started
+      // going unanswered.
+      const askedById = new Map(stalledMsgs.map((m) => [m.id, m]));
+      const stallItems = stalledRows.flatMap((s) => {
+        const asked = askedById.get(s.unansweredMsgId as string);
+        if (!asked) return []; // message deleted out from under the flag
+        const preview = firstText(asked.content);
+        return [{
+          kind: 'stall' as const,
+          key: `stall:${s.id}`,
+          agentName: s.agentName,
+          title: s.title?.trim() || preview || 'Untitled session',
+          preview: preview ? `No reply to: ${preview}` : 'No reply to your last message',
+          at: asked.createdAt,
+          sessionId: s.id,
+        }];
+      });
+
       // Only cron paginates (it's dense — the WHERE already restricts to unread, so
       // every fetched row is shown). More iff cron filled its page; the next cursor is
       // its oldest run's firedAt. Chat + host are fully delivered on the first page.
       const hasMore = cronRuns.length >= limit;
       const nextCursor = hasMore ? cronRuns[cronRuns.length - 1].firedAt.getTime() : null;
 
-      const items = [...hostItems, ...chatItems, ...cronItems].sort((a, b) => b.at.getTime() - a.at.getTime());
+      const items = [...hostItems, ...stallItems, ...chatItems, ...cronItems].sort(
+        (a, b) => b.at.getTime() - a.at.getTime(),
+      );
       return { items, nextCursor };
     }),
 
@@ -177,7 +229,7 @@ export const notificationsRouter = router({
   // globally while the dashboard is open, so it stays bounded and select-light.
   counts: machineProcedure.query(async ({ ctx }) => {
     const machineId = ctx.machine.id;
-    const [sessionRows, cron, hostStat] = await Promise.all([
+    const [sessionRows, cron, hostStat, stall] = await Promise.all([
       prisma.chatSession.findMany({
         where: { machineId },
         orderBy: { lastMessageAt: 'desc' },
@@ -186,10 +238,11 @@ export const notificationsRouter = router({
       }),
       prisma.cronRun.count({ where: { cron: { machineId }, readAt: null, status: { not: 'running' } } }),
       prisma.hostStat.findUnique({ where: { machineId } }),
+      prisma.chatSession.count({ where: { machineId, ...PENDING_UNANSWERED } }),
     ]);
     const chat = sessionRows.filter(isUnread).length;
     const host = hostAlertPending(hostStat) ? 1 : 0;
-    return { chat, cron, total: chat + cron + host };
+    return { chat, cron, stall, total: chat + cron + host + stall };
   }),
 
   // Clear the whole inbox: stamp lastReadAt on every currently-unread session and
@@ -214,6 +267,19 @@ export const notificationsRouter = router({
     if (hostAlertPending(hostStat)) {
       await prisma.hostStat.update({ where: { machineId }, data: { alertReadAt: now } });
     }
-    return { ok: true, chat: chatRes.count, cron: cronRes.count };
+    // Ack stalled sessions by copying the flag, never by clearing it: clearing
+    // unansweredMsgId would look to the next sweep like a fresh stall and push again.
+    // The session keeps owing you a reply — you've just said you know.
+    const stalled = await prisma.chatSession.findMany({
+      where: { machineId, ...PENDING_UNANSWERED },
+      select: { id: true, unansweredMsgId: true },
+    });
+    for (const s of stalled) {
+      await prisma.chatSession.update({
+        where: { id: s.id },
+        data: { unansweredAckedMsgId: s.unansweredMsgId },
+      });
+    }
+    return { ok: true, chat: chatRes.count, cron: cronRes.count, stall: stalled.length };
   }),
 });

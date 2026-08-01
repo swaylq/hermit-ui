@@ -7,9 +7,10 @@
 //   1. VIEWING — the session's read marker moved within the last minute, i.e. you
 //      have the chat open right now. Pushing what's already on your screen is the
 //      fastest way to make someone disable notifications.
-//   2. QUIET HOURS — 23:00–08:00 local, only `blocked` and `host` get through. An
-//      agent stopped dead waiting on you, or a machine about to OOM, is worth waking
-//      up for; "agent replied" and "cron failed" are not.
+//   2. QUIET HOURS — 23:00–08:00 local, only `blocked`, `host` and `stall` get
+//      through. An agent stopped dead waiting on you, a machine about to OOM, or a
+//      question of yours that nothing answered are worth waking up for; "agent
+//      replied" and "cron failed" are not.
 //
 // Evaluated at DELIVERY time, not enqueue time — which matters for the debounced
 // chat events in ./index.ts: opening the session during the debounce window
@@ -24,8 +25,15 @@ export const VIEWING_WINDOW_MS = 60_000;
 export const QUIET_START_HOUR = 23;
 export const QUIET_END_HOUR = 8;
 
-/** Kinds that ignore quiet hours — urgent enough to wake someone. */
-const ALWAYS: ReadonlySet<PushKind> = new Set<PushKind>(['blocked', 'host']);
+/**
+ * Kinds that ignore quiet hours — urgent enough to wake someone.
+ *
+ * `stall` belongs here despite being the least "live" of the three: it can only fire
+ * some minutes after the human themself typed something, so it cannot wake anyone who
+ * wasn't just awake, and being told at 23:40 that your 23:05 question went nowhere is
+ * the whole point of it existing.
+ */
+const ALWAYS: ReadonlySet<PushKind> = new Set<PushKind>(['blocked', 'host', 'stall']);
 
 export interface SuppressInput {
   kind: PushKind;

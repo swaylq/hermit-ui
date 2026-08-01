@@ -15,14 +15,16 @@
 
 import { Suspense, memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Bell, MessageSquare, Clock, CheckCheck, AlertTriangle, Activity } from 'lucide-react';
+import { Bell, MessageSquare, Clock, CheckCheck, AlertTriangle, Activity, MessageSquareDashed } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { cronStatusTone } from '@/lib/cron-status';
 
 type FeedItem = {
-  kind: 'chat' | 'cron' | 'host';
+  // 'stall' = the human asked something in this session and nothing answered it.
+  // Not an unread item — you sent the last message — so it carries its own row.
+  kind: 'chat' | 'cron' | 'host' | 'stall';
   key: string;
   agentName: string;
   title: string;
@@ -72,7 +74,7 @@ function NotificationsInner() {
       utils.notifications.feed.setInfiniteData({ limit: PAGE }, (old) =>
         old ? { pages: [{ items: [], nextCursor: null }], pageParams: old.pageParams.slice(0, 1) } : old,
       );
-      utils.notifications.counts.setData(undefined, { chat: 0, cron: 0, total: 0 });
+      utils.notifications.counts.setData(undefined, { chat: 0, cron: 0, stall: 0, total: 0 });
     },
     onSettled: () => {
       utils.notifications.feed.invalidate();
@@ -102,8 +104,10 @@ function NotificationsInner() {
     (item: FeedItem) => {
       // Fire the matching mark-read (best-effort) then jump to the detail, which also
       // marks it read on arrival (chat pane on open / cron run on auto-expand).
-      if (item.kind === 'chat' && item.sessionId) {
-        markChat.mutate({ sessionId: item.sessionId });
+      if ((item.kind === 'chat' || item.kind === 'stall') && item.sessionId) {
+        // A stall opens the same way — the fix is almost always "say it again" or
+        // restart the session, both of which live in the chat pane.
+        if (item.kind === 'chat') markChat.mutate({ sessionId: item.sessionId });
         window.location.href = `/chat?session=${encodeURIComponent(item.sessionId)}`;
       } else if (item.kind === 'cron' && item.cronId && item.runId) {
         markRun.mutate({ runId: item.runId });
@@ -189,15 +193,28 @@ const NotifRow = memo(function NotifRow({ item, onOpen }: { item: FeedItem; onOp
         className="group w-full text-left flex gap-3 px-3 py-2.5 rounded-lg hover:bg-accent/60 transition-colors cursor-pointer"
       >
         <span className="mt-0.5 shrink-0 text-muted-foreground">
-          {item.kind === 'chat' ? <MessageSquare className="h-4 w-4" /> : item.kind === 'host' ? <Activity className="h-4 w-4 text-rose-500" /> : <Clock className="h-4 w-4" />}
+          {item.kind === 'chat' ? (
+            <MessageSquare className="h-4 w-4" />
+          ) : item.kind === 'host' ? (
+            <Activity className="h-4 w-4 text-rose-500" />
+          ) : item.kind === 'stall' ? (
+            <MessageSquareDashed className="h-4 w-4 text-amber-500" />
+          ) : (
+            <Clock className="h-4 w-4" />
+          )}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
             <span className="font-medium text-foreground/80 truncate">{item.agentName}</span>
-            <span className="uppercase tracking-wide">{item.kind}</span>
+            <span className="uppercase tracking-wide">{item.kind === 'stall' ? 'unanswered' : item.kind}</span>
             {item.kind === 'cron' && cronStatusTone(item.status) === 'bad' && (
               <span className="inline-flex items-center gap-0.5 text-rose-500">
                 <AlertTriangle className="h-3 w-3" /> failed
+              </span>
+            )}
+            {item.kind === 'stall' && (
+              <span className="inline-flex items-center gap-0.5 text-amber-500">
+                <AlertTriangle className="h-3 w-3" /> no reply
               </span>
             )}
             <span className="ml-auto shrink-0 tabular-nums">{relTime(item.at)}</span>
@@ -207,7 +224,11 @@ const NotifRow = memo(function NotifRow({ item, onOpen }: { item: FeedItem; onOp
             <div className="text-xs text-muted-foreground line-clamp-2 [overflow-wrap:anywhere]">{item.preview}</div>
           )}
         </div>
-        <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-rose-500" aria-hidden="true" title="unread" />
+        <span
+          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${item.kind === 'stall' ? 'bg-amber-500' : 'bg-rose-500'}`}
+          aria-hidden="true"
+          title={item.kind === 'stall' ? 'unanswered' : 'unread'}
+        />
       </button>
     </li>
   );
