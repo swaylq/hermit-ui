@@ -161,9 +161,38 @@ quiet hours: it can only fire 30 minutes after the human themself typed somethin
 it cannot wake anyone who wasn't just awake, and "you asked and nothing came back" is
 the same urgency class as "an agent is stopped waiting on you".
 
+The "you're already looking at it" suppression (`lastReadAt` within 60 s) applies and
+is safe here: the chat pane stamps `lastReadAt` on an effect keyed to the message
+count, and a stalled session's message count is by definition frozen — so it stamps
+once when you open it and never again. It can't hold its own alert down.
+
 ⚠️ **The push transport is currently dark.** `APNS_KEY_ID` / `APNS_TEAM_ID` /
 `APNS_TOPIC` / `APNS_PRIVATE_KEY` are unset on the VPS and `PushDevice` has zero
 rows, so `enqueuePush` no-ops for *every* kind — `blocked`, `chat`, `cron` and `host`
 included. This feature is wired into that pipeline and lights up the moment it is
 configured; until then its live surface is the notifications inbox (bell badge +
 `/notifications`), which works today.
+
+## Verified
+
+**Backtest** (`scripts/unanswered-backtest.ts`, run against production, 2026-08-02):
+4 234 windows over 61.1 days replayed through `isUnanswered()` itself. The 2026-07-31
+incident is caught — it would have alerted at 22:27 Shanghai, **158 minutes before
+anything else noticed**. Three firings total at T=30, listed above, all real.
+
+**Live** (deployed `6084181`, first sweep 18:01:52 UTC):
+
+- Across 203 sessions on three machines the first sweep raised exactly **one** —
+  `ceo` on sway003-macmini, `年薪改成40-60w` from 06-30, unanswered for 46 703
+  minutes and still the last word. Its pane is long gone (`alive=false`).
+- The next sweep raised **0** — edge-triggering holds, a standing stall doesn't
+  re-push every five minutes.
+- The clear path was exercised by planting the 07-31 flag on the incident session
+  (which has since been answered): the following sweep reported `1 cleared` and the
+  flag was gone.
+- The inbox row renders: `ceo · UNANSWERED · ⚠ no reply · 32d ago · No reply to:
+  年薪改成40-60w`, and `notifications.counts` folds it into the bell badge.
+- Nothing in `logs/err.log`.
+
+13 unit tests on the predicate (168 in the suite), `tsc --noEmit` and `build:check`
+clean. Dashboard-only — no gateway change, so there is no per-machine rollout.
