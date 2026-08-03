@@ -42,6 +42,7 @@ import {
 import { paneIsWorking, WORK_MARKER_RE, sessionTranscriptPath } from './pane';
 import { extractText, hasToolResult, CcEvent } from './claude-code';
 
+import { runtimeFor } from './runtime';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
 import { relayImages } from './image-relay';
@@ -77,7 +78,13 @@ export function buildMcpConfigArg(chatSessionId: string, isBrain = false): strin
 }
 
 type PendingMsg = { id: string; sessionId: string; role: string; content: any; createdAt: string };
-type PendingSession = { id: string; agentName: string; claudeSessionId: string | null; agentDirectory: string | null; isOrchestrator?: boolean };
+type PendingSession = {
+  id: string; agentName: string; claudeSessionId: string | null;
+  agentDirectory: string | null; isOrchestrator?: boolean;
+  // Which backend runs this session. Absent means claude-tmux (the path this
+  // whole file implements); 'pi-rpc' is handed off in deliverMessages.
+  runtime?: string | null; runtimeProvider?: string | null; runtimeModel?: string | null;
+};
 
 // One outbound chat-message sync (the shape /api/sync/chat-message accepts).
 type SyncItem = {
@@ -540,6 +547,43 @@ async function streamSlashOutput({
 }
 
 async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
+  // ── Non-tmux backends ──────────────────────────────────────────────────────
+  // Everything below this block is Claude-Code-in-a-pane. A session on another
+  // runtime hands off here, before any tmux work, and reuses only the outbound
+  // sync coalescing. See docs/pi-runtime-design.md.
+  const runtime = runtimeFor(session.runtime);
+  if (runtime) {
+    const state = piState(session.id);
+    try {
+      const handle = await runtime.ensure(
+        {
+          id: session.id,
+          agentName: session.agentName,
+          agentDirectory: session.agentDirectory ?? path.join(AGENTS_ROOT, session.agentName),
+          externalSessionId: session.claudeSessionId,
+          provider: session.runtimeProvider,
+          model: session.runtimeModel,
+        },
+        (item) => queueSync(state, item),
+      );
+
+      // Same one-per-turn drain as the tmux path: if a turn is in flight, hold
+      // the whole batch and let the next chatTick re-evaluate.
+      if (await runtime.isWorking(handle)) return;
+
+      const oldest = msgs[0];
+      if (!oldest) return;
+      const text = typeof oldest.content === 'string' ? oldest.content : extractText(oldest.content);
+      if (!text.trim()) return;
+
+      const ok = await runtime.submit(handle, text, []);
+      if (ok) await api.ackChatDelivered([oldest.id]).catch(() => {});
+    } catch (e) {
+      console.error(`[chat] ${runtime.kind} delivery failed for ${session.agentName}:`, e);
+    }
+    return;
+  }
+
   // ── Idle gate (message queue) ──────────────────────────────────────────────
   // If claude is mid-turn, hold the ENTIRE pending batch: leave every row
   // deliveredAt=null and bail. The queue drains one message per turn — the next
@@ -1110,6 +1154,27 @@ function flushSync(state: SessionState, attempt = 0) {
         console.error(`[chat] sync batch DROPPED after ${attempt} retries (${batch.length} rows) — re-syncs only on a fresh reattach`);
       }
     });
+}
+
+// Sync-coalescing state for pi sessions.
+//
+// pi sessions need the same batching/retry as tmux ones — a gateway restart
+// replays their durable entries the same way — but none of the tmux fields.
+// `uuidStamped` starts true because the pi runtime stamps its own session id
+// on every item it emits rather than on a first-arrival basis.
+const piStates = new Map<string, SessionState>();
+
+function piState(sessionId: string): SessionState {
+  let s = piStates.get(sessionId);
+  if (!s) {
+    s = {
+      claudeUuid: '', jsonlPath: '', stopWatcher: () => {},
+      seenUuids: new Set(), uuidStamped: true,
+      syncBuf: [], syncTimer: null,
+    };
+    piStates.set(sessionId, s);
+  }
+  return s;
 }
 
 function queueSync(state: SessionState, item: SyncItem) {

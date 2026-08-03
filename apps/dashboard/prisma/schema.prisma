@@ -630,6 +630,16 @@ model Agent {
   // re-stamps when this is behind, so a brain scaffolded by an older template
   // converges on gateway startup. 0 = pre-versioning / non-brain.
   brainTemplateVersion Int       @default(0)
+  // Which backend runs this agent. 'claude-tmux' is interactive `claude` in a
+  // tmux pane (the default, and the only path that bills against Claude Max's
+  // Interactive bucket — see chat-runner.ts's header). 'pi-rpc' runs pi as an
+  // RPC child process against its own provider. Provider/model apply to pi only;
+  // claude's model comes from that machine's ~/.claude/settings.json.
+  // See docs/pi-runtime-design.md.
+  runtime              String    @default("claude-tmux")
+  runtimeProvider      String?
+  runtimeModel         String?
+
   // Soft-delete / recycle bin. Set when the agent is moved to trash; cleared on
   // restore. The gateway mv's the dir to AGENTS_ROOT/.hermit-trash/ on delete,
   // back on restore, and rm -rf's it on purge. agents.list hides rows where this

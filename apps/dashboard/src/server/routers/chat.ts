@@ -997,10 +997,14 @@ export const chatRouter = router({
     const agentNames = [...new Set(sessions.map((s) => s.agentName))];
     const agents = await prisma.agent.findMany({
       where: { machineId: ctx.machine.id, name: { in: agentNames } },
-      select: { name: true, directory: true, isOrchestrator: true },
+      select: {
+        name: true, directory: true, isOrchestrator: true,
+        runtime: true, runtimeProvider: true, runtimeModel: true,
+      },
     });
     const dirByName = new Map(agents.map((a) => [a.name, a.directory]));
     const orchByName = new Map(agents.map((a) => [a.name, a.isOrchestrator]));
+    const runtimeByName = new Map(agents.map((a) => [a.name, a]));
 
     const sessionsWithDir = sessions.map((s) => ({
       ...s,
@@ -1008,6 +1012,11 @@ export const chatRouter = router({
       // The orchestrator flag rides along so the gateway can set HERMIT_BRAIN on
       // this session's MCP stub (which unlocks the brain-only cross-agent tools).
       isOrchestrator: orchByName.get(s.agentName) ?? false,
+      // Which backend should run this session, and (pi only) on what model.
+      // Absent/unknown means claude-tmux — the gateway keeps its existing path.
+      runtime: runtimeByName.get(s.agentName)?.runtime ?? 'claude-tmux',
+      runtimeProvider: runtimeByName.get(s.agentName)?.runtimeProvider ?? null,
+      runtimeModel: runtimeByName.get(s.agentName)?.runtimeModel ?? null,
     }));
 
     const sessionIds = sessions.map((s) => s.id);
