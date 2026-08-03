@@ -78,7 +78,7 @@ export interface AgentRuntime {
 
 - [ ] **Step 2: Typecheck**
 
-Run: `cd apps/gateway && pnpm typecheck`
+Run: `cd apps/gateway && npm run typecheck`
 Expected: no errors.
 
 - [ ] **Step 3: Commit**
@@ -277,7 +277,7 @@ git commit -m "feat(gateway): translate pi session events into dashboard blocks"
 
 ```bash
 cd /Users/mac/claudeclaw/asst/hermit-ui
-pnpm --filter @hermit-ui/gateway add @earendil-works/pi-coding-agent@0.83.0
+npm install @earendil-works/pi-coding-agent@0.83.0 -w @hermit-ui/gateway
 ```
 
 - [ ] **Step 2: Verify the import surface at runtime**
@@ -295,7 +295,7 @@ Expected: `RpcClient ok`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add apps/gateway/package.json pnpm-lock.yaml
+git add apps/gateway/package.json package-lock.json
 git commit -m "chore(gateway): add pi coding agent"
 ```
 
@@ -370,7 +370,7 @@ export class PiRpcRuntime implements AgentRuntime {
 
 - [ ] **Step 2: Typecheck**
 
-Run: `cd apps/gateway && pnpm typecheck`
+Run: `cd apps/gateway && npm run typecheck`
 Expected: no errors.
 
 - [ ] **Step 3: Commit**
@@ -443,7 +443,7 @@ function handleOf(handle: RuntimeHandle): PiHandle | null {
 
 - [ ] **Step 2: Typecheck**
 
-Run: `cd apps/gateway && pnpm typecheck`
+Run: `cd apps/gateway && npm run typecheck`
 Expected: no errors.
 
 - [ ] **Step 3: Commit**
@@ -591,12 +591,12 @@ import { runtimeFor } from './runtime';
 
 - [ ] **Step 6: Run the gateway test suite — the claude path must be unchanged**
 
-Run: `cd apps/gateway && pnpm test`
+Run: `cd apps/gateway && npm test`
 Expected: all existing tests pass. This is the regression gate.
 
 - [ ] **Step 7: Typecheck the workspace**
 
-Run: `pnpm typecheck`
+Run: `npm run typecheck -w @hermit-ui/gateway`
 Expected: no errors.
 
 - [ ] **Step 8: Commit**
