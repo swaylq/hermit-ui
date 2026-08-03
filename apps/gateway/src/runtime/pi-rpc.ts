@@ -18,10 +18,19 @@ import { translatePiEvent } from './pi-events';
 // `<agentDir>/dist/cli.js` and dies. The package's `exports` map only defines
 // the `import` condition, so require.resolve() cannot see it either — resolve
 // through ESM and derive the sibling CLI entry.
-const PI_CLI = path.join(
-  path.dirname(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'))),
-  'cli.js',
-);
+//
+// Resolved lazily, NOT at module load. chat-runner imports this file for every
+// session including claude ones, so a resolution failure at import time would
+// crash the gateway and take the whole claude fleet down with it. Failing here
+// instead confines the damage to the pi session that asked for it.
+let piCliPath: string | null = null;
+
+function resolvePiCli(): string {
+  if (piCliPath) return piCliPath;
+  const entry = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'));
+  piCliPath = path.join(path.dirname(entry), 'cli.js');
+  return piCliPath;
+}
 
 type PiHandle = RuntimeHandle & {
   client: RpcClient;
@@ -45,7 +54,7 @@ export class PiRpcRuntime implements AgentRuntime {
 
     const client = new RpcClient({
       cwd: session.agentDirectory,
-      cliPath: PI_CLI,
+      cliPath: resolvePiCli(),
       provider: session.provider ?? undefined,
       model: session.model ?? undefined,
     });
