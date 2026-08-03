@@ -18,18 +18,6 @@ function fmtUSD(n: number | null | undefined): string {
   return `$${n.toFixed(3)}`;
 }
 
-function windowElapsed(start: Date | string, end: Date | string): { pct: number; hours: number } {
-  const s = new Date(start).getTime();
-  const e = new Date(end).getTime();
-  const now = Date.now();
-  const total = Math.max(1, e - s);
-  const elapsed = Math.max(0, Math.min(total, now - s));
-  return {
-    pct: (elapsed / total) * 100,
-    hours: Math.round(total / 3600_000),
-  };
-}
-
 function pctBarColor(pct: number): string {
   if (pct >= 90) return 'bg-rose-500';
   if (pct >= 70) return 'bg-amber-400';
@@ -234,7 +222,6 @@ function WindowCard({
       </Card>
     );
   }
-  const elapsed = windowElapsed(w.startTime, w.endTime);
   const left = untilText(w.endTime, now);
   // A 5h block usually starts and ends on the same Shanghai day; a weekly one never
   // does. Show the date only when the two ends disagree about it.
@@ -257,26 +244,26 @@ function WindowCard({
         <div className="font-mono leading-none text-4xl sm:text-5xl tracking-tight tabular-nums">
           {fmtUSD(w.costUSD)}
         </div>
-        {left && (
-          <div className="text-xs text-muted-foreground text-right leading-snug">
-            resets in <span className="font-mono font-medium text-foreground/80 tabular-nums">{left}</span>
-          </div>
-        )}
+        {/* Once the window is over the countdown has nothing to say, and an empty slot
+            reads as a bug — the row is simply the last block ccusage reported. */}
+        <div className="text-xs text-muted-foreground text-right leading-snug">
+          {left ? (
+            <>
+              resets in <span className="font-mono font-medium text-foreground/80 tabular-nums">{left}</span>
+            </>
+          ) : (
+            'window ended'
+          )}
+        </div>
       </div>
 
-      <div className="space-y-1.5">
-        <div className="flex items-baseline justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
-          <span>{elapsed.hours}h window elapsed</span>
-          <span className={`font-mono ${pctTextColor(elapsed.pct)}`}>{elapsed.pct.toFixed(0)}%</span>
-        </div>
-        {/* Both ends in Shanghai — the window's own boundaries are UTC-derived, and a
-            device-local render meant the same window read differently per device. */}
-        <div className="flex items-baseline justify-between text-[10px] font-mono text-muted-foreground/80">
-          <span>{formatShanghai(w.startTime, { withDate })}</span>
-          <span>
-            {formatShanghai(w.endTime, { withDate })} {DISPLAY_TZ_LABEL}
-          </span>
-        </div>
+      {/* Both ends in Shanghai — the window's own boundaries are UTC-derived, and a
+          device-local render meant the same window read differently per device. */}
+      <div className="flex items-baseline justify-between text-[10px] font-mono text-muted-foreground/80">
+        <span>{formatShanghai(w.startTime, { withDate })}</span>
+        <span>
+          {formatShanghai(w.endTime, { withDate })} {DISPLAY_TZ_LABEL}
+        </span>
       </div>
 
       <div className="text-[10px] font-mono text-muted-foreground">
