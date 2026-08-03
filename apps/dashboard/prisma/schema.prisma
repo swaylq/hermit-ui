@@ -596,6 +596,13 @@ model UsageWindow {
   endTime     DateTime
   costUSD     Float
   totalTokens BigInt   @default(0)
+  // The split behind totalTokens. Worth storing because the total on its own is
+  // alarming and uninformative: ~96% of it is cacheRead — the same context re-counted
+  // on every turn — so "190M tokens in 5 hours" means far less new text than it looks.
+  inputTokens         BigInt @default(0)
+  outputTokens        BigInt @default(0)
+  cacheCreationTokens BigInt @default(0)
+  cacheReadTokens     BigInt @default(0)
   isActive    Boolean  @default(false)
   updatedAt   DateTime @updatedAt
 

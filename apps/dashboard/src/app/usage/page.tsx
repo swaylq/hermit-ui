@@ -208,7 +208,16 @@ function WindowCard({
 }: {
   title: string;
   subtitle: string;
-  window: { startTime: Date | string; endTime: Date | string; costUSD: number; totalTokens: number; isActive: boolean } | undefined;
+  window:
+    | {
+        startTime: Date | string;
+        endTime: Date | string;
+        costUSD: number;
+        totalTokens: number;
+        cacheReadTokens: number;
+        isActive: boolean;
+      }
+    | undefined;
   now: Date;
 }) {
   if (!w) {
@@ -266,8 +275,18 @@ function WindowCard({
         </span>
       </div>
 
+      {/* The cache-read share is the whole story of that number: it is the SAME
+          context re-counted on every turn, and it is ~96% of the total. Without it
+          "190M tokens in 5 hours" reads as 190M tokens of new text. Hidden when the
+          split is absent — an older gateway, or a row written before it existed. */}
       <div className="text-[10px] font-mono text-muted-foreground">
         {w.totalTokens.toLocaleString()} tokens
+        {w.cacheReadTokens > 0 && (
+          <span className="text-muted-foreground/70">
+            {' · '}
+            {Math.round((w.cacheReadTokens / Math.max(1, w.totalTokens)) * 100)}% cache reads
+          </span>
+        )}
       </div>
     </Card>
   );

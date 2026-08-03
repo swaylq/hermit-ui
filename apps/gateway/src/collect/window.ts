@@ -3,6 +3,15 @@
 
 import { execCapture } from '../exec';
 
+// The two views name the same four counters differently — `blocks` nests them under
+// `tokenCounts` with an `…InputTokens` suffix, `weekly` puts them flat on the row —
+// so each is normalised through `split()` below.
+type TokenSplit = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+};
 type Block = {
   id: string;
   startTime: string;
@@ -11,12 +20,44 @@ type Block = {
   totalTokens: number;
   isActive: boolean;
   isGap: boolean;
+  tokenCounts?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheCreationInputTokens?: number;
+    cacheReadInputTokens?: number;
+  };
 };
 type WeeklyRow = {
   period: string; // e.g. "2026-W21"
   totalCost: number;
   totalTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
 };
+
+const ZERO_SPLIT: TokenSplit = { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 };
+
+function blockSplit(b: Block): TokenSplit {
+  const t = b.tokenCounts;
+  if (!t) return ZERO_SPLIT;
+  return {
+    inputTokens: t.inputTokens ?? 0,
+    outputTokens: t.outputTokens ?? 0,
+    cacheCreationTokens: t.cacheCreationInputTokens ?? 0,
+    cacheReadTokens: t.cacheReadInputTokens ?? 0,
+  };
+}
+
+function weeklySplit(w: WeeklyRow): TokenSplit {
+  return {
+    inputTokens: w.inputTokens ?? 0,
+    outputTokens: w.outputTokens ?? 0,
+    cacheCreationTokens: w.cacheCreationTokens ?? 0,
+    cacheReadTokens: w.cacheReadTokens ?? 0,
+  };
+}
 
 async function runCcusage(view: 'blocks' | 'weekly', extraArgs: string[] = []): Promise<any> {
   // Async spawn so the 5h/weekly ccusage scans don't freeze the event loop.
@@ -31,7 +72,7 @@ async function runCcusage(view: 'blocks' | 'weekly', extraArgs: string[] = []): 
   }
 }
 
-export type WindowRow = {
+export type WindowRow = TokenSplit & {
   kind: 'fiveHour' | 'weekly';
   startTime: string;
   endTime: string;
@@ -55,6 +96,7 @@ export async function collectUsageWindows(): Promise<WindowRow[]> {
         endTime: active.endTime,
         costUSD: active.costUSD,
         totalTokens: active.totalTokens,
+        ...blockSplit(active),
         isActive: true,
       });
     } else {
@@ -68,6 +110,7 @@ export async function collectUsageWindows(): Promise<WindowRow[]> {
           endTime: recent.endTime,
           costUSD: recent.costUSD,
           totalTokens: recent.totalTokens,
+          ...blockSplit(recent),
           isActive: false,
         });
       }
@@ -88,6 +131,7 @@ export async function collectUsageWindows(): Promise<WindowRow[]> {
         endTime: endTime.toISOString(),
         costUSD: cur.totalCost,
         totalTokens: cur.totalTokens ?? 0,
+        ...weeklySplit(cur),
         isActive: true,
       });
     }
