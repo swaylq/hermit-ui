@@ -13,6 +13,7 @@ import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
 import { translatePiEvent } from './pi-events';
+import { providerEnv } from './pi-credentials';
 
 // RpcClient's default cliPath search is cwd-relative, so it looks for
 // `<agentDir>/dist/cli.js` and dies. The package's `exports` map only defines
@@ -52,11 +53,14 @@ export class PiRpcRuntime implements AgentRuntime {
     const existing = live.get(session.id);
     if (existing) return existing;
 
+    // The child inherits the gateway's env plus the provider key, resolved from
+    // the encrypted store at start time so it never lands in a config file.
     const client = new RpcClient({
       cwd: session.agentDirectory,
       cliPath: resolvePiCli(),
       provider: session.provider ?? undefined,
       model: session.model ?? undefined,
+      env: { ...process.env, ...(await providerEnv(session.provider)) } as Record<string, string>,
     });
     await client.start();
 
