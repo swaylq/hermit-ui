@@ -226,6 +226,25 @@ fleet-wide cron hang (cron sessions must never block on a permission prompt).
 Gateway changes require a per-machine restart, so Mac first, then the two
 macminis — the usual lag applies.
 
+## Known gap: externalId stability vs. session resume
+
+The e2e run showed pi's session events do **not** carry a durable entry id —
+`translatePiEvent` fell back to the ordinal counter (`sess-e2e:ord-38`). That is
+correct today only because `ensure()` starts a *fresh* pi session per gateway
+lifetime, so ordinals are unique within the only sequence that exists.
+
+It stops being correct the moment sessions resume. pi's CLI has
+`--session-id <id>` ("use exact project session ID, creating it if missing"),
+which is the obvious way to make a pi agent survive a gateway restart — but a
+resumed session replays its entries, and replayed events would draw *new*
+ordinals and duplicate every message in the dashboard.
+
+So resume must not be implemented until `externalId` is derived from something
+stable. `getEntries()` returns `{entries:[{id, parentId, timestamp, …}], leafId}`
+with durable ids; the fix is to reconcile emitted items against those ids rather
+than counting events. Until then, pi sessions are correct but ephemeral: a
+gateway restart starts a new pi conversation instead of resuming the old one.
+
 ## Risks
 
 - **Transcript fidelity.** pi's events must translate to Anthropic-native blocks
