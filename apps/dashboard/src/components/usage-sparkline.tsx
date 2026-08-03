@@ -86,6 +86,12 @@ export function UsageSparkline() {
           <div className="text-xs text-muted-foreground">
             Last {DAYS} UTC days · all agents on this machine
           </div>
+          {/* The spike a long conversation leaves on the day it ended is the single
+              most confusing thing on this card — same caveat the per-agent table
+              carries, said here too because this is what you look at first. */}
+          <div className="text-[11px] text-muted-foreground/70">
+            A session lands whole on the day it was <em>last</em> active, not spread over the days it ran.
+          </div>
         </div>
         <div className="text-right space-y-0.5">
           <div className="font-mono text-2xl tabular-nums tracking-tight leading-none">
