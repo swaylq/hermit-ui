@@ -720,6 +720,11 @@ model UsageHourly {
   agentName           String
   hourBucket          DateTime // truncated to UTC hour
   cost                Float    @default(0)
+  // `cost` minus what the cache reads in it cost. Cache reads are the same context
+  // re-read every turn — ~98% of the tokens, ~60% of the dollars — so this is the
+  // number that moves with new work instead of with context size. Falls back to
+  // `cost` for a model whose price the gateway couldn't derive.
+  costExCacheRead     Float    @default(0)
   inputTokens         BigInt   @default(0)
   outputTokens        BigInt   @default(0)
   cacheCreationTokens BigInt   @default(0)

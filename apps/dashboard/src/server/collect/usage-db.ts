@@ -116,6 +116,7 @@ export async function getUsageByDay(machineId: string, days = 14) {
     agent: r.agentName,
     day: r.hourBucket.toISOString(),
     cost: r.cost,
+    costExCacheRead: r.costExCacheRead,
     // token columns are BigInt (INT8) in the DB; each is well under 2^53, so sum as
     // plain numbers to keep the wire type stable and avoid BigInt in the client.
     tokens: Number(r.inputTokens) + Number(r.outputTokens) + Number(r.cacheCreationTokens) + Number(r.cacheReadTokens),

@@ -24,6 +24,7 @@
 
 import fs from 'node:fs';
 import { execCapture } from '../exec';
+import { fitPrices, cacheReadCost, type ModelRow } from './pricing';
 import { encodedProjectDir } from '@hermit-ui/tmux-driver';
 import { api } from '../api';
 
@@ -35,12 +36,29 @@ type SessionRow = {
   cacheCreationTokens?: number;
   cacheReadTokens?: number;
   metadata?: { lastActivity?: string };
+  // Per-model split of the same session. Carries no per-token-type price, but across
+  // hundreds of rows it pins one down — see collect/pricing.ts.
+  modelBreakdowns?: Array<{
+    modelName: string;
+    cost?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheCreationTokens?: number;
+    cacheReadTokens?: number;
+  }>;
 };
 
 export type UsageRow = {
   agentName: string;
   hourBucket: string; // ISO timestamp at hour boundary (UTC day for v1)
   cost: number;
+  /**
+   * `cost` with the cache-read tokens priced out of it. Cache reads are ~98% of the
+   * tokens and ~60% of the dollars, and they are the SAME context being re-read every
+   * turn — so this is the number that tracks new work rather than context size. Equal
+   * to `cost` for any model whose price couldn't be derived (nothing is guessed).
+   */
+  costExCacheRead: number;
   inputTokens: number;
   outputTokens: number;
   cacheCreationTokens: number;
@@ -115,6 +133,21 @@ export async function collectUsage(daysBack = 35): Promise<UsageRow[]> {
   const sessions = payload.session ?? [];
   const map = await uuidByAgent();
 
+  // Derive the per-token prices from this very payload, then use them to price each
+  // session's cache reads out of its total.
+  const prices = fitPrices(
+    sessions.flatMap((s) =>
+      (s.modelBreakdowns ?? []).map((b): ModelRow => ({
+        modelName: b.modelName,
+        cost: b.cost ?? 0,
+        inputTokens: b.inputTokens ?? 0,
+        outputTokens: b.outputTokens ?? 0,
+        cacheCreationTokens: b.cacheCreationTokens ?? 0,
+        cacheReadTokens: b.cacheReadTokens ?? 0,
+      })),
+    ),
+  );
+
   const buckets = new Map<string, UsageRow>(); // key = `${agent}|${hourBucket}`
   for (const s of sessions) {
     const agent = map.get(s.period);
@@ -127,13 +160,29 @@ export async function collectUsage(daysBack = 35): Promise<UsageRow[]> {
       agentName: agent,
       hourBucket: bucket.toISOString(),
       cost: 0,
+      costExCacheRead: 0,
       inputTokens: 0,
       outputTokens: 0,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
       sessions: 0,
     };
-    cur.cost += s.totalCost ?? 0;
+    const total = s.totalCost ?? 0;
+    // Never below zero, and never a "reduction" for a model we couldn't price: rows
+    // with no fit contribute 0 to cacheReadCost, so their cost passes through whole.
+    const exCache = Math.max(0, total - cacheReadCost(
+      (s.modelBreakdowns ?? []).map((b): ModelRow => ({
+        modelName: b.modelName,
+        cost: b.cost ?? 0,
+        inputTokens: b.inputTokens ?? 0,
+        outputTokens: b.outputTokens ?? 0,
+        cacheCreationTokens: b.cacheCreationTokens ?? 0,
+        cacheReadTokens: b.cacheReadTokens ?? 0,
+      })),
+      prices,
+    ));
+    cur.cost += total;
+    cur.costExCacheRead += exCache;
     cur.inputTokens += s.inputTokens ?? 0;
     cur.outputTokens += s.outputTokens ?? 0;
     cur.cacheCreationTokens += s.cacheCreationTokens ?? 0;

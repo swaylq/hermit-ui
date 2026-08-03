@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
     agentName: u.agentName,
     hourBucket: new Date(u.hourBucket),
     cost: u.cost,
+    costExCacheRead: u.costExCacheRead ?? u.cost,
     inputTokens: u.inputTokens ?? 0,
     outputTokens: u.outputTokens ?? 0,
     cacheCreationTokens: u.cacheCreationTokens ?? 0,
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest) {
         agentName: u.agentName,
         hourBucket,
         cost: u.cost,
+        costExCacheRead: u.costExCacheRead ?? u.cost,
         inputTokens: u.inputTokens ?? 0,
         outputTokens: u.outputTokens ?? 0,
         cacheCreationTokens: u.cacheCreationTokens ?? 0,
@@ -72,6 +74,7 @@ export async function POST(req: NextRequest) {
       },
       update: {
         cost: u.cost,
+        costExCacheRead: u.costExCacheRead ?? u.cost,
         inputTokens: u.inputTokens ?? 0,
         outputTokens: u.outputTokens ?? 0,
         cacheCreationTokens: u.cacheCreationTokens ?? 0,

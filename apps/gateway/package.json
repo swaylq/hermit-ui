@@ -7,7 +7,7 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/*.test.ts"
+    "test": "tsx --test src/*.test.ts src/collect/*.test.ts"
   },
   "dependencies": {
     "@hermit-ui/tmux-driver": "*",

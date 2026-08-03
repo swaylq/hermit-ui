@@ -15,6 +15,13 @@ import { fmtBytes } from '@/lib/format';
 // day's spend wearing an hour's label. The same data drawn at the resolution it has is
 // a trend you can actually read.
 //
+// The dollars are cost with the cache READS priced out. Cache reads are ~98% of the
+// tokens and most of the money, and they measure how big the context is, not how much
+// work happened — a long conversation re-reads the same context on every turn whether
+// it achieves anything or not. What's left moves with output and new input, which is
+// the thing a daily trend is for. (The 5h/weekly cards above still show the full
+// estimate; they're answering "what did this window cost", not "how busy was I".)
+//
 // Days are UTC days, because that is what the buckets ARE. Rendering them in Shanghai
 // (as the cost cards do with their own real timestamps) would shift each bar 8 hours
 // and file it under the wrong date.
@@ -59,7 +66,7 @@ export function UsageSparkline() {
         // Rows are per agent per day; this chart is the whole machine, so they add up.
         const idx = idxByTs.get(new Date(row.day).getTime());
         if (idx != null) {
-          out[idx].cost += row.cost;
+          out[idx].cost += row.costExCacheRead;
           out[idx].tokens += row.tokens;
         }
       }
@@ -82,7 +89,7 @@ export function UsageSparkline() {
     <Card className="p-5 space-y-4 overflow-visible">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="space-y-0.5">
-          <div className="text-sm font-medium">Cost by day</div>
+          <div className="text-sm font-medium">Cost by day, cache reads excluded</div>
           <div className="text-xs text-muted-foreground">
             Last {DAYS} UTC days · all agents on this machine
           </div>

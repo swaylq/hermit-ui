@@ -92,6 +92,9 @@ const UsageInput = z.object({
   agentName: z.string(),
   hourBucket: z.string().datetime(),
   cost: z.number(),
+  // Optional so a gateway that predates it still syncs; the route then stores the
+  // full cost, i.e. no reduction rather than a wrong one.
+  costExCacheRead: z.number().optional(),
   inputTokens: z.number().int().optional(),
   outputTokens: z.number().int().optional(),
   cacheCreationTokens: z.number().int().optional(),
