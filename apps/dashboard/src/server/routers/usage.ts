@@ -7,13 +7,14 @@
 import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
-import { getUsageFromDb, getUsageByHour, getUsageByWeek } from '../collect/usage-db';
+import { getUsageFromDb, getUsageByDay, getUsageByWeek } from '../collect/usage-db';
 
 export const usageRouter = router({
   list: machineProcedure.query(async ({ ctx }) => getUsageFromDb(ctx.machine.id)),
-  byHour: machineProcedure
-    .input(z.object({ hours: z.number().int().min(1).max(168).default(48) }).default({ hours: 48 }))
-    .query(async ({ ctx, input }) => getUsageByHour(ctx.machine.id, input.hours)),
+  // By day — the resolution the underlying rows actually have (see getUsageByDay).
+  byDay: machineProcedure
+    .input(z.object({ days: z.number().int().min(1).max(90).default(14) }).default({ days: 14 }))
+    .query(async ({ ctx, input }) => getUsageByDay(ctx.machine.id, input.days)),
   byWeek: machineProcedure
     .input(z.object({ weeks: z.number().int().min(1).max(52).default(12) }).default({ weeks: 12 }))
     .query(async ({ ctx, input }) => getUsageByWeek(ctx.machine.id, input.weeks)),

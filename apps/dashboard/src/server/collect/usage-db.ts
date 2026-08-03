@@ -97,16 +97,24 @@ export async function getUsageFromDb(machineId: string): Promise<{
   return { rows, fetchedAt: new Date(), ttlMs: CACHE_TTL_MS };
 }
 
-export async function getUsageByHour(machineId: string, hours = 48) {
-  const cutoff = new Date(Date.now() - hours * 3600_000);
-  cutoff.setUTCMinutes(0, 0, 0);
+/**
+ * Per-UTC-day rows for the trend chart. By DAY, not by hour, because that is the only
+ * resolution the data has: `ccusage session` dates a session by `lastActivity`, which
+ * is a date, so every bucket the collector writes sits at 00:00 UTC. The chart used to
+ * lay out 48 hourly slots against this and could only ever light up two of them — one
+ * midnight spike per day, 46 empty columns, and a "peak" that was a whole day's spend
+ * labelled as an hour's.
+ */
+export async function getUsageByDay(machineId: string, days = 14) {
+  const cutoff = new Date(Date.now() - days * 86400_000);
+  cutoff.setUTCHours(0, 0, 0, 0);
   const rows = await prisma.usageHourly.findMany({
     where: { machineId, hourBucket: { gte: cutoff } },
     orderBy: { hourBucket: 'asc' },
   });
   return rows.map((r) => ({
     agent: r.agentName,
-    hour: r.hourBucket.toISOString(),
+    day: r.hourBucket.toISOString(),
     cost: r.cost,
     // token columns are BigInt (INT8) in the DB; each is well under 2^53, so sum as
     // plain numbers to keep the wire type stable and avoid BigInt in the client.
