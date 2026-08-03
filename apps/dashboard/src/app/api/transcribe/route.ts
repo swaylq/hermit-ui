@@ -12,13 +12,21 @@
 //   · else → OpenRouter: ASR = an audio model (default mistralai/voxtral-small-24b,
 //     a dedicated ASR far faster + steadier than a general multimodal LLM),
 //     polish = deepseek-v4-flash.
+// The recent conversation (server/transcribe-context.ts) rides along: the agent's
+// FINAL replies plus the user's own messages, a few hundred characters, no tool
+// traffic. Dictation is a follow-on to what was just said, and the words most
+// likely to be misheard — repo names, agent names, CLI flags — are usually sitting
+// in the last reply. DashScope ASR takes it through qwen3-asr's own 定制化识别
+// channel and polish takes it as fenced reference material; the OpenRouter ASR leg
+// does not (see orAsrMessages).
+//
 // Polish cleans the dictation into fluent, correct written text — fix ASR errors
 // (typos, misheard zh/en tech terms, spoken symbols), drop spoken noise (fillers,
 // repeats, redundancy), mend broken sentences, arrange an explicitly-dictated
 // list — WITHOUT ever losing information/meaning, adding content, or answering a
-// spoken question. The prompt, the fence that makes the transcript data rather
-// than instruction, and the guard that catches the model answering anyway all
-// live in server/transcribe-polish.ts. On failure we keep raw.
+// spoken question. The prompt, the fences that make transcript and context data
+// rather than instruction, and the guard that catches the model answering anyway
+// all live in server/transcribe-polish.ts. On failure we keep raw.
 //
 // Returns { text, raw }. Auth mirrors /api/upload (resolveKey + session
 // ownership). Server-side only — keys never reach the client.
@@ -35,7 +43,8 @@ import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
 
 import { openrouterChat, type ORMessage } from '@/server/openrouter';
-import { POLISH_SYSTEM, fenceTranscript, acceptPolish } from '@/server/transcribe-polish';
+import { POLISH_SYSTEM, polishPrompt, acceptPolish } from '@/server/transcribe-polish';
+import { loadContext, isContextEcho } from '@/server/transcribe-context';
 
 const ASR_MODEL = process.env.OPENROUTER_ASR_MODEL || 'mistralai/voxtral-small-24b-2507';
 const POLISH_MODEL = process.env.OPENROUTER_POLISH_MODEL || 'deepseek/deepseek-v4-flash';
@@ -55,6 +64,15 @@ const ASR_SYSTEM =
   'actually spoken. If the audio is empty or unintelligible, output an empty string.';
 
 // OpenRouter ASR request messages: audio as raw base64 + a separate format field.
+//
+// Deliberately gets NO conversation context. voxtral has no context parameter, so
+// the only channel is its system prompt, and a general audio model handed loose
+// text next to audio does something with it: tried live on the same clips, a
+// fenced "reference only" block got the terms right and then TRANSLATED the
+// speech — 「把 rathole 的隧道重启一下」 came back as "Please restart the rathole
+// tunnel.", and 「兜底」 as 「那台笔记本」. This is the emergency leg that runs when
+// DashScope is down; it stays exactly as it was, and the polish step (which does
+// get the context) still repairs the terms afterwards.
 function orAsrMessages(base64: string): ORMessage[] {
   return [
     { role: 'system', content: ASR_SYSTEM },
@@ -66,10 +84,10 @@ function orAsrMessages(base64: string): ORMessage[] {
 }
 
 // Polish messages (text in → cleaned text out); shared by both providers.
-function polishMessages(raw: string): ORMessage[] {
+function polishMessages(raw: string, context: string): ORMessage[] {
   return [
     { role: 'system', content: POLISH_SYSTEM },
-    { role: 'user', content: fenceTranscript(raw) },
+    { role: 'user', content: polishPrompt(raw, context) },
   ];
 }
 
@@ -101,12 +119,30 @@ async function dashscopeChat(
   }
 }
 
+// An HTTP status carried out of a failed provider call, so the caller can tell
+// "this request was refused" from "the provider was unreachable" — the difference
+// between retrying differently and retrying at all.
+class ProviderError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
 // Direct DashScope qwen3-asr-flash (OpenAI-compatible). Differs from OpenRouter:
 // the audio is a data-URI in input_audio.data, and asr_options sits at the body
 // TOP LEVEL (per Alibaba's docs + Keyo's live testing — nesting it elsewhere is
-// silently dropped). A dedicated ASR needs no system prompt; language omitted →
-// auto (Chinese/English mix).
-async function transcribeViaDashScope(apiKey: string, wavBase64: string, timeoutMs = 30_000): Promise<string> {
+// silently dropped). Language omitted → auto (Chinese/English mix).
+//
+// The system message is qwen3-asr's own 定制化识别 channel: free-form background
+// text that biases decoding toward the words in it (no format required, no
+// instruction semantics). It has to be a CONTENT-BLOCK ARRAY, not the plain
+// string Alibaba's OpenAI-compatible page shows — a string is refused outright
+// (400 "the dedicated task `asr` … does not support this input") on both the
+// workspace host and the public one. Measured on live audio, same clip:
+//   no system message      → 「把 red hole 的隧道重启一下」
+//   system [{type,text}]   → 「把 rathole 的隧道重启一下」
+//   asr_options.context    → 「把 Red Hole 的隧道重启一下」  (accepted, ignored)
+async function transcribeViaDashScope(apiKey: string, wavBase64: string, context: string, timeoutMs = 30_000): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -116,6 +152,7 @@ async function transcribeViaDashScope(apiKey: string, wavBase64: string, timeout
       body: JSON.stringify({
         model: DASHSCOPE_ASR_MODEL,
         messages: [
+          ...(context ? [{ role: 'system', content: [{ type: 'text', text: context }] }] : []),
           { role: 'user', content: [{ type: 'input_audio', input_audio: { data: `data:audio/wav;base64,${wavBase64}` } }] },
         ],
         asr_options: { enable_itn: false },
@@ -125,11 +162,42 @@ async function transcribeViaDashScope(apiKey: string, wavBase64: string, timeout
     const j = (await r.json().catch(() => null)) as
       | { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string }; message?: string; code?: string }
       | null;
-    if (!r.ok) throw new Error(`DashScope HTTP ${r.status}: ${j?.error?.message ?? j?.message ?? j?.code ?? 'unknown'}`);
+    if (!r.ok) throw new ProviderError(`DashScope HTTP ${r.status}: ${j?.error?.message ?? j?.message ?? j?.code ?? 'unknown'}`, r.status);
     return (j?.choices?.[0]?.message?.content ?? '').trim();
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Context is a nice-to-have; the user's words are not. Two ways it can spoil an
+// otherwise fine transcription, and the answer to both is the same — do the call
+// again the way it worked before this feature existed:
+//
+//   · REFUSED (4xx) — a different ASR model, a deployment that takes no system
+//     message, a context that trips some limit. Not retried on timeouts or 5xx:
+//     the context isn't why those failed, and a second full-length attempt would
+//     only double the wait before the real fallback.
+//   · ECHOED — the model transcribed the context instead of the audio, which
+//     silence reliably provokes. See isContextEcho.
+async function transcribeWithContext(
+  attempt: (context: string) => Promise<string>,
+  context: string,
+): Promise<string> {
+  if (!context) return attempt('');
+  let out: string;
+  try {
+    out = await attempt(context);
+  } catch (e) {
+    const status = e instanceof ProviderError ? e.status : 0;
+    if (status < 400 || status >= 500) throw e;
+    console.error('[transcribe] ASR refused the context, retrying without it —', String(e));
+    return attempt('');
+  }
+  if (isContextEcho(out, context)) {
+    console.error('[transcribe] ASR echoed the context back, retrying without it');
+    return attempt('');
+  }
+  return out;
 }
 
 export async function POST(req: NextRequest) {
@@ -163,7 +231,14 @@ export async function POST(req: NextRequest) {
   });
   if (!session) return NextResponse.json({ error: 'session not found' }, { status: 404 });
 
+  // What this chat was just talking about — a few lines, agent replies only, and
+  // only their FINAL text (see server/transcribe-context.ts). Both steps get it:
+  // ASR to bias decoding toward names already on screen, polish to restore the
+  // ones ASR still missed. Read while the audio is being encoded, and never fatal
+  // — no context just means the old behaviour.
+  const contextP = loadContext(sessionId);
   const base64 = Buffer.from(await wav.arrayBuffer()).toString('base64');
+  const context = await contextP;
 
   // ① ASR — DashScope qwen3-asr-flash direct when its key is set (fast Keyo path);
   // its errors fall back to OpenRouter voxtral when possible. Fatal only if all fail.
@@ -171,7 +246,7 @@ export async function POST(req: NextRequest) {
   try {
     if (dsKey) {
       try {
-        raw = await transcribeViaDashScope(dsKey, base64);
+        raw = await transcribeWithContext((c) => transcribeViaDashScope(dsKey, base64, c), context);
       } catch (e) {
         if (!orKey) throw e;
         raw = await openrouterChat(orKey, ASR_MODEL, orAsrMessages(base64), { timeoutMs: 60_000 });
@@ -192,9 +267,9 @@ export async function POST(req: NextRequest) {
   try {
     let polished = '';
     if (dsKey) {
-      polished = await dashscopeChat(dsKey, DASHSCOPE_POLISH_MODEL, polishMessages(raw), { temperature: 0.2, timeoutMs: 20_000 });
+      polished = await dashscopeChat(dsKey, DASHSCOPE_POLISH_MODEL, polishMessages(raw, context), { temperature: 0.2, timeoutMs: 20_000 });
     } else if (orKey) {
-      polished = await openrouterChat(orKey, POLISH_MODEL, polishMessages(raw), { temperature: 0.2, reasoningOff: true, timeoutMs: 30_000 });
+      polished = await openrouterChat(orKey, POLISH_MODEL, polishMessages(raw, context), { temperature: 0.2, reasoningOff: true, timeoutMs: 30_000 });
     }
     // The model may answer instead of clean; acceptPolish decides, and keeps
     // the user's own words when it did. See server/transcribe-polish.ts.

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptPolish, fenceTranscript, POLISH_SYSTEM } from './transcribe-polish';
+import { acceptPolish, fenceTranscript, fenceContext, polishPrompt, POLISH_SYSTEM } from './transcribe-polish';
 
 // Every pair below was produced by the live models (qwen-flash on DashScope and
 // deepseek-v4-flash on OpenRouter) — the answers by the original prompt, the
@@ -55,4 +55,40 @@ test('the fence is what the prompt points at', () => {
   assert.ok(POLISH_SYSTEM.includes('<transcript>'));
   // The worked example for the exact failure that motivated this file.
   assert.ok(POLISH_SYSTEM.includes('输入「用中文回复」→ 输出「用中文回复」'));
+});
+
+// ── the conversation context ────────────────────────────────────────────────
+// It arrives in its own fence because it is a THIRD kind of text: not the
+// user's words, not the instructions, but a block of agent prose full of
+// questions and requests that nobody in this exchange is meant to obey.
+
+test('context gets its own fence, ahead of the transcript', () => {
+  const prompt = polishPrompt('先别部署', '助手：Docker 配置已经改好，要我重新部署吗？');
+  assert.equal(
+    prompt,
+    '<context>\n助手：Docker 配置已经改好，要我重新部署吗？\n</context>\n<transcript>\n先别部署\n</transcript>',
+  );
+  assert.ok(prompt.indexOf('<context>') < prompt.indexOf('<transcript>'));
+});
+
+test('no context means no empty container', () => {
+  // An empty <context></context> reads as "the conversation is empty", which is a
+  // claim; saying nothing is the truth (a fresh chat, or a lookup that failed).
+  assert.equal(polishPrompt('把这段整理一下'), fenceTranscript('把这段整理一下'));
+  assert.equal(polishPrompt('把这段整理一下', ''), fenceTranscript('把这段整理一下'));
+});
+
+test('the prompt declares the context read-only, with the failure it prevents', () => {
+  assert.ok(POLISH_SYSTEM.includes('<context>'));
+  assert.ok(fenceContext('x').includes('<context>'));
+  // The one that isn't obvious: a reply to the context is short, plausible, and
+  // completely wrong — the composer must hold what was SAID, not an answer to it.
+  assert.ok(POLISH_SYSTEM.includes('输出「先别部署」'));
+});
+
+test('the guard still holds when the model answers the CONTEXT instead', () => {
+  // Same failure as answering the transcript, different door: the model reads the
+  // agent's last question and replies to it. It costs length, so the guard sees it.
+  assert.equal(acceptPolish('先别部署', '好的，那我先不部署，等你确认后再执行。'), false);
+  assert.equal(acceptPolish('先别部署', '先别部署'), true);
 });
