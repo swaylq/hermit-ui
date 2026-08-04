@@ -26,6 +26,7 @@ import { tmuxPaneName } from '@hermit-ui/tmux-driver';
 import { AGENTS_ROOT } from '../config';
 import { api } from '../api';
 import { sessionActivity, sessionTranscriptPath } from '../pane';
+import { runtimeFor } from '../runtime';
 import { extractText, hasToolResult, CcEvent } from '../claude-code';
 
 const TAIL_LINES = 500;
@@ -198,6 +199,50 @@ function readLoopState(agentDir: string): unknown | null {
   }
 }
 
+/**
+ * Runtime state for a non-tmux session.
+ *
+ * The main probe derives everything from a tmux pane plus Claude Code's JSONL,
+ * and a pi session has neither — which is why pi sessions showed a blank status
+ * light and no context until this existed. The numbers come from the runtime
+ * instead, and `contextTokens` is deliberately last-turn so the dashboard's
+ * context bar means the same thing for both backends.
+ */
+async function probeRuntime(
+  runtime: NonNullable<ReturnType<typeof runtimeFor>>,
+  sessionId: string,
+  agentName: string,
+  agentDirectory: string | null,
+  claudeSessionId: string | null,
+): Promise<SessionSnapshot> {
+  const agentDir = agentDirectory ?? path.join(AGENTS_ROOT, agentName);
+  const base: SessionSnapshot = {
+    sessionId, pid: null, alive: false, state: null,
+    contextTokens: null, outputTokens: null, lastActivity: null,
+    transcriptPath: null, lastUserPrompt: null, lastAssistantText: null,
+    loopState: readLoopState(agentDir), rssMb: null,
+  };
+
+  // A handle only exists once the session has been driven at least once; an
+  // idle-but-open session legitimately has none, and that is "not alive"
+  // rather than an error.
+  const handle = { sessionId, externalSessionId: claudeSessionId ?? '' };
+  try {
+    const working = await runtime.isWorking(handle);
+    const usage = await runtime.usage(handle);
+    if (usage === null && !working) return base;
+    return {
+      ...base,
+      alive: true,
+      state: working ? 'working' : 'idle',
+      contextTokens: usage?.contextTokens ?? null,
+      outputTokens: usage?.outputTokens ?? null,
+    };
+  } catch {
+    return base;
+  }
+}
+
 async function probe(
   sessionId: string,
   agentName: string,
@@ -322,7 +367,12 @@ export async function collectSessionSnapshots(): Promise<SessionSnapshot[]> {
   // summed from the same map (no per-session ps fork).
   const psTree = await collectPsTree();
   const settled = await Promise.allSettled(
-    pending.sessions.map((s) => probe(s.id, s.agentName, s.agentDirectory, s.claudeSessionId, psTree)),
+    pending.sessions.map((s) => {
+      const runtime = runtimeFor((s as { runtime?: string | null }).runtime);
+      return runtime
+        ? probeRuntime(runtime, s.id, s.agentName, s.agentDirectory, s.claudeSessionId)
+        : probe(s.id, s.agentName, s.agentDirectory, s.claudeSessionId, psTree);
+    }),
   );
   const out: SessionSnapshot[] = [];
   for (const r of settled) {

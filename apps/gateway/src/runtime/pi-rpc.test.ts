@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { contextTokensFrom } from './pi-rpc';
 
 // The bug this guards: ensure() awaited client.start() between checking the
 // live map and populating it, so concurrent chatTicks each spawned their own pi
@@ -81,4 +82,31 @@ test('a failed boot does not poison later attempts', async () => {
 
   assert.equal(ok.id, 's1');
   assert.equal(boots, 2, 'the in-flight entry must be cleared on failure');
+});
+
+// contextTokens must mean the same thing on both backends. The claude path
+// reports the LAST turn's window occupancy (input + cache_creation + cache_read
+// off the newest assistant message); a cumulative session total would render as
+// a context bar that only ever fills up.
+test('last-turn context tokens mirror the claude formula', () => {
+  // claude: input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+  assert.equal(contextTokensFrom({ input: 1200, output: 75, cacheRead: 800, cacheWrite: 200 }), 2200);
+});
+
+test('cache is counted, not just input', () => {
+  assert.notEqual(contextTokensFrom({ input: 1200, cacheRead: 800, cacheWrite: 200 }), 1200);
+});
+
+test('a turn with no cache reports just its input', () => {
+  assert.equal(contextTokensFrom({ input: 500, output: 10, cacheRead: 0, cacheWrite: 0 }), 500);
+});
+
+test('missing usage is null, not zero — null renders as "no data", 0 as "empty window"', () => {
+  assert.equal(contextTokensFrom(null), null);
+  assert.equal(contextTokensFrom(undefined), null);
+});
+
+test('malformed usage fields degrade to 0 rather than NaN', () => {
+  assert.equal(contextTokensFrom({ input: 'x' as unknown as number, cacheRead: 100 }), 100);
+  assert.equal(contextTokensFrom({}), 0);
 });

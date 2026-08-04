@@ -44,6 +44,14 @@ type PiHandle = RuntimeHandle & {
   /** externalIds already emitted — pi replays durable entries on reconnect. */
   seen: Set<string>;
   ordinal: number;
+  /**
+   * Usage of the most recent assistant turn.
+   *
+   * getSessionStats() only reports session totals, but the dashboard's context
+   * bar wants current occupancy, so the per-message usage is captured off the
+   * event stream as it goes past.
+   */
+  lastTurn: { contextTokens: number; outputTokens: number } | null;
 };
 
 const live = new Map<string, PiHandle>();
@@ -56,6 +64,19 @@ const live = new Map<string, PiHandle>();
 // and every event is emitted once per listener with an independent ordinal —
 // which surfaced as the same turn appearing three times in the dashboard.
 const starting = new Map<string, Promise<PiHandle>>();
+
+/**
+ * Window occupancy for one turn, from pi's per-message Usage.
+ *
+ * Mirrors the claude path's contextTokens exactly:
+ *   input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+ * so the dashboard's context bar means the same thing on both backends.
+ */
+export function contextTokensFrom(usage: Record<string, unknown> | null | undefined): number | null {
+  if (!usage) return null;
+  const n = (k: string) => Number(usage[k] ?? 0) || 0;
+  return n('input') + n('cacheRead') + n('cacheWrite');
+}
 
 function handleOf(handle: RuntimeHandle): PiHandle | null {
   return live.get(handle.sessionId) ?? null;
@@ -98,11 +119,26 @@ export class PiRpcRuntime implements AgentRuntime {
       client,
       seen: new Set<string>(),
       ordinal: 0,
+      lastTurn: null,
     };
     live.set(session.id, handle);
 
     client.onEvent((ev: unknown) => {
-      const raw = ev as { entryId?: string; id?: string } | null;
+      const raw = ev as {
+        entryId?: string; id?: string; type?: string;
+        message?: { role?: string; usage?: Record<string, number> };
+      } | null;
+
+      // Same basis as the claude path's contextTokens: what the provider was
+      // sent for this turn, cache included.
+      if (raw?.type === 'message_end' && raw.message?.role === 'assistant' && raw.message.usage) {
+        const u = raw.message.usage;
+        handle.lastTurn = {
+          contextTokens: contextTokensFrom(u) ?? 0,
+          outputTokens: Number(u.output ?? 0),
+        };
+      }
+
       // Prefer pi's durable entry id so a reconnect that replays the session
       // dedupes instead of duplicating. Ordinal is only a last resort.
       const key = raw?.entryId ?? raw?.id ?? `ord-${handle.ordinal++}`;
@@ -163,8 +199,8 @@ export class PiRpcRuntime implements AgentRuntime {
     const input = Number(stats.tokens.input ?? 0);
     const output = Number(stats.tokens.output ?? 0);
     return {
-      inputTokens: input,
-      outputTokens: output,
+      contextTokens: h.lastTurn?.contextTokens ?? null,
+      outputTokens: h.lastTurn?.outputTokens ?? null,
       totalTokens: Number(stats.tokens.total ?? input + output),
       costUsd: typeof stats.cost === 'number' ? stats.cost : null,
     };

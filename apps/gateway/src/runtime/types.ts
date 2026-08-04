@@ -31,8 +31,19 @@ export type RuntimeSession = {
 export type RuntimeImage = { path: string; mediaType: string };
 
 export type RuntimeUsage = {
-  inputTokens: number;
-  outputTokens: number;
+  /**
+   * Context occupancy of the LAST turn, not a session total.
+   *
+   * This exists to mean the same thing as the claude path's `contextTokens`,
+   * which is `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`
+   * off the most recent assistant message — i.e. "how full is the window right
+   * now". A cumulative session total would climb forever and render as a
+   * context bar that only ever fills up.
+   */
+  contextTokens: number | null;
+  /** Output tokens of the last turn, same basis as contextTokens. */
+  outputTokens: number | null;
+  /** Cumulative for the whole session — cost reporting, not the context bar. */
   totalTokens: number;
   costUsd: number | null;
 };
