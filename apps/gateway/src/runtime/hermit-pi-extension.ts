@@ -21,6 +21,9 @@ import path from 'node:path';
 
 type ToolContext = { input: Record<string, unknown> };
 
+/** What GET /api/sync/interaction?id= returns while an `ask` is outstanding. */
+type InteractionRow = { status?: string; decision?: { answers?: unknown[] } } | null;
+
 const DASHBOARD_URL = process.env.HERMIT_DASHBOARD_URL ?? '';
 const KEY = process.env.HERMIT_KEY ?? '';
 const SESSION_ID = process.env.HERMIT_SESSION_ID ?? '';
@@ -234,7 +237,7 @@ export default function hermitTools(pi: any): void {
   pi.registerTool({
     name: 'ask',
     description:
-      'Ask the user a multiple-choice question and BLOCK until they answer in the dashboard. Use whenever you need them to pick a direction. Keep options short (2-6).',
+      'Ask the user a multiple-choice question and BLOCK until they answer in the dashboard. Use whenever you need them to pick a direction or confirm. Keep options short (2-6).',
     parameters: {
       type: 'object',
       properties: {
@@ -252,33 +255,64 @@ export default function hermitTools(pi: any): void {
       required: ['question', 'options'],
     },
     async execute(_id: string, params: ToolContext['input']) {
-      const question = str(params.question, 'question');
-      const options = Array.isArray(params.options) ? params.options : [];
-      if (options.length === 0) throw new Error('options required');
+      const question = str(params.question, 'question').trim();
 
+      // Same normalisation the MCP stub applies: bare strings become {label},
+      // blanks are dropped, and the card is capped at 12 options.
+      const options = (Array.isArray(params.options) ? params.options : [])
+        .map((o: unknown) => (typeof o === 'string' ? { label: o } : o))
+        .filter((o: any) => o && typeof o.label === 'string' && o.label.trim())
+        .map((o: any) => ({
+          label: String(o.label).slice(0, 200),
+          ...(typeof o.description === 'string' && o.description.trim()
+            ? { description: o.description.trim().slice(0, 500) }
+            : {}),
+        }))
+        .slice(0, 12);
+      if (options.length === 0) throw new Error('at least one option with a label is required');
+
+      // kind MUST be 'question' — /api/sync/interaction takes
+      // z.enum(['permission','question']) and rejects anything else with a 400.
       const created = (await postJson('/api/sync/interaction', {
         sessionId: SESSION_ID,
-        kind: 'ask',
+        kind: 'question',
         payload: { question, options, multiSelect: Boolean(params.multiSelect) },
       })) as { id?: string } | null;
       const id = created?.id;
       if (!id) throw new Error('could not create the interaction');
 
-      // Poll until answered. The dashboard writes the answer back onto the row;
-      // there is no push channel into a pi child.
+      // Poll until the row leaves 'pending'. There is no push channel into a pi
+      // child, and the answer arrives as decision.answers — not an `answer`
+      // field, and not signalled by answeredAt.
       const deadline = Date.now() + ASK_TIMEOUT_MS;
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 2000));
-        const r = await fetch(`${DASHBOARD_URL}/api/sync/interaction?id=${encodeURIComponent(id)}`, {
-          headers: { 'x-asst-key': KEY },
-        });
-        if (!r.ok) continue;
-        const row = (await r.json()) as { answeredAt?: string | null; answer?: unknown } | null;
-        if (row?.answeredAt) {
-          return { content: [{ type: 'text', text: `User answered: ${JSON.stringify(row.answer)}` }] };
+        let row: InteractionRow = null;
+        try {
+          const r = await fetch(`${DASHBOARD_URL}/api/sync/interaction?id=${encodeURIComponent(id)}`, {
+            headers: { 'x-asst-key': KEY },
+          });
+          if (!r.ok) continue;
+          row = (await r.json()) as InteractionRow;
+        } catch {
+          continue; // transient blip — keep waiting
+        }
+        if (row?.status && row.status !== 'pending') {
+          const answers: unknown[] = Array.isArray(row.decision?.answers) ? row.decision.answers : [];
+          if (answers.length === 0) {
+            return { content: [{ type: 'text', text: 'The user dismissed the question without choosing.' }] };
+          }
+          return {
+            content: [{ type: 'text', text: `User answered: ${answers.map((a: unknown) => `"${String(a)}"`).join(', ')}` }],
+          };
         }
       }
-      throw new Error('ask timed out waiting for the user');
+      return {
+        content: [{
+          type: 'text',
+          text: 'No answer — the question timed out (~4h) without a response. Proceed conservatively or ask again.',
+        }],
+      };
     },
   });
 }
