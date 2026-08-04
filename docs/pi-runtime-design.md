@@ -179,6 +179,15 @@ know about the fallback chain.
 Existing rows have `ChatSession.runtime = null`, so every current session keeps
 inheriting `claude-tmux` and nothing changes behaviourally.
 
+**Sharp edge:** a session may override the model while inheriting the provider.
+That is the useful common case (same backend, different model), but it goes
+stale if the *agent's* provider is later changed — the session then pairs its
+old model id with the new provider, and model ids are not portable between
+providers (`deepseek/deepseek-v4-flash-0731` on OpenRouter is `deepseek-v4-flash`
+on a LiteLLM proxy). The resolver cannot detect this, because the session never
+stated a provider to compare against. Changing an agent's provider should be
+followed by clearing session-level `runtimeModel` overrides for that agent.
+
 `claudeSessionId` is reused verbatim for pi's session id — it is already "the
 runtime's own session identifier", and renaming it would touch far more than
 this change is worth.
