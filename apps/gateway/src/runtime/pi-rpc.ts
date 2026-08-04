@@ -48,6 +48,15 @@ type PiHandle = RuntimeHandle & {
 
 const live = new Map<string, PiHandle>();
 
+// In-flight starts, keyed by session.
+//
+// ensure() is called from chatTick (~2s) and awaits client.start() between
+// checking `live` and populating it. Without this guard several ticks all pass
+// the check, each spawns its own pi child and registers its own event listener,
+// and every event is emitted once per listener with an independent ordinal —
+// which surfaced as the same turn appearing three times in the dashboard.
+const starting = new Map<string, Promise<PiHandle>>();
+
 function handleOf(handle: RuntimeHandle): PiHandle | null {
   return live.get(handle.sessionId) ?? null;
 }
