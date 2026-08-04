@@ -14,6 +14,7 @@ import type {
 } from './types';
 import { translatePiEvent } from './pi-events';
 import { providerEnv } from './pi-credentials';
+import { DASHBOARD_URL, ASST_KEY } from '../config';
 
 // RpcClient's default cliPath search is cwd-relative, so it looks for
 // `<agentDir>/dist/cli.js` and dies. The package's `exports` map only defines
@@ -25,6 +26,11 @@ import { providerEnv } from './pi-credentials';
 // crash the gateway and take the whole claude fleet down with it. Failing here
 // instead confines the damage to the pi session that asked for it.
 let piCliPath: string | null = null;
+
+/** The hermit tools extension, loaded into every pi child with --extension. */
+function hermitExtensionPath(): string {
+  return fileURLToPath(new URL('./hermit-pi-extension.ts', import.meta.url));
+}
 
 function resolvePiCli(): string {
   if (piCliPath) return piCliPath;
@@ -60,7 +66,17 @@ export class PiRpcRuntime implements AgentRuntime {
       cliPath: resolvePiCli(),
       provider: session.provider ?? undefined,
       model: session.model ?? undefined,
-      env: { ...process.env, ...(await providerEnv(session.provider)) } as Record<string, string>,
+      // --extension gives the child hermit's own tools (pi has no MCP), and
+      // --no-approve keeps it from trusting project-local extension/skill files
+      // it happens to find in the workspace — only ours is loaded on purpose.
+      args: ['--extension', hermitExtensionPath()],
+      env: {
+        ...process.env,
+        ...(await providerEnv(session.provider)),
+        HERMIT_DASHBOARD_URL: DASHBOARD_URL,
+        HERMIT_KEY: ASST_KEY,
+        HERMIT_SESSION_ID: session.id,
+      } as Record<string, string>,
     });
     await client.start();
 

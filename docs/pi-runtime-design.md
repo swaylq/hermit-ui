@@ -216,22 +216,33 @@ is no place to install a JS callback from the gateway. The RPC protocol has no
 permission or approval concept at all (no `permission`/`approve` command in
 `rpc-types`).
 
-So: **pi sessions run their tools unrestricted**, equivalent to the
-`--dangerously-skip-permissions` posture cron sessions already use. The claude
-path is unchanged and keeps its PreToolUse hook → web permission card.
+But gating **is** possible — just from a different place. An extension can
+subscribe to the `tool_call` event and return `{ block, reason }`:
 
-What is available instead is coarse, static, and set at spawn:
+```ts
+export interface ToolCallEventResult {
+  /** Block tool execution. To modify arguments, mutate `event.input` in place instead. */
+  block?: boolean;
+  reason?: string;
+}
+```
+
+The extension runs *inside* the pi child, which is exactly where the decision
+has to be made. So the hermit extension is the right home for the permission
+gate: on `tool_call`, POST an Interaction to the dashboard and await the answer,
+the same contract the PreToolUse shell hook uses today — only typed, in-process
+for pi, and impossible to miss because it sees every tool rather than whatever a
+matcher pattern happened to cover.
+
+Two coarser controls exist at spawn and are worth using regardless:
 
 - `--tools <allowlist>` / `--exclude-tools <denylist>` — per-tool enable/disable
 - `--no-builtin-tools` — keep extension tools, drop `bash`/`write`/`edit`
 
-That is a real control, just not an interactive one. An agent that should not
-be able to run shell commands can be spawned with `bash` excluded, and that
-holds for the whole session. Anything finer would need pi to grow an approval
-round-trip over RPC.
-
-This is a genuine capability gap versus the claude path and should be weighed
-when choosing which agents run on pi.
+**Status:** the mechanism is confirmed; the interactive gate is not implemented
+yet. Until it is, pi sessions run their tools unrestricted — the same posture
+cron sessions already have — so that gap should be weighed when choosing which
+agents run on pi.
 
 ## Terminal
 
