@@ -104,7 +104,50 @@ const str = (v: unknown, field: string): string => {
   return v;
 };
 
+/**
+ * Register this machine's model endpoint as a pi provider.
+ *
+ * pi reads ANTHROPIC_AUTH_TOKEN but has no ANTHROPIC_BASE_URL, so a proxied or
+ * self-hosted Anthropic-compatible endpoint cannot be selected by environment
+ * alone — it has to be declared. registerProvider is the supported way, and an
+ * extension is the only place that runs inside the RPC child.
+ *
+ * apiKey is passed as a "$VAR" reference so the key stays in the environment
+ * rather than being baked into a registration object.
+ */
+function registerMachineProvider(pi: any): void {
+  const id = process.env.HERMIT_PI_PROVIDER?.trim();
+  const baseUrl = process.env.HERMIT_PI_BASE_URL?.trim();
+  if (!id || !baseUrl) return;
+
+  const api = process.env.HERMIT_PI_API?.trim() || 'anthropic-messages';
+  const ids = (process.env.HERMIT_PI_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean);
+
+  pi.registerProvider(id, {
+    baseUrl,
+    api,
+    apiKey: '$HERMIT_PI_API_KEY',
+    ...(ids.length
+      ? {
+          models: ids.map((modelId) => ({
+            id: modelId,
+            name: modelId,
+            api,
+            baseUrl,
+            reasoning: false,
+            input: ['text', 'image'],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 200_000,
+            maxTokens: 16_384,
+          })),
+        }
+      : {}),
+  });
+}
+
 export default function hermitTools(pi: any): void {
+  registerMachineProvider(pi);
+
   pi.registerTool({
     name: 'set_session_title',
     description:

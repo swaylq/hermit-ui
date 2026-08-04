@@ -34,6 +34,38 @@ function readSecret(key: string): Promise<string | null> {
 }
 
 /**
+ * This machine's own model endpoint, if it declares one.
+ *
+ * pi honours ANTHROPIC_AUTH_TOKEN but NOT ANTHROPIC_BASE_URL, so a
+ * self-hosted/proxied endpoint cannot be selected by environment alone. The
+ * hermit extension registers it as a pi provider instead (pi.registerProvider),
+ * and these values are what it registers. Declared in the gateway's .env so it
+ * stays machine-local — a different host can point somewhere else.
+ *
+ * The key is passed as HERMIT_PI_API_KEY and referenced from the provider
+ * registration as "$HERMIT_PI_API_KEY", so it never appears in a config file.
+ */
+export async function machineProviderEnv(): Promise<Record<string, string>> {
+  const id = process.env.HERMIT_PI_PROVIDER?.trim();
+  const baseUrl = process.env.HERMIT_PI_BASE_URL?.trim();
+  if (!id || !baseUrl) return {};
+
+  const out: Record<string, string> = {
+    HERMIT_PI_PROVIDER: id,
+    HERMIT_PI_BASE_URL: baseUrl,
+    HERMIT_PI_API: process.env.HERMIT_PI_API?.trim() || 'anthropic-messages',
+    HERMIT_PI_MODELS: process.env.HERMIT_PI_MODELS?.trim() || '',
+  };
+
+  const secretName = process.env.HERMIT_PI_SECRET?.trim();
+  if (secretName && PROVIDER_RE.test(secretName.replace(/_/g, '-'))) {
+    const value = await readSecret(secretName);
+    if (value) out.HERMIT_PI_API_KEY = value;
+  }
+  return out;
+}
+
+/**
  * Build the env a pi child needs to authenticate.
  *
  * Returns an empty object when the provider is unset or the secret is missing —
