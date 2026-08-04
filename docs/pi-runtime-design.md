@@ -269,6 +269,29 @@ equivalent; pi's gate is `beforeToolCall`, so the pi path passes a policy that
 auto-approves instead of prompting. This preserves the fix for the 2026-06-26
 fleet-wide cron hang (cron sessions must never block on a permission prompt).
 
+## Pilot findings (2026-08-04)
+
+Verified live on `pi-pilot` against the real dashboard:
+
+- tool use, parallel tool calls, and multi-turn context all work
+- hermit's five tools register alongside pi's built-ins and take effect
+  (`set_session_title` really renamed the session row)
+- per-session selection works: a session that explicitly picks `pi-rpc` runs on
+  it regardless of the agent default
+- the claude fleet kept syncing throughout, unaffected
+
+One real bug surfaced only under live load: `ensure()` awaited `client.start()`
+between checking the live map and populating it, so concurrent `chatTick`s each
+spawned a pi child and registered a listener. Fixed with an in-flight promise
+guard plus a regression test. The type checker could never have caught it.
+
+One behaviour that looks like a bug and is not: a small model
+(`deepseek-v4-flash`) will re-call tools several times on a chained
+"do A then B then say C" prompt, producing repeated turns. Confirmed as model
+behaviour rather than plumbing — the prompt is delivered exactly once, all
+events carry a single monotonic ordinal sequence, and a no-tool turn produces
+exactly one assistant message.
+
 ## Rollout
 
 1. Land the refactor with `ClaudeTmuxRuntime` only. No behaviour change; tests green.
