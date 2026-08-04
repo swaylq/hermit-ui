@@ -18,6 +18,7 @@ import {
   type TakeoverEndReason,
 } from '../../lib/takeover';
 import { HUMAN_MESSAGES_MAX, humanMessages } from '../user-profile';
+import { resolveRuntime } from '../runtime-resolve';
 
 const ContentBlock = z.union([
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -319,6 +320,11 @@ export const chatRouter = router({
         // Brain dispatch routing: the Brain chat session that opened this dispatch,
         // so the gateway dispatch-watcher knows whom to poke on finish/block.
         dispatchedBySessionId: z.string().max(64).optional(),
+        // Which backend runs this session. Omitted = inherit the agent's
+        // default, which is what every caller that predates the picker does.
+        runtime: z.enum(['claude-tmux', 'pi-rpc']).optional(),
+        runtimeProvider: z.string().max(64).optional(),
+        runtimeModel: z.string().max(128).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -329,6 +335,9 @@ export const chatRouter = router({
           title: input.title ?? null,
           origin: input.origin ?? null,
           dispatchedBySessionId: input.dispatchedBySessionId ?? null,
+          runtime: input.runtime ?? null,
+          runtimeProvider: input.runtimeProvider ?? null,
+          runtimeModel: input.runtimeModel ?? null,
         },
       });
     }),
@@ -985,7 +994,10 @@ export const chatRouter = router({
   pollPending: gatewayProcedure.query(async ({ ctx }) => {
     const sessions = await prisma.chatSession.findMany({
       where: { machineId: ctx.machine.id, closedAt: null },
-      select: { id: true, agentName: true, claudeSessionId: true },
+      select: {
+        id: true, agentName: true, claudeSessionId: true,
+        runtime: true, runtimeProvider: true, runtimeModel: true,
+      },
     });
     if (sessions.length === 0) return { sessions: [], messages: [] };
 
@@ -1012,11 +1024,11 @@ export const chatRouter = router({
       // The orchestrator flag rides along so the gateway can set HERMIT_BRAIN on
       // this session's MCP stub (which unlocks the brain-only cross-agent tools).
       isOrchestrator: orchByName.get(s.agentName) ?? false,
-      // Which backend should run this session, and (pi only) on what model.
-      // Absent/unknown means claude-tmux — the gateway keeps its existing path.
-      runtime: runtimeByName.get(s.agentName)?.runtime ?? 'claude-tmux',
-      runtimeProvider: runtimeByName.get(s.agentName)?.runtimeProvider ?? null,
-      runtimeModel: runtimeByName.get(s.agentName)?.runtimeModel ?? null,
+      // Which backend runs this session, resolved here so the gateway never has
+      // to know the fallback chain: session's own choice, else the agent's
+      // default, else claude-tmux. Provider/model follow whichever level won —
+      // a session that picked pi must not inherit the agent's claude settings.
+      ...resolveRuntime(s, runtimeByName.get(s.agentName)),
     }));
 
     const sessionIds = sessions.map((s) => s.id);

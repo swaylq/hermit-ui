@@ -344,6 +344,13 @@ model ChatSession {
   // chat. The /brain/dispatch page filters on this structural marker instead of
   // the title prefix, so a dispatch with a custom title is still recognized.
   origin            String?
+  // Which backend runs THIS session. null = inherit the agent's default.
+  // Chosen when the session is opened, so one agent can answer a throwaway
+  // question on a cheap model and do real work on Claude without being
+  // reconfigured. See docs/pi-runtime-design.md.
+  runtime           String?
+  runtimeProvider   String?
+  runtimeModel      String?
   claudeSessionId   String? // populated by gateway once SDK boots
   startedAt         DateTime  @default(now())
   lastMessageAt     DateTime?

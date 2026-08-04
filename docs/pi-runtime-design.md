@@ -151,25 +151,50 @@ The claude path must come out behaviourally identical. Its existing tests
 
 ## Data model
 
+The backend is chosen **per session**, defaulting from the agent.
+
 ```prisma
 model Agent {
-  runtime         String  @default("claude-tmux")  // 'claude-tmux' | 'pi-rpc'
-  runtimeProvider String?                          // pi only, e.g. 'deepseek'
-  runtimeModel    String?                          // pi only, e.g. 'deepseek-v4-pro'
+  runtime         String  @default("claude-tmux")  // the agent's default
+  runtimeProvider String?
+  runtimeModel    String?
+}
+
+model ChatSession {
+  runtime         String?  // null = inherit the agent's
+  runtimeProvider String?
+  runtimeModel    String?
 }
 ```
 
-Default keeps every existing agent on Claude Code with no migration behaviour
-change. `claudeSessionId` on `ChatSession` is reused verbatim for pi's session
-id — it is already "the runtime's own session identifier", and renaming it would
-touch far more than this change is worth.
+Per-session rather than per-agent because that is what mixed-fleet actually
+wants: the same agent answers a throwaway question on a cheap model and a real
+piece of work on Claude, without reconfiguring anything. The agent-level value
+is the default a new session starts from, not a lock.
+
+Resolution is `session.runtime ?? agent.runtime ?? 'claude-tmux'`, done once in
+`pollPending` so the gateway receives an already-resolved value and never has to
+know about the fallback chain.
+
+Existing rows have `ChatSession.runtime = null`, so every current session keeps
+inheriting `claude-tmux` and nothing changes behaviourally.
+
+`claudeSessionId` is reused verbatim for pi's session id — it is already "the
+runtime's own session identifier", and renaming it would touch far more than
+this change is worth.
 
 ## Tool parity
 
 pi has **no MCP**. hermit's five tools live in `mcp-stub.cjs` today
 (`ask`, `attach_image`, `attach_file`, `set_session_title`, `log_status`) and
-become native pi tools instead — pi takes `customTools` directly, the way
-tagent-core registers `ls`/`read`/`write`.
+become pi tools instead.
+
+Not via `customTools` — that is an in-process `AgentSession` option and the RPC
+child is a separate process. The mechanism is pi's **extension** system: a file
+that registers tools with `defineTool`, loaded with `--extension <path>` (which
+`RpcClientOptions.args` can carry). Extensions can also drive interactive UI
+over RPC through `extension_ui_request` / `extension_ui_response`, which is what
+the blocking `ask` tool needs.
 
 This is a simplification, not a loss: no MCP subprocess per agent, no stdio
 config plumbing, and it sidesteps the known bug where any `claude mcp`
@@ -182,14 +207,31 @@ Skills need no port at all. pi discovers `SKILL.md` with `{name, description}`
 frontmatter and treats any directory containing one as a skill root — the same
 convention Claude Code uses. `cron`, `loop`, `kb-*` and the rest load unchanged.
 
-## Permissions
+## Permissions — corrected
 
-Claude Code path is unchanged (PreToolUse hook → web permission card).
+An earlier draft of this document said `PiRpcRuntime` would gate on pi's
+`beforeToolCall` / `afterToolCall`. **That is wrong.** Those are in-process
+`AgentSession` hooks, and in RPC mode the agent runs in a child process — there
+is no place to install a JS callback from the gateway. The RPC protocol has no
+permission or approval concept at all (no `permission`/`approve` command in
+`rpc-types`).
 
-pi exposes in-process `beforeToolCall` / `afterToolCall`. `PiRpcRuntime` gates
-there and reuses the existing `Interaction` table and inline permission cards.
-This is strictly better than the shell hook: it is typed, in-process, and cannot
-be bypassed by a tool the hook's matcher failed to cover.
+So: **pi sessions run their tools unrestricted**, equivalent to the
+`--dangerously-skip-permissions` posture cron sessions already use. The claude
+path is unchanged and keeps its PreToolUse hook → web permission card.
+
+What is available instead is coarse, static, and set at spawn:
+
+- `--tools <allowlist>` / `--exclude-tools <denylist>` — per-tool enable/disable
+- `--no-builtin-tools` — keep extension tools, drop `bash`/`write`/`edit`
+
+That is a real control, just not an interactive one. An agent that should not
+be able to run shell commands can be spawned with `bash` excluded, and that
+holds for the whole session. Anything finer would need pi to grow an approval
+round-trip over RPC.
+
+This is a genuine capability gap versus the claude path and should be weighed
+when choosing which agents run on pi.
 
 ## Terminal
 
