@@ -1035,6 +1035,16 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     ? { key: 'needs-you' as const, label: 'needs you', dot: 'bg-amber-400', pulse: true }
     : sessionStatusView(session, { liveWorking: isInFlight, unread: false });
 
+  // Which backend runs this session, resolved server-side (a session's own
+  // runtime may be null = inherit the agent's). Shown next to ctx because both
+  // describe the run rather than the conversation. Both backends are labelled,
+  // not just the non-default one: in a mixed fleet "no badge" would be ambiguous
+  // between "Claude Code" and "the header hasn't loaded".
+  const backendLabel = session?.runtime === 'pi-rpc' ? 'pi' : 'Claude';
+  const backendTitle = session?.runtime === 'pi-rpc'
+    ? `pi${session?.runtimeProvider ? ` · ${session.runtimeProvider}` : ''}${session?.runtimeModel ? ` · ${session.runtimeModel}` : ''}`
+    : 'Claude Code (interactive, tmux pane)';
+
   // The in-dialog "thinking" dots are driven by the SAME status as the header
   // dot, so the two can never disagree. The old code keyed the dots off local
   // SSE signals (isWaitingAssistant / streamingTailId), which settle out of step
@@ -1307,6 +1317,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                     className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot, status.pulse && 'animate-pulse')}
                     aria-label={status.label}
                   />
+                  <span className="shrink-0 text-muted-foreground/40">·</span>
+                  {/* Which backend is actually running this session. Sits left of
+                      ctx because both describe the run, not the conversation.
+                      Short labels — the meta line is already tight at 390px. */}
+                  <span className="shrink-0 font-mono" title={backendTitle}>{backendLabel}</span>
                   <span className="shrink-0 text-muted-foreground/40">·</span>
                   {/* Full bar (count + 56px track + percent) is ~130px and crowded a
                       390px header; mobile gets `mini` — same token count, shorter

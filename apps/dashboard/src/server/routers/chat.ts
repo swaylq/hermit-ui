@@ -200,6 +200,9 @@ export const chatRouter = router({
           alive: true,
           state: true,
           contextTokens: true,
+          runtime: true,
+          runtimeProvider: true,
+          runtimeModel: true,
           snapshotAt: true,
           // loopState is deliberately NOT selected here (P1-2): it's the entire
           // .loop-state.json blob and measured at 38% of this 5s-polled payload
@@ -253,6 +256,9 @@ export const chatRouter = router({
           alive: true,
           state: true,
           contextTokens: true,
+          runtime: true,
+          runtimeProvider: true,
+          runtimeModel: true,
           snapshotAt: true,
           loopState: true,
           rssMb: true,
@@ -267,6 +273,18 @@ export const chatRouter = router({
           takeoverDraft: true,
         },
       });
+      // Resolve the backend the same way pollPending does — a session's own
+      // runtime may be null, meaning "inherit the agent's". The chat header
+      // shows the answer, so it must be the resolved one, not the raw column.
+      let backend: ReturnType<typeof resolveRuntime> | null = null;
+      if (s) {
+        const agent = await prisma.agent.findUnique({
+          where: { machineId_name: { machineId: ctx.machine.id, name: s.agentName } },
+          select: { runtime: true, runtimeProvider: true, runtimeModel: true },
+        });
+        backend = resolveRuntime(s, agent);
+      }
+
       // While a takeover is live, also report whether the BRAIN itself is mid-turn.
       // Between the agent finishing and the Brain's next move there's a minute of
       // nothing visible — it's reading and deciding — and with no signal for that the
@@ -277,9 +295,9 @@ export const chatRouter = router({
           where: { id: s.takeoverBySessionId },
           select: { state: true },
         });
-        return { ...s, takeoverBrainState: brain?.state ?? null };
+        return { ...s, ...backend, takeoverBrainState: brain?.state ?? null };
       }
-      return s ? { ...s, takeoverBrainState: null } : s;
+      return s ? { ...s, ...backend, takeoverBrainState: null } : s;
     }),
 
   // Mark a session read = now. Was browser localStorage (per-device); now a DB

@@ -179,7 +179,6 @@ function AgentDetailContent({
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-5">
-            <RuntimeSection agent={agent} />
             <SessionsSection agentName={name} sessions={sessions} loading={sessionsLoading} />
             <CronsSection agentName={name} />
             <SkillsAndTasks agent={agent} agentName={name} />
@@ -368,47 +367,6 @@ function fmtDur(sec: number): string {
   if (sec % 3600 === 0) return `${sec / 3600}h`;
   if (sec % 60 === 0) return `${sec / 60}m`;
   return `${sec}s`;
-}
-
-// Which backend runs this agent by default.
-//
-// A chat can override it per session (the New chat screen's Backend picker), so
-// this is the default a new session starts from, not a lock — worth saying,
-// because otherwise a session running on the other backend looks like a bug.
-function RuntimeSection({ agent }: { agent: AgentByNameOutput['agent'] }) {
-  const kind = agent.runtime ?? 'claude-tmux';
-  const isPi = kind === 'pi-rpc';
-  const label = isPi ? 'pi' : 'Claude Code';
-  // pi talks to a provider we configure; claude's model comes from that
-  // machine's ~/.claude/settings.json, so there is nothing to show for it.
-  const model = isPi ? agent.runtimeModel : null;
-  const provider = isPi ? agent.runtimeProvider : null;
-
-  return (
-    <section>
-      <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">runtime</h3>
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={isPi ? 'secondary' : 'outline'} className="font-mono text-[11px]">
-          {label}
-        </Badge>
-        {provider && (
-          <span className="font-mono text-[11px] text-muted-foreground">{provider}</span>
-        )}
-        {model && (
-          <span className="font-mono text-[11px] text-foreground/80">{model}</span>
-        )}
-        {isPi && !model && (
-          <span className="text-[11px] text-muted-foreground">provider default model</span>
-        )}
-      </div>
-      <p className="mt-1.5 text-[11px] text-muted-foreground">
-        {isPi
-          ? 'Default for new chats. Runs as a pi subprocess against the configured provider.'
-          : 'Default for new chats. Runs interactive Claude Code in a tmux pane.'}{' '}
-        A chat can pick the other backend when it is created.
-      </p>
-    </section>
-  );
 }
 
 function CronsSection({ agentName }: { agentName: string }) {
