@@ -85,12 +85,16 @@ export async function visionEnv(): Promise<Record<string, string>> {
   const value = await readSecret(secretName);
   if (!value) return {};
 
+  // Only what was actually configured. The child falls back to VISION_DEFAULTS
+  // for whatever is blank, so the two processes cannot disagree about the
+  // default model — which they did: this used to send an empty string for
+  // OpenRouter, and the child then invented `openai/gpt-4o-mini` on its own.
   return {
     HERMIT_VISION_PROVIDER: img.provider,
     HERMIT_VISION_API_KEY: value,
-    HERMIT_VISION_OCR_MODEL: img.ocrModel || (img.provider === 'dashscope' ? 'qwen-vl-ocr' : ''),
-    HERMIT_VISION_DESCRIBE_MODEL: img.describeModel || (img.provider === 'dashscope' ? 'qwen-vl-max' : ''),
-    ...(img.prompt ? { HERMIT_VISION_PROMPT: img.prompt } : {}),
+    ...(img.ocrModel?.trim() ? { HERMIT_VISION_OCR_MODEL: img.ocrModel.trim() } : {}),
+    ...(img.describeModel?.trim() ? { HERMIT_VISION_DESCRIBE_MODEL: img.describeModel.trim() } : {}),
+    ...(img.prompt?.trim() ? { HERMIT_VISION_PROMPT: img.prompt.trim() } : {}),
   };
 }
 

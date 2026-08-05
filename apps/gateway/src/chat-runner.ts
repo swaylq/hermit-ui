@@ -46,7 +46,7 @@ import { runtimeFor } from './runtime';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
 import { relayImages } from './image-relay';
-import { describeImage } from './vision';
+import { describeImage, formatVision } from './vision';
 import { tryAcquire, release, isLocked } from './op-locks';
 
 // MCP stub gives the in-pane claude these tools: set_session_title, log_status,
@@ -612,22 +612,20 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
         console.warn(`[chat] pi image relay errors for ${session.id.slice(0, 8)}:`, relay.errors);
       }
       if (relay.paths.length > 0) {
-        const parts: string[] = [text];
-        for (const p of relay.paths) {
-          const desc = await describeImage(p);
-          if (desc.ocr || desc.description) {
-            parts.push(
-              `[上传的截图识别结果 — 原图缓存于 ${p}，如需放大细节可用 describe_image 工具复查]\n` +
-                `OCR 文字：\n${desc.ocr || '（无）'}\n\n布局描述：\n${desc.description || '（无）'}`,
-            );
-          } else {
-            parts.push(
+        // Recognise every attachment concurrently — a layout pass runs ~17s, and
+        // three screenshots in one message should not cost a minute of delivery
+        // latency one after another.
+        const described = await Promise.all(
+          relay.paths.map(async (p) => {
+            const desc = await describeImage(p);
+            if (desc.ocr || desc.description) return formatVision(desc, p);
+            return (
               `[上传的截图已缓存于 ${p}，但图片识别不可用（${desc.error || '未启用图片识别'}）。` +
-                `如需查看内容，请用 describe_image 工具（参数 filePath=${p}）。]`,
+              `如需查看内容，请用 describe_image 工具（参数 filePath=${p}）。]`
             );
-          }
-        }
-        text = parts.join('\n\n');
+          }),
+        );
+        text = [text, ...described].join('\n\n');
       }
       if (!text.trim()) return;
 

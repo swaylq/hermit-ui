@@ -18,6 +18,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { runVision, formatVision, type VisionProvider } from './vision-call';
 
 type ToolContext = { input: Record<string, unknown> };
 
@@ -256,74 +257,26 @@ export default function hermitTools(pi: any): void {
         return {
           content: [{
             type: 'text',
-            text: '图片识别未配置：dashboard → Settings → Pi Runtime → 图片识别 需启用并填入 API key（DashScope 推荐）。配置保存后新起的会话生效。',
+            text: '图片识别未配置：dashboard → Settings → Pi Runtime → 图片识别 需启用并填入 API key。配置保存后新起的会话生效。',
           }],
         };
       }
 
-      const buf = fs.readFileSync(filePath);
-      if (buf.byteLength > 6 * 1024 * 1024) throw new Error('image too large (max 6MB)');
-      const b64 = buf.toString('base64');
-      const lower = filePath.toLowerCase();
-      const mime = lower.endsWith('.jpg') || lower.endsWith('.jpeg') ? 'image/jpeg'
-        : lower.endsWith('.webp') ? 'image/webp' : 'image/png';
-      const ask = typeof params.prompt === 'string' && params.prompt.trim()
-        ? params.prompt.trim()
-        : '列出这张图片（手机/桌面截图）里所有可见的文字，并描述界面布局：顶部标题、状态栏、各区块位置和内容。';
+      // Same call the gateway makes when it recognises an upload, so the tool
+      // and the injected prompt agree on models, prompts and formatting. The
+      // child gets its config from the env its parent set — see visionEnv().
+      const result = await runVision({
+        provider: provider as VisionProvider,
+        apiKey,
+        filePath,
+        ocrModel: process.env.HERMIT_VISION_OCR_MODEL,
+        describeModel: process.env.HERMIT_VISION_DESCRIBE_MODEL,
+        prompt: typeof params.prompt === 'string' && params.prompt.trim()
+          ? params.prompt.trim()
+          : process.env.HERMIT_VISION_PROMPT,
+      });
 
-      const call = async (model: string, prompt: string): Promise<string> => {
-        const url = provider === 'dashscope'
-          ? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-          : 'https://openrouter.ai/api/v1/chat/completions';
-        const r = await fetch(url, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            model,
-            max_tokens: 800,
-            messages: [{
-              role: 'user',
-              content: [
-                { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
-                { type: 'text', text: prompt },
-              ],
-            }],
-          }),
-          signal: AbortSignal.timeout(60_000),
-        });
-        const text = await r.text();
-        if (!r.ok) throw new Error(`${model} → ${r.status}: ${text.slice(0, 160)}`);
-        return JSON.parse(text)?.choices?.[0]?.message?.content ?? '';
-      };
-
-      try {
-        if (provider === 'dashscope') {
-          const ocrModel = process.env.HERMIT_VISION_OCR_MODEL || 'qwen-vl-ocr';
-          const describeModel = process.env.HERMIT_VISION_DESCRIBE_MODEL || 'qwen-vl-max';
-          const [ocr, desc] = await Promise.allSettled([
-            call(ocrModel, '提取这张图片里的全部文字，逐行输出，不要描述布局。'),
-            call(describeModel, ask),
-          ]);
-          const out: string[] = [];
-          if (ocr.status === 'fulfilled' && ocr.value.trim()) {
-            out.push(`【OCR 文字】\n${ocr.value.trim()}`);
-          } else if (ocr.status === 'rejected') {
-            out.push(`【OCR 失败】${String(ocr.reason).slice(0, 160)}`);
-          }
-          if (desc.status === 'fulfilled' && desc.value.trim()) {
-            out.push(`【布局描述】\n${desc.value.trim()}`);
-          } else if (desc.status === 'rejected') {
-            out.push(`【描述失败】${String(desc.reason).slice(0, 160)}`);
-          }
-          return { content: [{ type: 'text', text: out.join('\n\n') || '（图片识别无输出）' }] };
-        }
-
-        const model = process.env.HERMIT_VISION_OCR_MODEL || 'openai/gpt-4o-mini';
-        const desc = await call(model, ask);
-        return { content: [{ type: 'text', text: desc.trim() || '（图片识别无输出）' }] };
-      } catch (e) {
-        return { content: [{ type: 'text', text: `图片识别失败：${(e as Error).message}` }] };
-      }
+      return { content: [{ type: 'text', text: formatVision(result, filePath) }] };
     },
   });
 

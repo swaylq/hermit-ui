@@ -1,14 +1,24 @@
 'use client';
 
+// Settings → Pi Runtime: this machine's model endpoint for pi agents, plus the
+// vision fallback used when that endpoint drops image blocks.
+//
+// Layout and controls follow the other settings pages (header bar outside the
+// padding, its own scroll container, max-w-3xl column, uppercase micro-labels,
+// the shared Select). This page used to carry its own dialect: p-6 wrapped
+// around the header bar so it sat indented, full-bleed width on a desktop,
+// ui/label — used by no other page — and raw <select> elements.
+
 import { useState, useEffect } from 'react';
-import { Loader2, Save, RotateCcw, CheckCircle2, AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { Loader2, Save, CheckCircle2, AlertTriangle, Eye, EyeOff, KeyRound } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { SettingsTabs } from '@/components/settings-tabs';
+
+type ImageProvider = 'dashscope' | 'openrouter' | 'none';
 
 type PiConfig = {
   provider?: string;
@@ -18,7 +28,7 @@ type PiConfig = {
   secretKey?: string | null;
   image?: {
     enabled?: boolean;
-    provider?: 'dashscope' | 'openrouter' | 'none';
+    provider?: ImageProvider;
     apiKeySecret?: string | null;
     ocrModel?: string;
     describeModel?: string;
@@ -32,30 +42,76 @@ const EMPTY: PiConfig = {
   api: 'anthropic-messages',
   models: [],
   secretKey: '',
-  image: {
-    enabled: false,
-    provider: 'dashscope',
-    apiKeySecret: '',
-    ocrModel: 'qwen-vl-ocr',
-    describeModel: 'qwen-vl-max',
-    prompt: '',
+  image: { enabled: false, provider: 'openrouter', apiKeySecret: '', ocrModel: '', describeModel: '', prompt: '' },
+};
+
+// Must match VISION_DEFAULTS in apps/gateway/src/runtime/vision-call.ts. Shown
+// as placeholders only: a blank field is SAVED blank so the gateway resolves the
+// default itself. Resolving it here is what used to stamp DashScope model ids
+// onto an OpenRouter config — `qwen-vl-ocr` is not an OpenRouter model, so every
+// call 400'd and image recognition silently did nothing.
+const VISION_DEFAULTS: Record<Exclude<ImageProvider, 'none'>, { ocr: string; describe: string; secret: string }> = {
+  dashscope: { ocr: 'qwen-vl-ocr', describe: 'qwen-vl-max', secret: 'DASHSCOPE_API_KEY' },
+  openrouter: {
+    ocr: 'qwen/qwen3-vl-32b-instruct',
+    describe: 'qwen/qwen3-vl-32b-instruct',
+    secret: 'OPENROUTER_API_KEY',
   },
 };
 
-const SECRET_HINTS: Record<string, string> = {
-  LITELLM_HYQUBIT_TOKEN: 'hyqubit 的 litellm key（本机 secrets store）',
-  DASHSCOPE_API_KEY: '阿里云百炼 DashScope key',
-  OPENROUTER_API_KEY: 'OpenRouter key',
-};
+const IMAGE_PROVIDERS: { value: ImageProvider; label: string; hint: string }[] = [
+  { value: 'openrouter', label: 'OpenRouter', hint: '一个 key 覆盖所有模型；默认 qwen3-vl-32b，中文 UI 截图实测最完整' },
+  { value: 'dashscope', label: 'DashScope（阿里百炼）', hint: 'qwen-vl 原厂端点，国内直连更快' },
+  { value: 'none', label: '不启用', hint: '截图只缓存到本地，agent 需要时自己调 describe_image' },
+];
 
 function Field({
-  label, hint, children, className,
-}: { label: string; hint?: string; children: React.ReactNode; className?: string }) {
+  label, hint, children,
+}: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className={cn('space-y-1.5', className)}>
-      <Label className="text-xs font-medium text-foreground/80">{label}</Label>
-      {children}
-      {hint && <p className="text-[11px] text-muted-foreground/70 leading-relaxed">{hint}</p>}
+    <label className="block">
+      <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">{label}</span>
+      <div className="mt-1.5">{children}</div>
+      {hint && <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground/70">{hint}</span>}
+    </label>
+  );
+}
+
+function SectionCard({
+  title, desc, action, children,
+}: { title: string; desc?: string; action?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">{title}</h3>
+          {desc && <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/70">{desc}</p>}
+        </div>
+        {action}
+      </div>
+      <div className="mt-4 flex flex-col gap-4">{children}</div>
+    </section>
+  );
+}
+
+/** Secret names from this machine's store — click to fill, so nobody types one wrong. */
+function SecretPicker({ names, onPick }: { names: string[]; onPick: (k: string) => void }) {
+  if (names.length === 0) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1.5">
+      {names.slice(0, 12).map((k) => (
+        <button
+          key={k}
+          type="button"
+          onClick={() => onPick(k)}
+          className="rounded border border-border bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          {k}
+        </button>
+      ))}
+      {names.length > 12 && (
+        <span className="self-center text-[10px] text-muted-foreground/60">+{names.length - 12} more…</span>
+      )}
     </div>
   );
 }
@@ -81,45 +137,39 @@ export default function PiSettingsPage() {
         ...(d ?? {}),
         image: { ...(EMPTY.image ?? {}), ...(d?.image ?? {}) },
       } as PiConfig;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- form hydration: the server value is the initial state, and it arrives after mount
       setCfgLocal(base);
       setModelsText((base.models ?? []).join(', '));
     }
   }, [getCfg.data]);
 
-  if (getCfg.isLoading) {
-    return (
-      <div className="p-6 space-y-4">
-        <SettingsTabs active="pi" />
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> 加载中…
-        </div>
-      </div>
-    );
-  }
-
   const set = (patch: Partial<PiConfig>) => setCfgLocal((c) => (c ? { ...c, ...patch } : c));
   const setImg = (patch: Partial<NonNullable<PiConfig['image']>>) =>
     setCfgLocal((c) => (c ? { ...c, image: { ...(c.image ?? {}), ...patch } } : c));
 
+  const imgProvider: ImageProvider = cfg?.image?.provider ?? 'openrouter';
+  const imgDefaults = imgProvider === 'none' ? null : VISION_DEFAULTS[imgProvider];
+  const imgOn = Boolean(cfg?.image?.enabled) && imgProvider !== 'none';
+
   const save = async () => {
     setSaveError(null);
     setSaved(false);
+    const blank = (v?: string | null) => (v?.trim() ? v.trim() : undefined);
     const next: PiConfig = {
-      provider: cfg?.provider?.trim() || undefined,
-      baseUrl: cfg?.baseUrl?.trim() || undefined,
-      api: cfg?.api?.trim() || 'anthropic-messages',
+      provider: blank(cfg?.provider),
+      baseUrl: blank(cfg?.baseUrl),
+      api: blank(cfg?.api) ?? 'anthropic-messages',
       models: modelsText.split(',').map((m) => m.trim()).filter(Boolean),
-      secretKey: cfg?.secretKey?.trim() || null,
-      image: cfg?.image
-        ? {
-            enabled: Boolean(cfg.image.enabled),
-            provider: cfg.image.provider ?? 'dashscope',
-            apiKeySecret: cfg.image.apiKeySecret?.trim() || null,
-            ocrModel: cfg.image.ocrModel?.trim() || 'qwen-vl-ocr',
-            describeModel: cfg.image.describeModel?.trim() || 'qwen-vl-max',
-            prompt: cfg.image.prompt?.trim() || undefined,
-          }
-        : undefined,
+      secretKey: blank(cfg?.secretKey) ?? null,
+      image: {
+        enabled: Boolean(cfg?.image?.enabled),
+        provider: imgProvider,
+        apiKeySecret: blank(cfg?.image?.apiKeySecret) ?? null,
+        // Blank stays blank on purpose — the gateway owns the defaults.
+        ocrModel: blank(cfg?.image?.ocrModel),
+        describeModel: blank(cfg?.image?.describeModel),
+        prompt: blank(cfg?.image?.prompt),
+      },
     };
     try {
       await setCfg.mutateAsync({ config: next });
@@ -133,191 +183,212 @@ export default function PiSettingsPage() {
   const secretNames = (secrets.data?.keys ?? []).sort();
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="pi" />
-      <div>
-        <h1 className="text-lg font-semibold">Pi Runtime 设置</h1>
-        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-          配置本机 pi 底座的模型端点（hyqubit 或任意 Anthropic 兼容端点）与图片识别。
-          保存后由本机 gateway 自动生效（新起的 pi 会话），现有会话重启后生效。
-          所有 API key 只存 key 名，值保留在机器的加密 secrets store 里。
-        </p>
-      </div>
-
-      <Card className="p-4 space-y-4">
-        <h2 className="text-sm font-semibold text-foreground/90">① 模型端点（hyqubit）</h2>
-
-        <Field label="Provider ID" hint="pi 的 provider 名，例如 hyqubit / openrouter / deepseek">
-          <Input
-            value={cfg?.provider ?? ''}
-            placeholder="hyqubit"
-            onChange={(e) => set({ provider: e.target.value })}
-          />
-        </Field>
-
-        <Field label="Base URL" hint="Anthropic 兼容端点的 base url，例如 https://litellm.hyqubit.com">
-          <Input
-            value={cfg?.baseUrl ?? ''}
-            placeholder="https://litellm.hyqubit.com"
-            onChange={(e) => set({ baseUrl: e.target.value })}
-          />
-        </Field>
-
-        <Field label="API 类型">
-          <select
-            className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-            value={cfg?.api ?? 'anthropic-messages'}
-            onChange={(e) => set({ api: e.target.value })}
-          >
-            <option value="anthropic-messages">anthropic-messages</option>
-            <option value="openai">openai</option>
-          </select>
-        </Field>
-
-        <Field label="模型列表" hint="逗号分隔，例如 claude-opus-5, claude-sonnet-5, claude-haiku-4-5">
-          <Input value={modelsText} placeholder="claude-opus-5, claude-sonnet-5" onChange={(e) => setModelsText(e.target.value)} />
-        </Field>
-
-        <Field
-          label="API Key（secrets store 里的 key 名）"
-          hint={cfg?.secretKey ? SECRET_HINTS[cfg.secretKey] : '例如 LITELLM_HYQUBIT_TOKEN（存在本机 secrets store）'}
-        >
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Input
-                value={cfg?.secretKey ?? ''}
-                placeholder="LITELLM_HYQUBIT_TOKEN"
-                type={revealKey ? 'text' : 'password'}
-                onChange={(e) => set({ secretKey: e.target.value })}
-                className="pr-9 font-mono text-xs"
-              />
-              <button
-                type="button"
-                onClick={() => setRevealKey((v) => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label="toggle visibility"
-              >
-                {revealKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">Pi Runtime</h2>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              这台机器上 pi 底座用的模型端点，以及端点不支持图片时的识别兜底。
+              保存后本机 gateway 30 秒内生效（对新起的 pi 会话），已在跑的会话重启后生效。
+              所有 API key 只存 key 名，值留在机器的加密 secrets store 里。
+            </p>
           </div>
-          {secretNames.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {secretNames.slice(0, 12).map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => set({ secretKey: k })}
-                  className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  {k}
-                </button>
-              ))}
-              {secretNames.length > 12 && (
-                <span className="text-[10px] text-muted-foreground/60">+{secretNames.length - 12} more…</span>
-              )}
+
+          {getCfg.isLoading ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> 加载中…
             </div>
-          )}
-        </Field>
-      </Card>
-
-      <Card className="p-4 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-foreground/90">② 图片识别（vision fallback）</h2>
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-muted-foreground">{cfg?.image?.enabled ? '已启用' : '已停用'}</span>
-            <div className="flex rounded-md border border-border overflow-hidden">
-              {[true, false].map((v) => (
-                <button
-                  key={String(v)}
-                  type="button"
-                  onClick={() => setImg({ enabled: v })}
-                  className={cn(
-                    'px-2.5 py-1 text-xs transition-colors',
-                    Boolean(cfg?.image?.enabled) === v
-                      ? 'bg-foreground text-background'
-                      : 'text-muted-foreground hover:bg-muted',
-                  )}
-                >
-                  {v ? '启用' : '停用'}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-        <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
-          当模型端点不支持图片（如 hyqubit 会丢弃 image block）时，自动用独立视觉模型
-          对上传的截图做 OCR + 布局描述，把文本注入 agent 上下文，并在 pi 底座注册
-          <code className="font-mono text-[10px] bg-muted px-1 rounded">describe_image</code> 工具供主动复查。
-        </p>
-
-        <div className={cn('space-y-4', !cfg?.image?.enabled && 'opacity-50 pointer-events-none')}>
-          <Field label="识别 Provider">
-            <select
-              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-              value={cfg?.image?.provider ?? 'dashscope'}
-              onChange={(e) => setImg({ provider: e.target.value as 'dashscope' | 'openrouter' | 'none' })}
-            >
-              <option value="dashscope">DashScope（阿里 qwen-vl，中文 UI 识别最佳）</option>
-              <option value="openrouter">OpenRouter（gpt-4o / gemini 等）</option>
-              <option value="none">无（仅用 macOS Vision OCR 兜底）</option>
-            </select>
-          </Field>
-
-          {cfg?.image?.provider === 'dashscope' && (
+          ) : (
             <>
-              <Field label="OCR 模型" hint="纯文字提取（推荐 qwen-vl-ocr）">
-                <Input value={cfg?.image?.ocrModel ?? 'qwen-vl-ocr'} onChange={(e) => setImg({ ocrModel: e.target.value })} />
-              </Field>
-              <Field label="布局描述模型" hint="界面布局/元素描述（推荐 qwen-vl-max）">
-                <Input value={cfg?.image?.describeModel ?? 'qwen-vl-max'} onChange={(e) => setImg({ describeModel: e.target.value })} />
-              </Field>
+              <SectionCard
+                title="模型端点"
+                desc="任意 Anthropic / OpenAI 兼容端点。pi 不认 base url 环境变量，所以端点要在这里注册成 provider。"
+              >
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Provider ID" hint="pi 里的 provider 名，例如 hyqubit / openrouter">
+                    <Input
+                      value={cfg?.provider ?? ''}
+                      placeholder="hyqubit"
+                      onChange={(e) => set({ provider: e.target.value })}
+                      className="font-mono text-base sm:text-sm"
+                    />
+                  </Field>
+
+                  <Field label="API 类型" hint="端点说的是哪套协议">
+                    <Select
+                      value={cfg?.api ?? 'anthropic-messages'}
+                      onValueChange={(v) => set({ api: (v as string) ?? 'anthropic-messages' })}
+                      modal={false}
+                    >
+                      <SelectTrigger className="h-9 font-mono" aria-label="api type">
+                        <SelectValue>{(v: string | null) => v || 'anthropic-messages'}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent className="font-mono">
+                        <SelectItem value="anthropic-messages">anthropic-messages</SelectItem>
+                        <SelectItem value="openai">openai</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
+
+                <Field label="Base URL" hint="例如 https://litellm.hyqubit.com">
+                  <Input
+                    value={cfg?.baseUrl ?? ''}
+                    placeholder="https://litellm.hyqubit.com"
+                    onChange={(e) => set({ baseUrl: e.target.value })}
+                    className="font-mono text-base sm:text-sm"
+                  />
+                </Field>
+
+                <Field label="模型列表" hint="逗号分隔；会话详情里的模型下拉读的就是这个列表">
+                  <Input
+                    value={modelsText}
+                    placeholder="claude-opus-5, claude-sonnet-5"
+                    onChange={(e) => setModelsText(e.target.value)}
+                    className="font-mono text-base sm:text-sm"
+                  />
+                </Field>
+
+                <Field label="API Key" hint="填 secrets store 里的 key 名，不是 key 本身">
+                  <div className="relative">
+                    <Input
+                      value={cfg?.secretKey ?? ''}
+                      placeholder="LITELLM_HYQUBIT_TOKEN"
+                      type={revealKey ? 'text' : 'password'}
+                      onChange={(e) => set({ secretKey: e.target.value })}
+                      className="pr-9 font-mono text-base sm:text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setRevealKey((v) => !v)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                      aria-label="toggle visibility"
+                    >
+                      {revealKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <SecretPicker names={secretNames} onPick={(k) => set({ secretKey: k })} />
+                </Field>
+              </SectionCard>
+
+              <SectionCard
+                title="图片识别"
+                desc="端点丢弃 image block 时（hyqubit 会返回 [Unsupported Image]），用独立视觉模型做 OCR + 布局描述，把文本注入上下文；同时给 pi 注册 describe_image 工具，供 agent 主动复查。"
+                action={
+                  <div className="flex shrink-0 overflow-hidden rounded-md border border-border">
+                    {[true, false].map((v) => (
+                      <button
+                        key={String(v)}
+                        type="button"
+                        onClick={() => setImg({ enabled: v })}
+                        className={cn(
+                          'px-2.5 py-1 text-[11px] transition-colors',
+                          Boolean(cfg?.image?.enabled) === v
+                            ? 'bg-foreground text-background'
+                            : 'text-muted-foreground hover:bg-muted',
+                        )}
+                      >
+                        {v ? '启用' : '停用'}
+                      </button>
+                    ))}
+                  </div>
+                }
+              >
+                <div className={cn('flex flex-col gap-4', !imgOn && 'pointer-events-none opacity-50')}>
+                  <Field
+                    label="识别 Provider"
+                    hint={IMAGE_PROVIDERS.find((p) => p.value === imgProvider)?.hint}
+                  >
+                    <Select
+                      value={imgProvider}
+                      onValueChange={(v) => setImg({ provider: (v as ImageProvider) ?? 'openrouter' })}
+                      modal={false}
+                    >
+                      <SelectTrigger className="h-9" aria-label="vision provider">
+                        <SelectValue>
+                          {(v: string | null) =>
+                            IMAGE_PROVIDERS.find((p) => p.value === v)?.label ?? 'OpenRouter'}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {IMAGE_PROVIDERS.map((p) => (
+                          <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+
+                  {imgDefaults && (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field label="OCR 模型" hint="逐行提取文字。留空用默认">
+                        <Input
+                          value={cfg?.image?.ocrModel ?? ''}
+                          placeholder={imgDefaults.ocr}
+                          onChange={(e) => setImg({ ocrModel: e.target.value })}
+                          className="font-mono text-base sm:text-sm"
+                        />
+                      </Field>
+                      <Field label="布局描述模型" hint="描述界面结构。留空用默认（可以和 OCR 是同一个）">
+                        <Input
+                          value={cfg?.image?.describeModel ?? ''}
+                          placeholder={imgDefaults.describe}
+                          onChange={(e) => setImg({ describeModel: e.target.value })}
+                          className="font-mono text-base sm:text-sm"
+                        />
+                      </Field>
+                    </div>
+                  )}
+
+                  <Field label="API Key" hint="同样填 key 名。两次调用（OCR + 描述）共用这一个">
+                    <Input
+                      value={cfg?.image?.apiKeySecret ?? ''}
+                      placeholder={imgDefaults?.secret ?? 'OPENROUTER_API_KEY'}
+                      onChange={(e) => setImg({ apiKeySecret: e.target.value })}
+                      className="font-mono text-base sm:text-sm"
+                    />
+                    <SecretPicker names={secretNames} onPick={(k) => setImg({ apiKeySecret: k })} />
+                  </Field>
+
+                  <Field label="描述 Prompt" hint="只影响布局描述那一次调用；OCR 那次固定用逐行提取的 prompt">
+                    <textarea
+                      value={cfg?.image?.prompt ?? ''}
+                      onChange={(e) => setImg({ prompt: e.target.value })}
+                      rows={3}
+                      placeholder="留空用默认：列出所有可见文字，并描述界面布局（顶部标题、状态栏、各区块位置和内容）"
+                      className="w-full resize-y rounded-md border border-border bg-background p-2 text-[12px] outline-none focus:border-foreground/30"
+                    />
+                  </Field>
+
+                  {imgOn && !cfg?.image?.apiKeySecret?.trim() && (
+                    <p className="flex items-center gap-1.5 text-[11px] text-amber-600">
+                      <KeyRound className="h-3.5 w-3.5 shrink-0" />
+                      还没选 API key —— 识别会直接跳过，截图只以路径形式给到 agent。
+                    </p>
+                  )}
+                </div>
+              </SectionCard>
+
+              <div className="flex items-center gap-3 pb-2">
+                <Button onClick={save} disabled={setCfg.isPending}>
+                  {setCfg.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  保存设置
+                </Button>
+                {saved && (
+                  <span className="inline-flex items-center gap-1 text-xs text-emerald-500">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> 已保存
+                  </span>
+                )}
+                {saveError && (
+                  <span className="inline-flex items-center gap-1 text-xs text-rose-500">
+                    <AlertTriangle className="h-3.5 w-3.5" /> {saveError}
+                  </span>
+                )}
+              </div>
             </>
           )}
-
-          {cfg?.image?.provider === 'openrouter' && (
-            <Field label="模型" hint="例如 openai/gpt-4o-mini 或 google/gemini-2.5-flash">
-              <Input value={cfg?.image?.ocrModel ?? 'openai/gpt-4o-mini'} onChange={(e) => setImg({ ocrModel: e.target.value })} />
-            </Field>
-          )}
-
-          <Field
-            label="API Key（secrets store 里的 key 名）"
-            hint="DashScope → DASHSCOPE_API_KEY；OpenRouter → OPENROUTER_API_KEY"
-          >
-            <Input
-              value={cfg?.image?.apiKeySecret ?? ''}
-              placeholder={cfg?.image?.provider === 'dashscope' ? 'DASHSCOPE_API_KEY' : 'OPENROUTER_API_KEY'}
-              onChange={(e) => setImg({ apiKeySecret: e.target.value })}
-              className="font-mono text-xs"
-            />
-          </Field>
-
-          <Field label="描述 Prompt（可选）" hint="留空用默认：提取全部可见文字 + 描述界面布局">
-            <Input
-              value={cfg?.image?.prompt ?? ''}
-              placeholder="列出截图里所有可见文字，并描述界面布局"
-              onChange={(e) => setImg({ prompt: e.target.value })}
-            />
-          </Field>
         </div>
-      </Card>
-
-      <div className="flex items-center gap-3">
-        <Button onClick={save} disabled={setCfg.isPending}>
-          {setCfg.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          保存设置
-        </Button>
-        {saved && (
-          <span className="inline-flex items-center gap-1 text-xs text-emerald-500">
-            <CheckCircle2 className="h-3.5 w-3.5" /> 已保存
-          </span>
-        )}
-        {saveError && (
-          <span className="inline-flex items-center gap-1 text-xs text-rose-500">
-            <AlertTriangle className="h-3.5 w-3.5" /> {saveError}
-          </span>
-        )}
       </div>
     </div>
   );
