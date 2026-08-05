@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contextTokensFrom } from './pi-rpc';
+import { contextTokensFrom, emitItemsFor } from './pi-rpc';
 
 // The bug this guards: ensure() awaited client.start() between checking the
 // live map and populating it, so concurrent chatTicks each spawned their own pi
@@ -109,4 +109,38 @@ test('missing usage is null, not zero — null renders as "no data", 0 as "empty
 test('malformed usage fields degrade to 0 rather than NaN', () => {
   assert.equal(contextTokensFrom({ input: 'x' as unknown as number, cacheRead: 100 }), 100);
   assert.equal(contextTokensFrom({}), 0);
+});
+
+// ChatSession.claudeSessionId is Claude Code's --resume handle. Now that a
+// session can be moved between backends, a pi turn that stamped its own id
+// there would wipe the claude transcript handle — switching back would silently
+// start a fresh claude with no history.
+test('pi never stamps ChatSession.claudeSessionId', () => {
+  const items = emitItemsFor('sess-1', 'sess-1:entry-9', {
+    type: 'message_end',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+  });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].claudeSessionId, null);
+  assert.equal(items[0].sessionId, 'sess-1');
+  assert.equal(items[0].externalId, 'sess-1:entry-9');
+});
+
+test('every item of a multi-block event carries the session, none the resume handle', () => {
+  const items = emitItemsFor('sess-2', 'sess-2:e1', {
+    type: 'tool_execution_end',
+    toolCallId: 'tc1',
+    toolName: 'bash',
+    isError: false,
+    result: { content: [{ type: 'text', text: 'ok' }] },
+  });
+  assert.ok(items.length > 0);
+  for (const it of items) {
+    assert.equal(it.sessionId, 'sess-2');
+    assert.equal(it.claudeSessionId, null);
+  }
+});
+
+test('an event that translates to nothing emits nothing', () => {
+  assert.deepEqual(emitItemsFor('sess-3', 'sess-3:e1', { type: 'message_start' }), []);
 });

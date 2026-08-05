@@ -6,7 +6,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   RotateCw, Trash2, Terminal, Pencil, ListCollapse, Search, FoldVertical, Sparkles,
-  MoreHorizontal, ChevronRight, SquarePen,
+  MoreHorizontal, ChevronRight, SquarePen, Info,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -37,6 +37,8 @@ import { MessageTimeline } from '@/components/chat/message-timeline';
 import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
 import { VoiceMic } from '@/components/chat/voice-mic';
 import { FabDock } from '@/components/chat/fab-dock';
+import { SessionDetailSheet } from '@/components/chat/session-detail-sheet';
+import { runtimeShortLabel, runtimeDetail } from '@/lib/runtime-labels';
 
 // isTouchPrimary (phone/tablet vs desktop) lives in @/lib/save-file — the
 // soft-keyboard return key inserts a newline there (a dedicated send button
@@ -544,6 +546,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // you actually reach for mid-conversation (tmux, delete), so the rest live in a
   // tray that slides out leftward OVER the title. Desktop keeps everything inline.
   const [moreOpen, setMoreOpen] = useState(false);
+  // Session detail (incl. the backend switcher). Local state, not a URL param:
+  // this app's programmatic same-path navigations get swallowed (see the
+  // window.location comments around NewChatPane), and a sheet over the
+  // conversation has nothing to gain from being linkable.
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailEverOpened = useRef(false);
+  if (detailOpen) detailEverOpened.current = true;
   const moreRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!moreOpen) return;
@@ -1040,10 +1049,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // describe the run rather than the conversation. Both backends are labelled,
   // not just the non-default one: in a mixed fleet "no badge" would be ambiguous
   // between "Claude Code" and "the header hasn't loaded".
-  const backendLabel = session?.runtime === 'pi-rpc' ? 'pi' : 'Claude';
-  const backendTitle = session?.runtime === 'pi-rpc'
-    ? `pi${session?.runtimeProvider ? ` · ${session.runtimeProvider}` : ''}${session?.runtimeModel ? ` · ${session.runtimeModel}` : ''}`
-    : 'Claude Code (interactive, tmux pane)';
+  const backendLabel = runtimeShortLabel(session?.runtime);
+  const backendTitle = `${runtimeDetail(session?.runtime, session?.runtimeProvider, session?.runtimeModel)} — click for session details`;
 
   // The in-dialog "thinking" dots are driven by the SAME status as the header
   // dot, so the two can never disagree. The old code keyed the dots off local
@@ -1159,6 +1166,15 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
   const secondaryActions = (
     <>
+      <button
+        type="button"
+        onClick={() => { setDetailOpen(true); setMoreOpen(false); }}
+        aria-label="session details"
+        title="Session details — backend, process, history"
+        className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground"
+      >
+        <Info className="h-4 w-4" />
+      </button>
       <button
         type="button"
         onClick={() => setFindOpen((v) => !v)}
@@ -1320,8 +1336,18 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   <span className="shrink-0 text-muted-foreground/40">·</span>
                   {/* Which backend is actually running this session. Sits left of
                       ctx because both describe the run, not the conversation.
-                      Short labels — the meta line is already tight at 390px. */}
-                  <span className="shrink-0 font-mono" title={backendTitle}>{backendLabel}</span>
+                      Short labels — the meta line is already tight at 390px.
+                      Also the way IN to the session detail: the backend is the
+                      thing you'd click this line to change. */}
+                  <button
+                    type="button"
+                    onClick={() => setDetailOpen(true)}
+                    title={backendTitle}
+                    aria-label="session details"
+                    className="shrink-0 font-mono rounded px-1 -mx-1 cursor-pointer transition-colors hover:bg-accent/60 hover:text-foreground"
+                  >
+                    {backendLabel}
+                  </button>
                   <span className="shrink-0 text-muted-foreground/40">·</span>
                   {/* Full bar (count + 56px track + percent) is ~130px and crowded a
                       390px header; mobile gets `mini` — same token count, shorter
@@ -1394,6 +1420,12 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
       {findOpen && (
         <ChatFind sessionId={sessionId} getViewport={getViewport} onJump={anchored.jumpTo} onClose={() => setFindOpen(false)} />
+      )}
+
+      {/* Mounted only once opened, so an untouched chat never pays for the
+          detail query; kept mounted afterwards so the sheet animates out. */}
+      {(detailOpen || detailEverOpened.current) && (
+        <SessionDetailSheet sessionId={sessionId} open={detailOpen} onOpenChange={setDetailOpen} />
       )}
 
       {/* Anchored mode banner: you're parked on a search hit, not at the live

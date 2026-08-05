@@ -11,18 +11,46 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
+import { BackendPicker } from './backend-picker';
+import { isRuntimeKind, type RuntimeKind } from '@/lib/runtime-labels';
 
 export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }: { agents: string[]; preset?: string; lockedAgent?: string; onCreated: (id: string) => void; onCancel: () => void }) {
   const [picked, setPicked] = useState('');
-  // Which backend runs this session. '' = inherit the agent's default, which is
-  // what every session did before the picker existed. See docs/pi-runtime-design.md.
-  const [runtime, setRuntime] = useState('');
+  // Which backend runs this session — always an explicit answer, never
+  // "whatever the agent happens to default to at delivery time". There used to
+  // be an "Agent default" option that wrote NULL; a session that states its own
+  // backend keeps working the way you started it when the agent's default is
+  // later edited, and it makes every header chip a fact rather than a lookup.
+  //
+  // Holds only an explicit choice; null = "the agent's default", resolved at
+  // render. That way the picker is right the instant the agent lookup lands,
+  // without a re-seed that would overwrite a choice made while it was in flight.
+  const [runtime, setRuntime] = useState<RuntimeKind | null>(null);
   const [model, setModel] = useState('');
   useEffect(() => {
     setPicked((cur) => cur || (preset && agents.includes(preset) ? preset : agents[0] ?? ''));
   }, [preset, agents]);
   // A scoped share session is locked to its one agent — no picker.
   const agent = lockedAgent ?? picked;
+
+  // The agent's own default, so the picker opens on it. One lookup per agent
+  // choice, only on this screen — cheaper than putting `runtime` on the 10s
+  // agents.list poll that every page runs.
+  const agentMeta = trpc.agents.byName.useQuery({ name: agent }, { enabled: !!agent, staleTime: 60_000 });
+  const agentRuntime = agentMeta.data?.agent.runtime;
+
+  // Switching agents drops the choice: the default belongs to the agent you are
+  // about to talk to, not the one you looked at first. Adjusting state during
+  // render rather than in an effect — see React's "you might not need an effect".
+  const [pickedFor, setPickedFor] = useState('');
+  if (pickedFor !== agent) {
+    setPickedFor(agent);
+    setRuntime(null);
+    setModel('');
+  }
+
+  const chosen: RuntimeKind = runtime ?? (isRuntimeKind(agentRuntime) ? agentRuntime : 'claude-tmux');
+
   const create = trpc.chat.createSession.useMutation({ onSuccess: (s) => onCreated(s.id) });
   return (
     <div className="flex flex-1 flex-col">
@@ -38,8 +66,8 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
             if (!agent) return;
             create.mutate({
               agentName: agent,
-              ...(runtime ? { runtime: runtime as 'claude-tmux' | 'pi-rpc' } : {}),
-              ...(runtime === 'pi-rpc' && model.trim() ? { runtimeModel: model.trim() } : {}),
+              runtime: chosen,
+              ...(chosen === 'pi-rpc' && model.trim() ? { runtimeModel: model.trim() } : {}),
             });
           }}
         >
@@ -65,23 +93,13 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
               </Select>
             </label>
           )}
-          <label className="block">
+          <div className="block">
             <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Backend</span>
-            <Select value={runtime} onValueChange={(v) => setRuntime(v ?? '')} modal={false}>
-              <SelectTrigger aria-label="select backend" className="mt-1.5 w-full py-2 text-sm">
-                <SelectValue>
-                  {(v: string | null) =>
-                    v === 'claude-tmux' ? 'Claude Code' : v === 'pi-rpc' ? 'pi' : 'Agent default'}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">Agent default</SelectItem>
-                <SelectItem value="claude-tmux">Claude Code</SelectItem>
-                <SelectItem value="pi-rpc">pi</SelectItem>
-              </SelectContent>
-            </Select>
-          </label>
-          {runtime === 'pi-rpc' && (
+            <div className="mt-1.5">
+              <BackendPicker value={chosen} onChange={setRuntime} agentDefault={agentRuntime ?? 'claude-tmux'} />
+            </div>
+          </div>
+          {chosen === 'pi-rpc' && (
             <label className="block">
               <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Model</span>
               <Input

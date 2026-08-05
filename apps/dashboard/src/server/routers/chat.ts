@@ -19,6 +19,7 @@ import {
 } from '../../lib/takeover';
 import { HUMAN_MESSAGES_MAX, humanMessages } from '../user-profile';
 import { resolveRuntime } from '../runtime-resolve';
+import { planRuntimeSwitch } from '../runtime-switch';
 
 const ContentBlock = z.union([
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -309,6 +310,118 @@ export const chatRouter = router({
         return { ...s, ...backend, takeoverBrainState: brain?.state ?? null };
       }
       return s ? { ...s, ...backend, takeoverBrainState: null } : s;
+    }),
+
+  // Everything the session detail sheet shows, and NOTHING the chat header
+  // already polls. Deliberately a separate query from getSession: this one runs
+  // only while the sheet is open, so it can afford the message count, the group
+  // name and the agent's own defaults — three extra round trips that would
+  // otherwise ride along on a 5s poll for every open chat.
+  sessionDetail: agentProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findFirst({
+        where: {
+          id: input.sessionId,
+          machineId: ctx.machine.id,
+          ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}),
+        },
+        select: {
+          id: true, agentName: true, title: true, titleAuto: true, origin: true,
+          startedAt: true, lastMessageAt: true, lastReadAt: true, lastActivity: true,
+          closedAt: true, hiddenAt: true, hibernatedAt: true, groupId: true,
+          runtime: true, runtimeProvider: true, runtimeModel: true,
+          claudeSessionId: true, transcriptPath: true,
+          pid: true, alive: true, state: true, rssMb: true,
+          contextTokens: true, outputTokens: true, snapshotAt: true,
+        },
+      });
+      if (!s) return null;
+
+      const [agent, messageCount, group] = await Promise.all([
+        prisma.agent.findUnique({
+          where: { machineId_name: { machineId: ctx.machine.id, name: s.agentName } },
+          select: { directory: true, runtime: true, runtimeProvider: true, runtimeModel: true },
+        }),
+        prisma.chatMessage.count({ where: { sessionId: s.id } }),
+        s.groupId
+          ? prisma.sessionGroup.findUnique({ where: { id: s.groupId }, select: { name: true } })
+          : Promise.resolve(null),
+      ]);
+
+      return {
+        ...s,
+        messageCount,
+        groupName: group?.name ?? null,
+        agentDirectory: agent?.directory ?? null,
+        // The answer the gateway acts on…
+        backend: resolveRuntime(s, agent),
+        // …and where it came from, so the sheet can say "inherited from the
+        // agent" instead of presenting an inherited value as a session setting.
+        inherited: s.runtime == null,
+        agentBackend: resolveRuntime(null, agent),
+      };
+    }),
+
+  // Move this session to another backend.
+  //
+  // Always writes the session's OWN columns rather than clearing them back to
+  // "inherit": having explicitly chosen a backend for THIS conversation, the
+  // user should not have it change under them the next time the agent's default
+  // is edited.
+  //
+  // Context does not travel. Each backend keeps its own history (claude's
+  // transcript, pi's session file) and the dashboard keeps the full message
+  // list either way — but the new backend starts the next turn without the old
+  // one's context. The UI says so before it fires.
+  setSessionRuntime: agentProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        runtime: z.enum(['claude-tmux', 'pi-rpc']),
+        runtimeProvider: z.string().max(64).nullish(),
+        runtimeModel: z.string().max(128).nullish(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
+      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
+
+      const agent = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: s.agentName } },
+        select: { runtime: true, runtimeProvider: true, runtimeModel: true },
+      });
+      const before = resolveRuntime(s, agent);
+      const after = resolveRuntime(
+        {
+          runtime: input.runtime,
+          runtimeProvider: input.runtimeProvider ?? null,
+          runtimeModel: input.runtimeModel ?? null,
+        },
+        agent,
+      );
+
+      const plan = planRuntimeSwitch(s, before, after);
+      if (!plan.ok) throw new Error(plan.reason);
+
+      await prisma.chatSession.update({
+        where: { id: input.id },
+        data: {
+          runtime: input.runtime,
+          runtimeProvider: input.runtimeProvider ?? null,
+          runtimeModel: input.runtimeModel ?? null,
+          // Free the outgoing backend's process. Hibernate is exactly the right
+          // lever: it tears down whatever is running and leaves the session
+          // "asleep, wakes on send" — which is what a just-switched session is.
+          // The gateway's hibernate tick stops a pi child and kills a tmux pane,
+          // and each is a no-op for a session that never had one, so it does not
+          // need to know which direction the switch went.
+          ...(plan.restart ? { hibernateRequestedAt: new Date() } : {}),
+        },
+      });
+
+      return { ok: true, restarted: plan.restart, backend: after };
     }),
 
   // Mark a session read = now. Was browser localStorage (per-device); now a DB

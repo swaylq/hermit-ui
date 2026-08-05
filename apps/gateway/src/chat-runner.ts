@@ -235,6 +235,17 @@ export async function hibernateOneSession(sessionId: string): Promise<boolean> {
       sessionStates.delete(sessionId);
     }
     reservedUuids.delete(sessionId);
+    // A non-tmux backend has no pane; its child process is the thing to free.
+    // Called unconditionally because we cannot tell from here which backend was
+    // running: a session whose backend was just SWITCHED already reads as the
+    // new one in the DB. stop() is a no-op when this session has no live child,
+    // and killTmuxSession is a no-op when there is no pane, so both directions
+    // land correctly and a plain hibernate now frees a pi session too (it used
+    // to kill a pane that never existed and leave the child running).
+    await runtimeFor('pi-rpc')
+      ?.stop({ sessionId, externalSessionId: '' }, 'hibernate')
+      .catch(() => undefined);
+    piStates.delete(sessionId);
     await killTmuxSession(sessionId, 2_000);
     console.log(`[hibernate] killed session=${sessionId.slice(0, 8)}`);
     return true;

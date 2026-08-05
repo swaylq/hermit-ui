@@ -1,0 +1,52 @@
+// Moving a live session from one backend to another.
+//
+// Two questions, both answerable without touching the DB, which is why they
+// live here rather than inline in the router:
+//
+//   1. Is the switch safe right now?
+//   2. Does the currently-running process have to be torn down?
+//
+// (2) is not the same as "did the columns change". pi bakes its provider and
+// model into the child process at spawn time, so re-pointing a pi session at a
+// different model needs a fresh child; Claude Code takes its model from the
+// machine's settings.json and ignores those columns entirely, so writing them
+// on a claude session changes nothing that is running.
+//
+// See docs/pi-runtime-design.md.
+
+import type { RuntimeChoice } from './runtime-resolve';
+
+export type SwitchPlan =
+  | { ok: false; reason: string }
+  | { ok: true; restart: boolean };
+
+/**
+ * @param session   the row's live state (only `state` is consulted)
+ * @param before    the backend resolved for the session as it stands
+ * @param after     the backend the caller is asking for
+ */
+export function planRuntimeSwitch(
+  session: { state?: string | null },
+  before: RuntimeChoice,
+  after: RuntimeChoice,
+): SwitchPlan {
+  // A turn in flight belongs to the OLD backend: its process is mid-stream and
+  // holds the only copy of that turn's context. Switching now strands it —
+  // whatever comes back is written against a session that has already moved on.
+  // Cheap to avoid: the turn finishes in seconds, or the user stops it.
+  if (session.state === 'working') {
+    return { ok: false, reason: 'This session is mid-turn. Wait for it to finish, or stop the turn, then switch.' };
+  }
+
+  if (before.runtime !== after.runtime) return { ok: true, restart: true };
+
+  // Same backend. Only pi reads provider/model off these columns.
+  if (after.runtime === 'pi-rpc') {
+    const moved =
+      (before.runtimeProvider ?? null) !== (after.runtimeProvider ?? null) ||
+      (before.runtimeModel ?? null) !== (after.runtimeModel ?? null);
+    return { ok: true, restart: moved };
+  }
+
+  return { ok: true, restart: false };
+}

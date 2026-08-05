@@ -82,6 +82,27 @@ function handleOf(handle: RuntimeHandle): PiHandle | null {
   return live.get(handle.sessionId) ?? null;
 }
 
+/**
+ * The sync items for one pi event.
+ *
+ * `claudeSessionId` is deliberately null. That column is Claude Code's
+ * `--resume` handle: the sync route stamps whatever arrives onto the session,
+ * and the tmux path later spawns `claude --resume <it>`. pi used to write its
+ * OWN session id there, which was harmless only while a session stayed on one
+ * backend forever — the moment a session can be moved between backends, one pi
+ * turn destroys the claude transcript handle and switching back silently
+ * starts a fresh claude. pi has nothing to gain from it either: pi resume is
+ * not implemented (it would replay entries and duplicate every message —
+ * docs/pi-runtime-design.md), so nothing ever reads the value back.
+ */
+export function emitItemsFor(sessionId: string, externalId: string, ev: unknown): SyncItem[] {
+  return translatePiEvent(ev, externalId).map((item) => ({
+    ...item,
+    sessionId,
+    claudeSessionId: null,
+  }));
+}
+
 export class PiRpcRuntime implements AgentRuntime {
   readonly kind = 'pi-rpc' as const;
 
@@ -145,13 +166,11 @@ export class PiRpcRuntime implements AgentRuntime {
       const externalId = `${session.id}:${key}`;
       if (handle.seen.has(externalId)) return;
 
-      const items = translatePiEvent(ev, externalId);
+      const items = emitItemsFor(session.id, externalId, ev);
       if (items.length === 0) return;
 
       handle.seen.add(externalId);
-      for (const item of items) {
-        emit({ ...item, sessionId: session.id, claudeSessionId: handle.externalSessionId || null });
-      }
+      for (const item of items) emit(item);
     });
 
     return handle;
