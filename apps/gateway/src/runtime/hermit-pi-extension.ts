@@ -235,6 +235,99 @@ export default function hermitTools(pi: any): void {
   }
 
   pi.registerTool({
+    name: 'describe_image',
+    description:
+      'OCR + 布局描述一张本地图片（PNG/JPG/WebP）。当模型端点不支持图片输入（图片 Read 返回 [Unsupported Image]）时，用它“看图”：返回截图的全部可见文字和界面布局描述。适合 UI 截图、报错弹窗、设计稿等。',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Absolute path to the image on this machine.' },
+        prompt: { type: 'string', description: 'Optional: what to look for (defaults to full OCR + layout description).' },
+      },
+      required: ['filePath'],
+    },
+    async execute(_id: string, params: ToolContext['input']) {
+      const filePath = str(params.filePath, 'filePath');
+      if (!fs.existsSync(filePath)) throw new Error(`file not found: ${filePath}`);
+
+      const provider = process.env.HERMIT_VISION_PROVIDER?.trim();
+      const apiKey = process.env.HERMIT_VISION_API_KEY?.trim();
+      if (!provider || !apiKey) {
+        return {
+          content: [{
+            type: 'text',
+            text: '图片识别未配置：dashboard → Settings → Pi Runtime → 图片识别 需启用并填入 API key（DashScope 推荐）。配置保存后新起的会话生效。',
+          }],
+        };
+      }
+
+      const buf = fs.readFileSync(filePath);
+      if (buf.byteLength > 6 * 1024 * 1024) throw new Error('image too large (max 6MB)');
+      const b64 = buf.toString('base64');
+      const lower = filePath.toLowerCase();
+      const mime = lower.endsWith('.jpg') || lower.endsWith('.jpeg') ? 'image/jpeg'
+        : lower.endsWith('.webp') ? 'image/webp' : 'image/png';
+      const ask = typeof params.prompt === 'string' && params.prompt.trim()
+        ? params.prompt.trim()
+        : '列出这张图片（手机/桌面截图）里所有可见的文字，并描述界面布局：顶部标题、状态栏、各区块位置和内容。';
+
+      const call = async (model: string, prompt: string): Promise<string> => {
+        const url = provider === 'dashscope'
+          ? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+          : 'https://openrouter.ai/api/v1/chat/completions';
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model,
+            max_tokens: 800,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
+                { type: 'text', text: prompt },
+              ],
+            }],
+          }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        const text = await r.text();
+        if (!r.ok) throw new Error(`${model} → ${r.status}: ${text.slice(0, 160)}`);
+        return JSON.parse(text)?.choices?.[0]?.message?.content ?? '';
+      };
+
+      try {
+        if (provider === 'dashscope') {
+          const ocrModel = process.env.HERMIT_VISION_OCR_MODEL || 'qwen-vl-ocr';
+          const describeModel = process.env.HERMIT_VISION_DESCRIBE_MODEL || 'qwen-vl-max';
+          const [ocr, desc] = await Promise.allSettled([
+            call(ocrModel, '提取这张图片里的全部文字，逐行输出，不要描述布局。'),
+            call(describeModel, ask),
+          ]);
+          const out: string[] = [];
+          if (ocr.status === 'fulfilled' && ocr.value.trim()) {
+            out.push(`【OCR 文字】\n${ocr.value.trim()}`);
+          } else if (ocr.status === 'rejected') {
+            out.push(`【OCR 失败】${String(ocr.reason).slice(0, 160)}`);
+          }
+          if (desc.status === 'fulfilled' && desc.value.trim()) {
+            out.push(`【布局描述】\n${desc.value.trim()}`);
+          } else if (desc.status === 'rejected') {
+            out.push(`【描述失败】${String(desc.reason).slice(0, 160)}`);
+          }
+          return { content: [{ type: 'text', text: out.join('\n\n') || '（图片识别无输出）' }] };
+        }
+
+        const model = process.env.HERMIT_VISION_OCR_MODEL || 'openai/gpt-4o-mini';
+        const desc = await call(model, ask);
+        return { content: [{ type: 'text', text: desc.trim() || '（图片识别无输出）' }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: `图片识别失败：${(e as Error).message}` }] };
+      }
+    },
+  });
+
+  pi.registerTool({
     name: 'ask',
     description:
       'Ask the user a multiple-choice question and BLOCK until they answer in the dashboard. Use whenever you need them to pick a direction or confirm. Keep options short (2-6).',

@@ -13,7 +13,7 @@ import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
 import { translatePiEvent } from './pi-events';
-import { providerEnv, machineProviderEnv } from './pi-credentials';
+import { providerEnv, machineProviderEnv, visionEnv } from './pi-credentials';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 
 // RpcClient's default cliPath search is cwd-relative, so it looks for
@@ -125,6 +125,7 @@ export class PiRpcRuntime implements AgentRuntime {
         ...process.env,
         ...(await providerEnv(session.provider)),
         ...(await machineProviderEnv()),
+        ...(await visionEnv()),
         HERMIT_DASHBOARD_URL: DASHBOARD_URL,
         HERMIT_KEY: ASST_KEY,
         HERMIT_SESSION_ID: session.id,

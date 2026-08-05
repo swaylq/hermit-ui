@@ -34,6 +34,12 @@ model Machine {
   // reap disabled. See docs/resource-governance-design.md.
   idleReapHours Int?
 
+  // Pi-runtime machine config, edited from the dashboard Settings → Pi Runtime
+  // page and consumed by the machine's gateway when it spawns pi children.
+  // { provider, baseUrl, api, models[], secretKey, image: { enabled, provider,
+  //   apiKeySecret, ocrModel, describeModel, prompt } }
+  piConfig Json?
+
   agents              Agent[]
   crons               Cron[]
   usageHourly         UsageHourly[]

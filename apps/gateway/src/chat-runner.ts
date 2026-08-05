@@ -46,6 +46,7 @@ import { runtimeFor } from './runtime';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
 import { relayImages } from './image-relay';
+import { describeImage } from './vision';
 import { tryAcquire, release, isLocked } from './op-locks';
 
 // MCP stub gives the in-pane claude these tools: set_session_title, log_status,
@@ -584,7 +585,31 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
 
       const oldest = msgs[0];
       if (!oldest) return;
-      const text = typeof oldest.content === 'string' ? oldest.content : extractText(oldest.content);
+      let text = typeof oldest.content === 'string' ? oldest.content : extractText(oldest.content);
+
+      // Relay + recognise attached images. tmux send-keys can't carry binaries,
+      const relay = await relayImages([oldest.content]);
+      if (relay.errors.length > 0) {
+        console.warn(`[chat] pi image relay errors for ${session.id.slice(0, 8)}:`, relay.errors);
+      }
+      if (relay.paths.length > 0) {
+        const parts: string[] = [text];
+        for (const p of relay.paths) {
+          const desc = await describeImage(p);
+          if (desc.ocr || desc.description) {
+            parts.push(
+              `[上传的截图识别结果 — 原图缓存于 ${p}，如需放大细节可用 describe_image 工具复查]\n` +
+                `OCR 文字：\n${desc.ocr || '（无）'}\n\n布局描述：\n${desc.description || '（无）'}`,
+            );
+          } else {
+            parts.push(
+              `[上传的截图已缓存于 ${p}，但图片识别不可用（${desc.error || '未启用图片识别'}）。` +
+                `如需查看内容，请用 describe_image 工具（参数 filePath=${p}）。]`,
+            );
+          }
+        }
+        text = parts.join('\n\n');
+      }
       if (!text.trim()) return;
 
       const ok = await runtime.submit(handle, text, []);
@@ -1051,10 +1076,14 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     claudeSessionUuid: waitForResumeUuid ? undefined : claudeUuid || undefined,
     // Pane env inherited by claude's PreToolUse permission hook so it can reach
     // the dashboard (URL + key) and resolve this session — never on argv.
+    // CLAUDE_CODE_DISABLE_AUTO_MEMORY=1: unify memory behavior with the pi
+    // backend — no automatic index injection / auto-extract in cc either; both
+    // backends read memory on demand via the workspace <agent>/memory/auto/ link.
     env: {
       HERMIT_DASHBOARD_URL: DASHBOARD_URL,
       HERMIT_KEY: ASST_KEY,
       HERMIT_SESSION_ID: session.id,
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     },
   });
 

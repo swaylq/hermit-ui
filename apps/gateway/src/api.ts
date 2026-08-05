@@ -251,6 +251,16 @@ export const api = {
     if (!r.ok) throw new Error(`ackMachineRequest → ${r.status}`);
   },
 
+  // Machine-level pi runtime config (hyqubit endpoint + image recognition),
+  // edited on Settings → Pi Runtime. The gateway merges it over its own .env.
+  pollPiConfig: async (): Promise<unknown> => {
+    const r = await get<any>(
+      '/api/trpc/machines.pollPiConfig?batch=1&input=' +
+        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r?.[0]?.result?.data?.json ?? null;
+  },
+
   // ── File Station (large-file delivery) round-trip ───────────────────────────
   pollFileTransfers: async (): Promise<
     Array<{ id: string; filename: string; destPath: string; size: number; unzip: boolean }>

@@ -2,6 +2,29 @@ import { z } from 'zod';
 import { router, gatewayProcedure, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { invalidateMachineCache } from '../auth';
+import { Prisma } from '@/generated/prisma/client';
+
+export const PI_CONFIG_SCHEMA = z.object({
+  // hyqubit (or any Anthropic-compatible endpoint) base config
+  provider: z.string().trim().min(1).optional(),
+  baseUrl: z.string().trim().url().optional(),
+  api: z.string().trim().optional(), // 'anthropic-messages' | 'openai' | ...
+  models: z.array(z.string().trim().min(1)).optional(),
+  // Name of the secret in the machine's encrypted store that holds the API key
+  // (e.g. LITELLM_HYQUBIT_TOKEN). Never stores the value itself.
+  secretKey: z.string().trim().regex(/^[A-Za-z0-9_-]+$/).optional().nullable(),
+  // image recognition (vision fallback for models whose endpoint drops images)
+  image: z
+    .object({
+      enabled: z.boolean().optional(),
+      provider: z.enum(['dashscope', 'openrouter', 'none']).optional(),
+      apiKeySecret: z.string().trim().regex(/^[A-Za-z0-9_-]+$/).optional().nullable(),
+      ocrModel: z.string().trim().optional(),
+      describeModel: z.string().trim().optional(),
+      prompt: z.string().trim().max(2000).optional(),
+    })
+    .optional(),
+});
 
 export const machinesRouter = router({
   me: machineProcedure.query(async ({ ctx }) => {
@@ -22,6 +45,33 @@ export const machinesRouter = router({
       fiveHourLimitUsd: m.fiveHourLimitUsd,
       weeklyLimitUsd: m.weeklyLimitUsd,
     };
+  }),
+
+  // Pi-runtime machine config (hyqubit endpoint + image recognition). Reads
+  // fresh from the DB so the gateway's polling and the browser see the same
+  // snapshot; never returns the API key value, only the secret name.
+  getPiConfig: machineProcedure.query(async ({ ctx }) => {
+    const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
+    return (m?.piConfig as unknown as z.infer<typeof PI_CONFIG_SCHEMA> | null) ?? null;
+  }),
+
+  setPiConfig: machineProcedure
+    .input(z.object({ config: PI_CONFIG_SCHEMA.nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      await prisma.machine.update({
+        where: { id: ctx.machine.id },
+        data: { piConfig: (input.config ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue },
+      });
+      return { ok: true };
+    }),
+
+  // Gateway-side read: same shape as getPiConfig but behind gatewayProcedure,
+  // so a gateway polls it with its machine key without going through the
+  // browser-scoped getter. Kept separate so getPiConfig can change shape for
+  // the UI (e.g. add a mask) without breaking the gateway contract.
+  pollPiConfig: gatewayProcedure.query(async ({ ctx }) => {
+    const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
+    return (m?.piConfig as unknown as z.infer<typeof PI_CONFIG_SCHEMA> | null) ?? null;
   }),
 
   setLimits: machineProcedure
