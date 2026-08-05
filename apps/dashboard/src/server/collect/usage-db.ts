@@ -119,7 +119,13 @@ export async function getUsageByDay(machineId: string, days = 14) {
     costExCacheRead: r.costExCacheRead,
     // token columns are BigInt (INT8) in the DB; each is well under 2^53, so sum as
     // plain numbers to keep the wire type stable and avoid BigInt in the client.
-    tokens: Number(r.inputTokens) + Number(r.outputTokens) + Number(r.cacheCreationTokens) + Number(r.cacheReadTokens),
+    //
+    // Split the same way the cost is split, and for the same reason: cache reads are
+    // ~98% of the tokens (14 days on this machine: 10.39B of 10.64B), so a total that
+    // includes them only ever tracks how big the contexts were. Kept as its own field
+    // rather than folded in, so the chart can show either without re-deriving.
+    tokensExCacheRead: Number(r.inputTokens) + Number(r.outputTokens) + Number(r.cacheCreationTokens),
+    cacheReadTokens: Number(r.cacheReadTokens),
     sessions: r.sessions,
   }));
 }

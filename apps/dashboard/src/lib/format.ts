@@ -1,5 +1,13 @@
+/**
+ * Compact count, k/M/B. Despite the name it has only ever been given TOKEN counts, not
+ * bytes — context sizes in `ctx-bar`, daily totals in `usage-sparkline`.
+ *
+ * The B tier is not decoration: a machine's cache-read tokens run to ~10B over two
+ * weeks, and without it that printed as `10641.71M`.
+ */
 export function fmtBytes(n: number | null | undefined): string {
   if (n == null) return '-';
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
