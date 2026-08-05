@@ -119,30 +119,51 @@ export function transcriptFresh(transcriptPath: string | null | undefined): bool
 
 // ── Retroactive width-independent signal: an in-flight tool call ──────────────
 // A single tool call writes an assistant `tool_use` event when the tool STARTS and a
-// user `tool_result` event when it returns. So a turn is mid-tool-call iff the newest
-// tool_use is newer than the newest tool_result. This is a width-independent, hook-free,
-// RETROACTIVE working signal: it catches a long quiet tool call on a narrow pane (where
-// the "esc to interrupt" / spinner marker has truncated off AND the transcript mtime has
-// gone stale) even for a session whose turn-state hook isn't wired / hasn't reloaded —
-// no session restart required. Capped so an abandoned tool_use (claude killed mid-tool,
-// so tool_result never lands) self-heals instead of pinning "working" forever. The
-// pane-alive short-circuit in the snapshot collector already handles the common crash
-// case (dead pane → not working). Takes the caller's pre-read transcript tail (the
-// snapshot already reads it for usage/text) so it adds no file I/O of its own.
+// user `tool_result` event when it returns. So a turn is mid-tool-call iff the LAST
+// tool-bearing record in the transcript is a tool_use. This is a width-independent,
+// hook-free, RETROACTIVE working signal: it catches a long quiet tool call on a narrow
+// pane (where the "esc to interrupt" / spinner marker has truncated off AND the
+// transcript mtime has gone stale) even for a session whose turn-state hook isn't wired
+// / hasn't reloaded — no session restart required. Capped so an abandoned tool_use
+// (claude killed mid-tool, so tool_result never lands) self-heals instead of pinning
+// "working" forever. The pane-alive short-circuit in the snapshot collector already
+// handles the common crash case (dead pane → not working). Takes the caller's pre-read
+// transcript tail (the snapshot already reads it for usage/text) so it adds no file I/O
+// of its own.
+//
+// Rank by FILE POSITION, never by timestamp. The transcript is append-only, so position
+// IS the chronological order of what actually happened; the `timestamp` field is not.
+// /compact re-emits the files it carries across the boundary as tool_result records that
+// keep their ORIGINAL — often days-old — timestamps while landing at the very end of the
+// file. Under the old newest-of-each-kind timestamp comparison the previous turn's
+// tool_use out-ranked a tool_result physically written after it, so a freshly compacted,
+// fully idle session read "working" for the entire 20-min cap: the badge stuck AND the
+// chat delivery gate queued every message instead of sending it — a session that can't
+// answer, hence can't run the new turn that would have cleared the signal. (Observed
+// 2026-08-05 on session cms9uf7…gyglk, ~12 min dead.) Position also makes the verdict
+// immune to clock skew between records. `timestamp` is still read, for the staleness
+// cap only.
+//
+// Subagent (Task) records land in the PARENT transcript flagged isSidechain, and a long
+// Task keeps appending the subagent's own tool_results while the parent's tool_use is
+// genuinely still in flight — so sidechain records are skipped rather than mistaken for
+// the parent's tool returning.
 const TOOL_RUNNING_CAP_MS = 20 * 60_000;
 export function transcriptToolRunning(lines: string[]): boolean {
-  let tuMax = 0, trMax = 0;
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (tuMax && trMax) break; // both newest-of-kind found (scanning newest-first)
     let ev: any;
     try { ev = JSON.parse(lines[i]); } catch { continue; }
+    if (ev?.isSidechain) continue;
     const content = ev?.message?.content;
     if (!Array.isArray(content)) continue;
-    const t = Date.parse(ev.timestamp || '') || 0;
-    if (!tuMax && ev.type === CcEvent.assistant && hasToolUse(content)) tuMax = t;
-    if (!trMax && ev.type === CcEvent.user && hasToolResult(content)) trMax = t;
+    // First tool-bearing record found scanning newest-first decides.
+    if (ev.type === CcEvent.user && hasToolResult(content)) return false; // tool returned
+    if (ev.type === CcEvent.assistant && hasToolUse(content)) {
+      const t = Date.parse(ev.timestamp || '') || 0;
+      return t > 0 && Date.now() - t < TOOL_RUNNING_CAP_MS;
+    }
   }
-  return tuMax > 0 && tuMax > trMax && Date.now() - tuMax < TOOL_RUNNING_CAP_MS;
+  return false;
 }
 
 // Read up to the last TAIL_BYTES of a transcript as complete JSONL lines — enough for the

@@ -120,6 +120,10 @@ describe('transcriptToolRunning', () => {
     JSON.stringify({ type: 'user', timestamp: iso(msAgo), message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } });
   const assistantText = (msAgo: number) =>
     JSON.stringify({ type: 'assistant', timestamp: iso(msAgo), message: { content: [{ type: 'text', text: 'hi' }] } });
+  // A subagent (Task tool) writes its OWN tool_use / tool_result records into the
+  // PARENT transcript, flagged isSidechain.
+  const sidechainResult = (msAgo: number) =>
+    JSON.stringify({ type: 'user', isSidechain: true, timestamp: iso(msAgo), message: { content: [{ type: 'tool_result', tool_use_id: 's1', content: 'ok' }] } });
 
   it('is true when the newest tool_use is newer than the newest tool_result (in flight)', () => {
     assert.equal(transcriptToolRunning([toolResult(10_000), toolUse(2_000)]), true);
@@ -139,6 +143,26 @@ describe('transcriptToolRunning', () => {
   it('is false for empty / unparseable lines', () => {
     assert.equal(transcriptToolRunning([]), false);
     assert.equal(transcriptToolRunning(['not json', '{ partial']), false);
+  });
+
+  // The transcript is append-only, so FILE POSITION is the chronological order —
+  // timestamps are not. /compact re-emits the carried-over file reads as tool_result
+  // records that keep their ORIGINAL (days-old) timestamps while landing at the very
+  // END of the file. Comparing by timestamp made the last real turn's tool_use "newer"
+  // than a tool_result written after it, pinning the session to working for the full
+  // 20-min cap: badge stuck, and every chat message queued instead of delivered.
+  // (Observed 2026-08-05 on session cms9uf7…gyglk, ~12 min of dead session.)
+  it('is false after /compact re-emits carried-over tool_results with stale timestamps', () => {
+    assert.equal(transcriptToolRunning([toolUse(2_000), toolResult(2 * 24 * 60 * 60_000)]), false);
+  });
+  it('ranks by position, not timestamp, for an in-flight tool too (clock skew safe)', () => {
+    assert.equal(transcriptToolRunning([toolResult(1_000), toolUse(30_000)]), true);
+  });
+  // A long Task: the parent's tool_use(Task) has no tool_result yet, but the subagent
+  // keeps appending its own sidechain tool_results. Those must not read as the parent's
+  // tool returning.
+  it('ignores subagent sidechain records when ranking', () => {
+    assert.equal(transcriptToolRunning([toolUse(30_000), sidechainResult(1_000)]), true);
   });
 });
 
