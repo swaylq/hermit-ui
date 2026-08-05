@@ -87,3 +87,14 @@ skill 每次运行顺带扫一遍：worktree 路径里的会话 id 已不在 tmu
 | `.claude/settings.json` | 注册上面这个 hook |
 
 先在 asst 上做通并实测，再决定铺到模板和其它 agent（6 个会话的 finance-agent 才是最需要的那个）。
+
+---
+
+## 实测（2026-08-05，asst 会话 pv2096yok0i0，同时有 5 个兄弟会话）
+
+脚本自测 25 项全过（`wt.test.sh`，会话列表用环境变量注入，不依赖真 tmux）。测试抓出两个真 bug：
+
+1. **macOS `/var` → `/private/var` 符号链接**：`git worktree list` 报的是解析后的物理路径，而脚本自己拼的路径没解析，导致 `sweep` 一个自己创建的 worktree 都匹配不上。修：启动时把 `WT_ROOT` 解析成物理路径。
+2. **「已合并」不能拿本地 base 比**：本设计刻意不更新本地 `main`（没人 checkout 它），所以拿它当基准会把已经落地的 worktree 判成「有未合并提交」而永远保留。修：`sweep` 比对 `origin/<base>`，并先 fetch。
+
+真实全流程（就在这个 repo 上）：`check` 认出 5 个兄弟会话 → `enter` 建出 `~/.hermit/worktrees/hermit-ui/pv2096yok0i0`（分支 `wt/pv2096yok0i0`，基于 `origin/main`）→ 主 checkout 期间分支和 HEAD 一动没动 → 在 worktree 里改文档、提交 → `land` 完成 rebase + `push HEAD:main` + 删除 worktree 和分支。**全程无人 checkout main。**
