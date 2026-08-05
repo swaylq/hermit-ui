@@ -261,6 +261,12 @@
      indicator inset into that padding (max, not stack) so the bar sits snug above
      the indicator instead of leaving extra empty space below its content. */
   .pwa-pb-safe { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
+  /* Overlay sheets (session detail, agent detail) portal to <body>, so they
+     never sit inside the pwa-safe-* shell — without this their header text and
+     close button land under the iOS status bar. top must stay plain 0.75rem
+     outside standalone (the base class sets top-3; this media block overrides
+     it, and being unlayered it beats the layered utility regardless of order). */
+  .pwa-sheet-safe-top { top: calc(env(safe-area-inset-top) + 0.75rem); }
 }
 
 /* "Hermit" wordmark — a Cochin rendering baked to a transparent PNG, used as a
