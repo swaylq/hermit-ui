@@ -54,6 +54,17 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{AGENT_DIR}}/scripts/hook-worktree-notice.sh",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
