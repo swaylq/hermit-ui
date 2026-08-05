@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { resolveMachine, UsageInput } from '../route';
+import { usageReplaceWhere } from '@/server/usage-replace';
 
 // `replaceSince` makes this batch a SNAPSHOT of the window rather than an addition to
 // it: every bucket from that instant on is dropped first, and this run's rows become
@@ -39,11 +40,14 @@ export async function POST(req: NextRequest) {
   // Clear-then-write in ONE transaction: a reader mid-run must see either the old
   // window or the new one, never an empty page. Only the first batch of a run carries
   // the boundary; the rest fall through to the upsert below and fill in behind it.
+  //
+  // The delete covers the window AND any pre-window rows this batch carries — see
+  // usageReplaceWhere for why a batch reaches outside its own window at all.
   if (body.replaceSince) {
     const since = new Date(body.replaceSince);
     const rows = body.items.map(row);
     await prisma.$transaction([
-      prisma.usageHourly.deleteMany({ where: { machineId: machine.id, hourBucket: { gte: since } } }),
+      prisma.usageHourly.deleteMany({ where: usageReplaceWhere(machine.id, since, rows) }),
       ...(rows.length ? [prisma.usageHourly.createMany({ data: rows })] : []),
     ]);
     return NextResponse.json({ ok: true, updated: rows.length, replacedFrom: since.toISOString() });
