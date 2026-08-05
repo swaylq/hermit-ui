@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contextTokensFrom, emitItemsFor } from './pi-rpc';
+import { contextTokensFrom, emitItemsFor, eventKeyFor, singleFlight } from './pi-rpc';
 
 // The bug this guards: ensure() awaited client.start() between checking the
 // live map and populating it, so concurrent chatTicks each spawned their own pi
@@ -8,9 +8,10 @@ import { contextTokensFrom, emitItemsFor } from './pi-rpc';
 // once per listener with an independent ordinal, and the same turn appeared
 // three times in the dashboard.
 //
-// This models the guard itself rather than importing pi-rpc.ts, which would
-// spawn real child processes. The invariant under test is "N concurrent
-// ensure() calls for one session produce exactly one boot".
+// The first version of this file re-implemented the guard locally, to avoid
+// importing a module that spawns child processes — and so it passed while
+// ensure() itself never read the map it was supposed to consult. It now drives
+// the real guard (`singleFlight`), with `boot` standing in for the spawn.
 
 function makeEnsure(boot: (id: string) => Promise<{ id: string }>) {
   const live = new Map<string, { id: string }>();
@@ -19,13 +20,7 @@ function makeEnsure(boot: (id: string) => Promise<{ id: string }>) {
   return async function ensure(id: string) {
     const existing = live.get(id);
     if (existing) return existing;
-    const inFlight = starting.get(id);
-    if (inFlight) return inFlight;
-
-    const p = boot(id).then((h) => { live.set(id, h); return h; })
-      .finally(() => starting.delete(id));
-    starting.set(id, p);
-    return p;
+    return singleFlight(starting, id, () => boot(id).then((h) => { live.set(id, h); return h; }));
   };
 }
 
@@ -82,6 +77,34 @@ test('a failed boot does not poison later attempts', async () => {
 
   assert.equal(ok.id, 's1');
   assert.equal(boots, 2, 'the in-flight entry must be cleared on failure');
+});
+
+// externalId is what /api/sync/chat-message upserts on, and a conflict is an
+// UPDATE of the existing row's content. pi's events carry no durable id, so the
+// key falls back to a counter — which used to restart at 0 in every new child,
+// meaning the first turn after a gateway restart rewrote the session's opening
+// message in place instead of appending a reply.
+test('the same ordinal in two different children yields different ids', () => {
+  const first = { bootId: 'sess-abc-boot1', ordinal: 0 };
+  const second = { bootId: 'sess-abc-boot2', ordinal: 0 };
+
+  assert.notEqual(eventKeyFor(first, null), eventKeyFor(second, null));
+});
+
+test('a durable entry id wins and does not consume an ordinal', () => {
+  const h = { bootId: 'b', ordinal: 0 };
+
+  assert.equal(eventKeyFor(h, { entryId: 'entry-9' }), 'entry-9');
+  assert.equal(h.ordinal, 0, 'a replayed entry must key on its own id, not on position');
+});
+
+test('successive events in one child get successive ordinals', () => {
+  const h = { bootId: 'b', ordinal: 0 };
+
+  const keys = [eventKeyFor(h, null), eventKeyFor(h, null), eventKeyFor(h, null)];
+
+  assert.equal(new Set(keys).size, 3);
+  assert.equal(h.ordinal, 3);
 });
 
 // contextTokens must mean the same thing on both backends. The claude path

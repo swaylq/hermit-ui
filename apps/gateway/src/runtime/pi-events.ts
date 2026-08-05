@@ -69,8 +69,30 @@ export function translatePiEvent(ev: any, externalId: string): TranslatedItem[] 
   if (ev.type === 'message_end' && ev.message?.role === 'assistant') {
     const parts = Array.isArray(ev.message.content) ? ev.message.content : [];
     const content = parts.map(toBlock).filter((b: Block | null): b is Block => b !== null);
-    if (content.length === 0) return [];
-    return [{ role: 'assistant', content, externalId }];
+
+    const out: TranslatedItem[] = [];
+    if (content.length > 0) out.push({ role: 'assistant', content, externalId });
+
+    // A failed model call is NOT an exception here — pi encodes it as the final
+    // assistant message with stopReason 'error'/'aborted' and an errorMessage
+    // (pi-ai: "Failures must be encoded in the returned stream ... with
+    // stopReason 'error' or 'aborted'"). Such a message usually carries no
+    // renderable content, so translating only `content` dropped the whole turn:
+    // the user sent a message, the provider 429'd or overflowed, and the chat
+    // showed nothing whatsoever. Silence reads as "the agent ignored me", which
+    // is the same symptom as a lost session.
+    const stop = ev.message.stopReason;
+    if (stop === 'error' || stop === 'aborted') {
+      const detail = String(ev.message.errorMessage ?? '').trim();
+      const text = stop === 'aborted'
+        ? `[turn interrupted${detail ? ` — ${detail}` : ''}]`
+        : `[pi error — the turn did not complete]\n${detail || 'no error message reported'}`;
+      // Its own externalId: the assistant row above and this note are separate
+      // rows, and the sync route upserts by (sessionId, externalId).
+      out.push({ role: 'system', content: [{ type: 'text', text }], externalId: `${externalId}:stop` });
+    }
+
+    return out;
   }
 
   if (ev.type === 'tool_execution_end') {

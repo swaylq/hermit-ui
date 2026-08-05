@@ -45,6 +45,26 @@ type PiHandle = RuntimeHandle & {
   seen: Set<string>;
   ordinal: number;
   /**
+   * Unique per spawned child. Scopes the ordinal fallback in externalIds.
+   *
+   * pi's session events carry no durable entry id — `message_end` is
+   * `{type, message}` and nothing else (docs/pi-runtime-design.md), so the
+   * counter below is not a last resort, it is the live path. It restarts at 0
+   * for every child, and the dashboard upserts by (sessionId, externalId) with
+   * `update: {role, content}` on conflict. So an unscoped `ord-N` meant the
+   * first turn after a gateway restart REWROTE the session's first message in
+   * place: the new reply appeared at the top of the chat as mutated history,
+   * the actual answer never appeared at the bottom, and `lastMessageAt` did not
+   * advance so the session was not even marked unread. Scoping the counter to
+   * the child that produced it keeps every turn a distinct row.
+   */
+  bootId: string;
+  /**
+   * Where this session's items go. Kept on the handle so a child that dies
+   * between turns can still report itself into the chat.
+   */
+  emit: (item: SyncItem) => void;
+  /**
    * Usage of the most recent assistant turn.
    *
    * getSessionStats() only reports session totals, but the dashboard's context
@@ -63,7 +83,103 @@ const live = new Map<string, PiHandle>();
 // the check, each spawns its own pi child and registers its own event listener,
 // and every event is emitted once per listener with an independent ordinal —
 // which surfaced as the same turn appearing three times in the dashboard.
+//
+// (This map and that paragraph shipped in the fix commit; ensure() was never
+// changed to read it, so the bug it describes stayed live and the regression
+// test asserted against a local copy of the guard instead of this module.)
 const starting = new Map<string, Promise<PiHandle>>();
+
+// Cool-down after a boot that threw, keyed by session.
+//
+// A child that dies on every spawn — bad provider key, unreachable endpoint,
+// a cliPath that no longer resolves — otherwise gets respawned at chatTick's
+// ~2s cadence for as long as the message stays queued, silently: the failure
+// only ever reached the gateway console.
+const bootFailedUntil = new Map<string, { until: number; error: Error }>();
+const BOOT_BACKOFF_MS = 15_000;
+
+/**
+ * Run `factory` at most once per key while a previous call is still in flight.
+ *
+ * Exported so the guard itself is what the regression test exercises; a test
+ * that re-implements it locally passes while the real ensure() is unguarded,
+ * which is exactly what happened here.
+ */
+export function singleFlight<T>(
+  inFlight: Map<string, Promise<T>>,
+  key: string,
+  factory: () => Promise<T>,
+): Promise<T> {
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+  // .finally, not .then: a boot that threw must clear the slot too, or one bad
+  // spawn would pin the session to a rejected promise for the gateway's life.
+  const p = factory().finally(() => { inFlight.delete(key); });
+  inFlight.set(key, p);
+  return p;
+}
+
+/**
+ * The dedup / upsert key for one pi event, consuming an ordinal when the event
+ * carries no durable id of its own (which today is every event).
+ *
+ * Mutates `h.ordinal` — the counter has to advance exactly once per keyed
+ * event, and doing it here keeps the boot scoping and the increment together.
+ */
+export function eventKeyFor(
+  h: { bootId: string; ordinal: number },
+  raw: { entryId?: string; id?: string } | null | undefined,
+): string {
+  const durable = raw?.entryId ?? raw?.id;
+  if (durable) return durable;
+  return `${h.bootId}-ord-${h.ordinal++}`;
+}
+
+/** A chat row from the runtime itself, not from the model. */
+function systemItem(sessionId: string, externalId: string, text: string): SyncItem {
+  return {
+    sessionId,
+    role: 'system',
+    content: [{ type: 'text', text }],
+    externalId,
+    claudeSessionId: null,
+  };
+}
+
+/**
+ * Did this call fail because the child is gone, rather than being slow?
+ *
+ * RpcClient reports process death only in the Error message — it rejects every
+ * pending and subsequent call once the child exits, and exposes no exit hook to
+ * subscribe to. The distinction matters: a request that hit RpcClient's 30s
+ * timeout reads "Timeout waiting for response to …" and must NOT count as
+ * death, or a slow-but-healthy turn would be evicted and answered twice.
+ */
+function isDeadClientError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /Agent process (exited|error|stdin)|Client not started/.test(msg);
+}
+
+/**
+ * Drop a dead child so the next ensure() spawns a fresh one, and say so.
+ *
+ * Without this the handle stayed in `live` after the child died: every later
+ * submit() threw into chat-runner's catch, the message was never acked, and the
+ * session retried the same dead client forever while the dashboard showed a
+ * perfectly normal-looking chat that had simply stopped answering.
+ */
+function evict(sessionId: string, reason: string): void {
+  const h = live.get(sessionId);
+  if (!h) return;
+  live.delete(sessionId);
+  h.client.stop().catch(() => undefined);
+  console.warn(`[pi] evicted dead session=${sessionId.slice(0, 8)}: ${reason}`);
+  h.emit(systemItem(
+    sessionId,
+    `${sessionId}:${h.bootId}-exit`,
+    `[pi session ended — ${reason}]\nThe next message starts a fresh pi session, which will not carry this conversation's context.`,
+  ));
+}
 
 /**
  * Window occupancy for one turn, from pi's per-message Usage.
@@ -110,6 +226,42 @@ export class PiRpcRuntime implements AgentRuntime {
     const existing = live.get(session.id);
     if (existing) return existing;
 
+    // A child that cannot start at all is reported once, then left alone for a
+    // while, instead of being respawned on every tick.
+    const cooling = bootFailedUntil.get(session.id);
+    if (cooling && Date.now() < cooling.until) throw cooling.error;
+
+    // Serialise concurrent boots. deliverMessages is fire-and-forget and
+    // chatTick fires every ~2s, so while the first call is inside
+    // client.start() the next ticks reach here too — each spawning its own
+    // child, each registering its own listener over its own ordinal counter.
+    // Two live children then answered the same session with neither holding the
+    // other's turns, which is what a session losing its thread looks like from
+    // the chat.
+    return singleFlight(starting, session.id, () =>
+      this.boot(session, emit)
+        .then((handle) => {
+          live.set(session.id, handle);
+          bootFailedUntil.delete(session.id);
+          return handle;
+        })
+        .catch((e: unknown) => {
+          const error = e instanceof Error ? e : new Error(String(e));
+          if (!cooling) {
+            console.error(`[pi] boot failed for session=${session.id.slice(0, 8)}:`, error.message);
+            emit(systemItem(
+              session.id,
+              `${session.id}:boot-failed-${Date.now()}`,
+              `[pi could not start]\n${error.message.slice(0, 800)}`,
+            ));
+          }
+          bootFailedUntil.set(session.id, { until: Date.now() + BOOT_BACKOFF_MS, error });
+          throw error;
+        }));
+  }
+
+  /** Spawn one pi child and wire its event stream. Only called via ensure(). */
+  private async boot(session: RuntimeSession, emit: (item: SyncItem) => void): Promise<PiHandle> {
     // The child inherits the gateway's env plus the provider key, resolved from
     // the encrypted store at start time so it never lands in a config file.
     const client = new RpcClient({
@@ -141,9 +293,14 @@ export class PiRpcRuntime implements AgentRuntime {
       client,
       seen: new Set<string>(),
       ordinal: 0,
+      // pi's own session id makes an externalId traceable back to a session file
+      // on disk, but it is NOT unique on its own once resume lands (`pi
+      // --session <id>` reattaches to the same id with the counter back at 0),
+      // so a per-spawn suffix carries the uniqueness.
+      bootId: `${state?.sessionId ?? 'pi'}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      emit,
       lastTurn: null,
     };
-    live.set(session.id, handle);
 
     client.onEvent((ev: unknown) => {
       const raw = ev as {
@@ -162,9 +319,11 @@ export class PiRpcRuntime implements AgentRuntime {
       }
 
       // Prefer pi's durable entry id so a reconnect that replays the session
-      // dedupes instead of duplicating. Ordinal is only a last resort.
-      const key = raw?.entryId ?? raw?.id ?? `ord-${handle.ordinal++}`;
-      const externalId = `${session.id}:${key}`;
+      // dedupes instead of duplicating. No session event carries one today, so
+      // the ordinal fallback is the path every message actually takes — hence
+      // the bootId scope (see PiHandle.bootId), without which a restart's first
+      // turn silently overwrote the session's first message.
+      const externalId = `${session.id}:${eventKeyFor(handle, raw)}`;
       if (handle.seen.has(externalId)) return;
 
       const items = emitItemsFor(session.id, externalId, ev);
@@ -184,16 +343,35 @@ export class PiRpcRuntime implements AgentRuntime {
     // steer() lands mid-turn, prompt() starts one — the same distinction the
     // tmux path makes between "queue into a busy pane" and a fresh submit.
     const working = await this.isWorking(handle);
-    if (working) await h.client.steer(text, payload);
-    else await h.client.prompt(text, payload);
+    try {
+      if (working) await h.client.steer(text, payload);
+      else await h.client.prompt(text, payload);
+    } catch (e) {
+      // Returning false leaves the row un-acked, so chat-runner redelivers it on
+      // the next tick — by which time the evicted session has been respawned and
+      // the message lands on a live child instead of being lost to a dead one.
+      if (isDeadClientError(e)) {
+        evict(h.sessionId, (e as Error).message.split('.')[0]);
+        return false;
+      }
+      throw e;
+    }
     return true;
   }
 
   async isWorking(handle: RuntimeHandle): Promise<boolean> {
     const h = handleOf(handle);
     if (!h) return false;
-    const state = (await h.client.getState().catch(() => null)) as
-      { isStreaming?: boolean; isCompacting?: boolean } | null;
+    let state: { isStreaming?: boolean; isCompacting?: boolean } | null = null;
+    try {
+      state = (await h.client.getState()) as { isStreaming?: boolean; isCompacting?: boolean };
+    } catch (e) {
+      // Not "idle": gone. isWorking() runs on every chatTick and on every
+      // snapshot probe, so this is where a child that died between turns is
+      // noticed at all.
+      if (isDeadClientError(e)) evict(h.sessionId, (e as Error).message.split('.')[0]);
+      return false;
+    }
     if (!state) return false;
     // Compaction is not a model turn but the session cannot accept one either,
     // so for queue-gating purposes it counts as busy.

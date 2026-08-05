@@ -94,6 +94,64 @@ test('empty text blocks are dropped but siblings survive', () => {
   assert.deepEqual(out[0].content, [{ type: 'text', text: 'real' }]);
 });
 
+// pi encodes a failed model call as the final assistant message, with
+// stopReason 'error' and an errorMessage — usually carrying no content at all.
+// Translating only `content` therefore dropped the entire turn: the user sent a
+// message, the provider 429'd, and the chat showed nothing at all.
+test('a failed turn is reported instead of vanishing', () => {
+  const out = translatePiEvent({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'rate limit exceeded (429)',
+    },
+  } as any, 'e10');
+
+  assert.equal(out.length, 1);
+  assert.equal(out[0].role, 'system');
+  assert.match(JSON.stringify(out[0].content), /rate limit exceeded \(429\)/);
+  assert.notEqual(out[0].externalId, 'e10', 'must not collide with the assistant row for the same event');
+});
+
+test('partial output survives alongside the error note', () => {
+  const out = translatePiEvent({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'I started to answ' }],
+      stopReason: 'error',
+      errorMessage: 'connection reset',
+    },
+  } as any, 'e11');
+
+  assert.equal(out.length, 2);
+  assert.equal(out[0].role, 'assistant');
+  assert.deepEqual(out[0].content, [{ type: 'text', text: 'I started to answ' }]);
+  assert.equal(out[1].role, 'system');
+});
+
+test('an aborted turn reads as interrupted, not as a failure', () => {
+  const out = translatePiEvent({
+    type: 'message_end',
+    message: { role: 'assistant', content: [], stopReason: 'aborted' },
+  } as any, 'e12');
+
+  assert.equal(out.length, 1);
+  assert.match(JSON.stringify(out[0].content), /interrupted/);
+});
+
+test('a normal stop reason adds no note', () => {
+  const out = translatePiEvent({
+    type: 'message_end',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], stopReason: 'stop' },
+  } as any, 'e13');
+
+  assert.equal(out.length, 1);
+  assert.equal(out[0].role, 'assistant');
+});
+
 test('unknown block types are skipped rather than passed through raw', () => {
   const out = translatePiEvent({
     type: 'message_end',

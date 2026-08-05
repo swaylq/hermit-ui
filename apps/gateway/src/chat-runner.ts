@@ -170,6 +170,16 @@ export async function restartOneSession(sessionId: string, stampMs: number): Pro
       sessionStates.delete(sessionId);
     }
     reservedUuids.delete(sessionId);
+    // Restart is what a user reaches for when a session is wedged, so it has to
+    // free the thing that is actually running. For a pi session that is the RPC
+    // child, not a pane: this used to kill a pane that never existed, post the
+    // banner below, and leave the same child serving the same session — a
+    // restart that restarted nothing. Same unconditional call as hibernate (we
+    // cannot tell the backend from here; both are no-ops on the wrong one).
+    await runtimeFor('pi-rpc')
+      ?.stop({ sessionId, externalSessionId: '' }, 'kill')
+      .catch(() => undefined);
+    piStates.delete(sessionId);
     await killTmuxSession(sessionId, 2_000);
     console.log(`[chat-restart] killed session=${sessionId.slice(0, 8)}`);
 
@@ -327,6 +337,15 @@ export async function chatCancelTick() {
         console.error('[chat-cancel] sendInterrupt failed:', e);
       }
     }
+    // A pi session has no pane and no entry in sessionStates, so Escape was
+    // never sent anywhere for it — Stop looked like it worked (the flag cleared)
+    // while the turn ran on untouched. Its runtime owns the abort. Called
+    // unconditionally for the same reason hibernate does: from here we cannot
+    // tell which backend a session is on, and this is a no-op when it has no
+    // live pi child.
+    await runtimeFor('pi-rpc')
+      ?.interrupt({ sessionId: row.id, externalSessionId: '' })
+      .catch((e) => console.error('[chat-cancel] pi abort failed:', e));
     // Ack regardless — even if we didn't have an active state, the DB flag
     // needs clearing so the dashboard stops re-firing on every poll.
     ackIds.push(row.id);

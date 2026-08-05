@@ -314,21 +314,32 @@ macminis — the usual lag applies.
 ## Known gap: externalId stability vs. session resume
 
 The e2e run showed pi's session events do **not** carry a durable entry id —
-`translatePiEvent` fell back to the ordinal counter (`sess-e2e:ord-38`). That is
-correct today only because `ensure()` starts a *fresh* pi session per gateway
-lifetime, so ordinals are unique within the only sequence that exists.
+`translatePiEvent` fell back to the ordinal counter (`sess-e2e:ord-38`).
 
-It stops being correct the moment sessions resume. pi's CLI has
-`--session-id <id>` ("use exact project session ID, creating it if missing"),
-which is the obvious way to make a pi agent survive a gateway restart — but a
-resumed session replays its entries, and replayed events would draw *new*
-ordinals and duplicate every message in the dashboard.
+This paragraph used to claim that was "correct today, because `ensure()` starts
+a fresh pi session per gateway lifetime, so ordinals are unique within the only
+sequence that exists". **It was not.** The sequence resets to 0 in every child,
+while the dashboard's dedup key is `(sessionId, externalId)` and a conflict is
+an `update: {role, content}` — so the first turn after a gateway restart did not
+append a reply, it *rewrote the session's first message in place*, kept its
+original position in the transcript, and left `lastMessageAt` untouched so the
+session was not even marked unread. Two children on one session (the
+concurrent-`ensure()` bug below) did the same thing to each other, live.
 
-So resume must not be implemented until `externalId` is derived from something
-stable. `getEntries()` returns `{entries:[{id, parentId, timestamp, …}], leafId}`
-with durable ids; the fix is to reconcile emitted items against those ids rather
-than counting events. Until then, pi sessions are correct but ephemeral: a
-gateway restart starts a new pi conversation instead of resuming the old one.
+Fixed by scoping the counter to the child that produced it (`PiHandle.bootId` =
+pi's session id plus a per-spawn suffix). Durable ids are still preferred when
+an event carries one; none does today.
+
+Resume is still not implemented, and it is now the main reason a pi session
+loses its thread: a gateway restart, a hibernate, or a crashed child gives the
+next message a pi session with none of the conversation in it, while the
+dashboard still shows the whole transcript. `pi --session <id|path>` reattaches
+to a session file, so the spawn side is cheap; what it needs is somewhere to
+persist "this hermit session is that pi session" (machine-local is enough — the
+child and its session file are both on this machine) and, if a reattach ever
+replays entries, reconciliation against `getEntries()`'s durable ids rather than
+against a counter. Until then the runtime says so out loud instead of pretending
+the context survived — see the eviction row in `pi-rpc.ts`.
 
 ## Risks
 
