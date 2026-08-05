@@ -40,6 +40,25 @@ import { globalMemoryTick } from './global-memory';
 import { chromeReaperTick } from './chrome-reaper';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 
+// This process DRIVES tmux; it is never inside it. Scrub any inherited TMUX vars
+// before anything can shell out.
+//
+// They get inherited when the gateway is first started from a tmux pane: pm2 captures
+// the environment, `pm2 save` writes it to dump.pm2, and every later `pm2 resurrect`
+// restores it — including a $TMUX pointing at that long-dead server. While the machine
+// stays up the socket happens to still exist, so nothing looks wrong; a reboot kills
+// the server and the pointer goes stale.
+//
+// The failure it causes is silent and total: with a dead $TMUX, `tmux new-session -d`
+// EXITS 0 AND CREATES NOTHING. The gateway believes every pane it asks for, delivers
+// into a session that was never created, and every message to that machine stops
+// arriving ("sendKeys failed: tmux session not found"). The browser terminal inherits
+// the same env and shows "error creating /private/tmp/tmux-501/default". Cost sway003
+// its entire message path after a reboot on 2026-08-05, and the Mac had the identical
+// value sitting in its dump waiting for the next one.
+delete process.env.TMUX;
+delete process.env.TMUX_PANE;
+
 console.log('[gateway] starting');
 
 async function safe(label: string, fn: () => Promise<void>) {

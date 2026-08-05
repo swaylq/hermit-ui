@@ -8,8 +8,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg, chunkLiteral } from '@hermit-ui/tmux-driver';
+import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg, chunkLiteral, ensureSession } from '@hermit-ui/tmux-driver';
 
 describe('tmuxPaneName', () => {
   it('keeps the last 12 id chars behind the hermit- prefix', () => {
@@ -164,5 +165,53 @@ describe('chunkLiteral', () => {
   it('honours a custom ceiling, and a char wider than it still goes out whole', () => {
     assert.deepEqual(chunkLiteral('abcdef', 2), ['ab', 'cd', 'ef']);
     assert.deepEqual(chunkLiteral('🐟🐟', 2), ['🐟', '🐟']);
+  });
+});
+
+// The lie that took sway003's message path down after a reboot: with $TMUX pointing at
+// a dead server, `tmux new-session -d` exits 0 and creates nothing. ensureSession used
+// to believe the exit code. These run against real tmux; skipped where it isn't
+// installed (CI, a Linux box without it).
+describe('ensureSession vs a stale $TMUX', () => {
+  const haveTmux = spawnSync('tmux', ['-V'], { encoding: 'utf8' }).status === 0;
+  const opts = () => ({
+    sessionId: 'zzprobe' + Math.random().toString(36).slice(2, 8),
+    cwd: os.tmpdir(),
+    claudeBin: '/bin/sh',
+    claudeArgs: ['-c', 'sleep 30'],
+  });
+
+  it('creates a real session when the environment is clean', { skip: !haveTmux }, () => {
+    const o = opts();
+    const saved = process.env.TMUX;
+    delete process.env.TMUX;
+    try {
+      const r = ensureSession(o as Parameters<typeof ensureSession>[0]);
+      assert.equal(r.created, true);
+      assert.equal(spawnSync('tmux', ['has-session', '-t', r.name]).status, 0, 'session should exist');
+      spawnSync('tmux', ['kill-session', '-t', r.name]);
+    } finally {
+      if (saved !== undefined) process.env.TMUX = saved;
+    }
+  });
+
+  // Production shape: the socket path inherited from $TMUX sits in a directory that no
+  // longer exists (a reboot cleared /tmp). tmux only mkdirs the socket dir when IT
+  // derives the path — given one, it just binds, gets ENOENT, and still exits 0.
+  it('THROWS instead of reporting a phantom session when $TMUX is dead', { skip: !haveTmux }, () => {
+    const o = opts();
+    const saved = process.env.TMUX;
+    process.env.TMUX = '/private/tmp/tmux-501-gone-after-reboot/default,999,1';
+    try {
+      assert.throws(
+        () => ensureSession(o as Parameters<typeof ensureSession>[0]),
+        /does not exist/,
+        'a session tmux did not create must not be reported as created',
+      );
+      assert.notEqual(spawnSync('tmux', ['has-session', '-t', tmuxPaneName(o.sessionId)]).status, 0);
+    } finally {
+      if (saved === undefined) delete process.env.TMUX;
+      else process.env.TMUX = saved;
+    }
   });
 });

@@ -205,6 +205,17 @@ export function ensureSession(opts: EnsureOpts): { name: string; created: boolea
   if (!r.ok) {
     throw new Error(`tmux new-session failed: ${r.stderr || 'exit ' + r.status}`);
   }
+  // Exit 0 is not proof. `tmux new-session -d` returns 0 and creates NOTHING when the
+  // caller's $TMUX points at a dead server — the exact shape of the 2026-08-05 sway003
+  // outage, where the gateway "created" a pane for every message and delivered into
+  // nothing. The env is scrubbed at gateway startup now, but a lie this quiet deserves
+  // its own check: ask tmux whether the session is actually there.
+  if (!hasSession(name)) {
+    throw new Error(
+      `tmux new-session reported success but ${name} does not exist ` +
+        `(stale $TMUX pointing at a dead server does this — it is scrubbed in the gateway entrypoint)`,
+    );
+  }
   return { name, created: true, preExistingUuids };
 }
 
