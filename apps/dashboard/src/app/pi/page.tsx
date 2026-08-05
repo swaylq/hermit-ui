@@ -63,6 +63,8 @@ function Field({
 export default function PiSettingsPage() {
   const getCfg = trpc.machines.getPiConfig.useQuery();
   const setCfg = trpc.machines.setPiConfig.useMutation();
+  // Hooks must all be called before any early return (React error #310 otherwise).
+  const secrets = trpc.secrets.list.useQuery(undefined, { retry: false });
 
   const [cfg, setCfgLocal] = useState<PiConfig | null>(null);
   const [modelsText, setModelsText] = useState('');
@@ -128,7 +130,6 @@ export default function PiSettingsPage() {
     }
   };
 
-  const secrets = trpc.secrets.list.useQuery(undefined, { retry: false });
   const secretNames = (secrets.data?.keys ?? []).sort();
 
   return (
