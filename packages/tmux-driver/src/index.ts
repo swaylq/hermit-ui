@@ -133,6 +133,36 @@ export interface EnsureOpts {
 }
 
 /**
+ * Where `claude` actually is, rather than trusting PATH.
+ *
+ * The pane runs whatever string we hand tmux, and a bare `claude` is resolved against
+ * the PATH the GATEWAY happens to have. That PATH is inherited from whoever started
+ * it: a login shell during hands-on work, but launchd → pm2-resurrect after a reboot,
+ * and launchd's PATH has no `~/.local/bin` — which is exactly where the native claude
+ * installer puts it. The failure is silent and total: every pane dies the instant it
+ * starts (command not found), tmux reports "session not found" on the next send, and
+ * every message to that machine stops being deliverable. Cost 50 days of uptime to
+ * hide, then surfaced the moment sway003 rebooted (2026-08-05).
+ *
+ * So look for the binary where it actually lives, and fall back to the bare name only
+ * if none of the known locations exist (PATH may genuinely carry it elsewhere).
+ * HERMIT_CLAUDE_BIN overrides everything for an unusual install.
+ */
+function resolveClaudeBin(): string {
+  const override = process.env.HERMIT_CLAUDE_BIN;
+  if (override && existsSync(override)) return override;
+  const home = homedir();
+  for (const p of [
+    join(home, '.local', 'bin', 'claude'),   // native installer (the fleet's default)
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+  ]) {
+    if (existsSync(p)) return p;
+  }
+  return 'claude';
+}
+
+/**
  * Idempotent: returns the tmux session name. Pre-snapshots existing JSONL files
  * in the project dir so callers can later identify which file is THIS session's
  * transcript (see getClaudeSessionUuid).
@@ -147,7 +177,7 @@ export function ensureSession(opts: EnsureOpts): { name: string; created: boolea
     return { name, created: false, preExistingUuids };
   }
 
-  const claudeBin = opts.claudeBin ?? 'claude';
+  const claudeBin = opts.claudeBin ?? resolveClaudeBin();
   const extraArgs = [...(opts.claudeArgs ?? [])];
   if (opts.claudeSessionUuid) {
     extraArgs.push('--session-id', opts.claudeSessionUuid);
