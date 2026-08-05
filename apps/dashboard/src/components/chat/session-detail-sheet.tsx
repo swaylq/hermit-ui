@@ -176,10 +176,14 @@ export function SessionDetailSheet({
               {shownRuntime === 'pi-rpc' && (
                 <label className="mt-2.5 block">
                   <span className="text-[11px] uppercase tracking-wide text-muted-foreground">model</span>
+                  {/* The placeholder is just "inherit". Putting the inherited
+                      model id there made an empty field read as a pinned one —
+                      the muted text is dark enough to pass for a value. The
+                      line below says what it inherits TO. */}
                   <Input
                     value={shownModel}
                     onChange={(e) => { setModel(e.target.value); setErr(null); }}
-                    placeholder={d.agentBackend.runtimeModel ?? "this machine's pi default"}
+                    placeholder="inherit"
                     aria-label="pi model"
                     disabled={readOnly || working || save.isPending}
                     className="mt-1 w-full text-sm font-mono"
