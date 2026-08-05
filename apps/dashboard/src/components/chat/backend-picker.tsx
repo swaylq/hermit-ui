@@ -26,7 +26,9 @@ export function BackendPicker({
   agentDefault?: string | null;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="backend">
+    // Side by side once there is room; stacked on a phone, where two columns
+    // wrap each blurb to five lines and the cards stop being scannable.
+    <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-2" role="radiogroup" aria-label="backend">
       {RUNTIME_KINDS.map((kind) => {
         const active = value === kind;
         return (

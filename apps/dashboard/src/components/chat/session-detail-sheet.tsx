@@ -144,9 +144,12 @@ export function SessionDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      {/* data-[side=right]: prefix required — the base sheet's own
-          data-[side=right]:sm:max-w-sm otherwise wins on specificity. */}
-      <SheetContent className="w-full sm:max-w-lg data-[side=right]:sm:max-w-lg overflow-hidden flex flex-col gap-0 p-0">
+      {/* Every width override needs the data-[side=right]: prefix. The base
+          sheet sets data-[side=right]:w-3/4 AND data-[side=right]:sm:max-w-sm;
+          a plain `w-full` survives tailwind-merge next to the variant class and
+          then loses on specificity, which left this 292px wide on a 390px
+          phone. Full-bleed below sm, capped at max-w-lg above it. */}
+      <SheetContent className="data-[side=right]:w-full sm:max-w-lg data-[side=right]:sm:max-w-lg overflow-hidden flex flex-col gap-0 p-0">
         <SheetHeader className="border-b">
           <SheetTitle className="truncate">{d?.title || d?.agentName || 'Session'}</SheetTitle>
           <SheetDescription className="font-mono text-[11px]">{sessionId}</SheetDescription>
