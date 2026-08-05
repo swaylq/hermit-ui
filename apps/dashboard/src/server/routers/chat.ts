@@ -223,7 +223,18 @@ export const chatRouter = router({
           preview: true,
         },
       });
-      return rows;
+
+      // Resolve each row's backend against its agent's default. The column holds
+      // only the session's OWN choice, and null means "inherit" — returning it
+      // raw made every inherited session read as the fleet default, so a pi
+      // agent's sessions were all labelled Claude Code in the chat header.
+      // One query for the machine's agents, not one per row.
+      const agentRuntimes = await prisma.agent.findMany({
+        where: { machineId: ctx.machine.id, name: { in: [...new Set(rows.map((r) => r.agentName))] } },
+        select: { name: true, runtime: true, runtimeProvider: true, runtimeModel: true },
+      });
+      const byName = new Map(agentRuntimes.map((a) => [a.name, a]));
+      return rows.map((r) => ({ ...r, ...resolveRuntime(r, byName.get(r.agentName)) }));
     }),
 
   // Single-session meta for the chat HEADER (title / agentName / state / preview /
