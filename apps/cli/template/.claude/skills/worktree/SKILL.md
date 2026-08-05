@@ -14,13 +14,13 @@ This skill hands you your own worktree when, and only when, that risk is real.
 **Announce it:** "Another session of this agent is live — using the worktree skill to
 work in an isolated checkout."
 
-`wt.sh` lives next to this file. Everything below is idempotent; running it twice is
+`wt.sh` lives next to this file (the absolute path below is this agent's). Everything below is idempotent; running it twice is
 safe, and so is running it in a session that's already isolated.
 
 ## 1. Before you edit — ask
 
 ```bash
-.claude/skills/worktree/wt.sh check <repo>
+{{AGENT_DIR}}/.claude/skills/worktree/wt.sh check <repo>
 ```
 
 Three answers:
@@ -34,7 +34,7 @@ Three answers:
 ## 2. Enter
 
 ```bash
-WT=$(.claude/skills/worktree/wt.sh enter <repo>) && cd "$WT"
+WT=$({{AGENT_DIR}}/.claude/skills/worktree/wt.sh enter <repo>) && cd "$WT"
 ```
 
 Prints the worktree path (`~/.hermit/worktrees/<repo>/<session-id>`, branch
@@ -61,7 +61,7 @@ doesn't need any of this.
 Only after the work is verified the way that repo expects (tests, typecheck, build).
 
 ```bash
-.claude/skills/worktree/wt.sh land "$WT"
+{{AGENT_DIR}}/.claude/skills/worktree/wt.sh land "$WT"
 ```
 
 It fetches, rebases onto `origin/<base>`, pushes `HEAD:<base>`, then removes the
@@ -84,7 +84,7 @@ reintroduces the exact problem this prevents.
 ## 4. Sweep (cheap, do it when you land or when you notice mess)
 
 ```bash
-.claude/skills/worktree/wt.sh sweep <repo>
+{{AGENT_DIR}}/.claude/skills/worktree/wt.sh sweep <repo>
 ```
 
 Worktrees whose session is gone: removed if clean **and** already on the remote base,

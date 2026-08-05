@@ -36,8 +36,14 @@ print('yes' if any('hook-worktree-notice' in h.get('command','') for m in ss for
     fi
 
     mkdir -p "$dir/.claude/skills/worktree" "$dir/scripts"
-    cp "$TEMPLATE"/.claude/skills/worktree/{SKILL.md,wt.sh,wt.test.sh} "$dir/.claude/skills/worktree/"
+    cp "$TEMPLATE"/.claude/skills/worktree/{wt.sh,wt.test.sh} "$dir/.claude/skills/worktree/"
     cp "$TEMPLATE/scripts/hook-worktree-notice.sh" "$dir/scripts/"
+    # SKILL.md carries {{AGENT_DIR}} so the commands it prints are absolute — the
+    # agent's shell cwd wanders, and a relative path resolves to nothing from a
+    # subdirectory. The scaffolder substitutes this at create time; here we do the
+    # same for an agent that already exists.
+    sed "s#{{AGENT_DIR}}#${dir%/}#g" "$TEMPLATE/.claude/skills/worktree/SKILL.md" \
+        > "$dir/.claude/skills/worktree/SKILL.md"
     chmod +x "$dir/.claude/skills/worktree/wt.sh" "$dir/.claude/skills/worktree/wt.test.sh" \
              "$dir/scripts/hook-worktree-notice.sh"
 
