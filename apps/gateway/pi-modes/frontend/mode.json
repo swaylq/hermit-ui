@@ -1,0 +1,13 @@
+{
+  "label": "Frontend",
+  "blurb": "UI work with a real browser. Screenshot → fix → re-verify, read the DOM, check breakpoints.",
+  "engine": "omp",
+  "skills": [],
+  "extensions": [],
+  "model": null,
+  "_note": [
+    "Runs on the omp engine for its browser / inspect_image / lsp / ast_edit tools — the screenshot-verify loop needs real rendering, not a fetch of the HTML.",
+    "No `tools`: omp activates all 31 built-ins by default and its --tools covers built-ins only; leaving it unset keeps the full surface.",
+    "No mode-local skills: omp filters its own discovery and never reads a mode's skills/ dir (see docs/pi-modes-design.md). The discipline lives in SYSTEM.md, resident every turn."
+  ]
+}

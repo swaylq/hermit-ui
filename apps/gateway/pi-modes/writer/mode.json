@@ -1,0 +1,14 @@
+{
+  "label": "Writer",
+  "blurb": "Long-form prose and copy. Voice, structure, editing passes.",
+  "engine": "pi",
+  "tools": ["read", "bash", "edit", "write", "grep"],
+  "skills": [],
+  "extensions": [],
+  "model": null,
+  "_note": [
+    "Runs on the pi engine on purpose: writing is a lean craft. read/bash/edit/write plus grep, with hermit's ask/attach/describe_image tools unioned in by buildModeArgs — 11 tools total, against omp's 31-tool schema which is standing context tax a pure-prose mode does not need.",
+    "Tools are read in pi's vocabulary (read/bash/edit/write/grep/find/ls — no glob). find/ls are omitted; bash covers the rare listing need.",
+    "pi engine keeps mode-local skills viable later (e.g. an editing-passes skill under skills/) — none shipped yet."
+  ]
+}

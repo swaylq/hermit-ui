@@ -1,0 +1,13 @@
+{
+  "label": "Consultant",
+  "blurb": "Research-backed advice. Web search + reading before answering, cited sources, structured long-form replies.",
+  "engine": "omp",
+  "skills": [],
+  "extensions": [],
+  "model": null,
+  "_note": [
+    "Runs on the omp engine for its web_search (Exa), fetch and read tools — answering well requires reading real sources, not composing from memory.",
+    "No `tools`: leave omp's full built-in surface active.",
+    "Exa's hosted MCP works keyless (verified 2026-08-06: web_search_exa returns results with no exaApiKey param), so no API key or custom extension is needed."
+  ]
+}

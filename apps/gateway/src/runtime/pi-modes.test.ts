@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildModeArgs, HERMIT_TOOL_NAMES, type LoadedMode } from './pi-modes';
+import { buildModeArgs, HERMIT_TOOL_NAMES, listModeNames, loadMode, type LoadedMode } from './pi-modes';
 
 function mode(over: Partial<LoadedMode> = {}): LoadedMode {
   return { name: 'test', label: 'Test', dir: '/nonexistent', systemPrompt: '', ...over };
@@ -159,4 +159,53 @@ test('argument order: extensions, then tools, then skills, then the prompt', () 
     { agentDirectory: '/tmp' },
   );
   assert.ok(args.indexOf('--tools') < args.indexOf('--append-system-prompt'));
+});
+
+// ── shipped modes (on-disk recipes) ─────────────────────────────────────────
+// These read the real pi-modes/ directory, so they are the guard that a mode
+// shipped in the repo actually loads and expands the way its mode.json claims.
+
+test('every shipped mode is discoverable on disk', () => {
+  const names = listModeNames();
+  for (const n of ['coding', 'ops', 'omp', 'frontend', 'consultant', 'writer']) {
+    assert.ok(names.includes(n), `${n} missing from [${names.join(', ')}]`);
+  }
+});
+
+test('frontend mode runs on omp with a resident discipline prompt', () => {
+  const m = loadMode('frontend');
+  assert.ok(m, 'frontend mode should load');
+  assert.equal(m.engine, 'omp');
+  assert.ok(m.systemPrompt.length > 0, 'frontend needs a SYSTEM.md');
+  // omp, no tools listed → full built-in surface; only the prompt is added.
+  assert.deepEqual(buildModeArgs(m, { agentDirectory: '/tmp' }), [
+    '--append-system-prompt',
+    m.systemPrompt,
+  ]);
+});
+
+test('consultant mode runs on omp with a resident discipline prompt', () => {
+  const m = loadMode('consultant');
+  assert.ok(m, 'consultant mode should load');
+  assert.equal(m.engine, 'omp');
+  assert.ok(m.systemPrompt.length > 0, 'consultant needs a SYSTEM.md');
+  assert.deepEqual(buildModeArgs(m, { agentDirectory: '/tmp' }), [
+    '--append-system-prompt',
+    m.systemPrompt,
+  ]);
+});
+
+test('writer mode stays on pi and unions hermit tools', () => {
+  const m = loadMode('writer');
+  assert.ok(m, 'writer mode should load');
+  assert.equal(m.engine, 'pi');
+  const args = buildModeArgs(m, { agentDirectory: '/tmp' });
+  const toolsIdx = args.indexOf('--tools');
+  assert.ok(toolsIdx >= 0, 'writer pins a tool allowlist');
+  const tools = args[toolsIdx + 1].split(',');
+  for (const h of HERMIT_TOOL_NAMES) {
+    assert.ok(tools.includes(h), `writer must keep hermit tool ${h}`);
+  }
+  assert.ok(args.includes('--append-system-prompt'), 'writer keeps its SYSTEM.md');
+  assert.ok(toolsIdx < args.indexOf('--append-system-prompt'));
 });

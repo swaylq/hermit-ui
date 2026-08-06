@@ -6,7 +6,7 @@
 //
 // Static rather than fetched: built-in modes ship in the same deploy as this
 // dashboard, so the two are never out of step in practice, and a picker that
-// blocks on a machine round-trip to render three options is not worth the
+// blocks on a machine round-trip to render a handful of options is not worth the
 // column plus the push path it would cost.
 //
 // **Keep in step with apps/gateway/pi-modes/.** If they do drift, the failure is
@@ -17,7 +17,7 @@
 //
 // See docs/pi-modes-design.md.
 
-export const PI_MODES = ['coding', 'ops', 'omp'] as const;
+export const PI_MODES = ['coding', 'ops', 'omp', 'frontend', 'consultant', 'writer'] as const;
 export type PiMode = (typeof PI_MODES)[number];
 
 // The fleet default pi mode (stored as NULL on agent/session rows). omp
@@ -42,8 +42,19 @@ export const PI_MODE_META: Record<PiMode, { label: string; blurb: string }> = {
     label: 'omp (oh-my-pi)',
     blurb: '31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.',
   },
+  frontend: {
+    label: 'Frontend',
+    blurb: 'UI work in a real browser. Screenshot → fix → re-verify, breakpoints, DOM.',
+  },
+  consultant: {
+    label: 'Consultant',
+    blurb: 'Research-backed advice. Web search, read sources, cited structured replies.',
+  },
+  writer: {
+    label: 'Writer',
+    blurb: 'Long-form prose and copy. Voice, structure, editing passes.',
+  },
 };
-
 export function piModeLabel(v: string | null | undefined): string {
   return isPiMode(v) ? PI_MODE_META[v].label : (v || PI_MODE_META[DEFAULT_PI_MODE].label);
 }
