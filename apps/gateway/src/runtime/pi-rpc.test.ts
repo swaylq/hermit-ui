@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contextTokensFrom, emitItemsFor, eventKeyFor, singleFlight } from './pi-rpc';
+import { contextTokensFrom, emitItemsFor, eventKeyFor, providerMismatch, singleFlight } from './pi-rpc';
 
 // The bug this guards: ensure() awaited client.start() between checking the
 // live map and populating it, so concurrent chatTicks each spawned their own pi
@@ -166,4 +166,32 @@ test('every item of a multi-block event carries the session, none the resume han
 
 test('an event that translates to nothing emits nothing', () => {
   assert.deepEqual(emitItemsFor('sess-3', 'sess-3:e1', { type: 'message_start' }), []);
+});
+
+// The bug this guards, measured on a live child: `provider: undefined` with the
+// machine's default model id made pi resolve `claude-opus-5` against its own
+// catalogue and come back on {provider: 'anthropic', baseUrl:
+// api.anthropic.com} — which this machine has no key for. The turn then emitted
+// nothing at all: no reply, no error event, no stderr. Every pi session that
+// pinned no provider stopped answering, silently, and the chat waited forever.
+test('pi landing on a provider we did not ask for is a mismatch', () => {
+  const m = providerMismatch('hyqubit', {
+    model: { provider: 'anthropic', baseUrl: 'https://api.anthropic.com' },
+  });
+  assert.equal(m?.wanted, 'hyqubit');
+  assert.equal(m?.got, 'anthropic');
+  assert.equal(m?.baseUrl, 'https://api.anthropic.com');
+});
+
+test('the provider we asked for is not a mismatch', () => {
+  assert.equal(providerMismatch('hyqubit', { model: { provider: 'hyqubit' } }), null);
+});
+
+// Silence is not disagreement: an unconfigured machine (no provider to ask for)
+// and a pi build that reports no provider must not raise a false alarm on every
+// single boot.
+test('missing information on either side is not a mismatch', () => {
+  assert.equal(providerMismatch(undefined, { model: { provider: 'anthropic' } }), null);
+  assert.equal(providerMismatch('hyqubit', { model: {} }), null);
+  assert.equal(providerMismatch('hyqubit', null), null);
 });

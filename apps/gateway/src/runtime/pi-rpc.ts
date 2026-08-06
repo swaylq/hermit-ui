@@ -169,6 +169,27 @@ export function eventKeyFor(
   return `${h.bootId}-ord-${h.ordinal++}`;
 }
 
+/**
+ * Did pi end up on a different provider than the one we asked for?
+ *
+ * pi resolves a bare model id against its own built-in catalogue, so asking for
+ * a machine model id without naming the machine's provider silently lands on
+ * whichever public provider happens to publish that id. The turn then produces
+ * no reply, no error event and no stderr — the chat simply waits forever. This
+ * is the cheap check that turns that into something a person can see.
+ *
+ * Only a genuine disagreement counts: pi not reporting a provider at all, or us
+ * not having asked for one, is not evidence of anything.
+ */
+export function providerMismatch(
+  wanted: string | undefined,
+  resolved: { model?: { provider?: string; baseUrl?: string } } | null,
+): { wanted: string; got: string; baseUrl?: string } | null {
+  const got = resolved?.model?.provider;
+  if (!wanted || !got || got === wanted) return null;
+  return { wanted, got, baseUrl: resolved?.model?.baseUrl };
+}
+
 /** A chat row from the runtime itself, not from the model. */
 function systemItem(sessionId: string, externalId: string, text: string): SyncItem {
   return {
@@ -315,7 +336,16 @@ export class PiRpcRuntime implements AgentRuntime {
     const modeArgs = buildModeArgs(mode, { agentDirectory: session.agentDirectory });
     // The machine's default model, for sessions that pin none. Set on Settings →
     // Pi Runtime so a new chat does not have to name a model to get a good one.
-    const machineDefaultModel = resolveDefaultModel(await getPiConfig());
+    const piConfig = await getPiConfig();
+    const machineDefaultModel = resolveDefaultModel(piConfig);
+    // ...and the provider that serves it. A model id alone is NOT enough: pi
+    // resolves a bare id against its own built-in catalogue, so `claude-opus-5`
+    // with no provider came back as {provider: 'anthropic', baseUrl:
+    // api.anthropic.com} — a provider this machine has no key for. The turn then
+    // produced NOTHING: no reply, no error event, no stderr, just a child
+    // sitting idle while the chat waited forever. Every pi session that pinned
+    // no provider was dead from the moment the machine default model shipped.
+    const machineProvider = piConfig.provider?.trim() || undefined;
 
     // The conversation this session was already having, if it had one. `pi
     // --session <path>` opens that file instead of creating a session, which is
@@ -330,7 +360,11 @@ export class PiRpcRuntime implements AgentRuntime {
     const client = new RpcClient({
       cwd: session.agentDirectory,
       cliPath: resolvePiCli(),
-      provider: session.provider ?? undefined,
+      // Provider and model are resolved with the same precedence, and the
+      // provider falls back to the machine's rather than to pi's built-in
+      // catalogue — the models offered on the settings page are the machine
+      // endpoint's, so an id from that list means nothing anywhere else.
+      provider: session.provider ?? machineProvider,
       // Precedence: the session's own pin, then a mode that genuinely requires
       // a particular model (a browser mode needs an endpoint that accepts image
       // blocks), then the machine's configured default.
@@ -359,7 +393,23 @@ export class PiRpcRuntime implements AgentRuntime {
     await client.start();
 
     const state = (await client.getState().catch(() => null)) as
-      { sessionId?: string; sessionFile?: string } | null;
+      { sessionId?: string; sessionFile?: string; model?: { provider?: string; baseUrl?: string } } | null;
+
+    // Loud, because the alternative is a session that answers nothing at all
+    // and never says why.
+    const wrongProvider = providerMismatch(session.provider ?? machineProvider, state);
+    if (wrongProvider) {
+      console.error(
+        `[pi] session=${session.id.slice(0, 8)} resolved to provider "${wrongProvider.got}" ` +
+        `(${wrongProvider.baseUrl ?? 'no base url'}) but this machine configured "${wrongProvider.wanted}"`,
+      );
+      emit(systemItem(
+        session.id,
+        `${session.id}:provider-mismatch-${state?.sessionId ?? 'unknown'}`,
+        `[pi is on the wrong provider]\nAsked for "${wrongProvider.wanted}", pi resolved "${wrongProvider.got}"`
+        + `${wrongProvider.baseUrl ? ` (${wrongProvider.baseUrl})` : ''}. Turns will not be answered until this is fixed.`,
+      ));
+    }
 
     // Did the reattach take? pi reports the session it actually opened, so this
     // is checked rather than assumed: a `--session` that pi declined (a file it
