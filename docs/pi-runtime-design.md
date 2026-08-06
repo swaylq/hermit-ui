@@ -330,16 +330,52 @@ Fixed by scoping the counter to the child that produced it (`PiHandle.bootId` =
 pi's session id plus a per-spawn suffix). Durable ids are still preferred when
 an event carries one; none does today.
 
-Resume is still not implemented, and it is now the main reason a pi session
-loses its thread: a gateway restart, a hibernate, or a crashed child gives the
-next message a pi session with none of the conversation in it, while the
-dashboard still shows the whole transcript. `pi --session <id|path>` reattaches
-to a session file, so the spawn side is cheap; what it needs is somewhere to
-persist "this hermit session is that pi session" (machine-local is enough — the
-child and its session file are both on this machine) and, if a reattach ever
-replays entries, reconciliation against `getEntries()`'s durable ids rather than
-against a counter. Until then the runtime says so out loud instead of pretending
-the context survived — see the eviction row in `pi-rpc.ts`.
+## Resume
+
+Resume used to be the main reason a pi session lost its thread: a gateway
+restart, a hibernate or a crashed child handed the next message a pi session
+with none of the conversation in it, while the dashboard still showed the whole
+transcript. It was silent, too — the eviction row below only fires for a child
+that dies while the gateway lives, and a restart takes the in-memory handle map
+with it. Sessions `cmsgylws` (2026-08-06) and its predecessors were lost that
+way, mid-conversation, to the gateway restarts that developing pi requires.
+
+Implemented as `runtime/pi-sessions.ts` plus the reattach path in `boot()`:
+
+- **The pointer.** `<AGENTS_ROOT>/.hermit/pi-sessions.json` maps a hermit session
+  id to the pi session file it owns. Machine-local, because the session file is:
+  a pointer synced to another host would name a file that is not there.
+- **The reattach.** `boot()` spawns with `--session <path>` when the pointer
+  resolves to a file that exists, then verifies it took by comparing
+  `getState().sessionId` against the id in the pointer, rather than assuming a
+  flag that pi could have declined.
+- **Kept across both stop modes.** hermit's `kill` is the restart button, whose
+  claude-side equivalent respawns with `--resume` and keeps every turn; a
+  restart that also wiped the context would be worse than the wedged session it
+  was reached for.
+
+Measured against pi 0.83 rather than assumed (`getState()` on a real 132KB
+session file):
+
+| question | answer |
+| --- | --- |
+| does `--session <path>` reattach? | yes — same `sessionId`, all 57 entries, `messageCount` 55 |
+| does pi replay entries as events on reattach? | **no** — zero events before the first prompt |
+| does opening a session file modify it? | no — byte-identical before and after |
+| when is the file written? | only once a turn completes; a session with no turn leaves **no file at all** |
+
+That last row is why `PiSessionPointer.flushed` exists. Without it "the file is
+missing" is ambiguous between "a conversation was lost" and "there was never a
+conversation", and the runtime would announce a lost thread to every user whose
+previous child died before answering anything. The flag is set from the first
+`message_end`, and only a pointer carrying it earns the chat-visible notice.
+
+`PiHandle.replayGuard` drops events that arrive on a reattached child before our
+own first turn. The measurement above says pi replays nothing, so it is belt and
+braces — but the failure it prevents is a duplicated transcript (replayed
+entries would take fresh ordinals and insert second copies), which is not a risk
+worth carrying on one observation. If pi ever does emit durable entry ids,
+`eventKeyFor` already prefers them and the guard becomes redundant.
 
 ## Risks
 

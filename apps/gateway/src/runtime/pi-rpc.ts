@@ -6,6 +6,7 @@
 //
 // See docs/pi-runtime-design.md.
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RpcClient } from '@earendil-works/pi-coding-agent';
@@ -15,6 +16,7 @@ import type {
 import { translatePiEvent } from './pi-events';
 import { providerEnv, machineProviderEnv, visionEnv } from './pi-credentials';
 import { resolveMode, buildModeArgs } from './pi-modes';
+import { readPiSession, rememberPiSession, resumablePiSession } from './pi-sessions';
 import { getPiConfig, resolveDefaultModel } from '../pi-config';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 
@@ -84,6 +86,26 @@ type PiHandle = RuntimeHandle & {
    * event stream as it goes past.
    */
   lastTurn: { contextTokens: number; outputTokens: number } | null;
+  /**
+   * Set on a child that was reattached to an existing session file; cleared by
+   * the first submit.
+   *
+   * A reattached child holds a conversation the dashboard has already stored.
+   * If pi were to replay those entries through the event stream, they would
+   * arrive with fresh ordinals (no session event carries a durable id — see
+   * eventKeyFor), so every one of them would insert a SECOND copy of a message
+   * already in the chat. The measured behaviour is that pi replays nothing, but
+   * "measured once" is not a guarantee to hang a duplicated transcript on:
+   * events before our own first turn are dropped, since after a restart there
+   * is by definition no in-flight turn of ours for them to belong to.
+   */
+  replayGuard: boolean;
+  /** How many events the guard has dropped — logged once, to notice if pi ever does replay. */
+  replaySuppressed: number;
+  /** The session file pi says this child is writing, if it said. */
+  sessionFile: string | null;
+  /** Whether this child has already recorded that its file made it to disk. */
+  flushMarked: boolean;
 };
 
 const live = new Map<string, PiHandle>();
@@ -186,11 +208,13 @@ function evict(sessionId: string, reason: string): void {
   live.delete(sessionId);
   h.client.stop().catch(() => undefined);
   console.warn(`[pi] evicted dead session=${sessionId.slice(0, 8)}: ${reason}`);
-  h.emit(systemItem(
-    sessionId,
-    `${sessionId}:${h.bootId}-exit`,
-    `[pi session ended — ${reason}]\nThe next message starts a fresh pi session, which will not carry this conversation's context.`,
-  ));
+  // What happens next depends on whether the session file survived the child,
+  // which is the ordinary case — pi appends to it as the conversation goes, so
+  // a crashed or killed child leaves the thread on disk to be picked back up.
+  const next = resumablePiSession(sessionId)
+    ? 'The next message restarts pi on this conversation and carries on.'
+    : "The next message starts a fresh pi session, which will not carry this conversation's context.";
+  h.emit(systemItem(sessionId, `${sessionId}:${h.bootId}-exit`, `[pi session ended — ${reason}]\n${next}`));
 }
 
 /**
@@ -293,6 +317,14 @@ export class PiRpcRuntime implements AgentRuntime {
     // Pi Runtime so a new chat does not have to name a model to get a good one.
     const machineDefaultModel = resolveDefaultModel(await getPiConfig());
 
+    // The conversation this session was already having, if it had one. `pi
+    // --session <path>` opens that file instead of creating a session, which is
+    // what makes a gateway restart survivable: the child is new, the thread is
+    // not. `pointer` without `resume` means we had a thread and lost the file —
+    // the one case worth telling the user about, below.
+    const pointer = readPiSession(session.id);
+    const resume = resumablePiSession(session.id);
+
     // The child inherits the gateway's env plus the provider key, resolved from
     // the encrypted store at start time so it never lands in a config file.
     const client = new RpcClient({
@@ -307,7 +339,13 @@ export class PiRpcRuntime implements AgentRuntime {
       // --no-approve keeps it from trusting project-local extension/skill files
       // it happens to find in the workspace — only ours is loaded on purpose.
       // hermit's extension goes FIRST so a mode extension can see its tools.
-      args: ['--extension', hermitExtensionPath(), ...modeArgs],
+      // --session last: an absolute path, so it is independent of cwd and of
+      // every mode argument before it.
+      args: [
+        '--extension', hermitExtensionPath(),
+        ...modeArgs,
+        ...(resume ? ['--session', resume.file] : []),
+      ],
       env: {
         ...process.env,
         ...(await providerEnv(session.provider)),
@@ -320,7 +358,38 @@ export class PiRpcRuntime implements AgentRuntime {
     });
     await client.start();
 
-    const state = (await client.getState().catch(() => null)) as { sessionId?: string } | null;
+    const state = (await client.getState().catch(() => null)) as
+      { sessionId?: string; sessionFile?: string } | null;
+
+    // Did the reattach take? pi reports the session it actually opened, so this
+    // is checked rather than assumed: a `--session` that pi declined (a file it
+    // could not parse, a build without the flag) would otherwise be reported to
+    // the user as continuity while the model started from nothing.
+    const reattached = Boolean(resume && state?.sessionId && state.sessionId === resume.piSessionId);
+
+    // Write the pointer on every boot, reattach or not — this is the only place
+    // that knows which file the child ended up with, and refreshing it on a
+    // reattach is also what keeps the store's LRU cap meaningful.
+    if (state?.sessionId && state.sessionFile) {
+      rememberPiSession(session.id, {
+        file: state.sessionFile,
+        piSessionId: state.sessionId,
+        cwd: session.agentDirectory,
+        // Carried forward, not recomputed. A reattach is itself proof the file
+        // is on disk with a conversation in it, and a pointer that already
+        // earned the flag must not lose it here — the flush-mark in onEvent
+        // only fires for a child that has not been marked, so a downgrade would
+        // be permanent and would silence the one notice that matters.
+        flushed: reattached || pointer?.flushed || undefined,
+      });
+    } else {
+      // Not fatal, but this session will amnesia on the next restart, so it is
+      // said out loud rather than discovered later in a confused conversation.
+      console.warn(
+        `[pi] session=${session.id.slice(0, 8)}: pi reported no session file; ` +
+        'this session will not survive a gateway restart',
+      );
+    }
 
     const handle: PiHandle = {
       sessionId: session.id,
@@ -329,13 +398,20 @@ export class PiRpcRuntime implements AgentRuntime {
       seen: new Set<string>(),
       ordinal: 0,
       // pi's own session id makes an externalId traceable back to a session file
-      // on disk, but it is NOT unique on its own once resume lands (`pi
-      // --session <id>` reattaches to the same id with the counter back at 0),
-      // so a per-spawn suffix carries the uniqueness.
+      // on disk, but it is NOT unique on its own now that resume has landed:
+      // `--session <path>` reattaches to the same pi session id with the ordinal
+      // counter back at 0, so a per-spawn suffix carries the uniqueness. Without
+      // it, the first turn after a restart would upsert onto the row the first
+      // turn of the previous child wrote.
       bootId: `${state?.sessionId ?? 'pi'}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
       mode: mode?.name ?? null,
       emit,
       lastTurn: null,
+      replayGuard: reattached,
+      replaySuppressed: 0,
+      sessionFile: state?.sessionFile ?? null,
+      // A reattached child is by definition writing a file that already exists.
+      flushMarked: reattached,
     };
 
     client.onEvent((ev: unknown) => {
@@ -343,6 +419,18 @@ export class PiRpcRuntime implements AgentRuntime {
         entryId?: string; id?: string; type?: string;
         message?: { role?: string; usage?: Record<string, number> };
       } | null;
+
+      // Anything a reattached child says before we have asked it anything is
+      // history the dashboard already holds — see PiHandle.replayGuard.
+      if (handle.replayGuard) {
+        handle.replaySuppressed += 1;
+        if (handle.replaySuppressed === 1) {
+          console.log(
+            `[pi] session=${session.id.slice(0, 8)} reattached: dropping events replayed before the first turn`,
+          );
+        }
+        return;
+      }
 
       // Same basis as the claude path's contextTokens: what the provider was
       // sent for this turn, cache included.
@@ -352,6 +440,27 @@ export class PiRpcRuntime implements AgentRuntime {
           contextTokens: contextTokensFrom(u) ?? 0,
           outputTokens: Number(u.output ?? 0),
         };
+      }
+
+      // A completed assistant turn is the point at which pi has actually
+      // written the session to disk, so it is the point at which the pointer
+      // can promise there is a conversation behind it — see
+      // PiSessionPointer.flushed. Guarded: a failure to record this must not
+      // take down the event stream carrying the reply.
+      if (raw?.type === 'message_end' && !handle.flushMarked && handle.sessionFile) {
+        try {
+          if (fs.existsSync(handle.sessionFile)) {
+            handle.flushMarked = true;
+            rememberPiSession(session.id, {
+              file: handle.sessionFile,
+              piSessionId: handle.externalSessionId,
+              cwd: session.agentDirectory,
+              flushed: true,
+            });
+          }
+        } catch (e) {
+          console.warn(`[pi] session=${session.id.slice(0, 8)}: could not record session pointer:`, (e as Error).message);
+        }
       }
 
       // Prefer pi's durable entry id so a reconnect that replays the session
@@ -369,6 +478,30 @@ export class PiRpcRuntime implements AgentRuntime {
       for (const item of items) emit(item);
     });
 
+    // Three ways this can end, and only one of them is worth interrupting the
+    // conversation over. Saying nothing at all is what made the original bug
+    // expensive — the dashboard shows the full transcript either way, so an
+    // amnesiac child looks exactly like a healthy one until it answers a
+    // question it should already have known. But crying loss over a session
+    // that never had a turn in it would be its own kind of noise.
+    const short = session.id.slice(0, 8);
+    if (reattached) {
+      console.log(`[pi] session=${short} reattached to ${path.basename(resume!.file)}`);
+    } else if (resume || pointer?.flushed) {
+      const why = resume
+        ? `pi opened ${state?.sessionId ?? 'another session'} instead of ${resume.piSessionId}`
+        : `its session file is gone (${pointer!.file})`;
+      console.warn(`[pi] session=${short} could not reattach: ${why}`);
+      emit(systemItem(
+        session.id,
+        `${session.id}:${handle.bootId}-fresh`,
+        `[pi started a fresh session — ${why}]\nThe turns above are not in this session's context.`,
+      ));
+    } else if (pointer) {
+      // Pointer, no file, no turn ever completed under it: nothing was lost.
+      console.log(`[pi] session=${short}: previous child left no session file, starting fresh`);
+    }
+
     return handle;
   }
 
@@ -379,6 +512,10 @@ export class PiRpcRuntime implements AgentRuntime {
     // steer() lands mid-turn, prompt() starts one — the same distinction the
     // tmux path makes between "queue into a busy pane" and a fresh submit.
     const working = await this.isWorking(handle);
+    // From here on the events belong to a turn we asked for, so they are ours to
+    // emit. Cleared BEFORE the send, not after: the reply can start arriving
+    // while prompt() is still resolving.
+    h.replayGuard = false;
     try {
       if (working) await h.client.steer(text, payload);
       else await h.client.prompt(text, payload);
@@ -444,7 +581,11 @@ export class PiRpcRuntime implements AgentRuntime {
     const h = live.get(handle.sessionId);
     if (!h) return;
     // pi persists the session to ~/.pi/agent/sessions/<encoded-cwd>/ either way,
-    // so hibernate and kill differ only in whether we expect to resume it.
+    // and the pointer is kept for BOTH modes on purpose. `kill` here is not
+    // "throw the conversation away" — it is chat-runner's restart button, whose
+    // claude-side equivalent respawns with `--resume` and keeps every turn. A
+    // restart that also wiped the context would be a worse tool than the wedged
+    // session it was reached for.
     live.delete(handle.sessionId);
     await h.client.stop().catch(() => undefined);
   }
