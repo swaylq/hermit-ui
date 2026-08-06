@@ -368,7 +368,11 @@ export async function collectSessionSnapshots(): Promise<SessionSnapshot[]> {
   const psTree = await collectPsTree();
   const settled = await Promise.allSettled(
     pending.sessions.map((s) => {
-      const runtime = runtimeFor((s as { runtime?: string | null }).runtime);
+      // The MODE is not optional here. It is what picks the engine, and each
+      // engine keeps its own live-handle map — so probing an omp session with
+      // pi's runtime finds no handle, reads no usage, and the session shows a
+      // blank context bar forever while its child is perfectly healthy.
+      const runtime = runtimeFor(s.runtime, s.runtimeMode);
       return runtime
         ? probeRuntime(runtime, s.id, s.agentName, s.agentDirectory, s.claudeSessionId)
         : probe(s.id, s.agentName, s.agentDirectory, s.claudeSessionId, psTree);

@@ -22,6 +22,7 @@ import { CtxBar } from '@/components/ctx-bar';
 import { BackendPicker } from './backend-picker';
 import { useScope } from '@/lib/use-scope';
 import { isRuntimeKind, runtimeLabel, type RuntimeKind } from '@/lib/runtime-labels';
+import { isPiMode, piModeLabel, PI_MODE_META } from '@/lib/pi-modes';
 
 function Row({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
   return (
@@ -106,6 +107,18 @@ export function SessionDetailSheet({
     onError: (e) => setErr(e.message),
   });
 
+  // Where the running mode came from, read off the two levels the server already
+  // returned rather than by re-deriving resolveRuntime's fallback chain here: a
+  // session pin wins, an equal agent value means it was inherited, and anything
+  // else is the resolver's default.
+  const mode = d?.backend.runtimeMode ?? null;
+  const modeBlurb = isPiMode(mode) ? PI_MODE_META[mode].blurb : null;
+  const modeSource = d?.runtimeMode
+    ? 'Set on this session.'
+    : mode && mode === d?.agentBackend.runtimeMode
+      ? `Inherited from ${d.agentName}.`
+      : 'The default mode.';
+
   const dirty = !!d
     && (shownRuntime !== d.backend.runtime
       || (shownRuntime === 'pi-rpc' && shownModel.trim() !== (d.runtimeModel ?? '')));
@@ -175,6 +188,27 @@ export function SessionDetailSheet({
                 disabled={readOnly || working || save.isPending}
                 agentDefault={d.agentBackend.runtime}
               />
+
+              {/* Which mode this session runs — the recipe picked at "New chat"
+                  and never shown again, though it is the setting that decides
+                  the most: the mode names the ENGINE (pi or omp), the system
+                  prompt, the tool list and the skills. Read-only and keyed off
+                  the SERVER's resolved backend, not `shownRuntime`, so it states
+                  what is running rather than predicting what an unapplied picker
+                  change would run. */}
+              {d.backend.runtime === 'pi-rpc' && (
+                <div className="mt-2.5">
+                  <span className="text-[11px] uppercase tracking-wide text-muted-foreground">mode</span>
+                  {/* The label alone. piModeLabel already falls back to the raw
+                      directory name for a machine-local mode, so pairing it with
+                      the raw value would read "Coding coding". */}
+                  <p className="mt-1 text-[13px] text-foreground/90">{piModeLabel(mode)}</p>
+                  <span className="mt-1 block text-[11px] leading-snug text-muted-foreground">
+                    {modeBlurb ? `${modeBlurb} ` : ''}
+                    {modeSource} Change it by starting a new chat.
+                  </span>
+                </div>
+              )}
 
               {shownRuntime === 'pi-rpc' && (
                 <label className="mt-2.5 block">

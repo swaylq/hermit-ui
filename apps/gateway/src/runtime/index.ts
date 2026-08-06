@@ -24,10 +24,16 @@ const ompRuntime = new OmpRpcRuntime();
  *
  * An unknown or absent mode resolves to the default mode, whose engine is pi:
  * exactly the behaviour that existed before omp.
+ *
+ * `mode` is REQUIRED, though it accepts null/undefined. It used to be optional,
+ * and the session-snapshot probe quietly omitted it — so every omp session was
+ * probed with pi's runtime, found no handle in pi's live map, and reported no
+ * context at all while its child ran fine. A caller that has no mode must say so
+ * explicitly rather than by leaving the argument off.
  */
 export function runtimeFor(
   kind: string | null | undefined,
-  mode?: string | null,
+  mode: string | null | undefined,
 ): AgentRuntime | null {
   if (kind !== 'pi-rpc') return null;
   return resolveMode(mode)?.engine === 'omp' ? ompRuntime : piRuntime;

@@ -66,8 +66,19 @@ export const api = {
     return r[0]?.result?.data?.json ?? { content: '', enabled: true, updatedAt: null };
   },
 
+  // `runtime`/`runtimeMode` are the dashboard's already-resolved answer (session's
+  // own choice, else the agent's default) and are typed here because every caller
+  // needs BOTH: the mode picks the engine, so a runtimeFor() given only the kind
+  // hands an omp session pi's runtime — which owns a different handle map and so
+  // reports no context at all. That was a live bug; the type is what stops it
+  // coming back as an untyped `as` cast at the next call site.
   pollChatPending: async (): Promise<{
-    sessions: Array<{ id: string; agentName: string; claudeSessionId: string | null; agentDirectory: string | null; isOrchestrator?: boolean }>;
+    sessions: Array<{
+      id: string; agentName: string; claudeSessionId: string | null;
+      agentDirectory: string | null; isOrchestrator?: boolean;
+      runtime?: string | null; runtimeProvider?: string | null;
+      runtimeModel?: string | null; runtimeMode?: string | null;
+    }>;
     messages: Array<{ id: string; sessionId: string; role: string; content: any; createdAt: string }>;
   }> => {
     const r = await get<any>(
