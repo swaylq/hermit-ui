@@ -61,12 +61,16 @@ type ProviderPreset = { provider: string; baseUrl: string; api: string; models: 
 const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   custom: { provider: '', baseUrl: '', api: 'anthropic-messages', models: [], defaultModel: '', secretKey: '' },
   // Claude Code 订阅（复用本机 Keychain OAuth，无 API key；走订阅计划额度）
+  // Model ids verified against the subscription endpoint (2026-08-06): each
+  // returns 200 with `anthropic-ratelimit-unified-status: allowed`, i.e. drawing
+  // on the plan rather than extra usage. The 4-8/4-6 generation this listed
+  // before also still works — it was simply a generation behind.
   'cc-subscription': {
     provider: 'anthropic',
     baseUrl: '',
     api: 'anthropic-messages',
-    models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    defaultModel: 'claude-opus-4-8',
+    models: ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+    defaultModel: 'claude-opus-5',
     secretKey: '',
   },
   // Kimi 开放平台：按量付费，中国区 key（platform.kimi.com 充值）。走 pi 内置
@@ -352,7 +356,7 @@ export default function PiSettingsPage() {
 
                 <Field
                   label="默认模型"
-                  hint={cfg?.authMode === 'cc-subscription' ? '订阅可用模型：claude-opus-4-8 / claude-sonnet-4-6 / claude-haiku-4-5' : '新建 pi 会话不指定模型时用它。留空则取上面列表的第一个。'}
+                  hint={cfg?.authMode === 'cc-subscription' ? '订阅可用模型：claude-opus-5 / claude-sonnet-5 / claude-haiku-4-5' : '新建 pi 会话不指定模型时用它。留空则取上面列表的第一个。'}
                 >
                   <Input
                     value={cfg?.defaultModel ?? ''}
