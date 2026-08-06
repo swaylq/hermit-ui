@@ -1,0 +1,16 @@
+{
+  "label": "Ops",
+  "blurb": "Live machines and services. Investigation discipline, read-before-write, ssh_run.",
+  "tools": ["read", "bash", "grep", "find", "ls", "edit", "ssh_run", "ssh_hosts"],
+  "skills": ["japan-dev-ops"],
+  "extensions": ["./extensions/ops-tools.ts"],
+  "model": null,
+  "attribution": [
+    {
+      "source": "HolmesGPT/holmesgpt",
+      "url": "https://github.com/HolmesGPT/holmesgpt",
+      "license": "Apache-2.0",
+      "took": "SYSTEM.md's Investigation and Reporting sections are a translation and rewrite of holmes/plugins/prompts/generic_ask.jinja2 (Investigation guidelines, Special cases, Style guide). Kubernetes-specific guidance dropped; the connection-refused vs timeout pair is ours, added by analogy to their auth-error rule."
+    }
+  ]
+}

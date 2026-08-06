@@ -204,6 +204,7 @@ export const chatRouter = router({
           runtime: true,
           runtimeProvider: true,
           runtimeModel: true,
+          runtimeMode: true,
           snapshotAt: true,
           // loopState is deliberately NOT selected here (P1-2): it's the entire
           // .loop-state.json blob and measured at 38% of this 5s-polled payload
@@ -232,7 +233,7 @@ export const chatRouter = router({
       // One query for the machine's agents, not one per row.
       const agentRuntimes = await prisma.agent.findMany({
         where: { machineId: ctx.machine.id, name: { in: [...new Set(rows.map((r) => r.agentName))] } },
-        select: { name: true, runtime: true, runtimeProvider: true, runtimeModel: true },
+        select: { name: true, runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true },
       });
       const byName = new Map(agentRuntimes.map((a) => [a.name, a]));
       return rows.map((r) => ({ ...r, ...resolveRuntime(r, byName.get(r.agentName)) }));
@@ -271,6 +272,7 @@ export const chatRouter = router({
           runtime: true,
           runtimeProvider: true,
           runtimeModel: true,
+          runtimeMode: true,
           snapshotAt: true,
           loopState: true,
           rssMb: true,
@@ -292,7 +294,7 @@ export const chatRouter = router({
       if (s) {
         const agent = await prisma.agent.findUnique({
           where: { machineId_name: { machineId: ctx.machine.id, name: s.agentName } },
-          select: { runtime: true, runtimeProvider: true, runtimeModel: true },
+          select: { runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true },
         });
         backend = resolveRuntime(s, agent);
       }
@@ -330,7 +332,7 @@ export const chatRouter = router({
           id: true, agentName: true, title: true, titleAuto: true, origin: true,
           startedAt: true, lastMessageAt: true, lastReadAt: true, lastActivity: true,
           closedAt: true, hiddenAt: true, hibernatedAt: true, groupId: true,
-          runtime: true, runtimeProvider: true, runtimeModel: true,
+          runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true,
           claudeSessionId: true, transcriptPath: true,
           pid: true, alive: true, state: true, rssMb: true,
           contextTokens: true, outputTokens: true, snapshotAt: true,
@@ -341,7 +343,9 @@ export const chatRouter = router({
       const [agent, messageCount, group] = await Promise.all([
         prisma.agent.findUnique({
           where: { machineId_name: { machineId: ctx.machine.id, name: s.agentName } },
-          select: { directory: true, runtime: true, runtimeProvider: true, runtimeModel: true },
+          select: {
+            directory: true, runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true,
+          },
         }),
         prisma.chatMessage.count({ where: { sessionId: s.id } }),
         s.groupId
@@ -381,6 +385,7 @@ export const chatRouter = router({
         runtime: z.enum(['claude-tmux', 'pi-rpc']),
         runtimeProvider: z.string().max(64).nullish(),
         runtimeModel: z.string().max(128).nullish(),
+        runtimeMode: z.string().max(64).nullish(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -390,7 +395,7 @@ export const chatRouter = router({
 
       const agent = await prisma.agent.findUnique({
         where: { machineId_name: { machineId: ctx.machine.id, name: s.agentName } },
-        select: { runtime: true, runtimeProvider: true, runtimeModel: true },
+        select: { runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true },
       });
       const before = resolveRuntime(s, agent);
       const after = resolveRuntime(
@@ -398,6 +403,10 @@ export const chatRouter = router({
           runtime: input.runtime,
           runtimeProvider: input.runtimeProvider ?? null,
           runtimeModel: input.runtimeModel ?? null,
+          // Omitted means "leave the mode alone", not "reset to default" — the
+          // backend picker in the session sheet does not show modes, and having
+          // it silently knock an ops session back to coding would be a trap.
+          runtimeMode: input.runtimeMode === undefined ? s.runtimeMode : input.runtimeMode,
         },
         agent,
       );
@@ -411,6 +420,7 @@ export const chatRouter = router({
           runtime: input.runtime,
           runtimeProvider: input.runtimeProvider ?? null,
           runtimeModel: input.runtimeModel ?? null,
+          ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
           // Free the outgoing backend's process. Hibernate is exactly the right
           // lever: it tears down whatever is running and leaves the session
           // "asleep, wakes on send" — which is what a just-switched session is.
@@ -467,6 +477,11 @@ export const chatRouter = router({
         runtime: z.enum(['claude-tmux', 'pi-rpc']).optional(),
         runtimeProvider: z.string().max(64).optional(),
         runtimeModel: z.string().max(128).optional(),
+        // Which pi mode to spawn under. Omitted = inherit the agent's, then the
+        // fleet default. Not validated against the installed modes here: the
+        // dashboard has no view of what is on the machine's disk, so an unknown
+        // name is the gateway's to fall back from (see resolveMode).
+        runtimeMode: z.string().max(64).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -480,6 +495,7 @@ export const chatRouter = router({
           runtime: input.runtime ?? null,
           runtimeProvider: input.runtimeProvider ?? null,
           runtimeModel: input.runtimeModel ?? null,
+          runtimeMode: input.runtimeMode ?? null,
         },
       });
     }),
@@ -1138,7 +1154,7 @@ export const chatRouter = router({
       where: { machineId: ctx.machine.id, closedAt: null },
       select: {
         id: true, agentName: true, claudeSessionId: true,
-        runtime: true, runtimeProvider: true, runtimeModel: true,
+        runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true,
       },
     });
     if (sessions.length === 0) return { sessions: [], messages: [] };
@@ -1153,7 +1169,7 @@ export const chatRouter = router({
       where: { machineId: ctx.machine.id, name: { in: agentNames } },
       select: {
         name: true, directory: true, isOrchestrator: true,
-        runtime: true, runtimeProvider: true, runtimeModel: true,
+        runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true,
       },
     });
     const dirByName = new Map(agents.map((a) => [a.name, a.directory]));

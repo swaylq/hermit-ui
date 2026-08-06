@@ -14,6 +14,7 @@ import type {
 } from './types';
 import { translatePiEvent } from './pi-events';
 import { providerEnv, machineProviderEnv, visionEnv } from './pi-credentials';
+import { resolveMode, buildModeArgs } from './pi-modes';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 
 // RpcClient's default cliPath search is cwd-relative, so it looks for
@@ -59,6 +60,16 @@ type PiHandle = RuntimeHandle & {
    * the child that produced it keeps every turn a distinct row.
    */
   bootId: string;
+  /**
+   * The mode this child was spawned with, as resolved at boot.
+   *
+   * A mode exists only as spawn arguments, so a running child cannot adopt a
+   * new one. Recording it lets ensure() notice a session whose mode moved
+   * underneath it and replace the child instead of silently serving the old
+   * recipe. The dashboard's own switch already hibernates the session; this
+   * catches the other routes in (the agent default changing, a direct DB edit).
+   */
+  mode: string | null;
   /**
    * Where this session's items go. Kept on the handle so a child that dies
    * between turns can still report itself into the chat.
@@ -224,7 +235,16 @@ export class PiRpcRuntime implements AgentRuntime {
 
   async ensure(session: RuntimeSession, emit: (item: SyncItem) => void): Promise<RuntimeHandle> {
     const existing = live.get(session.id);
-    if (existing) return existing;
+    if (existing) {
+      // Same session, different recipe: the child in hand cannot become the mode
+      // being asked for, so retire it and fall through to a fresh boot.
+      const wanted = resolveMode(session.mode)?.name ?? null;
+      if (wanted !== existing.mode) {
+        evict(session.id, `mode changed ${existing.mode ?? 'none'} → ${wanted ?? 'none'}`);
+      } else {
+        return existing;
+      }
+    }
 
     // A child that cannot start at all is reported once, then left alone for a
     // while, instead of being respawned on every tick.
@@ -262,17 +282,28 @@ export class PiRpcRuntime implements AgentRuntime {
 
   /** Spawn one pi child and wire its event stream. Only called via ensure(). */
   private async boot(session: RuntimeSession, emit: (item: SyncItem) => void): Promise<PiHandle> {
+    // The mode is the session's spawn recipe: extra extensions, a tool
+    // allowlist, skills, and text appended to pi's system prompt. Read at spawn
+    // because that is the only moment pi can be told any of it — which is also
+    // why changing a session's mode has to restart its child (planRuntimeSwitch).
+    const mode = resolveMode(session.mode);
+    const modeArgs = buildModeArgs(mode, { agentDirectory: session.agentDirectory });
+
     // The child inherits the gateway's env plus the provider key, resolved from
     // the encrypted store at start time so it never lands in a config file.
     const client = new RpcClient({
       cwd: session.agentDirectory,
       cliPath: resolvePiCli(),
       provider: session.provider ?? undefined,
-      model: session.model ?? undefined,
+      // A mode may pin a model when it genuinely requires one (a browser mode
+      // needs an endpoint that accepts image blocks). The session's own choice
+      // still wins — the mode default is only for sessions that expressed none.
+      model: session.model ?? mode?.model ?? undefined,
       // --extension gives the child hermit's own tools (pi has no MCP), and
       // --no-approve keeps it from trusting project-local extension/skill files
       // it happens to find in the workspace — only ours is loaded on purpose.
-      args: ['--extension', hermitExtensionPath()],
+      // hermit's extension goes FIRST so a mode extension can see its tools.
+      args: ['--extension', hermitExtensionPath(), ...modeArgs],
       env: {
         ...process.env,
         ...(await providerEnv(session.provider)),
@@ -298,6 +329,7 @@ export class PiRpcRuntime implements AgentRuntime {
       // --session <id>` reattaches to the same id with the counter back at 0),
       // so a per-spawn suffix carries the uniqueness.
       bootId: `${state?.sessionId ?? 'pi'}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      mode: mode?.name ?? null,
       emit,
       lastTurn: null,
     };

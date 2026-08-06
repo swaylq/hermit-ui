@@ -151,9 +151,10 @@ export const agentsRouter = router({
         select: {
           id: true, name: true, directory: true, trashedAt: true, updatedAt: true,
           skillNames: true, skills: true, metadataAt: true, isOrchestrator: true,
-          // Which backend this agent defaults to, shown in the detail panel.
-          // Three short strings — negligible next to the ~2KB budget above.
-          runtime: true, runtimeProvider: true, runtimeModel: true,
+          // Which backend this agent defaults to, shown in the detail panel, and
+          // which pi mode new sessions open in — the new-chat picker seeds from
+          // it. Four short strings — negligible next to the ~2KB budget above.
+          runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true,
         },
       });
       if (!agent) return null;

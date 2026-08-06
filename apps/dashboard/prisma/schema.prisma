@@ -357,6 +357,11 @@ model ChatSession {
   runtime           String?
   runtimeProvider   String?
   runtimeModel      String?
+  // Which pi MODE runs this session — the prompt/skill/tool recipe the child is
+  // spawned with (ops, coding, research, …). Only meaningful for runtime
+  // 'pi-rpc'; claude-tmux ignores it. null = inherit the agent's, then 'coding'.
+  // See docs/pi-modes-design.md.
+  runtimeMode       String?
   claudeSessionId   String? // populated by gateway once SDK boots
   startedAt         DateTime  @default(now())
   lastMessageAt     DateTime?
@@ -652,6 +657,9 @@ model Agent {
   runtime              String    @default("claude-tmux")
   runtimeProvider      String?
   runtimeModel         String?
+  // Default pi mode for this agent's new sessions. Only meaningful when runtime
+  // is 'pi-rpc'. null = the fleet default ('coding'). See docs/pi-modes-design.md.
+  runtimeMode          String?
 
   // Soft-delete / recycle bin. Set when the agent is moved to trash; cleared on
   // restore. The gateway mv's the dir to AGENTS_ROOT/.hermit-trash/ on delete,

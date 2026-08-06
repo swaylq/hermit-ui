@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { BackendPicker } from './backend-picker';
 import { isRuntimeKind, type RuntimeKind } from '@/lib/runtime-labels';
+import { PI_MODES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
 
 export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }: { agents: string[]; preset?: string; lockedAgent?: string; onCreated: (id: string) => void; onCancel: () => void }) {
   const [picked, setPicked] = useState('');
@@ -27,6 +28,9 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
   // without a re-seed that would overwrite a choice made while it was in flight.
   const [runtime, setRuntime] = useState<RuntimeKind | null>(null);
   const [model, setModel] = useState('');
+  // pi only. Same "explicit choice or null" shape as `runtime`: null means the
+  // agent's default, resolved at render once the agent lookup lands.
+  const [mode, setMode] = useState<PiMode | null>(null);
   useEffect(() => {
     setPicked((cur) => cur || (preset && agents.includes(preset) ? preset : agents[0] ?? ''));
   }, [preset, agents]);
@@ -38,6 +42,7 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
   // agents.list poll that every page runs.
   const agentMeta = trpc.agents.byName.useQuery({ name: agent }, { enabled: !!agent, staleTime: 60_000 });
   const agentRuntime = agentMeta.data?.agent.runtime;
+  const agentMode = agentMeta.data?.agent.runtimeMode;
 
   // Switching agents drops the choice: the default belongs to the agent you are
   // about to talk to, not the one you looked at first. Adjusting state during
@@ -47,9 +52,11 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
     setPickedFor(agent);
     setRuntime(null);
     setModel('');
+    setMode(null);
   }
 
   const chosen: RuntimeKind = runtime ?? (isRuntimeKind(agentRuntime) ? agentRuntime : 'claude-tmux');
+  const chosenMode: PiMode = mode ?? (isPiMode(agentMode) ? agentMode : DEFAULT_PI_MODE);
 
   const create = trpc.chat.createSession.useMutation({ onSuccess: (s) => onCreated(s.id) });
   return (
@@ -68,6 +75,10 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
               agentName: agent,
               runtime: chosen,
               ...(chosen === 'pi-rpc' && model.trim() ? { runtimeModel: model.trim() } : {}),
+              // Written explicitly, for the same reason the backend is: a
+              // session that states its mode keeps the one you started it in
+              // when the agent's default is later edited.
+              ...(chosen === 'pi-rpc' ? { runtimeMode: chosenMode } : {}),
             });
           }}
         >
@@ -99,6 +110,26 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
               <BackendPicker value={chosen} onChange={setRuntime} agentDefault={agentRuntime ?? 'claude-tmux'} />
             </div>
           </div>
+          {chosen === 'pi-rpc' && (
+            <label className="block">
+              <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Mode</span>
+              <Select
+                value={chosenMode}
+                onValueChange={(v) => setMode(isPiMode(v) ? v : DEFAULT_PI_MODE)}
+                modal={false}
+              >
+                <SelectTrigger aria-label="pi mode" className="mt-1.5 w-full py-2 text-sm">
+                  <SelectValue>{(v: string | null) => PI_MODE_META[isPiMode(v) ? v : DEFAULT_PI_MODE].label}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {PI_MODES.map((m) => <SelectItem key={m} value={m}>{PI_MODE_META[m].label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
+                {PI_MODE_META[chosenMode].blurb}
+              </span>
+            </label>
+          )}
           {chosen === 'pi-rpc' && (
             <label className="block">
               <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Model</span>

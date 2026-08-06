@@ -6,9 +6,10 @@
 //   1. Is the switch safe right now?
 //   2. Does the currently-running process have to be torn down?
 //
-// (2) is not the same as "did the columns change". pi bakes its provider and
-// model into the child process at spawn time, so re-pointing a pi session at a
-// different model needs a fresh child; Claude Code takes its model from the
+// (2) is not the same as "did the columns change". pi bakes its provider, model
+// and mode into the child process at spawn time, so re-pointing a pi session at
+// a different model — or a different mode, whose whole expression is spawn
+// arguments — needs a fresh child; Claude Code takes its model from the
 // machine's settings.json and ignores those columns entirely, so writing them
 // on a claude session changes nothing that is running.
 //
@@ -40,11 +41,12 @@ export function planRuntimeSwitch(
 
   if (before.runtime !== after.runtime) return { ok: true, restart: true };
 
-  // Same backend. Only pi reads provider/model off these columns.
+  // Same backend. Only pi reads provider/model/mode off these columns.
   if (after.runtime === 'pi-rpc') {
     const moved =
       (before.runtimeProvider ?? null) !== (after.runtimeProvider ?? null) ||
-      (before.runtimeModel ?? null) !== (after.runtimeModel ?? null);
+      (before.runtimeModel ?? null) !== (after.runtimeModel ?? null) ||
+      (before.runtimeMode ?? null) !== (after.runtimeMode ?? null);
     return { ok: true, restart: moved };
   }
 

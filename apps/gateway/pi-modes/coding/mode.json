@@ -1,0 +1,13 @@
+{
+  "label": "Coding",
+  "blurb": "Read, write, run. The default working mode for changing a codebase.",
+  "tools": ["read", "bash", "edit", "write", "grep", "find", "ls"],
+  "skills": [],
+  "extensions": [],
+  "model": null,
+  "_note": [
+    "The default mode, so every pi session that never picked one lands here — which is why it is deliberately thin.",
+    "The only behavioural change against pre-modes pi is the tool list: pi activates read/bash/edit/write by default and leaves grep/find/ls off, and this turns them on. Strictly additive; hermit's own six tools are unioned in by buildModeArgs.",
+    "There is no SYSTEM.md yet on purpose. A coding prompt is the one thing this repo should NOT guess at — the plan is to harvest from bigpowers (MIT, 87 skills: develop-tdd, investigate-bug, diagnose-root, map-codebase, verify-work) and gentle-pi (MIT), curating rather than installing wholesale: pi keeps every skill's name and description permanently in the system prompt, so 87 of them is a standing context tax. See docs/pi-modes-design.md."
+  ]
+}

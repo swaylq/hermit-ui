@@ -26,6 +26,11 @@ export type RuntimeSession = {
   externalSessionId: string | null;
   provider?: string | null;
   model?: string | null;
+  /**
+   * Which pi mode to spawn under (already resolved by the dashboard against the
+   * agent's default). null for claude-tmux, which has no such concept.
+   */
+  mode?: string | null;
 };
 
 export type RuntimeImage = { path: string; mediaType: string };
