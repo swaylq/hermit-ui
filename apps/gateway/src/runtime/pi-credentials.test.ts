@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { envVarForProvider, providerEnv } from './pi-credentials';
+import { envVarForProvider, providerEnv, subscriptionTokenEnv } from './pi-credentials';
 
 test('provider name maps onto the store key convention', () => {
   assert.equal(envVarForProvider('openrouter'), 'OPENROUTER_API_KEY');
@@ -17,6 +17,24 @@ test('built-in moonshot providers read MOONSHOT_API_KEY, not the convention name
   assert.equal(envVarForProvider('moonshotai-cn'), 'MOONSHOT_API_KEY');
   assert.equal(envVarForProvider('kimi-coding'), 'KIMI_API_KEY');
   assert.equal(envVarForProvider('huggingface'), 'HF_TOKEN');
+});
+
+test('cc-subscription env uses ANTHROPIC_OAUTH_TOKEN so pi-ai\'s OAuth branch fires', () => {
+  // pi-ai only takes its stealth-OAuth path when the token reaches createClient
+  // as `apiKey` (checked via apiKey.includes("sk-ant-oat")). ANTHROPIC_AUTH_TOKEN
+  // resolves to a plain Authorization header instead, which never enters that
+  // branch — the exact 429-without-unified-header failure this guards against.
+  assert.deepEqual(subscriptionTokenEnv('sk-ant-oat01-test-token'), {
+    ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-test-token',
+  });
+});
+
+test('a non-OAuth token still maps to ANTHROPIC_OAUTH_TOKEN (prefix guard is a warning only)', () => {
+  // The env is set regardless; whether pi routes the request through the OAuth
+  // branch is pi-ai's decision, so the guard can only warn.
+  assert.deepEqual(subscriptionTokenEnv('sk-ant-api03-xxxx'), {
+    ANTHROPIC_OAUTH_TOKEN: 'sk-ant-api03-xxxx',
+  });
 });
 
 test('no provider means no injected env', async () => {

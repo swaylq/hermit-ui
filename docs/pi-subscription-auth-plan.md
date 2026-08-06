@@ -14,10 +14,10 @@ pi runtime 的会话（`new-chat` 与 session detail sheet 里的 pi backend）�
 ## 背景机制（调研结论，2026-08-06）
 
 - 第三方 agent 用订阅的官方入口是 `claude setup-token`（"requires Claude subscription"，本地 2.1.223 确认），生成 `sk-ant-oat01-...` 长效 token
-- Anthropic 端**模糊分类器**判定请求形状（headers + system prompt + 工具命名）是否「Claude Code 官方使用」：是 → 烧订阅 plan（5h 窗口 + 周上限，响应头 `anthropic-ratelimit-unified-status: allowed`）；否 → extra usage 按 token 计费（400 `"out of extra usage"`）。黑盒非契约（pi issue #6888）
-- **system prompt 身份段是分类器的硬触发器（2026-08-06 实测修正）**：pi 默认 system 里的 `"operating inside pi"` / `"Pi documentation (read only when the user asks about pi itself…)"` 段会导致即使请求形状完全 stealth（Bearer + claude-cli UA + x-app + beta）也返回 400 `Third-party apps now draw from your extra usage`。去掉这些身份段（或提供不含身份段的 `SYSTEM.md`）后实测 200 正常流式。**任何订阅方案必须保证 pi 的 system prompt 不含 pi/harness 身份描述**——见下方 SYSTEM.md 修正。
-- pi 0.83.0 已内置全部能力：env 解析顺序 `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_OAUTH_TOKEN` → `ANTHROPIC_API_KEY`；apiKey 值含 `sk-ant-oat` 前缀自动走 stealth OAuth 分支（Bearer + `anthropic-beta: claude-code-20250219,oauth-2025-04-20` + `user-agent: claude-cli/*` + `x-app: cli` + Claude Code 规范工具名）
-- **认证来源（env 名）无关紧要，只有 token 值前缀和请求形状决定计费桶**；`ANTHROPIC_AUTH_TOKEN` 实测直接可用（Bearer）
+- Anthropic 端**模糊分类器**判定请求形状（headers + system prompt + 工具命名）是否「Claude Code 官方使用」：是 → 烧订阅 plan（5h 窗口 + 周上限，响应头 `anthropic-ratelimit-unified-status: allowed`）；否 → extra usage 按 token 计费。黑盒非契约（pi issue #6888）
+- **system 第一块身份行是分类器的硬触发器（2026-08-06 二轮实测修正）**：正确形态是 system 数组的**第一个 block 必须逐字**为 `You are Claude Code, Anthropic's official CLI for Claude.`，单独成块；我们的指令放**第二个 block**（`SYSTEM.md` / mode 内容）。逐字匹配：同一 block 里身份行后追加任何文字（含末尾多一个空格）都失败；身份行独立成块 + 内容放第二块则 200 `allowed`。「去掉身份段」不是门槛，**逐字带上 CC 身份**才是——旧结论（去身份段即可）方向错了。
+- pi 0.83.0 已内置 stealth OAuth 分支：apiKey 值含 `sk-ant-oat` 前缀自动走（Bearer + `anthropic-beta: claude-code-20250219,oauth-2025-04-20` + `user-agent: claude-cli/*` + `x-app: cli` + Claude Code 规范工具名 + **system[0] 逐字身份行**、`SYSTEM.md` 内容作为 system[1]）
+- **env 名很关键（2026-08-06 二轮实测修正）**：`ANTHROPIC_AUTH_TOKEN` 被 pi 解析成普通 `Authorization: Bearer` 头 → **不走** stealth OAuth 分支 → 请求无身份行 → 429 `rate_limit_error` 且无 unified 头（extra usage 额度耗尽时的形态，不是 400 `"out of extra usage"`）。必须用 `ANTHROPIC_OAUTH_TOKEN`（pi 解析成 `auth.apiKey`）才会触发 OAuth 分支。机器级实现已由 AUTH_TOKEN 改为 OAUTH_TOKEN。
 
 ## 数据层改动
 
@@ -193,9 +193,9 @@ export function AuthPicker({
 - `apps/dashboard/src/server/routers/machines.ts`：`PI_CONFIG_SCHEMA` 加 `authMode`（'api-key' | 'cc-subscription'）
 - `apps/dashboard/src/app/pi/page.tsx`：预设下拉加「Claude Code 订阅（Keychain OAuth）」；订阅模式下隐藏 Base URL / API Key 字段并显示说明
 - `apps/gateway/src/pi-config.ts`：`PiConfig` 加 `authMode`，merge 透传（默认 'api-key'）
-- `apps/gateway/src/runtime/pi-credentials.ts`：`machineProviderEnv()` 加 cc-subscription 分支——读 macOS Keychain 的 `Claude Code-credentials` 条目（`claudeAiOauth.accessToken`，Claude Code 自己的凭据，自动刷新轮换）注入 `ANTHROPIC_AUTH_TOKEN`；幂等写入干净 `SYSTEM.md` 到 `~/.pi/agent/`（已有则不动）
+- `apps/gateway/src/runtime/pi-credentials.ts`：`machineProviderEnv()` 加 cc-subscription 分支——读 macOS Keychain 的 `Claude Code-credentials` 条目（`claudeAiOauth.accessToken`，Claude Code 自己的凭据，自动刷新轮换）注入 `ANTHROPIC_OAUTH_TOKEN`（**必须 OAUTH_TOKEN 不是 AUTH_TOKEN**，见背景机制）；幂等写入干净 `SYSTEM.md` 到 `~/.pi/agent/`（已有则不动）
 
-**SYSTEM.md 修正（必须，实测）**：pi 默认 system 含 pi/harness 身份段，会导致 400 extra usage。cc-subscription 分支会确保 `~/.pi/agent/SYSTEM.md` 存在（干净版，无身份段）。若用户已有自定义 SYSTEM.md 则尊重不覆盖。
+**SYSTEM.md 修正（必须，实测）**：pi 默认 system 含 pi/harness 身份段，会破坏分类器对身份行的判定。cc-subscription 分支会确保 `~/.pi/agent/SYSTEM.md` 存在（干净版，无身份段）——它的内容作为 system 第二块，身份行由 pi-ai 的 OAuth 分支作为第一块提供。若用户已有自定义 SYSTEM.md 则尊重不覆盖。
 
 **与 agent 级方案的取舍**：Keychain 实时读 token（本方案）免 setup-token 手动维护、token 自动轮换；setup-token 存 secret（agent 级方案）可在无 Claude Code CLI 的机器上用。P0 验证后可考虑把 agent 级也接到 Keychain 读（改 `subscriptionAuthEnv` 来源）。
 

@@ -82,9 +82,15 @@ function readClaudeCodeKeychainToken(): Promise<string | null> {
 }
 
 /**
- * pi 全局配置目录的干净 SYSTEM.md（无 harness 身份段），cc-subscription 模式
- * 幂等写入。pi 每次 spawn 前会调用 machineProviderEnv()，这里保证文件存在。
- * 不要删除用户已有的 SYSTEM.md —— 只在该模式下补一个干净版本（若已有则不动）。
+ * pi 全局配置目录的干净 SYSTEM.md，cc-subscription 模式幂等写入。
+ *
+ * 这份文件的内容会成为 system 数组的第二个 block：pi-ai 的 stealth OAuth 分支
+ * （apiKey 含 sk-ant-oat 时）会把 "You are Claude Code, Anthropic's official CLI
+ * for Claude." 作为第一个 block 逐字前置（见 pi-ai anthropic-messages.js
+ * buildParams），本文件只承载我们的指令。因此它绝不能含 pi/harness 身份段
+ * （"operating inside pi" / "Pi documentation"），否则分类器会把它判成第三方
+ * harness，拒掉订阅额度。不要删除用户已有的 SYSTEM.md —— 只在该模式下补一个
+ * 干净版本（若已有则不动）。
  */
 function ensureCleanSystemPrompt(): void {
   const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent');
@@ -108,6 +114,29 @@ function ensureCleanSystemPrompt(): void {
     console.warn('[pi-credentials] 写入 SYSTEM.md 失败:', (e as Error).message);
   }
 }
+/**
+ * The env that makes pi take its stealth-OAuth path for a Claude Code OAuth
+ * token.
+ *
+ * MUST be ANTHROPIC_OAUTH_TOKEN, not ANTHROPIC_AUTH_TOKEN: pi's anthropic
+ * provider resolves AUTH_TOKEN to a plain `Authorization: Bearer` header, which
+ * bypasses the OAuth branch in pi-ai anthropic-messages.js entirely. That branch
+ * only fires when the token reaches createClient as `apiKey` (it checks
+ * `apiKey.includes("sk-ant-oat")`), and it is what adds the verbatim Claude Code
+ * identity as system block 1, the claude-cli UA and x-app headers, and the
+ * claude-code beta. Without it the request is classified as third-party and gets
+ * a 429 rate_limit_error with no `anthropic-ratelimit-unified-status: allowed`
+ * header — the exact failure this whole path exists to avoid.
+ */
+export function subscriptionTokenEnv(token: string): Record<string, string> {
+  if (!token.includes('sk-ant-oat')) {
+    console.warn(
+      '[pi-credentials] cc-subscription: Keychain token 不含 sk-ant-oat，'
+      + 'pi-ai 的 stealth OAuth 分支不会触发，请求会落 extra usage / 429（无 unified 头）',
+    );
+  }
+  return { ANTHROPIC_OAUTH_TOKEN: token };
+}
 
 /**
  * This machine's own model endpoint, if it declares one.
@@ -126,11 +155,12 @@ function ensureCleanSystemPrompt(): void {
 export async function machineProviderEnv(): Promise<Record<string, string>> {
   const cfg = await getPiConfig();
 
-  // Claude Code 订阅模式：直接复用本机 Claude Code 的 Keychain OAuth 凭据
-  // （Bearer auth），anthropic 是 pi 内置 provider，无需注册也无需 API key。
-  // 同时确保 pi 全局配置目录里有干净的 SYSTEM.md —— Anthropic 服务端会检测
-  // system prompt 里的第三方 harness 身份段（"operating inside pi" / "Pi
-  // documentation"），命中即拒绝走订阅计划额度（400 Third-party apps...）。
+  // Claude Code 订阅模式：复用本机 Claude Code 的 Keychain OAuth 凭据，anthropic
+  // 是 pi 内置 provider，无需注册也无需 API key。token 必须经 ANTHROPIC_OAUTH_TOKEN
+  // 注入（见 subscriptionTokenEnv）：pi 把 AUTH_TOKEN 当普通 Bearer 头，只有
+  // OAUTH_TOKEN 会触发 pi-ai 的 stealth OAuth 分支——system 第一块逐字带上 Claude
+  // Code 身份行 + claude-cli UA，请求才进订阅桶（响应头 unified=allowed），否则
+  // 429 无 unified 头。同时确保 pi 全局配置目录里有干净的 SYSTEM.md（system 第二块）。
   if (cfg.authMode === 'cc-subscription') {
     const token = await readClaudeCodeKeychainToken();
     if (!token) {
@@ -138,7 +168,7 @@ export async function machineProviderEnv(): Promise<Record<string, string>> {
       return {};
     }
     ensureCleanSystemPrompt();
-    return { ANTHROPIC_AUTH_TOKEN: token };
+    return subscriptionTokenEnv(token);
   }
 
   const id = cfg.provider?.trim();

@@ -257,9 +257,10 @@ export default function PiSettingsPage() {
             </p>
             {cfg?.authMode === 'cc-subscription' && (
               <p className="mt-2 rounded-md border border-emerald-600/30 bg-emerald-600/10 px-3 py-2 text-[11px] leading-relaxed text-emerald-600">
-                Claude Code 订阅模式：pi 直接复用本机 Claude Code 的 Keychain OAuth 凭据，不消耗
-                ANTHROPIC_API_KEY。前提是本机 Claude Code 已登录（订阅可用）；Anthropic 会把 pi 识别为
-                Claude Code 客户端，走订阅计划额度。
+                Claude Code 订阅模式：pi 直接复用本机 Claude Code 的 Keychain OAuth 凭据
+                （注入 `ANTHROPIC_OAUTH_TOKEN`，pi-ai 的 stealth OAuth 分支把 Claude Code
+                身份行作为 system 第一块 + claude-cli UA，走订阅计划额度），不消耗
+                ANTHROPIC_API_KEY。前提是本机 Claude Code 已登录（订阅可用）。
               </p>
             )}
           </div>
@@ -373,7 +374,8 @@ export default function PiSettingsPage() {
                 {cfg?.authMode === 'cc-subscription' ? (
                   <div className="rounded-md border border-emerald-600/20 bg-emerald-600/5 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
                     订阅模式无需 API Key —— pi 用本机 Claude Code 的 Keychain OAuth 凭据认证
-                    （`ANTHROPIC_AUTH_TOKEN`，Bearer）。切换回 API key：端点预设选回「自定义」或 Kimi。
+                    （`ANTHROPIC_OAUTH_TOKEN`，pi-ai 的 stealth OAuth 分支会把它作为 apiKey 触发，
+                    自动带 Claude Code 身份行 + claude-cli UA）。切换回 API key：端点预设选回「自定义」或 Kimi。
                   </div>
                 ) : (
                   <Field label="API Key" hint="填 secrets store 里的 key 名，不是 key 本身">
