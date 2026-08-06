@@ -22,8 +22,9 @@ const ompRuntime = new OmpRpcRuntime();
  * the Claude-subscription option — serving both, instead of a second backend
  * growing a parallel set.
  *
- * An unknown or absent mode resolves to the default mode, whose engine is pi:
- * exactly the behaviour that existed before omp.
+ * An unknown or absent mode resolves to the default mode. The default is omp
+ * (oh-my-pi — the full-tool engine), so a pi session with no mode stated runs
+ * omp rather than bare pi.
  *
  * `mode` is REQUIRED, though it accepts null/undefined. It used to be optional,
  * and the session-snapshot probe quietly omitted it — so every omp session was

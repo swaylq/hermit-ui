@@ -18,10 +18,10 @@ test('a pi-engine mode gets pi', () => {
   assert.equal(runtimeFor('pi-rpc', 'ops')?.kind, 'pi-rpc');
 });
 
-test('an absent or unknown mode falls back to the default mode, which is pi', () => {
-  assert.equal(runtimeFor('pi-rpc', null)?.kind, 'pi-rpc');
-  assert.equal(runtimeFor('pi-rpc', undefined)?.kind, 'pi-rpc');
-  assert.equal(runtimeFor('pi-rpc', 'no-such-mode')?.kind, 'pi-rpc');
+test('an absent or unknown mode falls back to the default mode, which is omp', () => {
+  assert.equal(runtimeFor('pi-rpc', null)?.kind, 'omp-rpc');
+  assert.equal(runtimeFor('pi-rpc', undefined)?.kind, 'omp-rpc');
+  assert.equal(runtimeFor('pi-rpc', 'no-such-mode')?.kind, 'omp-rpc');
 });
 
 test('the omp mode gets omp — the regression that blanked its context bar', () => {

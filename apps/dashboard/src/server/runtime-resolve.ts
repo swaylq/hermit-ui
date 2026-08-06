@@ -23,7 +23,7 @@ export const DEFAULT_RUNTIME = 'claude-tmux';
  * Mode when neither level names one. Only ever applied to pi sessions — see
  * the null return for claude-tmux in resolveRuntime.
  */
-export const DEFAULT_PI_MODE = 'coding';
+export const DEFAULT_PI_MODE = 'omp';
 
 /**
  * A short-lived third backend, folded back into pi as an engine chosen by the

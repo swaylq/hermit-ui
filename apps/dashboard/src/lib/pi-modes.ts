@@ -20,7 +20,9 @@
 export const PI_MODES = ['coding', 'ops', 'omp'] as const;
 export type PiMode = (typeof PI_MODES)[number];
 
-export const DEFAULT_PI_MODE: PiMode = 'coding';
+// The fleet default pi mode (stored as NULL on agent/session rows). omp
+// (oh-my-pi) is the full-tool engine — sway's preferred default.
+export const DEFAULT_PI_MODE: PiMode = 'omp';
 
 export function isPiMode(v: string | null | undefined): v is PiMode {
   return PI_MODES.includes(v as PiMode);

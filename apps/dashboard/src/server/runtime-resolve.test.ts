@@ -47,7 +47,7 @@ test('same backend as the agent inherits provider/model when unset', () => {
     { runtime: 'pi-rpc', runtimeProvider: 'openrouter', runtimeModel: 'deepseek/x' },
   );
   assert.deepEqual(out, {
-    runtime: 'pi-rpc', runtimeProvider: 'openrouter', runtimeModel: 'deepseek/x', runtimeMode: 'coding',
+    runtime: 'pi-rpc', runtimeProvider: 'openrouter', runtimeModel: 'deepseek/x', runtimeMode: 'omp',
   });
 });
 
@@ -57,21 +57,21 @@ test('a session may override just the model', () => {
     { runtime: 'pi-rpc', runtimeProvider: 'openrouter', runtimeModel: 'deepseek/x' },
   );
   assert.deepEqual(out, {
-    runtime: 'pi-rpc', runtimeProvider: 'openrouter', runtimeModel: 'moonshotai/kimi-k3', runtimeMode: 'coding',
+    runtime: 'pi-rpc', runtimeProvider: 'openrouter', runtimeModel: 'moonshotai/kimi-k3', runtimeMode: 'omp',
   });
 });
 
 test('a pi session on an agent that has no pi settings still resolves', () => {
   const out = resolveRuntime({ runtime: 'pi-rpc' }, { runtime: 'claude-tmux' });
   assert.deepEqual(out, {
-    runtime: 'pi-rpc', runtimeProvider: null, runtimeModel: null, runtimeMode: 'coding',
+    runtime: 'pi-rpc', runtimeProvider: null, runtimeModel: null, runtimeMode: 'omp',
   });
 });
 
 // ── mode ────────────────────────────────────────────────────────────────────
 
 test('a pi session with no mode anywhere gets the default mode', () => {
-  assert.equal(resolveRuntime({ runtime: 'pi-rpc' }, null).runtimeMode, 'coding');
+  assert.equal(resolveRuntime({ runtime: 'pi-rpc' }, null).runtimeMode, 'omp');
 });
 
 test("a session's own mode beats the agent's", () => {
@@ -103,7 +103,7 @@ test('switching from a pi agent to claude drops the inherited mode', () => {
 test('a legacy omp-rpc session normalizes to pi', () => {
   const out = resolveRuntime({ runtime: 'omp-rpc' }, null);
   assert.equal(out.runtime, 'pi-rpc');
-  assert.equal(out.runtimeMode, 'coding');
+  assert.equal(out.runtimeMode, 'omp');
 });
 
 test('a legacy omp-rpc session keeps whatever mode it had', () => {
@@ -118,5 +118,5 @@ test('switching TO pi from a claude agent does not inherit a stale mode', () => 
   // levels disagree on backend, so the agent's mode is not inheritable and the
   // session falls to the default rather than silently landing in 'ops'.
   const out = resolveRuntime({ runtime: 'pi-rpc' }, { runtime: 'claude-tmux', runtimeMode: 'ops' });
-  assert.equal(out.runtimeMode, 'coding');
+  assert.equal(out.runtimeMode, 'omp');
 });

@@ -81,7 +81,10 @@ export const HERMIT_TOOL_NAMES = [
   'ask',
 ] as const;
 
-export const DEFAULT_MODE = 'coding';
+// The default mode for a pi session that states none (agent/session rows store
+// NULL = "fleet default"). omp (oh-my-pi) is the full-tool engine — the fleet
+// default since 2026-08-06. Keep in step with the dashboard's DEFAULT_PI_MODE.
+export const DEFAULT_MODE = 'omp';
 
 /** Built-in modes, shipped with the gateway. */
 function builtinRoot(): string {
