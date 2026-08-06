@@ -1,13 +1,14 @@
 // GET /api/chat/stream?sessionId=<id> — Server-Sent Events stream of a chat
 // session's message list. Replaces the browser's 600ms tRPC poll with a push:
-// the handler polls Postgres every ~250ms (cheap, few concurrent viewers) and
-// emits the full message list whenever it changes. The browser writes each push
-// into its React Query cache, and a client-side typewriter reveals new text.
+// the handler emits the full message list whenever it changes. The browser
+// writes each push into its React Query cache, and a client-side typewriter
+// reveals new text.
 //
-// Why a server-side poll loop and not LISTEN/NOTIFY: the gateway already writes
-// block-level rows every couple hundred ms, Prisma can't LISTEN, and our viewer
-// count is tiny. If that changes, swap the tick for a `pg` LISTEN on
-// `chat_<sessionId>` fired from /api/sync/chat-message.
+// Wake-up: /api/sync/chat-message fires an in-process signal (server/chat-bus)
+// after it lands rows; this handler subscribes and ticks immediately (a 100ms
+// coalesce window absorbs the gateway's dense streaming flushes). The POLL_MS
+// interval below is now only a safety net for lost signals / out-of-process
+// writers, so it runs slow (2s) — no longer the latency path.
 //
 // Auth: x-asst-key header (same as every sync route). The client uses fetch()
 // + a ReadableStream reader rather than EventSource precisely so it can send
@@ -17,10 +18,12 @@ import { NextRequest } from 'next/server';
 import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
 import { capMessageContent } from '@/server/message-cap';
+import { subscribe as subscribeChat } from '@/server/chat-bus';
 
 export const dynamic = 'force-dynamic';
 
-const POLL_MS = 600;
+const POLL_MS = 2_000;        // safety-net poll; live pushes arrive via chat-bus
+const TICK_DEBOUNCE_MS = 100; // coalesce burst signals from one streaming flush
 const PING_MS = 15_000;
 const DEFAULT_LIMIT = 60;
 const MAX_LIMIT = 1000;
@@ -59,6 +62,15 @@ export async function GET(req: NextRequest) {
 
   const encoder = new TextEncoder();
   let closed = false;
+
+  // 提升到 start/cancel 共享的外层作用域（ReadableStream 的两个方法不共享
+  // 彼此的函数作用域，只共享本层）。类型跟随 DOM lib 解析——Next 环境里
+  // setTimeout/clearTimeout 走 DOM 签名，@types/node 的 NodeJS.Timeout 与它
+  // 不匹配，故用 ReturnType（私有 alias，非导出契约）。
+  type TimerHandle = ReturnType<typeof setTimeout>;
+  let tickTimer: TimerHandle | undefined;
+  let interval: ReturnType<typeof setInterval> | undefined;
+  let unsubscribeChat: () => void = () => {};
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -111,6 +123,17 @@ export async function GET(req: NextRequest) {
         }
       };
 
+      // Live wake-up: /api/sync/chat-message fired after writing rows. Coalesce
+      // burst signals (a streaming flush POSTs many items back-to-back) into one
+      // tick; the tick's own MAX(updatedAt) sig guard still skips no-op pushes.
+      const scheduleTick = () => {
+        if (closed || tickTimer) return;
+        tickTimer = setTimeout(() => {
+          tickTimer = undefined;
+          void tick();
+        }, TICK_DEBOUNCE_MS);
+      };
+      unsubscribeChat = subscribeChat(sessionId, scheduleTick);
       if (skipInitial) {
         // Prime lastSig to the current state WITHOUT emitting — the client already
         // has this window from tRPC. If the probe fails, lastSig stays '' and the
@@ -126,17 +149,24 @@ export async function GET(req: NextRequest) {
       } else {
         await tick(); // initial snapshot ASAP
       }
-      const interval = setInterval(tick, POLL_MS);
+      interval = setInterval(tick, POLL_MS);
 
       const shutdown = () => {
         if (closed) return;
         closed = true;
         clearInterval(interval);
+        clearTimeout(tickTimer);
+        unsubscribeChat();
         try { controller.close(); } catch { /* already closed */ }
       };
       req.signal.addEventListener('abort', shutdown);
     },
-    cancel() { closed = true; },
+    cancel() {
+      closed = true;
+      clearInterval(interval);
+      clearTimeout(tickTimer);
+      unsubscribeChat();
+    },
   });
 
   return new Response(stream, {

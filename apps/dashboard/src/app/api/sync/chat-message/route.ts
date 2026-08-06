@@ -10,6 +10,7 @@ import { resolveMachine } from '../route';
 import { stripNulDeep } from '@/server/sanitize';
 import { enqueuePush } from '@/server/push';
 import { chatEvent } from '@/server/push/events';
+import { fire as fireChat } from '@/server/chat-bus';
 
 const Item = z.object({
   sessionId: z.string(),
@@ -61,6 +62,9 @@ export async function POST(req: NextRequest) {
   // rows are excluded by the same isNew test as freshSessions, so a gateway
   // restart re-tailing a transcript can't notify about hours-old replies.
   const pushable = new Map<string, { agentName: string; content: unknown }>();
+  // Sessions this batch actually wrote rows for — new OR streamed-growth upsert.
+  // The SSE stream must be woken for BOTH: an UPDATE is a growing bubble.
+  const dirtySessions = new Set<string>();
 
   // Cache session lookups within this batch: a streaming turn POSTs many items
   // for the SAME session, and re-reading the row per item is pure waste on the
@@ -139,6 +143,7 @@ export async function POST(req: NextRequest) {
         data: { sessionId: m.sessionId, role: m.role, content, externalId: null },
       });
     }
+    dirtySessions.add(m.sessionId);
     inserted++;
   }
 
@@ -158,6 +163,9 @@ export async function POST(req: NextRequest) {
     const event = chatEvent({ machineId: machine.id, sessionId, agentName, content });
     if (event) enqueuePush(event);
   }
+  // 广播落库信号：同进程的 /api/chat/stream SSE handler 立即 tick 推送，
+  // 不再等下一次 Postgres 轮询。新增与流式增长（upsert-UPDATE）都广播——都要推。
+  for (const sid of dirtySessions) fireChat(sid);
 
   return NextResponse.json({ ok: true, inserted });
 }
