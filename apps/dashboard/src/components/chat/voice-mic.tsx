@@ -63,6 +63,11 @@ const SPRING = 'cubic-bezier(0.34, 1.35, 0.5, 1)';
 type MicStyle = 'rewrite' | 'minimal';
 const STYLE_KEY = 'hermit:voice-mic-style';
 const DOUBLE_TAP_MS = 300;
+// The tap that OPENS the settings dialog on touch also produces a synthesized
+// `click` a few ms later; by then the backdrop covers the screen, so the click
+// lands on it and would instantly close the dialog. Close requests in this window
+// after opening are ignored so the dialog survives its own tap-through.
+const OUTSIDE_CLOSE_GRACE_MS = 400;
 const STYLE_OPTIONS: { value: MicStyle; label: string; desc: string }[] = [
   { value: 'rewrite', label: '改写润色', desc: '修改并重写转写文字，更贴合任务场景的表达习惯（默认）' },
   { value: 'minimal', label: '保留原话', desc: '尽量保留原始转写，仅纠正错别字、英文拼写和语法问题' },
@@ -97,6 +102,7 @@ export const VoiceMic = memo(function VoiceMic({
   const [startedAt, setStartedAt] = useState(0);
   const [style, setStyle] = useState<MicStyle>('rewrite');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const dialogOpenedAt = useRef(0);
 
   const recorderRef = useRef<VoiceRecorder | null>(null);
   const g = useRef({
@@ -371,6 +377,7 @@ export const VoiceMic = memo(function VoiceMic({
     setPhase('idle');
     if (isDouble) {
       setHint(null);
+      dialogOpenedAt.current = Date.now();
       setSettingsOpen(true);
       return;
     }
@@ -433,6 +440,12 @@ export const VoiceMic = memo(function VoiceMic({
     setStyle(s);
     try { localStorage.setItem(STYLE_KEY, s); } catch { /* private mode */ }
     setSettingsOpen(false);
+  }, []);
+  // See OUTSIDE_CLOSE_GRACE_MS: a tap that opened the dialog fires a leftover
+  // `click` into the backdrop a few ms later. Ignore closes inside that window.
+  const handleSettingsOpenChange = useCallback((open: boolean) => {
+    if (!open && Date.now() - dialogOpenedAt.current < OUTSIDE_CLOSE_GRACE_MS) return;
+    setSettingsOpen(open);
   }, []);
 
   if (hidden) return null;
@@ -530,7 +543,7 @@ export const VoiceMic = memo(function VoiceMic({
           primitives directly (not the stock DialogContent) because the dock sits at
           z-[70] and the stock dialog is z-50 — the mic would float above its own
           settings popup. Both overlay and popup get z-[80]. */}
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+      <Dialog open={settingsOpen} onOpenChange={handleSettingsOpenChange}>
         <DialogPortal>
           <DialogOverlay className="z-[80]" />
           <DialogPrimitive.Popup
