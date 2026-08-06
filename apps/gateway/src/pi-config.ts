@@ -57,6 +57,75 @@ function envFallback(): PiConfig {
 }
 
 /**
+ * Copy the legacy .env endpoint knobs into the dashboard's config, once.
+ *
+ * The two have been layered since pi shipped: `mergeRemote` falls back to
+ * HERMIT_PI_* for anything the dashboard leaves blank, so a machine configured
+ * entirely by .env works — but its Settings → Pi Runtime page renders *empty*,
+ * every field showing a grey example instead of what the machine is actually
+ * running. That is not a cosmetic gap: the page's example values happen to name
+ * models, so a blank page reads as "everything defaults to claude-opus-5" when
+ * the machine is really on hyqubit with three models from a file nobody is
+ * looking at. Reported as exactly that confusion.
+ *
+ * So the env values are promoted into the DB the first time a gateway starts
+ * without them, after which the settings page is the single source of truth and
+ * .env is only bootstrap. Deliberately conservative:
+ *
+ *  - Only when the stored config names no provider. A machine configured on the
+ *    page is never overwritten, and this becomes a no-op forever after.
+ *  - Only fields the env actually declares; the stored image/auth settings are
+ *    carried through untouched.
+ *  - A failure is logged and dropped. Seeding is a convenience; a dashboard blip
+ *    must not stop pi sessions from spawning, which is why nothing awaits it.
+ */
+export async function seedPiConfigFromEnv(): Promise<void> {
+  const env = envFallback();
+  if (!env.provider || !env.baseUrl) return; // nothing to promote — cheap early out
+
+  let remote: PiConfig | null = null;
+  try {
+    remote = (await api.pollPiConfig()) as PiConfig | null;
+  } catch (e) {
+    console.warn('[pi-config] seed: could not read current config:', (e as Error).message);
+    return;
+  }
+
+  const next = planPiConfigSeed(env, remote);
+  if (!next) return;
+
+  try {
+    await api.setPiConfig(next);
+    cache = null; // force the next getPiConfig to see what we just wrote
+    console.log(`[pi-config] seeded Settings → Pi Runtime from .env (provider "${env.provider}")`);
+  } catch (e) {
+    console.warn('[pi-config] seed: write failed:', (e as Error).message);
+  }
+}
+
+/**
+ * What (if anything) the seed should write. Null means leave it alone.
+ *
+ * Split out so the rules are what the tests exercise, rather than a local copy
+ * of them — see the singleFlight note in pi-rpc.ts for what a re-implemented
+ * guard costs.
+ */
+export function planPiConfigSeed(env: PiConfig, remote: PiConfig | null): PiConfig | null {
+  if (!env.provider || !env.baseUrl) return null;
+  if (remote?.provider?.trim()) return null; // already configured on the page
+
+  return {
+    ...(remote ?? {}),
+    provider: env.provider,
+    baseUrl: env.baseUrl,
+    api: env.api,
+    models: env.models?.length ? env.models : remote?.models,
+    secretKey: remote?.secretKey || env.secretKey || null,
+    defaultModel: remote?.defaultModel?.trim() || env.models?.[0],
+  };
+}
+
+/**
  * The model a pi session gets when it pins none of its own.
  *
  * Explicit setting first, then the head of the models list. The list is ordered

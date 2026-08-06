@@ -261,6 +261,12 @@ export const api = {
     return r?.[0]?.result?.data?.json ?? null;
   },
 
+  // Write the machine's pi config. Used once at startup to seed it from the
+  // legacy .env knobs — see seedPiConfigFromEnv.
+  setPiConfig: async (config: unknown): Promise<void> => {
+    await post('/api/trpc/machines.setPiConfig?batch=1', { 0: { json: { config } } });
+  },
+
   // ── File Station (large-file delivery) round-trip ───────────────────────────
   pollFileTransfers: async (): Promise<
     Array<{ id: string; filename: string; destPath: string; size: number; unzip: boolean }>

@@ -37,6 +37,7 @@ import { fileTransferTick } from './file-station';
 import { pushGlobalSkills, globalSkillRequestTick } from './global-skills';
 import { knowledgeRequestTick, reconcileKnowledgeOnStartup } from './knowledge';
 import { globalMemoryTick } from './global-memory';
+import { seedPiConfigFromEnv } from './pi-config';
 import { chromeReaperTick } from './chrome-reaper';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 
@@ -216,6 +217,10 @@ function loop(fn: () => Promise<void>, ms: number) {
   await pushGlobalSkillsTick();
   await safe('knowledge-reconcile', reconcileKnowledgeOnStartup); // converge attached KBs disk↔DB
   await safe('global-memory', globalMemoryTick);
+  // One-time convergence: promote the legacy .env endpoint knobs into the
+  // dashboard config so Settings → Pi Runtime shows what this machine actually
+  // runs, instead of an empty form over a live .env. No-op once configured.
+  await safe('pi-config-seed', seedPiConfigFromEnv);
   await pushSessionSnapshots();
   await pushHostStat();
   await pushUsage();

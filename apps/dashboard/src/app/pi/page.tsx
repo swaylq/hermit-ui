@@ -356,7 +356,11 @@ export default function PiSettingsPage() {
                 >
                   <Input
                     value={cfg?.defaultModel ?? ''}
-                    placeholder={modelsText.split(',')[0]?.trim() || 'claude-opus-5'}
+                    // The head of the list above, since that is what a blank
+                    // field resolves to. NOT a hardcoded model id: naming one
+                    // here made an unconfigured page read as "everything
+                    // defaults to claude-opus-5" when nothing was set at all.
+                    placeholder={modelsText.split(',')[0]?.trim() || '列表第一个'}
                     onChange={(e) => set({ defaultModel: e.target.value })}
                     className="font-mono text-base sm:text-sm"
                   />
