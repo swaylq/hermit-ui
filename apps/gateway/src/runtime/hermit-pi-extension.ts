@@ -109,6 +109,22 @@ const str = (v: unknown, field: string): string => {
 };
 
 /**
+ * Context window per model id, as reported by the machine endpoint on
+ * 2026-08-06 (litellm /v1/model/info: claude-opus-5, claude-sonnet-5,
+ * claude-haiku-4-5 all report 1_000_000). pi auto-compacts at contextWindow - reserveTokens, so an
+ * understated window makes long chats compact (and on a broken translation
+ * path, read as "context reset") far earlier than the model actually requires.
+ * Anything not listed falls back to a conservative default rather than lying
+ * about a model we haven't measured.
+ */
+const MODEL_CONTEXT_WINDOW: Record<string, { contextWindow: number; maxTokens: number }> = {
+  'claude-opus-5':    { contextWindow: 1_000_000, maxTokens: 16_384 },
+  'claude-sonnet-5':  { contextWindow: 1_000_000, maxTokens: 16_384 },
+  'claude-haiku-4-5': { contextWindow: 1_000_000, maxTokens: 16_384 },
+};
+const DEFAULT_CONTEXT_WINDOW = { contextWindow: 200_000, maxTokens: 16_384 };
+
+/**
  * Register this machine's model endpoint as a pi provider.
  *
  * pi reads ANTHROPIC_AUTH_TOKEN but has no ANTHROPIC_BASE_URL, so a proxied or
@@ -133,17 +149,20 @@ function registerMachineProvider(pi: any): void {
     apiKey: '$HERMIT_PI_API_KEY',
     ...(ids.length
       ? {
-          models: ids.map((modelId) => ({
-            id: modelId,
-            name: modelId,
-            api,
-            baseUrl,
-            reasoning: false,
-            input: ['text', 'image'],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 200_000,
-            maxTokens: 16_384,
-          })),
+          models: ids.map((modelId) => {
+            const ctx = MODEL_CONTEXT_WINDOW[modelId] ?? DEFAULT_CONTEXT_WINDOW;
+            return {
+              id: modelId,
+              name: modelId,
+              api,
+              baseUrl,
+              reasoning: false,
+              input: ['text', 'image'],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: ctx.contextWindow,
+              maxTokens: ctx.maxTokens,
+            };
+          }),
         }
       : {}),
   });
