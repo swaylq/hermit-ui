@@ -28,7 +28,7 @@
 // its own gesture, with the button staying a circle + spinner until it resolves.
 
 import { memo, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Mic, Loader2 } from 'lucide-react';
+import { Check, Loader2, Mic, XIcon } from 'lucide-react';
 import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
 import {
@@ -41,6 +41,10 @@ import {
 } from '@/lib/voice-capture';
 import { VoiceWave, type WavePhase } from '@/components/chat/voice-wave';
 import { FAB, HOLD_MS, useFabDock } from '@/components/chat/fab-dock';
+import { Dialog, DialogPortal, DialogOverlay } from '@/components/ui/dialog';
+import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 // 'arming' = waiting on the mic (device opening, or the user answering the
 // permission alert). Deliberately NOT expanded: the capsule means "we are
@@ -51,6 +55,21 @@ const EXP_MAX = 212; // expanded capsule width ceiling
 const MIN_MS = 400; // shorter press = accidental tap, don't send
 const MAX_MS = 60_000; // recording ceiling
 const SPRING = 'cubic-bezier(0.34, 1.35, 0.5, 1)';
+
+// ── polish style ────────────────────────────────────────────────────────────
+// Which transcription polish this device uses. Double-click the mic to change it;
+// the choice lives in localStorage (per-browser, like the mic position and
+// visibility) and rides along with each transcription as the `style` form field.
+type MicStyle = 'rewrite' | 'minimal';
+const STYLE_KEY = 'hermit:voice-mic-style';
+const DOUBLE_TAP_MS = 300;
+const STYLE_OPTIONS: { value: MicStyle; label: string; desc: string }[] = [
+  { value: 'rewrite', label: '改写润色', desc: '修改并重写转写文字，更贴合任务场景的表达习惯（默认）' },
+  { value: 'minimal', label: '保留原话', desc: '尽量保留原始转写，仅纠正错别字、英文拼写和语法问题' },
+];
+function readMicStyle(): MicStyle {
+  try { return localStorage.getItem(STYLE_KEY) === 'minimal' ? 'minimal' : 'rewrite'; } catch { return 'rewrite'; }
+}
 
 
 // memo: VoiceMic lives inside SessionPane, which re-renders on every SSE
@@ -76,6 +95,8 @@ export const VoiceMic = memo(function VoiceMic({
   const [level, setLevel] = useState(0);
   const [hint, setHint] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState(0);
+  const [style, setStyle] = useState<MicStyle>('rewrite');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const recorderRef = useRef<VoiceRecorder | null>(null);
   const g = useRef({
@@ -92,11 +113,17 @@ export const VoiceMic = memo(function VoiceMic({
     byKey: false, // current recording was started by the PTT key (not the button)
     needsAuth: false, // this press must ask for permission on release, not record
     pointerDown: false, // finger/button still down — false means nobody is holding
+    lastTapAt: 0, // time of the previous quick tap — two taps ≤ DOUBLE_TAP_MS opens settings
+    tapHintTimer: 0 as unknown as ReturnType<typeof setTimeout>,
   });
 
 
   // Release the warm mic on unmount (leaving the chat) so it doesn't linger.
-  useEffect(() => () => releaseWarmMic(), []);
+  useEffect(() => () => { clearTimeout(g.current.tapHintTimer); releaseWarmMic(); }, []);
+
+  // The polish style lives in localStorage — read it once on mount. It only ever
+  // changes through the settings popup on this same button, so no cross-tab sync.
+  useEffect(() => { setStyle(readMicStyle()); }, []);
 
   // Keep the cached permission answer fresh — it expires on its own (iOS drops the
   // grant ~10 min after capture stops) and pointerdown has to read it synchronously.
@@ -116,6 +143,7 @@ export const VoiceMic = memo(function VoiceMic({
         const fd = new FormData();
         fd.append('sessionId', sessionId);
         fd.append('wav', wav, 'voice.wav');
+        fd.append('style', style);
         const r = await authedFetch('/api/transcribe', { method: 'POST', body: fd });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = (await r.json()) as { text?: string };
@@ -128,7 +156,7 @@ export const VoiceMic = memo(function VoiceMic({
         setTimeout(() => { setPhase('idle'); setHint(null); }, 2600);
       }
     },
-    [sessionId, onTranscript],
+    [sessionId, onTranscript, style],
   );
 
   const stopAndTranscribe = useCallback(async () => {
@@ -278,6 +306,7 @@ export const VoiceMic = memo(function VoiceMic({
       gg.py = e.clientY;
       dock.onDown(e); // the dock decides whether this becomes a group drag
       setHint(null);
+      clearTimeout(gg.tapHintTimer); // a new press cancels a pending tap hint
       // Open the mic only once the hold is confirmed, so a DRAG never opens it (no
       // stray mic indicator). Exception: on touch we open on pointerdown — only a
       // request made inside this gesture is privileged, and that privilege is what
@@ -324,6 +353,33 @@ export const VoiceMic = memo(function VoiceMic({
     [dock],
   );
 
+  // A press that never held into a recording (released before HOLD_MS) is a TAP.
+  // Two taps within DOUBLE_TAP_MS open the style settings; a lone tap just hints
+  // '长按说话', delayed by the double-tap window so the hint can't flash in the
+  // gap before a second tap lands.
+  const onTap = useCallback(() => {
+    const gg = g.current;
+    clearTimeout(gg.tapHintTimer);
+    // Touch opens the mic on pointerdown; a sub-400ms press is never a real
+    // recording, so cancel it silently instead of transcribing.
+    const rec = recorderRef.current;
+    recorderRef.current = null;
+    if (rec) { rec.cancel(); setLevel(0); }
+    const now = Date.now();
+    const isDouble = now - gg.lastTapAt <= DOUBLE_TAP_MS;
+    gg.lastTapAt = isDouble ? 0 : now;
+    setPhase('idle');
+    if (isDouble) {
+      setHint(null);
+      setSettingsOpen(true);
+      return;
+    }
+    gg.tapHintTimer = setTimeout(() => {
+      setHint('长按说话');
+      setTimeout(() => setHint(null), 1500);
+    }, DOUBLE_TAP_MS);
+  }, []);
+
   const endGesture = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>) => {
       const gg = g.current;
@@ -340,9 +396,14 @@ export const VoiceMic = memo(function VoiceMic({
       // Unauthorized press → this release IS the permission request (its own
       // gesture, finger already up, so the alert can't strand the UI).
       if (needsAuth) { authorizeMic(); return; }
-      if (mode === 'deciding' || mode === 'recording') void stopAndTranscribe();
+      if (mode === 'recording') { void stopAndTranscribe(); return; }
+      // mode === 'deciding' → a quick tap, never a recording: the first tap of a
+      // double-tap (settings) or an accidental tap (hint). stopAndTranscribe is
+      // deliberately NOT called — its too-short path would flash '长按说话'
+      // immediately and eat the double-tap window.
+      void onTap();
     },
-    [stopAndTranscribe, authorizeMic, dock],
+    [stopAndTranscribe, authorizeMic, onTap, dock],
   );
 
   // Safety net for a press that never gets its pointerup: the tab going away
@@ -354,6 +415,7 @@ export const VoiceMic = memo(function VoiceMic({
       const gg = g.current;
       if (gg.mode === 'idle' && !recorderRef.current) return;
       clearTimeout(gg.holdTimer);
+      clearTimeout(gg.tapHintTimer);
       gg.mode = 'idle';
       gg.pointerDown = false;
       gg.needsAuth = false;
@@ -366,6 +428,11 @@ export const VoiceMic = memo(function VoiceMic({
     };
     document.addEventListener('visibilitychange', bail);
     return () => document.removeEventListener('visibilitychange', bail);
+  }, []);
+  const chooseStyle = useCallback((s: MicStyle) => {
+    setStyle(s);
+    try { localStorage.setItem(STYLE_KEY, s); } catch { /* private mode */ }
+    setSettingsOpen(false);
   }, []);
 
   if (hidden) return null;
@@ -399,63 +466,117 @@ export const VoiceMic = memo(function VoiceMic({
       : '0 6px 20px -6px rgba(0,0,0,0.55)';
 
   return (
-    <div
-      className="relative"
-      style={{ marginLeft: -shift, transition: dock.dragging ? 'none' : `margin-left 0.42s ${SPRING}` }}
-    >
-      {!active && hint && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap rounded-full bg-black/75 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
-          {hint}
-        </div>
-      )}
-      <button
-        type="button"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endGesture}
-        onPointerCancel={endGesture}
-        aria-label="语音输入（长按说话，拖动可移位；未授权时点一下授权）"
-        title="长按说话，拖动可移位（桌面可按住右 Option 说话）"
-        className="relative flex items-center justify-center overflow-hidden rounded-full border border-white/10 bg-[#111319]/85 backdrop-blur-xl cursor-pointer"
-        style={{
-          width,
-          height: FAB,
-          boxShadow: glow,
-          transition: dock.dragging ? 'none' : `width 0.42s ${SPRING}, box-shadow 0.35s ease`,
-        }}
+    <>
+      <div
+        className="relative"
+        style={{ marginLeft: -shift, transition: dock.dragging ? 'none' : `margin-left 0.42s ${SPRING}` }}
       >
-        {active && (
-          <div className="pointer-events-none absolute inset-0">
-            <VoiceWave phase={phase as WavePhase} level={level} />
+        {!active && hint && (
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap rounded-full bg-black/75 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
+            {hint}
           </div>
         )}
-        <Mic
-          className="pointer-events-none absolute h-5 w-5 text-white/85 transition-all duration-200"
+        <button
+          type="button"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endGesture}
+          onPointerCancel={endGesture}
+          aria-label="语音输入（长按说话，拖动可移位；未授权时点一下授权；双击打开设置）"
+          title="长按说话，拖动可移位（桌面可按住右 Option 说话；双击打开设置）"
+          className="relative flex items-center justify-center overflow-hidden rounded-full border border-white/10 bg-[#111319]/85 backdrop-blur-xl cursor-pointer"
           style={{
-            opacity: active || arming ? 0 : 1,
-            transform: active || arming ? 'scale(0.5)' : 'scale(1)',
+            width,
+            height: FAB,
+            boxShadow: glow,
+            transition: dock.dragging ? 'none' : `width 0.42s ${SPRING}, box-shadow 0.35s ease`,
           }}
-        />
-        {arming && (
-          <Loader2 className="pointer-events-none absolute h-5 w-5 animate-spin text-white/85" />
-        )}
-        {phase === 'recording' && (
-          <>
-            <span className="pointer-events-none absolute left-4 h-2 w-2 animate-pulse rounded-full bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.9)]" />
-            <span className="pointer-events-none absolute right-4 text-[11px] font-medium tabular-nums text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
-              {mmss}
+        >
+          {active && (
+            <div className="pointer-events-none absolute inset-0">
+              <VoiceWave phase={phase as WavePhase} level={level} />
+            </div>
+          )}
+          <Mic
+            className="pointer-events-none absolute h-5 w-5 text-white/85 transition-all duration-200"
+            style={{
+              opacity: active || arming ? 0 : 1,
+              transform: active || arming ? 'scale(0.5)' : 'scale(1)',
+            }}
+          />
+          {arming && (
+            <Loader2 className="pointer-events-none absolute h-5 w-5 animate-spin text-white/85" />
+          )}
+          {phase === 'recording' && (
+            <>
+              <span className="pointer-events-none absolute left-4 h-2 w-2 animate-pulse rounded-full bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.9)]" />
+              <span className="pointer-events-none absolute right-4 text-[11px] font-medium tabular-nums text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
+                {mmss}
+              </span>
+            </>
+          )}
+          {phase === 'transcribing' && (
+            <Loader2 className="pointer-events-none absolute right-4 h-3.5 w-3.5 animate-spin text-white/90" />
+          )}
+          {phase === 'error' && (
+            <span className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] font-medium text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
+              {hint ?? '出错了'}
             </span>
-          </>
-        )}
-        {phase === 'transcribing' && (
-          <Loader2 className="pointer-events-none absolute right-4 h-3.5 w-3.5 animate-spin text-white/90" />
-        )}
-        {phase === 'error' && (
-          <span className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] font-medium text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
-            {hint ?? '出错了'}
-          </span>
-        )}
-      </button>
-    </div>
+          )}
+        </button>
+      </div>
+
+      {/* Double-click the mic → this settings popup. Composed on the base-ui
+          primitives directly (not the stock DialogContent) because the dock sits at
+          z-[70] and the stock dialog is z-50 — the mic would float above its own
+          settings popup. Both overlay and popup get z-[80]. */}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogPortal>
+          <DialogOverlay className="z-[80]" />
+          <DialogPrimitive.Popup
+            data-slot="dialog-content"
+            className="fixed top-1/2 left-1/2 z-[80] grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+          >
+            <div className="flex flex-col gap-1">
+              <p className="text-sm font-semibold text-foreground">语音输入风格</p>
+              <p className="text-xs text-muted-foreground">双击麦克风可随时改回。保存在本机浏览器。</p>
+            </div>
+            <div className="flex flex-col gap-2">
+              {STYLE_OPTIONS.map((o) => {
+                const selected = style === o.value;
+                return (
+                  <button
+                    key={o.value}
+                    type="button"
+                    onClick={() => chooseStyle(o.value)}
+                    aria-pressed={selected}
+                    className={cn(
+                      'flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors cursor-pointer',
+                      selected ? 'border-foreground/30 bg-accent' : 'border-border hover:bg-accent/50',
+                    )}
+                  >
+                    <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-foreground/30">
+                      {selected && <Check className="h-3 w-3 text-emerald-500" />}
+                    </span>
+                    <span className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium text-foreground">{o.label}</span>
+                      <span className="text-[11px] leading-snug text-muted-foreground">{o.desc}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <DialogPrimitive.Close
+              render={
+                <Button variant="ghost" className="absolute top-2 right-2" size="icon-sm" />
+              }
+            >
+              <XIcon />
+              <span className="sr-only">Close</span>
+            </DialogPrimitive.Close>
+          </DialogPrimitive.Popup>
+        </DialogPortal>
+      </Dialog>
+    </>
   );
 });

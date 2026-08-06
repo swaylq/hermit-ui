@@ -43,7 +43,7 @@ import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
 
 import { openrouterChat, type ORMessage } from '@/server/openrouter';
-import { POLISH_SYSTEM, polishPrompt, acceptPolish } from '@/server/transcribe-polish';
+import { POLISH_SYSTEM, MINIMAL_POLISH_SYSTEM, polishPrompt, acceptPolish, type PolishStyle } from '@/server/transcribe-polish';
 import { loadContext, isContextEcho } from '@/server/transcribe-context';
 
 const ASR_MODEL = process.env.OPENROUTER_ASR_MODEL || 'mistralai/voxtral-small-24b-2507';
@@ -83,10 +83,13 @@ function orAsrMessages(base64: string): ORMessage[] {
   ];
 }
 
-// Polish messages (text in → cleaned text out); shared by both providers.
-function polishMessages(raw: string, context: string): ORMessage[] {
+// Polish messages (text in → cleaned text out); shared by both providers. The
+// `style` picks which polish the user chose for THIS device (see transcribe-polish:
+// `rewrite` = rewrite into fluent written text — the default; `minimal` = keep the
+// user's own words, correct only typos / English spelling / grammar).
+function polishMessages(raw: string, context: string, style: PolishStyle): ORMessage[] {
   return [
-    { role: 'system', content: POLISH_SYSTEM },
+    { role: 'system', content: style === 'minimal' ? MINIMAL_POLISH_SYSTEM : POLISH_SYSTEM },
     { role: 'user', content: polishPrompt(raw, context) },
   ];
 }
@@ -217,6 +220,10 @@ export async function POST(req: NextRequest) {
 
   const sessionId = (form.get('sessionId') as string | null)?.trim();
   const wav = form.get('wav');
+  // The polish style the user picked on THIS device (double-click the mic → 设置).
+  // Anything unknown resolves to the default `rewrite`, so an old client or a
+  // hand-rolled request still gets the established behaviour.
+  const style: PolishStyle = form.get('style') === 'minimal' ? 'minimal' : 'rewrite';
   if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 });
   if (!(wav instanceof Blob)) return NextResponse.json({ error: 'wav blob required' }, { status: 400 });
   if (wav.size === 0) return NextResponse.json({ error: 'empty audio' }, { status: 400 });
@@ -267,9 +274,9 @@ export async function POST(req: NextRequest) {
   try {
     let polished = '';
     if (dsKey) {
-      polished = await dashscopeChat(dsKey, DASHSCOPE_POLISH_MODEL, polishMessages(raw, context), { temperature: 0.2, timeoutMs: 20_000 });
+      polished = await dashscopeChat(dsKey, DASHSCOPE_POLISH_MODEL, polishMessages(raw, context, style), { temperature: 0.2, timeoutMs: 20_000 });
     } else if (orKey) {
-      polished = await openrouterChat(orKey, POLISH_MODEL, polishMessages(raw, context), { temperature: 0.2, reasoningOff: true, timeoutMs: 30_000 });
+      polished = await openrouterChat(orKey, POLISH_MODEL, polishMessages(raw, context, style), { temperature: 0.2, reasoningOff: true, timeoutMs: 30_000 });
     }
     // The model may answer instead of clean; acceptPolish decides, and keeps
     // the user's own words when it did. See server/transcribe-polish.ts.
