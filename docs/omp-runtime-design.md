@@ -1,4 +1,4 @@
-# omp — a third agent backend
+# omp — a second engine inside the pi backend
 
 Follows [pi-runtime-design.md](pi-runtime-design.md) (pi as a second backend)
 and [pi-modes-design.md](pi-modes-design.md) (per-session spawn recipes).
@@ -14,8 +14,25 @@ deliberately omits.
 It is offered **alongside** pi, not instead of it. pi is small and predictable;
 omp is capable and moves fast (17.2.9 against pi's 0.83.0, and its own docs put
 the last upstream sync at 2026-03-22, so it is diverging rather than tracking).
-Which is right depends on the work, so the choice is per session like every
-other backend choice.
+
+## Why it is an engine, not a backend
+
+There are two backends — Claude Code and pi — and two **engines** inside the pi
+one. The engine is declared by the mode (`"engine": "omp"` in `mode.json`), not
+chosen separately.
+
+It shipped briefly as a third backend and that was wrong twice over. From the
+user's side "pi or omp" and "coding or ops" are not two questions: a mode
+already pins the model, the system prompt and the tool list, and the engine is
+the same kind of decision. And a separate backend grows a separate everything —
+its own provider config, its own API key, its own subscription setting — when
+the whole point is that one Settings → Pi Runtime page should configure both.
+
+`runtimeFor(kind, mode)` resolves the mode and picks the engine. An absent or
+unknown mode resolves to the default, whose engine is pi: exactly the behaviour
+that existed before omp. A session carrying the short-lived `omp-rpc` runtime
+value is normalized to `pi-rpc` in `resolveRuntime`, so it still runs rather
+than silently falling through to the tmux path.
 
 ## Why we do not use omp's own RpcClient
 
@@ -52,7 +69,7 @@ detection. Those are refinements earned by pi being in production; omp starts
 without them and will grow the ones it turns out to need. A restart therefore
 loses an omp session's context today, and that is a known gap, not an oversight.
 
-## Three places the two backends genuinely differ
+## Three places the two engines genuinely differ
 
 **1. `--tools` means the opposite thing.** Measured on both:
 
@@ -65,9 +82,10 @@ loses an omp session's context today, and that is a known gap, not an oversight.
 
 So pi's list reads "also switch these on" and omp's reads "restrict to these",
 and pi's `HERMIT_TOOL_NAMES` union — which exists so a mode author cannot
-accidentally drop `ask`/`attach_image` — would fail an omp spawn outright. Modes
-therefore carry a separate `ompTools` field rather than a translation. Omitted
-means omp keeps its full surface.
+accidentally drop `ask`/`attach_image` — would fail an omp spawn outright. A
+mode's `tools` is therefore only ever read in **its own engine's** vocabulary;
+there is no translation, and a list written for one engine will not work on the
+other. Omitted means omp keeps its full surface.
 
 **2. Skills.** pi's `--skill <path>` *adds* on top of discovery; omp's
 `--skills <glob>` *filters* discovery down. Passing a mode's skill list to omp
@@ -86,6 +104,25 @@ extension therefore skips its provider registration when
 page, rather than two that drift. A `models.yml` without the generated marker
 was written by a human and is left alone.
 
+## One auth configuration for both engines
+
+Settings → Pi Runtime configures the pi backend, engines included. Both call the
+same `machineProviderEnv()`:
+
+- **api-key** — the machine's provider and secret. omp additionally needs the
+  generated `models.yml`, because its provider is a custom endpoint.
+- **cc-subscription** — this machine's Claude Code Keychain OAuth token, at zero
+  marginal model cost. No `models.yml` is written and the provider is forced to
+  `anthropic`, since the token only works against Anthropic's own endpoint
+  whatever the API-key config happens to name.
+
+The subscription path carries one constraint that applies to both engines:
+Anthropic's classifier reads the system prompt, and a third-party harness
+identity in it drops the request out of the plan and into extra usage. pi
+handles this by writing a clean `~/.pi/agent/SYSTEM.md`; omp announces itself
+the same way, so it is given `--system-prompt` with the same identity-free text.
+A mode's own text is still appended after it.
+
 ## Installation
 
 omp is **not** a gateway dependency. It is 36MB and requires Bun ≥ 1.3.14;
@@ -102,11 +139,15 @@ bun install -g @oh-my-pi/pi-coding-agent
 
 `pi-modes.test.ts` covers the omp argument semantics — no hermit union, pi's
 tool list ignored, no skill flags, extensions and prompt still passed.
-`runtime-resolve.test.ts` covers omp as a mode backend and the
-pi↔omp non-inheritance rule.
+`runtime-resolve.test.ts` covers the legacy `omp-rpc` runtime value
+normalizing back to `pi-rpc`.
 
-End-to-end, driving `OmpRpcRuntime` through the `AgentRuntime` interface exactly
-as chat-runner does:
+`runtimeFor` dispatch, checked directly: `pi-rpc`+`coding`/`ops`/absent/unknown
+all resolve to the pi engine, `pi-rpc`+`omp` to the omp engine, and
+`claude-tmux` to null (the tmux path) whatever the mode says.
+
+End-to-end, driving the runtime `runtimeFor` returns through the `AgentRuntime`
+interface exactly as chat-runner does:
 
 - `ensure` returns omp's session id; `isWorking` false; `submit` accepted.
 - Events translate: `assistant[thinking+tool_use]` → `user[tool_result]` →

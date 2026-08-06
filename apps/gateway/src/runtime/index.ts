@@ -1,6 +1,7 @@
 import type { AgentRuntime } from './types';
 import { PiRpcRuntime } from './pi-rpc';
 import { OmpRpcRuntime } from './omp-rpc';
+import { resolveMode } from './pi-modes';
 
 const piRuntime = new PiRpcRuntime();
 const ompRuntime = new OmpRpcRuntime();
@@ -12,11 +13,24 @@ const ompRuntime = new OmpRpcRuntime();
  * its existing inline tmux path, which this deliberately does not touch — that
  * path is the fleet's critical path and the only one that bills against Claude
  * Max's Interactive bucket.
+ *
+ * There is one *backend* in the pi family and two *engines* under it. Which
+ * engine runs is declared by the MODE, not chosen separately: from the user's
+ * side "pi or omp" and "coding or ops" are one decision, and a mode already
+ * pins the model, the prompt and the tool list, so the engine belongs with
+ * them. It also keeps one auth configuration — Settings → Pi Runtime, including
+ * the Claude-subscription option — serving both, instead of a second backend
+ * growing a parallel set.
+ *
+ * An unknown or absent mode resolves to the default mode, whose engine is pi:
+ * exactly the behaviour that existed before omp.
  */
-export function runtimeFor(kind: string | null | undefined): AgentRuntime | null {
-  if (kind === 'pi-rpc') return piRuntime;
-  if (kind === 'omp-rpc') return ompRuntime;
-  return null;
+export function runtimeFor(
+  kind: string | null | undefined,
+  mode?: string | null,
+): AgentRuntime | null {
+  if (kind !== 'pi-rpc') return null;
+  return resolveMode(mode)?.engine === 'omp' ? ompRuntime : piRuntime;
 }
 
 /**

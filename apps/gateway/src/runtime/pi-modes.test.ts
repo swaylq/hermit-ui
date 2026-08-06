@@ -98,26 +98,25 @@ test('a skill that exists nowhere is skipped rather than failing the spawn', () 
 
 test('omp never gets the hermit-tools union', () => {
   const args = buildModeArgs(
-    mode({ ompTools: ['read', 'bash'] }),
-    { agentDirectory: '/tmp', runtime: 'omp-rpc' },
+    mode({ engine: 'omp', tools: ['read', 'bash'] }),
+    { agentDirectory: '/tmp' },
   );
   const tools = args[args.indexOf('--tools') + 1].split(',');
   assert.deepEqual(tools, ['read', 'bash']);
   for (const t of HERMIT_TOOL_NAMES) assert.ok(!tools.includes(t), `${t} would fail the spawn`);
 });
 
-test("omp ignores pi's tool list — the vocabularies differ", () => {
-  // `find`/`ls` are pi built-ins that omp does not have (it has `glob`), and
-  // the list also names hermit's tools. Passing it through would fail to spawn.
-  const args = buildModeArgs(
-    mode({ tools: ['read', 'find', 'ls', 'ssh_run'] }),
-    { agentDirectory: '/tmp', runtime: 'omp-rpc' },
-  );
-  assert.ok(!args.includes('--tools'));
+test('the same mode shape produces different args per engine', () => {
+  // The one list, read twice. On pi it gains hermit's tools; on omp it must not.
+  const shape = { tools: ['read', 'bash'] };
+  const onPi = buildModeArgs(mode(shape), { agentDirectory: '/tmp' });
+  const onOmp = buildModeArgs(mode({ ...shape, engine: 'omp' }), { agentDirectory: '/tmp' });
+  assert.ok(onPi[onPi.indexOf('--tools') + 1].includes('ask'));
+  assert.ok(!onOmp[onOmp.indexOf('--tools') + 1].includes('ask'));
 });
 
-test('omp with no ompTools keeps its full built-in surface', () => {
-  assert.deepEqual(buildModeArgs(mode({}), { agentDirectory: '/tmp', runtime: 'omp-rpc' }), []);
+test('omp with no tools keeps its full built-in surface', () => {
+  assert.deepEqual(buildModeArgs(mode({ engine: 'omp' }), { agentDirectory: '/tmp' }), []);
 });
 
 test('omp gets no --skill flags', () => {
@@ -127,8 +126,8 @@ test('omp gets no --skill flags', () => {
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-agent-'));
   fs.mkdirSync(path.join(agentDir, '.claude', 'skills', 'japan-dev-ops'), { recursive: true });
   const args = buildModeArgs(
-    mode({ skills: ['japan-dev-ops'] }),
-    { agentDirectory: agentDir, runtime: 'omp-rpc' },
+    mode({ engine: 'omp', skills: ['japan-dev-ops'] }),
+    { agentDirectory: agentDir },
   );
   assert.ok(!args.includes('--skill'));
   assert.ok(!args.includes('--skills'));
@@ -141,14 +140,14 @@ test('omp still gets extensions and the system prompt', () => {
   const ext = path.join(dir, 'extensions', 'x.ts');
   fs.writeFileSync(ext, 'export default () => {};');
   const args = buildModeArgs(
-    mode({ dir, extensions: ['./extensions/x.ts'], systemPrompt: 'Be terse.' }),
-    { agentDirectory: '/tmp', runtime: 'omp-rpc' },
+    mode({ engine: 'omp', dir, extensions: ['./extensions/x.ts'], systemPrompt: 'Be terse.' }),
+    { agentDirectory: '/tmp' },
   );
   assert.deepEqual(args, ['--extension', ext, '--append-system-prompt', 'Be terse.']);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('omitting runtime keeps the pi behaviour, so existing callers are unchanged', () => {
+test('a mode with no engine is pi, so existing modes are unchanged', () => {
   const args = buildModeArgs(mode({ tools: ['read'] }), { agentDirectory: '/tmp' });
   const tools = args[args.indexOf('--tools') + 1].split(',');
   assert.ok(tools.includes('ask'));

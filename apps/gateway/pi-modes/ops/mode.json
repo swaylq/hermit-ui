@@ -1,10 +1,22 @@
 {
   "label": "Ops",
   "blurb": "Live machines and services. Investigation discipline, read-before-write, ssh_run.",
-  "tools": ["read", "bash", "grep", "find", "ls", "edit", "ssh_run", "ssh_hosts"],
-  "ompTools": ["read", "bash", "grep", "glob", "edit", "ast_grep", "todo", "web_search"],
-  "skills": ["japan-dev-ops"],
-  "extensions": ["./extensions/ops-tools.ts"],
+  "tools": [
+    "read",
+    "bash",
+    "grep",
+    "find",
+    "ls",
+    "edit",
+    "ssh_run",
+    "ssh_hosts"
+  ],
+  "skills": [
+    "japan-dev-ops"
+  ],
+  "extensions": [
+    "./extensions/ops-tools.ts"
+  ],
   "model": null,
   "attribution": [
     {

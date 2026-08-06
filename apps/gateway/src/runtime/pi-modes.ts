@@ -42,21 +42,19 @@ export type PiMode = {
    */
   tools?: string[];
   /**
-   * Tool allowlist for the omp backend, which does NOT share pi's vocabulary.
+   * Which engine runs this mode. Default 'pi'.
    *
-   * Three things differ, all measured against a live omp:
-   *  - omp activates all 31 built-ins by default; pi activates four. So on pi
-   *    `tools` reads "also switch these on", and on omp it reads "restrict to
-   *    these" — opposite intents from the same list.
-   *  - The names differ (`glob` where pi has `find`/`ls`).
-   *  - omp's `--tools` validates against built-ins ONLY and hard-errors on
-   *    anything else, while leaving extension tools always available. Passing
-   *    pi's list — which names hermit's own tools — fails the spawn outright.
+   * omp (oh-my-pi) is a fork of pi with 31 built-in tools where pi keeps four,
+   * and it is selected here rather than as a separate backend: from the user's
+   * side "which engine" and "which recipe" are one decision, and a mode already
+   * pins the model, the prompt and the tool list, so the engine belongs with
+   * them. It also keeps one auth configuration (Settings → Pi Runtime) serving
+   * both, rather than a second backend growing its own.
    *
-   * So it is a separate field rather than a translation. Omitted means omp gets
-   * no `--tools` and keeps its full surface, which is the sane default.
+   * `tools` is read in the vocabulary of THIS engine — they do not agree, and
+   * a list written for one will not work on the other. See buildModeArgs.
    */
-  ompTools?: string[];
+  engine?: 'pi' | 'omp';
   /** Skill names resolved against the agent's own skills dir, plus mode-local ones. */
   skills?: string[];
   /** Paths relative to the mode directory. */
@@ -184,10 +182,10 @@ function resolveSkillPaths(mode: LoadedMode, agentDirectory: string): string[] {
  */
 export function buildModeArgs(
   mode: LoadedMode | null,
-  opts: { agentDirectory: string; runtime?: 'pi-rpc' | 'omp-rpc' },
+  opts: { agentDirectory: string },
 ): string[] {
   if (!mode) return [];
-  const isOmp = opts.runtime === 'omp-rpc';
+  const isOmp = mode.engine === 'omp';
   const args: string[] = [];
 
   for (const rel of mode.extensions ?? []) {
@@ -197,10 +195,17 @@ export function buildModeArgs(
   }
 
   if (isOmp) {
-    // No hermit-tools union here: omp's --tools rejects any name that is not a
-    // built-in, and its extension tools are available regardless of the flag.
-    // Unioning them in would fail the spawn AND be pointless.
-    if (mode.ompTools?.length) args.push('--tools', mode.ompTools.join(','));
+    // No hermit-tools union here, and this is not an oversight. Measured on
+    // both: pi activates four built-ins by default and its `--tools` covers
+    // extension tools too, so a mode listing only built-ins would silently
+    // lose `ask`/`attach_image` — hence the union. omp activates all 31 and
+    // its `--tools` covers built-ins ONLY, hard-erroring on any other name
+    // while leaving extension tools available regardless. Unioning hermit's
+    // tools in there would fail the spawn outright AND achieve nothing.
+    //
+    // The names differ too (`glob` where pi has `find`/`ls`), which is why a
+    // mode's `tools` is only ever read in its own engine's vocabulary.
+    if (mode.tools?.length) args.push('--tools', mode.tools.join(','));
   } else if (mode.tools?.length) {
     // Union with hermit's tools — see the note on PiMode.tools. A mode author
     // listing only the built-ins they want must not lose the dashboard plumbing.

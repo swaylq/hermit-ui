@@ -601,7 +601,7 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // Everything below this block is Claude-Code-in-a-pane. A session on another
   // runtime hands off here, before any tmux work, and reuses only the outbound
   // sync coalescing. See docs/pi-runtime-design.md.
-  const runtime = runtimeFor(session.runtime);
+  const runtime = runtimeFor(session.runtime, session.runtimeMode);
   if (runtime) {
     const state = piState(session.id);
     try {

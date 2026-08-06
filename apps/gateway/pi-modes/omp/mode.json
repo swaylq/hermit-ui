@@ -1,0 +1,14 @@
+{
+  "label": "omp (oh-my-pi)",
+  "blurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+  "engine": "omp",
+  "skills": [],
+  "extensions": [],
+  "model": null,
+  "_note": [
+    "An engine choice expressed as a mode, because from the user's side 'pi or omp' and 'coding or ops' are one decision — and a mode already pins the model, prompt and tools.",
+    "No `tools` on purpose: omp activates all 31 built-ins by default, and this mode's point is to have them. Note the list is read in OMP's vocabulary (glob, not find/ls) and must name built-ins only — its --tools hard-errors on anything else, unlike pi's, which also allowlists extension tools.",
+    "No SYSTEM.md yet: the craft worth appending (dirty-worktree discipline, lazy/overeager, parallel tool calls) applies to both engines and belongs in the coding mode once written, not here. See docs/pi-modes-design.md.",
+    "Requires omp on the machine: `bun install -g @oh-my-pi/pi-coding-agent` (Bun >= 1.3.14). A machine without it fails the spawn with instructions."
+  ]
+}

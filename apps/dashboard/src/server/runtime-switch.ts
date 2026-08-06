@@ -43,7 +43,7 @@ export function planRuntimeSwitch(
 
   // Same backend. Only the child-process backends read provider/model/mode off
   // these columns; claude takes its model from the machine's settings.json.
-  if (after.runtime === 'pi-rpc' || after.runtime === 'omp-rpc') {
+  if (after.runtime === 'pi-rpc') {
     const moved =
       (before.runtimeProvider ?? null) !== (after.runtimeProvider ?? null) ||
       (before.runtimeModel ?? null) !== (after.runtimeModel ?? null) ||

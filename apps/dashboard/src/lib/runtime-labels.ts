@@ -6,30 +6,25 @@
 //
 // See docs/pi-runtime-design.md.
 
-export const RUNTIME_KINDS = ['claude-tmux', 'pi-rpc', 'omp-rpc'] as const;
+// Two backends, not three. omp (oh-my-pi) is a second ENGINE inside the pi
+// backend, selected by the mode — see lib/pi-modes.ts. Which engine runs and
+// which recipe it runs are one decision from the user's side, and keeping them
+// one also keeps a single auth configuration serving both.
+export const RUNTIME_KINDS = ['claude-tmux', 'pi-rpc'] as const;
 export type RuntimeKind = (typeof RUNTIME_KINDS)[number];
 
 export function isRuntimeKind(v: string | null | undefined): v is RuntimeKind {
   return RUNTIME_KINDS.includes(v as RuntimeKind);
 }
 
-/** Does this backend run as a child process with a pi-style mode recipe? */
-export function isModeBackend(v: string | null | undefined): boolean {
-  return v === 'pi-rpc' || v === 'omp-rpc';
-}
-
 /** Full name, for pickers and headings. */
 export function runtimeLabel(kind: string | null | undefined): string {
-  if (kind === 'pi-rpc') return 'pi';
-  if (kind === 'omp-rpc') return 'omp';
-  return 'Claude Code';
+  return kind === 'pi-rpc' ? 'pi' : 'Claude Code';
 }
 
 /** Short name for the chat header, where the meta line is tight at 390px. */
 export function runtimeShortLabel(kind: string | null | undefined): string {
-  if (kind === 'pi-rpc') return 'pi';
-  if (kind === 'omp-rpc') return 'omp';
-  return 'Claude';
+  return kind === 'pi-rpc' ? 'pi' : 'Claude';
 }
 
 /** One line of hover detail: the backend plus whatever qualifies it. */
@@ -38,13 +33,12 @@ export function runtimeDetail(
   provider?: string | null,
   model?: string | null,
 ): string {
-  if (!isModeBackend(kind)) return 'Claude Code (interactive, tmux pane)';
-  return [runtimeLabel(kind), provider, model].filter(Boolean).join(' · ');
+  if (kind !== 'pi-rpc') return 'Claude Code (interactive, tmux pane)';
+  return ['pi', provider, model].filter(Boolean).join(' · ');
 }
 
 /** What each backend actually is — shown under the picker so the choice is informed. */
 export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
   'claude-tmux': 'Claude Code in a tmux pane. Slash commands, subagents, terminal access.',
-  'pi-rpc': 'pi as an RPC child process. Four tools, small and predictable, no MCP.',
-  'omp-rpc': 'omp (oh-my-pi) as an RPC child. 31 tools incl. LSP, ast-edit, browser, MCP.',
+  'pi-rpc': 'pi or omp as an RPC child process. Pick the engine and recipe under Mode.',
 };

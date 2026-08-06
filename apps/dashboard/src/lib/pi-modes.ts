@@ -17,7 +17,7 @@
 //
 // See docs/pi-modes-design.md.
 
-export const PI_MODES = ['coding', 'ops'] as const;
+export const PI_MODES = ['coding', 'ops', 'omp'] as const;
 export type PiMode = (typeof PI_MODES)[number];
 
 export const DEFAULT_PI_MODE: PiMode = 'coding';
@@ -35,6 +35,10 @@ export const PI_MODE_META: Record<PiMode, { label: string; blurb: string }> = {
   ops: {
     label: 'Ops',
     blurb: 'Live machines and services. Investigation discipline, read-before-write, ssh_run.',
+  },
+  omp: {
+    label: 'omp (oh-my-pi)',
+    blurb: '31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.',
   },
 };
 

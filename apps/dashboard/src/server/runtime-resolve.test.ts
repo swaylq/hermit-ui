@@ -97,24 +97,20 @@ test('switching from a pi agent to claude drops the inherited mode', () => {
   assert.equal(out.runtimeMode, null);
 });
 
-test('omp carries a mode too — it runs the same recipe', () => {
-  assert.equal(resolveRuntime({ runtime: 'omp-rpc' }, null).runtimeMode, 'coding');
+// omp was briefly its own backend before being folded into pi as an engine the
+// mode selects. A session created in that window must still resolve to
+// something that runs, rather than silently falling through to the tmux path.
+test('a legacy omp-rpc session normalizes to pi', () => {
+  const out = resolveRuntime({ runtime: 'omp-rpc' }, null);
+  assert.equal(out.runtime, 'pi-rpc');
+  assert.equal(out.runtimeMode, 'coding');
+});
+
+test('a legacy omp-rpc session keeps whatever mode it had', () => {
   assert.equal(
     resolveRuntime({ runtime: 'omp-rpc', runtimeMode: 'ops' }, null).runtimeMode,
     'ops',
   );
-});
-
-test('pi and omp inherit each other nothing — they are different backends', () => {
-  // Same rule as pi-vs-claude: the levels disagree, so provider/model/mode are
-  // not inheritable. An omp model id is not a pi model id.
-  const out = resolveRuntime(
-    { runtime: 'omp-rpc' },
-    { runtime: 'pi-rpc', runtimeProvider: 'hyqubit', runtimeModel: 'claude-opus-5', runtimeMode: 'ops' },
-  );
-  assert.deepEqual(out, {
-    runtime: 'omp-rpc', runtimeProvider: null, runtimeModel: null, runtimeMode: 'coding',
-  });
 });
 
 test('switching TO pi from a claude agent does not inherit a stale mode', () => {

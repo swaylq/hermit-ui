@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { BackendPicker } from './backend-picker';
-import { isRuntimeKind, isModeBackend, type RuntimeKind } from '@/lib/runtime-labels';
+import { isRuntimeKind, type RuntimeKind } from '@/lib/runtime-labels';
 import { PI_MODES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
 
 export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }: { agents: string[]; preset?: string; lockedAgent?: string; onCreated: (id: string) => void; onCancel: () => void }) {
@@ -74,7 +74,7 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
               // Written explicitly, for the same reason the backend is: a
               // session that states its mode keeps the one you started it in
               // when the agent's default is later edited.
-              ...(isModeBackend(chosen) ? { runtimeMode: chosenMode } : {}),
+              ...(chosen === 'pi-rpc' ? { runtimeMode: chosenMode } : {}),
             });
           }}
         >
@@ -106,7 +106,7 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
               <BackendPicker value={chosen} onChange={setRuntime} agentDefault={agentRuntime ?? 'claude-tmux'} />
             </div>
           </div>
-          {isModeBackend(chosen) && (
+          {chosen === 'pi-rpc' && (
             <label className="block">
               <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Mode</span>
               <Select
