@@ -544,6 +544,36 @@ export const agentsRouter = router({
       return { ok: true };
     }),
 
+  // Set this agent's DEFAULT backend (which runtime + pi mode new chats and new
+  // sessions open on). Stored on the Agent so the new-chat picker and the
+  // session-detail sheet can both show it as the inherited default; a session
+  // that states its own runtime/mode at creation keeps that choice afterwards.
+  // A mode is a pi spawn recipe — claude-tmux can't honour one, so we never
+  // store a mode for it (resolveRuntime forces null anyway; writing null keeps
+  // the column clean for a backend switch back).
+  setDefaultRuntime: machineProcedure
+    .input(z.object({
+      name: z.string(),
+      runtime: z.enum(['claude-tmux', 'pi-rpc']),
+      runtimeMode: z.string().max(64).nullish(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const agent = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: input.name } },
+        select: { id: true, trashedAt: true },
+      });
+      if (!agent) throw new Error('agent not found');
+      if (agent.trashedAt) throw new Error('cannot edit a trashed agent');
+      await prisma.agent.update({
+        where: { id: agent.id },
+        data: {
+          runtime: input.runtime,
+          runtimeMode: input.runtime === 'pi-rpc' ? (input.runtimeMode ?? null) : null,
+        },
+      });
+      return { ok: true };
+    }),
+
   // One-click "set up 义脑": scaffold a dedicated `brain` agent (orchestrator
   // persona overlaid into its IDENTITY) and flag it as the machine's orchestrator.
   // Returns the existing orchestrator if there already is one.

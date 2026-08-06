@@ -28,6 +28,10 @@ import { removeAgentSkill } from '@/lib/optimistic-skills';
 import { AgentFiles } from './agent-files';
 import { useScope } from '@/lib/use-scope';
 import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
+import { BackendPicker } from './chat/backend-picker';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { isRuntimeKind, type RuntimeKind } from '@/lib/runtime-labels';
+import { PI_MODES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
 
 type SessionRow = inferRouterOutputs<AppRouter>['chat']['listSessions'][number];
 type AgentByNameOutput = NonNullable<inferRouterOutputs<AppRouter>['agents']['byName']>;
@@ -179,6 +183,7 @@ function AgentDetailContent({
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-5">
+            <DefaultBackendSection agent={agent} agentName={name} />
             <SessionsSection agentName={name} sessions={sessions} loading={sessionsLoading} />
             <CronsSection agentName={name} />
             <SkillsAndTasks agent={agent} agentName={name} />
@@ -257,6 +262,85 @@ export function AgentDetailSheet({
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+// ── Default backend (what new chats / new sessions open on) ─────────────────
+// Mirrors the new-chat picker: runtime + (pi only) mode. A session states its
+// own backend at creation, so this only seeds the default; editing it here does
+// not touch existing sessions. Null mode = the fleet default (DEFAULT_PI_MODE),
+// so the stored value only pins a mode that differs from it.
+function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput['agent']; agentName: string }) {
+  const utils = trpc.useUtils();
+  const storedRuntime: RuntimeKind = isRuntimeKind(agent.runtime) ? agent.runtime : 'claude-tmux';
+  const storedMode: PiMode | null = isPiMode(agent.runtimeMode) ? agent.runtimeMode : null;
+  const [draftRuntime, setDraftRuntime] = useState<RuntimeKind | null>(null);
+  const [draftMode, setDraftMode] = useState<PiMode | null>(null);
+  const shownRuntime: RuntimeKind = draftRuntime ?? storedRuntime;
+  const shownMode: PiMode = draftMode ?? storedMode ?? DEFAULT_PI_MODE;
+  // The stored value's shape: DEFAULT_PI_MODE is stored as null (fleet default).
+  const storeMode = (m: PiMode) => (m === DEFAULT_PI_MODE ? null : m);
+  const dirty =
+    shownRuntime !== storedRuntime ||
+    storeMode(shownMode) !== (isPiMode(agent.runtimeMode) ? agent.runtimeMode : null);
+  const save = trpc.agents.setDefaultRuntime.useMutation({
+    onSuccess: () => {
+      // byName is cached at 30s (detail) / 60s (new-chat); invalidate so the
+      // picker and the inherited hint pick up the new default immediately.
+      utils.agents.byName.invalidate({ name: agentName });
+      setDraftRuntime(null);
+      setDraftMode(null);
+    },
+  });
+  const reset = () => {
+    setDraftRuntime(null);
+    setDraftMode(null);
+  };
+  return (
+    <section>
+      <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">default backend</h3>
+      <div className="rounded-lg border border-border bg-card p-3 space-y-3">
+        <BackendPicker value={shownRuntime} onChange={setDraftRuntime} agentDefault={storedRuntime} />
+        {shownRuntime === 'pi-rpc' && (
+          <label className="block">
+            <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Mode</span>
+            <Select value={shownMode} onValueChange={(v) => setDraftMode(isPiMode(v) ? v : DEFAULT_PI_MODE)} modal={false}>
+              <SelectTrigger aria-label="pi mode" className="mt-1.5 w-full py-1.5 text-sm">
+                <SelectValue>{(v: string | null) => PI_MODE_META[isPiMode(v) ? v : DEFAULT_PI_MODE].label}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {PI_MODES.map((m) => <SelectItem key={m} value={m}>{PI_MODE_META[m].label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
+              {PI_MODE_META[shownMode].blurb}
+            </span>
+          </label>
+        )}
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            disabled={!dirty || save.isPending}
+            onClick={() =>
+              save.mutate({
+                name: agentName,
+                runtime: shownRuntime,
+                runtimeMode: shownRuntime === 'pi-rpc' ? storeMode(shownMode) : null,
+              })
+            }
+          >
+            {save.isPending ? 'saving…' : 'Save'}
+          </Button>
+          {dirty && (
+            <Button size="sm" variant="ghost" onClick={reset} disabled={save.isPending}>
+              reset
+            </Button>
+          )}
+          <span className="text-[11px] text-muted-foreground">New chats and sessions open on this by default.</span>
+        </div>
+        {save.error && <p className="text-xs text-rose-500">{save.error.message}</p>}
+      </div>
+    </section>
   );
 }
 
