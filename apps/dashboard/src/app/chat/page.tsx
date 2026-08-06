@@ -1397,7 +1397,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           >
             {moreOpen ? <ChevronRight className="h-4 w-4" /> : <MoreHorizontal className="h-4 w-4" />}
           </button>
-          {!scope.scoped && (
+          {/* pi sessions run as an RPC child process with no tmux pane — the
+              terminal link would attach to a pane that does not exist. */}
+          {!scope.scoped && session?.runtime !== 'pi-rpc' && (
             <Link
               href={`/chat/terminal?session=${encodeURIComponent(sessionId)}`}
               title="attach to this session's tmux pane"
