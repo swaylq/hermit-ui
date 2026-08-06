@@ -80,10 +80,12 @@ agent, and an agent is not a completions endpoint. Fronting it as one means:
   again inside that call — its own context management, its own compaction, its
   own subagents. Token accounting, interrupts, and steering all break across the
   seam, and neither loop's `isWorking` means what the other thinks.
-- **The Interactive bucket is only reachable through the TUI**, which means a
-  shim aiming at the free bucket must re-derive exactly the terminal scraping
-  pi was adopted to escape — `capture-pane`, `esc to interrupt` matching, uuid
-  drift — while *still* hitting both problems above.
+- **No Interactive-bucket surface serves tokens.** The bucket is a property of
+  running a real session, and a session is a conversation, not a completions
+  endpoint. There *is* a structured way to talk to one — see Shape C below,
+  which is how the previous generation of this fleet did it — but it delivers
+  *turns to an agent*, not `tool_use` blocks to a caller that owns the loop. It
+  does not rescue this shape; it replaces the need for it.
 
 There is a fourth path people reach for: use Claude Code's own OAuth credential
 directly against `api.anthropic.com`. Don't. It is outside the supported
@@ -148,32 +150,110 @@ target shape rather than further from it.
 Shape B is the honest reading of "run the pi 底座 with Claude Code": it is Claude
 Code *inside the pi-shaped seam*, rather than Claude Code *underneath pi*.
 
+### Shape C — the channel plugin (what openclaw and hermit-agent already do)
+
+**This section corrects the two shapes above.** They assumed the only way to
+drive Claude Code programmatically is `-p` / the Agent SDK, and therefore that
+structured plumbing costs the Agent SDK bucket. That is wrong, and the
+counter-example is this fleet's own previous generation.
+
+`create-hermit-agent`'s template — the openclaw-era layout every current agent
+was reshaped from — starts an agent like this:
+
+```bash
+tmux new-session -d -s "claude-$AGENT" \
+  "cd $DIR && claude --dangerously-skip-permissions \
+     --channels plugin:telegram@claude-plugins-official"
+```
+
+Interactive `claude` in a pane, so **Interactive bucket** — and yet nothing
+types into that pane. Inbound messages arrive over `--channels`.
+
+**The contract.** A "channel" is an ordinary MCP server (the reference one is
+`claude-channel-telegram`, shipped as a plugin with a `.mcp.json`) that speaks
+three notification methods. All three are present in the shipping CLI binary
+(verified against 2.1.222):
+
+| Direction | Method | Payload |
+| --- | --- | --- |
+| channel → Claude | `notifications/claude/channel` | `{content, meta:{user, ts, image_path?, …}}` — arrives in the session as a `<channel source="…" user="…" ts="…">` turn |
+| Claude → channel | `notifications/claude/channel/permission_request` | `{request_id, tool_name, description, input_preview}` |
+| channel → Claude | `notifications/claude/channel/permission` | `{request_id, behavior: 'allow' \| 'deny'}` |
+
+Outbound content is not a notification — it goes back through ordinary MCP
+tools the channel registers (`reply`, `edit_message`, `react`,
+`download_attachment`), which the model calls.
+
+So the openclaw generation had, on the Interactive bucket: **push-based
+structured inbound, no send-keys, no uuid drift, and a real permission
+round-trip.** hermit-ui does not use `--channels` anywhere — it replaced that
+with `tmux send-keys` for inbound and a JSONL tail for outbound. Which means the
+send-keys failure class the pi runtime was adopted to escape is not intrinsic to
+Claude Code at all; it is something this rewrite reintroduced.
+
+**What it would and would not fix here.**
+
+- **Inbound: fixed.** `chatTick` would POST a notification to the session's
+  channel instead of typing into a pane. `robustSubmit`, the dropped-keystroke
+  retry, and the composer-detection heuristics all go away.
+- **Permissions: better than today.** A typed request/response pair replaces the
+  PreToolUse shell hook, and it sees every tool rather than whatever a matcher
+  pattern covered.
+- **Outbound: not fixed, and don't try.** The channel only carries what the
+  model *chooses* to send via `reply`. The dashboard renders full transcripts —
+  thinking, tool calls, results — which only the JSONL tail provides. The right
+  shape is channel-for-inbound plus the existing tail for the transcript, not a
+  swap.
+- **Cost: nothing.** Same interactive session, same bucket.
+
+**The caveats, stated plainly.** `--channels` is **not in `claude --help`** — it
+is in the binary (alongside `--dangerously-load-development-channels`, which is
+how you would load a local unpublished channel during development), but hidden.
+That makes it an unsupported surface that can change without notice, unlike the
+Agent SDK. This fleet already carries a local patch to the official telegram
+channel's orphan watchdog (`patch-telegram-plugin.sh`, upstream PR stalled a
+month because the repo auto-closes external PRs), which is fair evidence the
+surface is young. And the official plugin is deliberately single-user; a hermit
+channel would be our own server, so that constraint is theirs, not ours.
+
 ## Recommendation
 
-1. **Don't build the shim.** It buys nothing at the Agent SDK bucket that an API
-   key doesn't buy more simply, and the Interactive bucket is unreachable
-   programmatically without re-adopting the terminal scraping pi exists to
-   avoid.
-2. **For "Claude-quality pi agents" now:** Shape A, today, on the settings page.
-   Decide it per agent, on cost.
-3. **Before committing to Shape B, measure.** The open question is what the
-   Agent SDK bucket actually costs this fleet — the L1 finding is that it *would
-   have* blown the cap under v1's all-traffic routing, which says nothing about
-   a handful of cron agents. One week of usage data for the candidate agents
-   answers it; the usage collectors already record per-session tokens and cost.
-4. **Spike, if Shape B survives the measurement.** One session, one agent, no
-   fleet exposure: implement `ensure`/`submit`/`isWorking`/`stop` over the Agent
-   SDK, translate its events to content blocks, and confirm three things — that
-   the transcript renders as well as the tmux path's, that interrupt and
-   hibernate behave, and that the usage numbers land in the same collectors.
-   The exact SDK option names should be read from the Agent SDK docs at spike
-   time rather than assumed here.
+1. **Don't build the shim.** Fronting Claude Code as `/v1/messages` for pi fails
+   on both counts — it bills the Agent SDK bucket, and an agent cannot serve as
+   a model without nesting two loops and stranding pi's tool schemas.
+2. **Shape C is the answer to "Shape B without API billing."** A hermit channel
+   plugin gives interactive Claude Code sessions push-based structured inbound
+   and typed permissions at zero marginal cost — restoring what the openclaw /
+   `create-hermit-agent` generation already had, pointed at the dashboard
+   instead of Telegram. Scope it to inbound and permissions; keep the JSONL tail
+   for the transcript.
+3. **Spike it behind one agent.** A channel is an MCP server, so the spike is
+   small: a server that (a) holds the session's pending-message queue, (b)
+   emits `notifications/claude/channel` when `chatTick` has something to
+   deliver, (c) registers no outbound tools at first. Load it with
+   `--dangerously-load-development-channels` on one agent, confirm a message
+   lands as a `<channel …>` turn without any `send-keys`, then decide whether
+   the permission round-trip replaces the PreToolUse hook. Nothing else in
+   `chat-runner` changes until that works.
+4. **Shape A remains the answer for "a pi agent that thinks like Claude"** —
+   Settings → Pi Runtime, today, at API rates, decided per agent on cost.
+5. **Shape B (the Agent SDK runtime) is now the fallback, not the plan.** It is
+   worth keeping on the shelf for the case where the channel surface changes
+   under us, since `AgentRuntime` accommodates either.
 
 ## What would change this
 
-The design turns entirely on the bucket split, which is a policy fact recorded
-in June 2026 and not something this repo can verify. If Anthropic ever exposes a
-subscription-billed model endpoint — or Claude Code grows a supported local
-`/v1/messages` surface on the Interactive bucket — Shape A becomes free and this
-document's conclusion inverts. Worth re-checking at the next Claude Code release
-that touches auth or headless mode; nothing else here needs to change.
+Two independent facts hold this up, and each has a different failure mode.
+
+The **bucket split** is a policy fact recorded in June 2026 (L1) that this repo
+cannot verify. If Anthropic ever exposes a subscription-billed model endpoint,
+Shape A becomes free and Shape C stops mattering.
+
+The **channel surface** is undocumented — present in the binary, absent from
+`--help`. It can move or disappear in any Claude Code release, and unlike the
+Agent SDK there is no compatibility promise to lean on. Anything built on it
+should be one module behind `AgentRuntime`, so that losing it costs a runtime
+implementation rather than the fleet. Re-check `--channels` and the three
+notification methods against the bundle at each Claude Code upgrade; the probe
+is `strings <bundle> | grep notifications/claude/channel`, and it takes a
+minute.
