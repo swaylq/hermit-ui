@@ -1,11 +1,13 @@
 'use client';
 
-// Which backend runs a session. Two mutually exclusive options, so a segmented
-// control rather than a dropdown: both choices stay visible with their one-line
-// description, which is what makes the choice informed instead of a guess at
-// what "pi" means. It also keeps the picker out of a portal, which matters in
-// the detail sheet — base-ui overlays inside an overlay have bitten this app
-// before (see docs, and the lightbox's bare-createPortal workaround).
+// Which backend runs a session. Cards rather than a dropdown: every choice
+// stays visible with its one-line description, which is what makes the choice
+// informed instead of a guess at what "pi" or "omp" means. It also keeps the
+// picker out of a portal, which matters in the detail sheet — base-ui overlays
+// inside an overlay have bitten this app before (see docs, and the lightbox's
+// bare-createPortal workaround).
+//
+// Driven by RUNTIME_KINDS, so a new backend appears here by adding it there.
 //
 // Shared by the new-chat screen and the session detail sheet so the two can't
 // drift apart on labels or option set.

@@ -16,7 +16,7 @@ export type SyncItem = {
   claudeSessionId: string | null;
 };
 
-export type RuntimeKind = 'claude-tmux' | 'pi-rpc';
+export type RuntimeKind = 'claude-tmux' | 'pi-rpc' | 'omp-rpc';
 
 export type RuntimeSession = {
   id: string;

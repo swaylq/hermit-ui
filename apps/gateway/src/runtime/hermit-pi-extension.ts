@@ -136,6 +136,13 @@ const DEFAULT_CONTEXT_WINDOW = { contextWindow: 200_000, maxTokens: 16_384 };
  * rather than being baked into a registration object.
  */
 function registerMachineProvider(pi: any): void {
+  // omp declares providers in ~/.omp/agent/models.yml, and resolves `apiKey` as
+  // the NAME of an environment variable. Registering here would override that
+  // entry with pi's "$VAR" reference syntax, which omp passes through
+  // literally — the endpoint then sees the string "$HERMIT_PI_API_KEY" as the
+  // credential and 401s. Measured, not theorised.
+  if (process.env.HERMIT_RUNTIME === 'omp-rpc') return;
+
   const id = process.env.HERMIT_PI_PROVIDER?.trim();
   const baseUrl = process.env.HERMIT_PI_BASE_URL?.trim();
   if (!id || !baseUrl) return;

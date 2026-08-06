@@ -41,6 +41,22 @@ export type PiMode = {
    * hermit's six.
    */
   tools?: string[];
+  /**
+   * Tool allowlist for the omp backend, which does NOT share pi's vocabulary.
+   *
+   * Three things differ, all measured against a live omp:
+   *  - omp activates all 31 built-ins by default; pi activates four. So on pi
+   *    `tools` reads "also switch these on", and on omp it reads "restrict to
+   *    these" — opposite intents from the same list.
+   *  - The names differ (`glob` where pi has `find`/`ls`).
+   *  - omp's `--tools` validates against built-ins ONLY and hard-errors on
+   *    anything else, while leaving extension tools always available. Passing
+   *    pi's list — which names hermit's own tools — fails the spawn outright.
+   *
+   * So it is a separate field rather than a translation. Omitted means omp gets
+   * no `--tools` and keeps its full surface, which is the sane default.
+   */
+  ompTools?: string[];
   /** Skill names resolved against the agent's own skills dir, plus mode-local ones. */
   skills?: string[];
   /** Paths relative to the mode directory. */
@@ -168,9 +184,10 @@ function resolveSkillPaths(mode: LoadedMode, agentDirectory: string): string[] {
  */
 export function buildModeArgs(
   mode: LoadedMode | null,
-  opts: { agentDirectory: string },
+  opts: { agentDirectory: string; runtime?: 'pi-rpc' | 'omp-rpc' },
 ): string[] {
   if (!mode) return [];
+  const isOmp = opts.runtime === 'omp-rpc';
   const args: string[] = [];
 
   for (const rel of mode.extensions ?? []) {
@@ -179,15 +196,28 @@ export function buildModeArgs(
     else console.warn(`[pi-modes] ${mode.name}: extension "${rel}" not found at ${abs}`);
   }
 
-  if (mode.tools?.length) {
+  if (isOmp) {
+    // No hermit-tools union here: omp's --tools rejects any name that is not a
+    // built-in, and its extension tools are available regardless of the flag.
+    // Unioning them in would fail the spawn AND be pointless.
+    if (mode.ompTools?.length) args.push('--tools', mode.ompTools.join(','));
+  } else if (mode.tools?.length) {
     // Union with hermit's tools — see the note on PiMode.tools. A mode author
     // listing only the built-ins they want must not lose the dashboard plumbing.
     const tools = [...new Set([...mode.tools, ...HERMIT_TOOL_NAMES])];
     args.push('--tools', tools.join(','));
   }
 
-  for (const skill of resolveSkillPaths(mode, opts.agentDirectory)) {
-    args.push('--skill', skill);
+  // Skills are pi-only. pi's `--skill <path>` ADDS a skill on top of discovery;
+  // omp's `--skills <glob>` FILTERS discovery down to what matches. Passing a
+  // mode's skill list to omp would therefore hide every other skill the agent
+  // has, which is the opposite of the intent. omp already discovers
+  // `.claude/skills/` natively (verified: it lists this agent's full set), so
+  // it needs no flag to see them.
+  if (!isOmp) {
+    for (const skill of resolveSkillPaths(mode, opts.agentDirectory)) {
+      args.push('--skill', skill);
+    }
   }
 
   // --append-system-prompt takes text, not a path, so the file is read here.

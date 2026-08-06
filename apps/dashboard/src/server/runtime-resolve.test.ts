@@ -97,6 +97,26 @@ test('switching from a pi agent to claude drops the inherited mode', () => {
   assert.equal(out.runtimeMode, null);
 });
 
+test('omp carries a mode too — it runs the same recipe', () => {
+  assert.equal(resolveRuntime({ runtime: 'omp-rpc' }, null).runtimeMode, 'coding');
+  assert.equal(
+    resolveRuntime({ runtime: 'omp-rpc', runtimeMode: 'ops' }, null).runtimeMode,
+    'ops',
+  );
+});
+
+test('pi and omp inherit each other nothing — they are different backends', () => {
+  // Same rule as pi-vs-claude: the levels disagree, so provider/model/mode are
+  // not inheritable. An omp model id is not a pi model id.
+  const out = resolveRuntime(
+    { runtime: 'omp-rpc' },
+    { runtime: 'pi-rpc', runtimeProvider: 'hyqubit', runtimeModel: 'claude-opus-5', runtimeMode: 'ops' },
+  );
+  assert.deepEqual(out, {
+    runtime: 'omp-rpc', runtimeProvider: null, runtimeModel: null, runtimeMode: 'coding',
+  });
+});
+
 test('switching TO pi from a claude agent does not inherit a stale mode', () => {
   // Agent is claude with a leftover mode column; the session picks pi. The
   // levels disagree on backend, so the agent's mode is not inheritable and the

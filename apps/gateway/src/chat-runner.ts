@@ -42,7 +42,7 @@ import {
 import { paneIsWorking, WORK_MARKER_RE, sessionTranscriptPath } from './pane';
 import { extractText, hasToolResult, CcEvent } from './claude-code';
 
-import { runtimeFor } from './runtime';
+import { runtimeFor, allRuntimes } from './runtime';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
 import { relayImages } from './image-relay';
@@ -184,9 +184,8 @@ export async function restartOneSession(sessionId: string, stampMs: number): Pro
     // banner below, and leave the same child serving the same session — a
     // restart that restarted nothing. Same unconditional call as hibernate (we
     // cannot tell the backend from here; both are no-ops on the wrong one).
-    await runtimeFor('pi-rpc')
-      ?.stop({ sessionId, externalSessionId: '' }, 'kill')
-      .catch(() => undefined);
+    await Promise.all(allRuntimes().map((r) =>
+      r.stop({ sessionId, externalSessionId: '' }, 'kill').catch(() => undefined)));
     piStates.delete(sessionId);
     await killTmuxSession(sessionId, 2_000);
     console.log(`[chat-restart] killed session=${sessionId.slice(0, 8)}`);
@@ -261,9 +260,8 @@ export async function hibernateOneSession(sessionId: string): Promise<boolean> {
     // and killTmuxSession is a no-op when there is no pane, so both directions
     // land correctly and a plain hibernate now frees a pi session too (it used
     // to kill a pane that never existed and leave the child running).
-    await runtimeFor('pi-rpc')
-      ?.stop({ sessionId, externalSessionId: '' }, 'hibernate')
-      .catch(() => undefined);
+    await Promise.all(allRuntimes().map((r) =>
+      r.stop({ sessionId, externalSessionId: '' }, 'hibernate').catch(() => undefined)));
     piStates.delete(sessionId);
     await killTmuxSession(sessionId, 2_000);
     console.log(`[hibernate] killed session=${sessionId.slice(0, 8)}`);
@@ -351,9 +349,9 @@ export async function chatCancelTick() {
     // unconditionally for the same reason hibernate does: from here we cannot
     // tell which backend a session is on, and this is a no-op when it has no
     // live pi child.
-    await runtimeFor('pi-rpc')
-      ?.interrupt({ sessionId: row.id, externalSessionId: '' })
-      .catch((e) => console.error('[chat-cancel] pi abort failed:', e));
+    await Promise.all(allRuntimes().map((r) =>
+      r.interrupt({ sessionId: row.id, externalSessionId: '' })
+        .catch((e) => console.error(`[chat-cancel] ${r.kind} abort failed:`, e))));
     // Ack regardless — even if we didn't have an active state, the DB flag
     // needs clearing so the dashboard stops re-firing on every poll.
     ackIds.push(row.id);

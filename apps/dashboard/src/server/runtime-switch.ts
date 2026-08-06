@@ -41,8 +41,9 @@ export function planRuntimeSwitch(
 
   if (before.runtime !== after.runtime) return { ok: true, restart: true };
 
-  // Same backend. Only pi reads provider/model/mode off these columns.
-  if (after.runtime === 'pi-rpc') {
+  // Same backend. Only the child-process backends read provider/model/mode off
+  // these columns; claude takes its model from the machine's settings.json.
+  if (after.runtime === 'pi-rpc' || after.runtime === 'omp-rpc') {
     const moved =
       (before.runtimeProvider ?? null) !== (after.runtimeProvider ?? null) ||
       (before.runtimeModel ?? null) !== (after.runtimeModel ?? null) ||

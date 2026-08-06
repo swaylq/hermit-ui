@@ -26,6 +26,18 @@ export const DEFAULT_RUNTIME = 'claude-tmux';
 export const DEFAULT_PI_MODE = 'coding';
 
 /**
+ * Backends that run as a child process off a mode recipe.
+ *
+ * Duplicated from lib/runtime-labels' isModeBackend rather than imported: this
+ * module is a pure function with its own node:test suite, and keeping it free
+ * of path-aliased imports keeps that suite runnable without Next's resolver.
+ * Both lists must move together when a backend is added.
+ */
+function isModeBackend(runtime: string): boolean {
+  return runtime === 'pi-rpc' || runtime === 'omp-rpc';
+}
+
+/**
  * session's own choice > agent's default > claude-tmux.
  *
  * provider/model follow the level that actually chose the runtime. A session
@@ -49,9 +61,8 @@ export function resolveRuntime(session: Level, agent: Level): RuntimeChoice {
     runtime,
     runtimeProvider: session?.runtimeProvider ?? (inheritable ? agent?.runtimeProvider ?? null : null),
     runtimeModel: session?.runtimeModel ?? (inheritable ? agent?.runtimeModel ?? null : null),
-    runtimeMode:
-      runtime !== 'pi-rpc'
-        ? null
-        : session?.runtimeMode ?? (inheritable ? agent?.runtimeMode ?? null : null) ?? DEFAULT_PI_MODE,
+    runtimeMode: !isModeBackend(runtime)
+      ? null
+      : session?.runtimeMode ?? (inheritable ? agent?.runtimeMode ?? null : null) ?? DEFAULT_PI_MODE,
   };
 }
