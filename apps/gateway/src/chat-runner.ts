@@ -140,6 +140,11 @@ const reservedUuids = new Map<string, string>();
 // the ownership check authoritative rather than best-effort.
 let recordedUuids = new Map<string, string>();
 
+// One in-flight delivery per session. See the guard in chatTick: a slow pi
+// image delivery must not let concurrent ticks start a second one against the
+// same un-acked row.
+const inFlightDeliveries = new Map<string, Promise<void>>();
+
 // Every claude uuid currently spoken for by ANOTHER session — live (sessionStates),
 // still starting (reservedUuids), or recorded in the DB (recordedUuids). Every
 // transcript-picking path (resume sniff, drift adoption, orphan recovery) excludes
@@ -431,10 +436,23 @@ export async function chatTick() {
     // to the fresh pane. Reachable now that queued messages can sit pending across
     // a user-triggered restart (the message-queue feature).
     if (isLocked('restart', sessionId)) continue;
+    // Never run two deliveries for one session at once. deliverMessages is
+    // fire-and-forget and chatTick fires every ~2s, so a slow delivery — the pi
+    // path relays + describes each attached image (~17s/layout pass) before it
+    // submits — leaves the row un-acked long enough for the next ticks to read
+    // it again and start MORE concurrent deliveries. Each one submits the same
+    // message, which pi records as repeated user messages (measured: 17 copies
+    // of one image message in the session file) and the agent answers each,
+    // which reads as "the same message delivered over and over". The lock makes
+    // the second-and-later deliveries wait: they re-check the queue on the next
+    // tick, by which time the first has acked the row.
+    if (inFlightDeliveries.has(sessionId)) continue;
     const session = payload.sessions.find((s) => s.id === sessionId);
     if (!session) continue;
 
-    deliverMessages(session, msgs).catch((e) => {
+    const p = deliverMessages(session, msgs).finally(() => inFlightDeliveries.delete(sessionId));
+    inFlightDeliveries.set(sessionId, p);
+    p.catch((e) => {
       console.error(`[chat] delivery failed for ${sessionId.slice(0, 8)}:`, e);
     });
   }
