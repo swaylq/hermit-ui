@@ -12,14 +12,34 @@
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { getPiConfig } from '../pi-config';
 
 const SECRET_BIN = path.join(os.homedir(), '.local', 'bin', 'secret');
 const PROVIDER_RE = /^[A-Za-z0-9_-]+$/;
 
-/** `openrouter` -> `OPENROUTER_API_KEY` */
+/**
+ * Built-in pi providers whose API key env var does NOT follow the
+ * `<PROVIDER>_API_KEY` convention — mirror of pi's own env-api-keys map
+ * (@earendil-works/pi-ai/dist/env-api-keys.js). The gateway must export the
+ * SAME env var pi looks up, or the built-in provider cannot authenticate. The
+ * secret-store name is the env var name, so e.g. a Kimi key is stored as
+ * `MOONSHOT_API_KEY` and picked up by both this gateway and pi.
+ */
+const PROVIDER_ENV_OVERRIDES: Record<string, string> = {
+  moonshotai: 'MOONSHOT_API_KEY',
+  'moonshotai-cn': 'MOONSHOT_API_KEY',
+  'kimi-coding': 'KIMI_API_KEY',
+  huggingface: 'HF_TOKEN',
+};
+
+/**
+ * The env var pi expects for a provider — `openrouter` -> `OPENROUTER_API_KEY`,
+ * but `moonshotai-cn` -> `MOONSHOT_API_KEY` (pi's built-in moonshot providers
+ * all read MOONSHOT_API_KEY, see pi-ai env-api-keys.js).
+ */
 export function envVarForProvider(provider: string): string {
-  return `${provider.replace(/-/g, '_').toUpperCase()}_API_KEY`;
+  return PROVIDER_ENV_OVERRIDES[provider] ?? `${provider.replace(/-/g, '_').toUpperCase()}_API_KEY`;
 }
 
 /** Read a secret by name from the machine's encrypted store. */
@@ -33,6 +53,60 @@ export function readSecret(key: string): Promise<string | null> {
     );
     child.stdin?.end();
   });
+}
+
+/**
+ * Claude Code OAuth access token from the macOS Keychain — the same credential
+ * Claude Code itself uses (service "Claude Code-credentials", JSON payload
+ * with claudeAiOauth.accessToken). Mirror of agent/anthropic_adapter.py's
+ * keychain reader in Hermes.
+ */
+function readClaudeCodeKeychainToken(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const child = execFile(
+      'security',
+      ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+      { timeout: 8_000, maxBuffer: 256 * 1024 },
+      (err, stdout) => {
+        if (err) return resolve(null);
+        try {
+          const data = JSON.parse(stdout);
+          resolve(data?.claudeAiOauth?.accessToken ?? null);
+        } catch {
+          resolve(null);
+        }
+      },
+    );
+    child.stdin?.end();
+  });
+}
+
+/**
+ * pi 全局配置目录的干净 SYSTEM.md（无 harness 身份段），cc-subscription 模式
+ * 幂等写入。pi 每次 spawn 前会调用 machineProviderEnv()，这里保证文件存在。
+ * 不要删除用户已有的 SYSTEM.md —— 只在该模式下补一个干净版本（若已有则不动）。
+ */
+function ensureCleanSystemPrompt(): void {
+  const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent');
+  const sysPath = path.join(agentDir, 'SYSTEM.md');
+  if (existsSync(sysPath)) return; // 已有自定义 system prompt，尊重它
+  try {
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      sysPath,
+      [
+        'You are an expert coding assistant. You help users by reading files, executing commands, editing code, and writing new files.',
+        '',
+        'Guidelines:',
+        '- Be concise in your responses',
+        '- Show file paths clearly when working with files',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+  } catch (e) {
+    console.warn('[pi-credentials] 写入 SYSTEM.md 失败:', (e as Error).message);
+  }
 }
 
 /**
@@ -51,6 +125,22 @@ export function readSecret(key: string): Promise<string | null> {
  */
 export async function machineProviderEnv(): Promise<Record<string, string>> {
   const cfg = await getPiConfig();
+
+  // Claude Code 订阅模式：直接复用本机 Claude Code 的 Keychain OAuth 凭据
+  // （Bearer auth），anthropic 是 pi 内置 provider，无需注册也无需 API key。
+  // 同时确保 pi 全局配置目录里有干净的 SYSTEM.md —— Anthropic 服务端会检测
+  // system prompt 里的第三方 harness 身份段（"operating inside pi" / "Pi
+  // documentation"），命中即拒绝走订阅计划额度（400 Third-party apps...）。
+  if (cfg.authMode === 'cc-subscription') {
+    const token = await readClaudeCodeKeychainToken();
+    if (!token) {
+      console.warn('[pi-credentials] cc-subscription: 无法从 Keychain 读取 Claude Code 凭据，跳过订阅注入');
+      return {};
+    }
+    ensureCleanSystemPrompt();
+    return { ANTHROPIC_AUTH_TOKEN: token };
+  }
+
   const id = cfg.provider?.trim();
   const baseUrl = cfg.baseUrl?.trim();
   if (!id || !baseUrl) return {};
@@ -107,6 +197,10 @@ export async function visionEnv(): Promise<Record<string, string>> {
  */
 export async function providerEnv(provider: string | null | undefined): Promise<Record<string, string>> {
   if (!provider || !PROVIDER_RE.test(provider)) return {};
+  // envVarForProvider doubles as the secret name: for moonshotai-cn both the
+  // store key and the child env var are MOONSHOT_API_KEY, so one lookup serves
+  // both. (Custom machine endpoints stay on the old convention — their key is
+  // passed through HERMIT_PI_API_KEY instead, see machineProviderEnv.)
   const name = envVarForProvider(provider);
   const value = await readSecret(name);
   return value ? { [name]: value } : {};

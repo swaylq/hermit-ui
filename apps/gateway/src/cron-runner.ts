@@ -172,6 +172,12 @@ async function fireInner(c: Cron): Promise<void> {
       cwd,
       claudeArgs,
       claudeSessionUuid: claudeUuid,
+      // Same memory-unification env as chat-runner: cc must not auto-inject or
+      // auto-extract auto-memory; both backends read memory on demand via
+      // <agent>/memory/auto/.
+      env: {
+        CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+      },
     });
     let jsonlPath = path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`);
     // We pinned --session-id <claudeUuid>, so claude should write exactly this

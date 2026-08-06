@@ -382,7 +382,13 @@ export class PiRpcRuntime implements AgentRuntime {
       ],
       env: {
         ...process.env,
-        ...(await providerEnv(session.provider)),
+        // Provider key for whatever provider the child will actually use. The
+        // session's own pin wins; a session without one falls back to the
+        // machine's configured provider — which is how a built-in provider
+        // like moonshotai-cn (pi reads MOONSHOT_API_KEY from env) gets its
+        // key when no session has pinned it. Injecting only the session pin
+        // left machine-provider sessions keyless.
+        ...(await providerEnv(session.provider ?? machineProvider)),
         ...(await machineProviderEnv()),
         ...(await visionEnv()),
         HERMIT_DASHBOARD_URL: DASHBOARD_URL,

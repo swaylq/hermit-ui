@@ -121,8 +121,28 @@ const MODEL_CONTEXT_WINDOW: Record<string, { contextWindow: number; maxTokens: n
   'claude-opus-5':    { contextWindow: 1_000_000, maxTokens: 16_384 },
   'claude-sonnet-5':  { contextWindow: 1_000_000, maxTokens: 16_384 },
   'claude-haiku-4-5': { contextWindow: 1_000_000, maxTokens: 16_384 },
+  // Kimi models served by pi's built-in moonshotai-cn provider (OpenAI
+  // completions protocol). Windows match the Kimi API docs: kimi-k3 is 1M with
+  // a default max_completion_tokens of 131072; the K2.7/K2.6 family is 256K.
+  // Only consulted when the machine registers kimi as a CUSTOM provider — the
+  // built-in moonshotai-cn path uses pi's own catalog, which is already tuned.
+  'kimi-k3':             { contextWindow: 1_048_576, maxTokens: 131_072 },
+  'kimi-k2.7-code':      { contextWindow: 262_144, maxTokens: 131_072 },
+  'kimi-k2.7-code-highspeed': { contextWindow: 262_144, maxTokens: 131_072 },
+  'kimi-k2.6':           { contextWindow: 262_144, maxTokens: 131_072 },
 };
 const DEFAULT_CONTEXT_WINDOW = { contextWindow: 200_000, maxTokens: 16_384 };
+
+/**
+ * pi providers that ship their own model catalog in @earendil-works/pi-ai
+ * (generated from each vendor's spec). Re-registering them from the machine
+ * config would clobber that tuning — the flat model shape below drops compat
+ * flags (thinkingFormat, requiresReasoningContentOnAssistantMessages,
+ * deferredToolsMode, thinkingLevelMap …) and would substitute a guessed
+ * context window for the catalog's measured one. Custom endpoints (hyqubit,
+ * self-hosted proxies, …) have no catalog entry, so they still register.
+ */
+const BUILTIN_PI_PROVIDERS = new Set(['moonshotai', 'moonshotai-cn', 'kimi-coding']);
 
 /**
  * Register this machine's model endpoint as a pi provider.
@@ -146,6 +166,9 @@ function registerMachineProvider(pi: any): void {
   const id = process.env.HERMIT_PI_PROVIDER?.trim();
   const baseUrl = process.env.HERMIT_PI_BASE_URL?.trim();
   if (!id || !baseUrl) return;
+
+  // Built-in providers need no registration — see BUILTIN_PI_PROVIDERS above.
+  if (BUILTIN_PI_PROVIDERS.has(id)) return;
 
   const api = process.env.HERMIT_PI_API?.trim() || 'anthropic-messages';
   const ids = (process.env.HERMIT_PI_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean);

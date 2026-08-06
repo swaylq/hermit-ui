@@ -5,6 +5,9 @@ import { invalidateMachineCache } from '../auth';
 import { Prisma } from '@/generated/prisma/client';
 
 export const PI_CONFIG_SCHEMA = z.object({
+  // 'api-key' (default): provider + secretKey as below; 'cc-subscription': reuse
+  // this machine's Claude Code Keychain OAuth credentials instead of an API key.
+  authMode: z.enum(['api-key', 'cc-subscription']).optional(),
   // hyqubit (or any Anthropic-compatible endpoint) base config
   provider: z.string().trim().min(1).optional(),
   baseUrl: z.string().trim().url().optional(),

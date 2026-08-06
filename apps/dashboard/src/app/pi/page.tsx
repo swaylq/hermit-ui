@@ -21,6 +21,7 @@ import { SettingsTabs } from '@/components/settings-tabs';
 type ImageProvider = 'dashscope' | 'openrouter' | 'none';
 
 type PiConfig = {
+  authMode?: 'api-key' | 'cc-subscription';
   provider?: string;
   baseUrl?: string;
   api?: string;
@@ -38,6 +39,7 @@ type PiConfig = {
 };
 
 const EMPTY: PiConfig = {
+  authMode: 'api-key',
   provider: '',
   baseUrl: '',
   api: 'anthropic-messages',
@@ -45,6 +47,49 @@ const EMPTY: PiConfig = {
   defaultModel: '',
   secretKey: '',
   image: { enabled: false, provider: 'openrouter', apiKeySecret: '', ocrModel: '', describeModel: '', prompt: '' },
+};
+
+// One-click endpoint presets for the machine provider. Kimi goes through pi's
+// BUILT-IN moonshotai-cn provider (tuned catalog: 1M context for kimi-k3,
+// native vision, kimi deferred tools) — the gateway maps provider moonshotai-cn
+// to the MOONSHOT_API_KEY secret and skips custom registration for it. baseUrl
+// is informational for built-in providers; the extension ignores it.
+//
+// 'cc-subscription' 复用本机 Claude Code 的 Keychain OAuth 凭据（订阅），不需要
+// API key：gateway 注入 ANTHROPIC_AUTH_TOKEN，anthropic 走 pi 内置 provider。
+type ProviderPreset = { provider: string; baseUrl: string; api: string; models: string[]; defaultModel: string; secretKey: string };
+const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
+  custom: { provider: '', baseUrl: '', api: 'anthropic-messages', models: [], defaultModel: '', secretKey: '' },
+  // Claude Code 订阅（复用本机 Keychain OAuth，无 API key；走订阅计划额度）
+  'cc-subscription': {
+    provider: 'anthropic',
+    baseUrl: '',
+    api: 'anthropic-messages',
+    models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    defaultModel: 'claude-opus-4-8',
+    secretKey: '',
+  },
+  // Kimi 开放平台：按量付费，中国区 key（platform.kimi.com 充值）。走 pi 内置
+  // moonshotai-cn provider（OpenAI 兼容，目录已调好 compat）。
+  'kimi-cn': {
+    provider: 'moonshotai-cn',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    api: 'openai-completions',
+    models: ['kimi-k3', 'kimi-k2.7-code-highspeed', 'kimi-k2.7-code'],
+    defaultModel: 'kimi-k3',
+    secretKey: 'MOONSHOT_API_KEY',
+  },
+  // Kimi Code 订阅（Kimi 会员权益）：Kimi Code 控制台新建的 API Key，走 pi
+  // 内置 kimi-coding provider（Anthropic 兼容 api.kimi.com/coding）。档位：
+  // Andante=kimi-for-coding；Moderato+=k3/k3-256k；Allegretto+=highspeed。
+  'kimi-sub': {
+    provider: 'kimi-coding',
+    baseUrl: 'https://api.kimi.com/coding',
+    api: 'anthropic-messages',
+    models: ['k3', 'k3-256k', 'kimi-for-coding-highspeed'],
+    defaultModel: 'k3',
+    secretKey: 'KIMI_API_KEY',
+  },
 };
 
 // Must match VISION_DEFAULTS in apps/gateway/src/runtime/vision-call.ts. Shown
@@ -126,6 +171,7 @@ export default function PiSettingsPage() {
 
   const [cfg, setCfgLocal] = useState<PiConfig | null>(null);
   const [modelsText, setModelsText] = useState('');
+  const [presetKey, setPresetKey] = useState('custom');
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [revealKey, setRevealKey] = useState(false);
@@ -142,6 +188,13 @@ export default function PiSettingsPage() {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- form hydration: the server value is the initial state, and it arrives after mount
       setCfgLocal(base);
       setModelsText((base.models ?? []).join(', '));
+      if (base.authMode === 'cc-subscription') {
+        setPresetKey('cc-subscription');
+      } else if (base.provider === 'moonshotai-cn' || base.provider === 'moonshotai') {
+        setPresetKey('kimi-cn');
+      } else if (base.provider === 'kimi-coding') {
+        setPresetKey('kimi-sub');
+      }
     }
   }, [getCfg.data]);
 
@@ -158,6 +211,7 @@ export default function PiSettingsPage() {
     setSaved(false);
     const blank = (v?: string | null) => (v?.trim() ? v.trim() : undefined);
     const next: PiConfig = {
+      authMode: cfg?.authMode === 'cc-subscription' ? 'cc-subscription' : 'api-key',
       provider: blank(cfg?.provider),
       baseUrl: blank(cfg?.baseUrl),
       api: blank(cfg?.api) ?? 'anthropic-messages',
@@ -197,6 +251,13 @@ export default function PiSettingsPage() {
               保存后本机 gateway 30 秒内生效（对新起的 pi 会话），已在跑的会话重启后生效。
               所有 API key 只存 key 名，值留在机器的加密 secrets store 里。
             </p>
+            {cfg?.authMode === 'cc-subscription' && (
+              <p className="mt-2 rounded-md border border-emerald-600/30 bg-emerald-600/10 px-3 py-2 text-[11px] leading-relaxed text-emerald-600">
+                Claude Code 订阅模式：pi 直接复用本机 Claude Code 的 Keychain OAuth 凭据，不消耗
+                ANTHROPIC_API_KEY。前提是本机 Claude Code 已登录（订阅可用）；Anthropic 会把 pi 识别为
+                Claude Code 客户端，走订阅计划额度。
+              </p>
+            )}
           </div>
 
           {getCfg.isLoading ? (
@@ -207,8 +268,41 @@ export default function PiSettingsPage() {
             <>
               <SectionCard
                 title="模型端点"
-                desc="任意 Anthropic / OpenAI 兼容端点。pi 不认 base url 环境变量，所以端点要在这里注册成 provider。"
+                desc="任意 Anthropic / OpenAI 兼容端点。pi 不认 base url 环境变量，所以端点要在这里注册成 provider；Kimi 官方端点走 pi 内置 provider，不需要注册。"
               >
+                <div className="mb-3">
+                  <Field label="端点预设" hint="一键填入官方端点；选自定义则手填。预设只填字段，不保存">
+                    <Select
+                      value={presetKey}
+                      onValueChange={(v) => {
+                        setPresetKey(v as string);
+                        const p = PROVIDER_PRESETS[v as string];
+                        if (p) {
+                          set({
+                            authMode: v === 'cc-subscription' ? 'cc-subscription' : 'api-key',
+                            provider: p.provider,
+                            baseUrl: p.baseUrl,
+                            api: p.api,
+                            secretKey: p.secretKey,
+                          });
+                          setModelsText(p.models.join(', '));
+                          set({ defaultModel: p.defaultModel });
+                        }
+                      }}
+                      modal={false}
+                    >
+                      <SelectTrigger className="h-9 font-mono" aria-label="endpoint preset">
+                        <SelectValue>{(v: string | null) => v || '自定义'}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent className="font-mono">
+                        <SelectItem value="custom">自定义（手填）</SelectItem>
+                        <SelectItem value="cc-subscription">Claude Code 订阅（Keychain OAuth）</SelectItem>
+                        <SelectItem value="kimi-cn">Kimi 开放平台 · 按量（moonshotai-cn）</SelectItem>
+                        <SelectItem value="kimi-sub">Kimi Code 订阅（kimi-coding）</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Provider ID" hint="pi 里的 provider 名，例如 hyqubit / openrouter">
                     <Input
@@ -230,20 +324,22 @@ export default function PiSettingsPage() {
                       </SelectTrigger>
                       <SelectContent className="font-mono">
                         <SelectItem value="anthropic-messages">anthropic-messages</SelectItem>
-                        <SelectItem value="openai">openai</SelectItem>
+                        <SelectItem value="openai-completions">openai-completions</SelectItem>
                       </SelectContent>
                     </Select>
                   </Field>
                 </div>
 
-                <Field label="Base URL" hint="例如 https://litellm.hyqubit.com">
-                  <Input
-                    value={cfg?.baseUrl ?? ''}
-                    placeholder="https://litellm.hyqubit.com"
-                    onChange={(e) => set({ baseUrl: e.target.value })}
-                    className="font-mono text-base sm:text-sm"
-                  />
-                </Field>
+                {cfg?.authMode !== 'cc-subscription' && (
+                  <Field label="Base URL" hint="例如 https://litellm.hyqubit.com">
+                    <Input
+                      value={cfg?.baseUrl ?? ''}
+                      placeholder="https://litellm.hyqubit.com"
+                      onChange={(e) => set({ baseUrl: e.target.value })}
+                      className="font-mono text-base sm:text-sm"
+                    />
+                  </Field>
+                )}
 
                 <Field label="模型列表" hint="逗号分隔；会话详情里的模型下拉读的就是这个列表">
                   <Input
@@ -256,7 +352,7 @@ export default function PiSettingsPage() {
 
                 <Field
                   label="默认模型"
-                  hint="新建 pi 会话不指定模型时用它。留空则取上面列表的第一个。"
+                  hint={cfg?.authMode === 'cc-subscription' ? '订阅可用模型：claude-opus-4-8 / claude-sonnet-4-6 / claude-haiku-4-5' : '新建 pi 会话不指定模型时用它。留空则取上面列表的第一个。'}
                 >
                   <Input
                     value={cfg?.defaultModel ?? ''}
@@ -266,26 +362,33 @@ export default function PiSettingsPage() {
                   />
                 </Field>
 
-                <Field label="API Key" hint="填 secrets store 里的 key 名，不是 key 本身">
-                  <div className="relative">
-                    <Input
-                      value={cfg?.secretKey ?? ''}
-                      placeholder="LITELLM_HYQUBIT_TOKEN"
-                      type={revealKey ? 'text' : 'password'}
-                      onChange={(e) => set({ secretKey: e.target.value })}
-                      className="pr-9 font-mono text-base sm:text-sm"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setRevealKey((v) => !v)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-                      aria-label="toggle visibility"
-                    >
-                      {revealKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
+                {cfg?.authMode === 'cc-subscription' ? (
+                  <div className="rounded-md border border-emerald-600/20 bg-emerald-600/5 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                    订阅模式无需 API Key —— pi 用本机 Claude Code 的 Keychain OAuth 凭据认证
+                    （`ANTHROPIC_AUTH_TOKEN`，Bearer）。切换回 API key：端点预设选回「自定义」或 Kimi。
                   </div>
-                  <SecretPicker names={secretNames} onPick={(k) => set({ secretKey: k })} />
-                </Field>
+                ) : (
+                  <Field label="API Key" hint="填 secrets store 里的 key 名，不是 key 本身">
+                    <div className="relative">
+                      <Input
+                        value={cfg?.secretKey ?? ''}
+                        placeholder="LITELLM_HYQUBIT_TOKEN"
+                        type={revealKey ? 'text' : 'password'}
+                        onChange={(e) => set({ secretKey: e.target.value })}
+                        className="pr-9 font-mono text-base sm:text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setRevealKey((v) => !v)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                        aria-label="toggle visibility"
+                      >
+                        {revealKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <SecretPicker names={secretNames} onPick={(k) => set({ secretKey: k })} />
+                  </Field>
+                )}
               </SectionCard>
 
               <SectionCard

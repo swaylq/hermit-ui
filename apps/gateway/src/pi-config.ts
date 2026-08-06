@@ -18,6 +18,12 @@ export type PiImageConfig = {
 };
 
 export type PiConfig = {
+  /**
+   * 'api-key' (default) uses `provider`+`secretKey` below; 'cc-subscription'
+   * reuses this machine's Claude Code Keychain OAuth credentials instead — no
+   * API key needed, the anthropic provider is pi's built-in.
+   */
+  authMode?: 'api-key' | 'cc-subscription';
   provider?: string;
   baseUrl?: string;
   api?: string;
@@ -67,6 +73,7 @@ function mergeRemote(remote: PiConfig | null): PiConfig {
   const env = envFallback();
   if (!remote) return env;
   return {
+    authMode: remote.authMode || 'api-key',
     provider: remote.provider?.trim() || env.provider,
     baseUrl: remote.baseUrl?.trim() || env.baseUrl,
     api: remote.api?.trim() || env.api || 'anthropic-messages',
