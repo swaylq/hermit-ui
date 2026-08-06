@@ -25,6 +25,7 @@ type PiConfig = {
   baseUrl?: string;
   api?: string;
   models?: string[];
+  defaultModel?: string;
   secretKey?: string | null;
   image?: {
     enabled?: boolean;
@@ -41,6 +42,7 @@ const EMPTY: PiConfig = {
   baseUrl: '',
   api: 'anthropic-messages',
   models: [],
+  defaultModel: '',
   secretKey: '',
   image: { enabled: false, provider: 'openrouter', apiKeySecret: '', ocrModel: '', describeModel: '', prompt: '' },
 };
@@ -160,6 +162,7 @@ export default function PiSettingsPage() {
       baseUrl: blank(cfg?.baseUrl),
       api: blank(cfg?.api) ?? 'anthropic-messages',
       models: modelsText.split(',').map((m) => m.trim()).filter(Boolean),
+      defaultModel: blank(cfg?.defaultModel),
       secretKey: blank(cfg?.secretKey) ?? null,
       image: {
         enabled: Boolean(cfg?.image?.enabled),
@@ -247,6 +250,18 @@ export default function PiSettingsPage() {
                     value={modelsText}
                     placeholder="claude-opus-5, claude-sonnet-5"
                     onChange={(e) => setModelsText(e.target.value)}
+                    className="font-mono text-base sm:text-sm"
+                  />
+                </Field>
+
+                <Field
+                  label="默认模型"
+                  hint="新建 pi 会话不指定模型时用它。留空则取上面列表的第一个。"
+                >
+                  <Input
+                    value={cfg?.defaultModel ?? ''}
+                    placeholder={modelsText.split(',')[0]?.trim() || 'claude-opus-5'}
+                    onChange={(e) => set({ defaultModel: e.target.value })}
                     className="font-mono text-base sm:text-sm"
                   />
                 </Field>

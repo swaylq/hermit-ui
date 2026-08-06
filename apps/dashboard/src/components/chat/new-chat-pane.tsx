@@ -9,7 +9,6 @@ import { Plus } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
-import { Input } from '@/components/ui/input';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { BackendPicker } from './backend-picker';
 import { isRuntimeKind, type RuntimeKind } from '@/lib/runtime-labels';
@@ -27,7 +26,6 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
   // render. That way the picker is right the instant the agent lookup lands,
   // without a re-seed that would overwrite a choice made while it was in flight.
   const [runtime, setRuntime] = useState<RuntimeKind | null>(null);
-  const [model, setModel] = useState('');
   // pi only. Same "explicit choice or null" shape as `runtime`: null means the
   // agent's default, resolved at render once the agent lookup lands.
   const [mode, setMode] = useState<PiMode | null>(null);
@@ -51,7 +49,6 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
   if (pickedFor !== agent) {
     setPickedFor(agent);
     setRuntime(null);
-    setModel('');
     setMode(null);
   }
 
@@ -74,7 +71,6 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
             create.mutate({
               agentName: agent,
               runtime: chosen,
-              ...(chosen === 'pi-rpc' && model.trim() ? { runtimeModel: model.trim() } : {}),
               // Written explicitly, for the same reason the backend is: a
               // session that states its mode keeps the one you started it in
               // when the agent's default is later edited.
@@ -130,21 +126,11 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
               </span>
             </label>
           )}
-          {chosen === 'pi-rpc' && (
-            <label className="block">
-              <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Model</span>
-              <Input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="agent default"
-                aria-label="pi model"
-                className="mt-1.5 w-full text-sm font-mono"
-              />
-              <span className="mt-1 block text-[11px] text-muted-foreground">
-                Leave empty to use the agent&apos;s configured model.
-              </span>
-            </label>
-          )}
+          {/* No model field here on purpose. Starting a chat should be: agent,
+              backend, mode, go. The model comes from Settings → Pi Runtime
+              ("默认模型"), and a session that wants its own can be re-pointed
+              from the session detail sheet afterwards. This used to be a
+              free-text box you had to leave blank on every single new chat. */}
           <div className="flex gap-2">
             <Button type="submit" disabled={!agent || create.isPending} className="flex-1 h-10">
               {create.isPending ? 'creating…' : 'Start chat'}

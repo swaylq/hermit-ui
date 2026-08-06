@@ -22,6 +22,11 @@ export type PiConfig = {
   baseUrl?: string;
   api?: string;
   models?: string[];
+  /**
+   * Model for a pi session that pins none of its own. Blank falls back to the
+   * first entry of `models` — see resolveDefaultModel.
+   */
+  defaultModel?: string;
   /** Secret-store name for the provider API key (never the value). */
   secretKey?: string | null;
   image?: PiImageConfig;
@@ -40,8 +45,22 @@ function envFallback(): PiConfig {
     baseUrl: process.env.HERMIT_PI_BASE_URL?.trim(),
     api: process.env.HERMIT_PI_API?.trim() || 'anthropic-messages',
     models: (process.env.HERMIT_PI_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean),
+    defaultModel: process.env.HERMIT_PI_DEFAULT_MODEL?.trim() || undefined,
     secretKey: process.env.HERMIT_PI_SECRET?.trim() || null,
   };
+}
+
+/**
+ * The model a pi session gets when it pins none of its own.
+ *
+ * Explicit setting first, then the head of the models list. The list is ordered
+ * by preference on the settings page, so its first entry is the machine's
+ * "best" model — on this fleet that is claude-opus-5. Returns undefined when
+ * nothing is configured, which leaves pi to pick, because inventing a model id
+ * here would name something the machine's provider may not serve.
+ */
+export function resolveDefaultModel(cfg: PiConfig): string | undefined {
+  return cfg.defaultModel?.trim() || cfg.models?.[0]?.trim() || undefined;
 }
 
 function mergeRemote(remote: PiConfig | null): PiConfig {
@@ -52,6 +71,7 @@ function mergeRemote(remote: PiConfig | null): PiConfig {
     baseUrl: remote.baseUrl?.trim() || env.baseUrl,
     api: remote.api?.trim() || env.api || 'anthropic-messages',
     models: (remote.models?.length ? remote.models : env.models),
+    defaultModel: remote.defaultModel?.trim() || env.defaultModel,
     secretKey: remote.secretKey || env.secretKey,
     image: remote.image?.provider && remote.image.provider !== 'none' ? remote.image : undefined,
   };

@@ -15,6 +15,7 @@ import type {
 import { translatePiEvent } from './pi-events';
 import { providerEnv, machineProviderEnv, visionEnv } from './pi-credentials';
 import { resolveMode, buildModeArgs } from './pi-modes';
+import { getPiConfig, resolveDefaultModel } from '../pi-config';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 
 // RpcClient's default cliPath search is cwd-relative, so it looks for
@@ -288,6 +289,9 @@ export class PiRpcRuntime implements AgentRuntime {
     // why changing a session's mode has to restart its child (planRuntimeSwitch).
     const mode = resolveMode(session.mode);
     const modeArgs = buildModeArgs(mode, { agentDirectory: session.agentDirectory });
+    // The machine's default model, for sessions that pin none. Set on Settings →
+    // Pi Runtime so a new chat does not have to name a model to get a good one.
+    const machineDefaultModel = resolveDefaultModel(await getPiConfig());
 
     // The child inherits the gateway's env plus the provider key, resolved from
     // the encrypted store at start time so it never lands in a config file.
@@ -295,10 +299,10 @@ export class PiRpcRuntime implements AgentRuntime {
       cwd: session.agentDirectory,
       cliPath: resolvePiCli(),
       provider: session.provider ?? undefined,
-      // A mode may pin a model when it genuinely requires one (a browser mode
-      // needs an endpoint that accepts image blocks). The session's own choice
-      // still wins — the mode default is only for sessions that expressed none.
-      model: session.model ?? mode?.model ?? undefined,
+      // Precedence: the session's own pin, then a mode that genuinely requires
+      // a particular model (a browser mode needs an endpoint that accepts image
+      // blocks), then the machine's configured default.
+      model: session.model ?? mode?.model ?? machineDefaultModel,
       // --extension gives the child hermit's own tools (pi has no MCP), and
       // --no-approve keeps it from trusting project-local extension/skill files
       // it happens to find in the workspace — only ours is loaded on purpose.

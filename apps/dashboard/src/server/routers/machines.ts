@@ -10,6 +10,11 @@ export const PI_CONFIG_SCHEMA = z.object({
   baseUrl: z.string().trim().url().optional(),
   api: z.string().trim().optional(), // 'anthropic-messages' | 'openai' | ...
   models: z.array(z.string().trim().min(1)).optional(),
+  // Which of them a new pi session gets when neither the session nor its agent
+  // pins one. Without this the model had to be typed into the new-chat picker
+  // every time, or left blank and decided by pi. Blank falls back to the first
+  // entry of `models`.
+  defaultModel: z.string().trim().optional(),
   // Name of the secret in the machine's encrypted store that holds the API key
   // (e.g. LITELLM_HYQUBIT_TOKEN). Never stores the value itself.
   secretKey: z.string().trim().regex(/^[A-Za-z0-9_-]+$/).optional().nullable(),
