@@ -152,7 +152,9 @@ Two things only: the one hard rule that must bind an agent that never opens the 
 
 Splitting into four small files rather than one grab-bag is deliberate: under progressive loading the index line is what gets scanned, so a focused file with a sharp one-liner is *cheaper* to have than a broad one — the cost of an extra file is one line, and the payoff is the agent reading only what it needs.
 
-**Result:** always-on **2,352 → 484 chars** (240 note + 244 generated description) — a **79% cut** — and, the part that matters, flat from here: the fifth and fiftieth memory file cost one index line each, paid only when the skill fires.
+**Result:** always-on **2,352 → 682 chars**, a **71% cut**. Measured the same way on both sides — the whole managed block including its markers and header (830 → 438) plus what it pulls in with it (a 1,522-char resolved `@import` → a 244-char skill description). The note itself is 581 → 240.
+
+The cut is the smaller half of the win. The other half is that it is now **flat**: the fifth and the fiftieth memory file each cost one index line, paid only when the skill fires.
 
 ## 9. Edge cases
 
