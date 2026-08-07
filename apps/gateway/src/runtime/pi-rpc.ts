@@ -20,6 +20,7 @@ import {
 } from './pi-credentials';
 import { resolveMode, buildModeArgs } from './pi-modes';
 import { readPiSession, rememberPiSession, resumablePiSession } from './pi-sessions';
+import { globalMemoryPrompt } from './context-files';
 import { getPiConfig, resolveDefaultModel } from '../pi-config';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 
@@ -367,6 +368,7 @@ export class PiRpcRuntime implements AgentRuntime {
     // why changing a session's mode has to restart its child (planRuntimeSwitch).
     const mode = resolveMode(session.mode);
     const modeArgs = buildModeArgs(mode, { agentDirectory: session.agentDirectory });
+    const globalMemoryArg = globalMemoryPrompt();
     // The machine's default model, for sessions that pin none. Set on Settings →
     // Pi Runtime so a new chat does not have to name a model to get a good one.
     const piConfig = await getPiConfig();
@@ -416,6 +418,12 @@ export class PiRpcRuntime implements AgentRuntime {
       args: [
         '--extension', hermitExtensionPath(),
         ...modeArgs,
+        // pi finds the agent's own AGENTS.md/CLAUDE.md by walking CWD's
+        // ancestors, but the machine's global memory lives in ~/.claude/, which
+        // is not on that path — so it is the one thing pi can never reach for
+        // itself, in either auth mode. Appended (not --system-prompt) so pi's
+        // own core prompt and the mode's text both survive.
+        ...(globalMemoryArg ? ['--append-system-prompt', globalMemoryArg] : []),
         ...(resume ? ['--session', resume.file] : []),
       ],
       env: {
