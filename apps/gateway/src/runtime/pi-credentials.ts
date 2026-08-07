@@ -11,6 +11,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { getPiConfig } from '../pi-config';
@@ -152,7 +153,7 @@ export function subscriptionTokenEnv(token: string): Record<string, string> {
  * the provider registration as "$HERMIT_PI_API_KEY", so it never appears in a
  * config file.
  */
-export async function machineProviderEnv(): Promise<Record<string, string>> {
+async function computeMachineProviderEnv(): Promise<Record<string, string>> {
   const cfg = await getPiConfig();
 
   // Claude Code 订阅模式：复用本机 Claude Code 的 Keychain OAuth 凭据，anthropic
@@ -188,6 +189,63 @@ export async function machineProviderEnv(): Promise<Record<string, string>> {
     if (value) out.HERMIT_PI_API_KEY = value;
   }
   return out;
+}
+
+/**
+ * The env vars that actually authenticate a child, in the order they are hashed.
+ *
+ * Only credential-bearing names belong here. A base URL or a model list moving
+ * is not a reason to recycle a live conversation.
+ */
+const AUTH_ENV_KEYS = ['ANTHROPIC_OAUTH_TOKEN', 'HERMIT_PI_API_KEY'] as const;
+
+/**
+ * A stable, non-reversible fingerprint of the credentials in an env.
+ *
+ * Truncated SHA-256 per key. It exists to answer one question — "is this the
+ * same credential the child booted with?" — and must never be able to answer
+ * "what is it": these values reach logs and eviction reasons.
+ *
+ * Always applied to machineProviderEnv()'s output, never to a child's full env.
+ * The two differ: a child inherits process.env, so a stray HERMIT_PI_API_KEY in
+ * the gateway's own .env would appear on one side of the comparison and not the
+ * other, and every check would read as "the credential rotated".
+ */
+export function fingerprintAuthEnv(env: Record<string, string>): string | null {
+  const parts = AUTH_ENV_KEYS
+    .filter((k) => env[k])
+    .map((k) => `${k}:${createHash('sha256').update(env[k]).digest('hex').slice(0, 12)}`);
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+// Last fingerprint observed, refreshed as a side effect of every
+// machineProviderEnv() call so a boot and a later check can never disagree
+// about what "current" means (see currentAuthFingerprint).
+let authFp: { at: number; value: string | null } = { at: 0, value: null };
+
+/**
+ * Provider/auth env for a child, and the single place the fingerprint cache is
+ * kept honest — boot resolves credentials through here, so the value it records
+ * is by construction the value a later staleness check compares against.
+ */
+export async function machineProviderEnv(): Promise<Record<string, string>> {
+  const env = await computeMachineProviderEnv();
+  authFp = { at: Date.now(), value: fingerprintAuthEnv(env) };
+  return env;
+}
+
+/**
+ * Fingerprint of the credentials a child would boot with *right now*.
+ *
+ * Cached, because the callers are on the message-delivery path and the
+ * uncached form shells out to `security` (Keychain) or to `secret`. A Claude
+ * Code OAuth token lives ~8h, so a minute of staleness costs nothing and saves
+ * a subprocess per message.
+ */
+export async function currentAuthFingerprint(maxAgeMs = 60_000): Promise<string | null> {
+  if (authFp.at > 0 && Date.now() - authFp.at < maxAgeMs) return authFp.value;
+  await machineProviderEnv();
+  return authFp.value;
 }
 
 /**

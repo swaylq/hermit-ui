@@ -19,13 +19,27 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AGENTS_ROOT } from '../config';
 
+/** Which engine wrote a session — they cannot read each other's files. */
+export type PiEngine = 'pi' | 'omp';
+
 export type PiSessionPointer = {
-  /** Absolute path to pi's session JSONL — what `--session` is given. */
+  /** Absolute path to the engine's session JSONL — what `--session`/`--resume` is given. */
   file: string;
-  /** pi's own session id. Reported back by getState(), so it doubles as the check that the reattach took. */
+  /** The engine's own session id. Reported back by getState(), so it doubles as the check that the reattach took. */
   piSessionId: string;
-  /** The cwd the child ran in; pi scopes its session directories by it. */
+  /** The cwd the child ran in; both engines scope their session directories by it. */
   cwd: string;
+  /**
+   * Which engine owns the file.
+   *
+   * Absent means 'pi' — pointers written before omp learned to resume, and the
+   * only shape that existed then. It matters because a session can change
+   * engine under the user (a mode switch does exactly that, see runtimeFor):
+   * handing an omp JSONL to `pi --session` reattaches nothing at best, so a
+   * pointer from the other engine must read as "no session to resume" rather
+   * than as a file to try.
+   */
+  engine?: PiEngine;
   /**
    * Set once a turn has completed and pi has actually written the file.
    *
@@ -110,19 +124,30 @@ export function readPiSession(sessionId: string, file = piSessionStorePath()): P
   return readStore(file)[sessionId] ?? null;
 }
 
+/** The engine a pointer belongs to, defaulting the pre-omp shape to 'pi'. */
+export function pointerEngine(pointer: PiSessionPointer): PiEngine {
+  return pointer.engine === 'omp' ? 'omp' : 'pi';
+}
+
 /**
- * The pi session this hermit session can actually be put back onto.
+ * The session this hermit session can actually be put back onto.
  *
  * Null both when there was never one and when its file is gone; the caller
  * separates those with readPiSession, because only the second is a thread that
  * was lost and worth reporting.
+ *
+ * `opts.engine` filters to pointers that engine can actually open. Callers that
+ * pass it get null for a pointer left by the other engine, which is the same
+ * "nothing to resume" the very first boot sees — correct, and quiet.
  */
 export function resumablePiSession(
   sessionId: string,
   file = piSessionStorePath(),
+  opts: { engine?: PiEngine } = {},
 ): PiSessionPointer | null {
   const pointer = readPiSession(sessionId, file);
   if (!pointer?.file) return null;
+  if (opts.engine && pointerEngine(pointer) !== opts.engine) return null;
   return fs.existsSync(pointer.file) ? pointer : null;
 }
 

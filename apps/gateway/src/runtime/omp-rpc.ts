@@ -23,7 +23,11 @@ import type {
 import { translatePiEvent } from './pi-events';
 import { singleFlight } from './pi-rpc';
 import { resolveMode, buildModeArgs } from './pi-modes';
-import { providerEnv, visionEnv, readSecret, machineProviderEnv } from './pi-credentials';
+import {
+  providerEnv, visionEnv, readSecret, machineProviderEnv,
+  fingerprintAuthEnv, currentAuthFingerprint,
+} from './pi-credentials';
+import { readPiSession, rememberPiSession, resumablePiSession } from './pi-sessions';
 import { getPiConfig, resolveDefaultModel } from '../pi-config';
 import { OmpTransport, type OmpEvent } from './omp-transport';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
@@ -158,6 +162,20 @@ type OmpHandle = RuntimeHandle & {
   bootId: string;
   /** Mode this child was spawned with; a change means a new child. */
   mode: string | null;
+  /**
+   * Fingerprint of the credentials this child was booted with.
+   *
+   * omp reads its auth from the environment once, at startup, and an env is
+   * fixed for the life of a process — so a child outlives its own credential.
+   * Under the Claude subscription that is not hypothetical: Claude Code rotates
+   * its OAuth access token roughly every 8h and the rotation REVOKES the
+   * previous one, so every turn on a child older than one rotation came back
+   * 401 "OAuth access token has been revoked" until someone restarted it
+   * (observed on sway003 and macmini003, 2026-08-07, both wedged ~9h in).
+   * Comparing this against the current fingerprint is what turns that into a
+   * recycle nobody sees.
+   */
+  authFingerprint: string | null;
   emit: (item: SyncItem) => void;
   lastTurn: { contextTokens: number; outputTokens: number } | null;
 };
@@ -183,17 +201,78 @@ function contextTokensFrom(u: Record<string, number> | undefined): number | null
   return total > 0 ? total : null;
 }
 
+/** Tell the chat a child is gone, and whether its conversation survived it. */
+function announceExit(h: OmpHandle, sessionId: string, reason: string): void {
+  console.warn(`[omp] evicted session=${sessionId.slice(0, 8)}: ${reason}`);
+  // What the user is told depends on whether the thread survives the child,
+  // which is now the ordinary case: omp appends to its session file as the
+  // conversation goes, and the next boot reattaches with --resume.
+  const next = resumablePiSession(sessionId, undefined, { engine: 'omp' })
+    ? 'The next message restarts omp on this conversation and carries on.'
+    : "The next message starts a fresh omp session, which will not carry this conversation's context.";
+  h.emit(systemItem(sessionId, `${sessionId}:${h.bootId}-exit`, `[omp session ended — ${reason}]\n${next}`));
+}
+
+/** Drop a child that is already dead, or that we are giving up on. */
 function evict(sessionId: string, reason: string): void {
   const h = live.get(sessionId);
   if (!h) return;
   live.delete(sessionId);
   h.transport.kill();
-  console.warn(`[omp] evicted session=${sessionId.slice(0, 8)}: ${reason}`);
-  h.emit(systemItem(
-    sessionId,
-    `${sessionId}:${h.bootId}-exit`,
-    `[omp session ended — ${reason}]\nThe next message starts a fresh omp session, which will not carry this conversation's context.`,
-  ));
+  announceExit(h, sessionId, reason);
+}
+
+/** How long a retiring child gets to drain before it is killed outright. */
+const DRAIN_TIMEOUT_MS = 5_000;
+
+/**
+ * Close stdin and wait for the child to actually be gone.
+ *
+ * Awaiting matters because every caller boots a replacement straight after,
+ * pointed at the same session file with `--resume`. omp writes that file on
+ * stdin close rather than continuously, so returning early would leave two
+ * children holding one file and the new one resuming a conversation whose last
+ * turn had not landed yet. The deadline bounds it: a child that will not drain
+ * is still gone in 5s.
+ */
+async function drain(transport: OmpTransport, label: string): Promise<void> {
+  transport.end();
+  const deadline = Date.now() + DRAIN_TIMEOUT_MS;
+  while (transport.isAlive && Date.now() < deadline) {
+    await new Promise((r) => { setTimeout(r, 50); });
+  }
+  if (transport.isAlive) {
+    console.warn(`[omp] ${label} did not drain in ${DRAIN_TIMEOUT_MS}ms; killing`);
+    transport.kill();
+  }
+}
+
+/**
+ * Retire a child that is still healthy, and wait for it to be gone.
+ *
+ * Not `evict`, because a SIGKILLed omp writes no session file — killing a
+ * healthy child would take the conversation with it, the very thing --resume
+ * was added to keep.
+ */
+async function retire(sessionId: string, reason: string): Promise<void> {
+  const h = live.get(sessionId);
+  if (!h) return;
+  live.delete(sessionId);
+  await drain(h.transport, `session=${sessionId.slice(0, 8)}`);
+  announceExit(h, sessionId, reason);
+}
+
+/**
+ * Has the machine's credential moved since this child booted?
+ *
+ * False when either side is unknown: a machine with no configured credential
+ * (children inherit whatever the gateway's own env carries) must not be told
+ * its sessions rotate every minute.
+ */
+async function staleAuth(h: OmpHandle): Promise<boolean> {
+  if (!h.authFingerprint) return false;
+  const now = await currentAuthFingerprint();
+  return now !== null && now !== h.authFingerprint;
 }
 
 export class OmpRpcRuntime implements AgentRuntime {
@@ -208,6 +287,13 @@ export class OmpRpcRuntime implements AgentRuntime {
         const wanted = resolveMode(session.mode)?.name ?? null;
         if (wanted !== existing.mode) {
           evict(session.id, `mode changed ${existing.mode ?? 'none'} → ${wanted ?? 'none'}`);
+        } else if (await staleAuth(existing)) {
+          // Retired while idle only. Evicting mid-turn would abandon a reply
+          // that is still streaming, and this is never urgent: the credential
+          // the running turn already sent with is the one it will finish on,
+          // and the next tick catches the child once it is quiet.
+          if (await this.isWorking(existing)) return existing;
+          await retire(session.id, 'auth credential rotated');
         } else {
           return existing;
         }
@@ -275,10 +361,20 @@ export class OmpRpcRuntime implements AgentRuntime {
       }
     }
 
+    // The conversation this session was already having, if it had one. Same
+    // shape as the pi path: `pointer` without `resume` means we had a thread
+    // and lost the file, which is the one case worth telling the user about.
+    // omp takes its own session id here rather than a path — verified against a
+    // live child (rpc get_state reports both; --resume <id> reattached and the
+    // reply carried context planted before the restart).
+    const pointer = readPiSession(session.id);
+    const resume = resumablePiSession(session.id, undefined, { engine: 'omp' });
+
     const args = [
       '--extension', hermitExtensionPath(),
       ...buildModeArgs(mode, { agentDirectory: session.agentDirectory }),
       ...(modelArg ? ['--model', modelArg] : []),
+      ...(resume ? ['--resume', resume.piSessionId] : []),
       // Anthropic's classifier reads the system prompt: a third-party harness
       // identity in it ("operating inside pi", and omp's own prepended "You
       // are a Claude agent, built on Anthropic's Claude Agent SDK.") makes the
@@ -291,6 +387,13 @@ export class OmpRpcRuntime implements AgentRuntime {
       ...(subscription ? ['--system-prompt', SUBSCRIPTION_SYSTEM_PROMPT] : []),
     ];
 
+    // Shared with pi: the Keychain OAuth token under the subscription, or the
+    // HERMIT_PI_* endpoint values under api-key. Resolved into a local first so
+    // the child's credential and the fingerprint recorded for it come from one
+    // read — two reads could straddle a rotation and record a fingerprint the
+    // child never had, which reads as "already stale" on the very next tick.
+    const machineEnv = await machineProviderEnv();
+
     const transport = new OmpTransport({
       cliPath: resolveOmpCli(),
       cwd: session.agentDirectory,
@@ -298,9 +401,7 @@ export class OmpRpcRuntime implements AgentRuntime {
       env: {
         ...process.env,
         ...(await providerEnv(session.provider)),
-        // Shared with pi: returns the Keychain OAuth token under the
-        // subscription, or the HERMIT_PI_* endpoint values under api-key.
-        ...(await machineProviderEnv()),
+        ...machineEnv,
         ...keyEnv,
         ...(await visionEnv()),
         HERMIT_DASHBOARD_URL: DASHBOARD_URL,
@@ -323,7 +424,32 @@ export class OmpRpcRuntime implements AgentRuntime {
 
     await transport.start();
 
-    const state = await transport.send<{ sessionId?: string }>({ type: 'get_state' }).catch(() => null);
+    const state = await transport
+      .send<{ sessionId?: string; sessionFile?: string }>({ type: 'get_state' })
+      .catch(() => null);
+
+    // Loud, because the alternative is a session that quietly answers with none
+    // of its own history: we asked to reattach and did not land on it.
+    if (resume && state?.sessionId && state.sessionId !== resume.piSessionId) {
+      console.warn(
+        `[omp] session=${session.id.slice(0, 8)} asked to resume ${resume.piSessionId}`
+        + ` but landed on ${state.sessionId}`,
+      );
+    }
+
+    // Write the pointer down before the first turn, not after: a child that
+    // dies mid-answer has still created the session, and the file it left is
+    // exactly what the next boot should pick back up.
+    if (state?.sessionId) {
+      rememberPiSession(session.id, {
+        file: state.sessionFile ?? resume?.file ?? '',
+        piSessionId: state.sessionId,
+        cwd: session.agentDirectory,
+        engine: 'omp',
+      });
+    } else if (pointer) {
+      console.warn(`[omp] session=${session.id.slice(0, 8)} booted without a session id; pointer left as-is`);
+    }
 
     const handle: OmpHandle = {
       sessionId: session.id,
@@ -333,6 +459,7 @@ export class OmpRpcRuntime implements AgentRuntime {
       ordinal: 0,
       bootId: `${state?.sessionId ?? 'omp'}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
       mode: mode?.name ?? null,
+      authFingerprint: fingerprintAuthEnv(machineEnv),
       emit,
       lastTurn: null,
     };
@@ -444,12 +571,12 @@ export class OmpRpcRuntime implements AgentRuntime {
     if (!h) return;
     // Remove first so the exit hook does not report this as an unexpected death.
     live.delete(handle.sessionId);
-    if (mode === 'hibernate') {
-      // Closing stdin lets omp drain and write its session file; SIGKILL does not.
-      h.transport.end();
-      setTimeout(() => { if (h.transport.isAlive) h.transport.kill(); }, 5_000).unref();
-    } else {
-      h.transport.kill();
-    }
+    // Closing stdin lets omp drain and write its session file; SIGKILL does not.
+    // Both modes take that path, and the pointer is kept for both on purpose:
+    // `kill` here is chat-runner's restart button, not "throw the conversation
+    // away", and now that boot reattaches with --resume, a restart that killed
+    // the file would be a worse tool than the wedged session it was reached for.
+    void mode;
+    await drain(h.transport, `session=${handle.sessionId.slice(0, 8)}`);
   }
 }

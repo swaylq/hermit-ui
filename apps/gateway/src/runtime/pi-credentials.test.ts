@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { envVarForProvider, providerEnv, subscriptionTokenEnv } from './pi-credentials';
+import {
+  envVarForProvider, fingerprintAuthEnv, providerEnv, subscriptionTokenEnv,
+} from './pi-credentials';
 
 test('provider name maps onto the store key convention', () => {
   assert.equal(envVarForProvider('openrouter'), 'OPENROUTER_API_KEY');
@@ -54,4 +56,60 @@ test('a provider name that could reach the shell is rejected outright', async ()
 test('an unknown provider degrades to the gateway env instead of throwing', async () => {
   const out = await providerEnv('definitely-not-a-real-provider-xyz');
   assert.deepEqual(out, {});
+});
+
+// The fingerprint is how a runtime notices its child is holding a credential
+// that has since been rotated away — the failure that wedged sway003 and
+// macmini003 for ~9h each with 401 "OAuth access token has been revoked".
+test('a rotated credential produces a different fingerprint', () => {
+  const before = fingerprintAuthEnv({ ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-old' });
+  const after = fingerprintAuthEnv({ ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-new' });
+  assert.ok(before);
+  assert.notEqual(before, after);
+});
+
+test('the same credential fingerprints identically, so a live child is left alone', () => {
+  const env = { ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-same' };
+  assert.equal(fingerprintAuthEnv(env), fingerprintAuthEnv({ ...env }));
+});
+
+// It ends up in logs and in an eviction reason shown to the user, so it must
+// not be possible to read the credential back out of it.
+test('the fingerprint never carries the secret itself', () => {
+  const secret = 'sk-ant-oat01-SUPERSECRET-VALUE';
+  const fp = fingerprintAuthEnv({ ANTHROPIC_OAUTH_TOKEN: secret })!;
+  assert.ok(!fp.includes(secret));
+  assert.ok(!fp.includes('SUPERSECRET'));
+  assert.match(fp, /^ANTHROPIC_OAUTH_TOKEN:[0-9a-f]{12}$/);
+});
+
+test('an api-key machine is fingerprinted too — rotation is not OAuth-only', () => {
+  const before = fingerprintAuthEnv({ HERMIT_PI_API_KEY: 'key-one' });
+  const after = fingerprintAuthEnv({ HERMIT_PI_API_KEY: 'key-two' });
+  assert.ok(before);
+  assert.notEqual(before, after);
+});
+
+// Null is the "do not check" signal: a machine that configures no credential
+// hands its children the gateway's own env, and must not be told its sessions
+// rotate on every tick.
+test('no credential means no fingerprint, which disables the staleness check', () => {
+  assert.equal(fingerprintAuthEnv({}), null);
+  // Non-credential config moving is not a reason to recycle a conversation.
+  assert.equal(fingerprintAuthEnv({
+    HERMIT_PI_PROVIDER: 'hyqubit',
+    HERMIT_PI_BASE_URL: 'https://litellm.hyqubit.com',
+    HERMIT_PI_MODELS: 'claude-opus-5',
+  }), null);
+});
+
+test('both credentials present fingerprint as one value, in a fixed order', () => {
+  const fp = fingerprintAuthEnv({
+    HERMIT_PI_API_KEY: 'k',
+    ANTHROPIC_OAUTH_TOKEN: 't',
+  })!;
+  assert.match(fp, /^ANTHROPIC_OAUTH_TOKEN:[0-9a-f]{12} HERMIT_PI_API_KEY:[0-9a-f]{12}$/);
+  // Key order in the object must not change the answer, or every boot would
+  // look like a rotation.
+  assert.equal(fp, fingerprintAuthEnv({ ANTHROPIC_OAUTH_TOKEN: 't', HERMIT_PI_API_KEY: 'k' }));
 });

@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   MAX_ENTRIES,
   forgetPiSession,
+  pointerEngine,
   readPiSession,
   rememberPiSession,
   resumablePiSession,
@@ -134,6 +135,47 @@ test('the flushed flag round-trips, and defaults to absent', () => {
 
   rememberPiSession('sess-1', { file, piSessionId: 'p1', cwd: '/a', flushed: true }, store);
   assert.equal(readPiSession('sess-1', store)?.flushed, true);
+});
+
+// A session changes engine whenever its mode does (runtimeFor picks the runtime
+// off the mode's `engine`). Handing omp's JSONL to `pi --session` — or pi's to
+// `omp --resume` — reattaches nothing, so the pointer has to be refused rather
+// than tried.
+test('a pointer is only offered to the engine that wrote it', () => {
+  const { store, sessionFile } = tmp();
+  const file = sessionFile();
+  rememberPiSession('sess-1', { file, piSessionId: 'o1', cwd: '/a', engine: 'omp' }, store);
+
+  assert.equal(resumablePiSession('sess-1', store, { engine: 'omp' })?.piSessionId, 'o1');
+  assert.equal(resumablePiSession('sess-1', store, { engine: 'pi' }), null);
+  // Unfiltered still sees it — readPiSession's "was there ever a thread" answer
+  // must not depend on who is asking.
+  assert.equal(resumablePiSession('sess-1', store)?.piSessionId, 'o1');
+});
+
+// Pointers written before omp learned to resume carry no engine at all. They
+// were pi's, and pi must keep resuming them across the upgrade.
+test('a pointer with no engine reads as pi', () => {
+  const { store, sessionFile } = tmp();
+  const file = sessionFile();
+  rememberPiSession('sess-1', { file, piSessionId: 'p1', cwd: '/a' }, store);
+
+  assert.equal(pointerEngine(readPiSession('sess-1', store)!), 'pi');
+  assert.equal(resumablePiSession('sess-1', store, { engine: 'pi' })?.piSessionId, 'p1');
+  assert.equal(resumablePiSession('sess-1', store, { engine: 'omp' }), null);
+});
+
+test('the engine round-trips through the store', () => {
+  const { store, sessionFile } = tmp();
+  const file = sessionFile();
+  rememberPiSession('sess-1', { file, piSessionId: 'o1', cwd: '/a', engine: 'omp' }, store);
+  assert.equal(readPiSession('sess-1', store)?.engine, 'omp');
+
+  // Re-booting the same hermit session onto the other engine replaces the
+  // pointer rather than leaving a stale one the old engine would still match.
+  rememberPiSession('sess-1', { file, piSessionId: 'p1', cwd: '/a', engine: 'pi' }, store);
+  assert.equal(readPiSession('sess-1', store)?.engine, 'pi');
+  assert.equal(resumablePiSession('sess-1', store, { engine: 'omp' }), null);
 });
 
 test('forgetting a session drops only that pointer', () => {

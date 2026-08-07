@@ -14,7 +14,10 @@ import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
 import { translatePiEvent } from './pi-events';
-import { providerEnv, machineProviderEnv, visionEnv } from './pi-credentials';
+import {
+  providerEnv, machineProviderEnv, visionEnv,
+  fingerprintAuthEnv, currentAuthFingerprint,
+} from './pi-credentials';
 import { resolveMode, buildModeArgs } from './pi-modes';
 import { readPiSession, rememberPiSession, resumablePiSession } from './pi-sessions';
 import { getPiConfig, resolveDefaultModel } from '../pi-config';
@@ -73,6 +76,18 @@ type PiHandle = RuntimeHandle & {
    * catches the other routes in (the agent default changing, a direct DB edit).
    */
   mode: string | null;
+  /**
+   * Fingerprint of the credentials this child was booted with.
+   *
+   * pi reads its auth from the environment at startup and an env is fixed for
+   * the life of a process, so a long-lived child outlives its own credential.
+   * Under the Claude subscription that is routine rather than rare: Claude Code
+   * rotates its OAuth access token roughly every 8h and the rotation REVOKES
+   * the previous one. See PiHandle's omp counterpart for the incident this came
+   * from — the fault is in this file too, and the pi-engine modes (coding, ops,
+   * writer) sit on exactly the same one.
+   */
+  authFingerprint: string | null;
   /**
    * Where this session's items go. Kept on the handle so a child that dies
    * between turns can still report itself into the chat.
@@ -276,6 +291,19 @@ export function emitItemsFor(sessionId: string, externalId: string, ev: unknown)
   }));
 }
 
+/**
+ * Has the machine's credential moved since this child booted?
+ *
+ * False when either side is unknown: a machine with no configured credential
+ * (children inherit whatever the gateway's own env carries) must not be told
+ * its sessions rotate every minute.
+ */
+async function staleAuth(h: PiHandle): Promise<boolean> {
+  if (!h.authFingerprint) return false;
+  const now = await currentAuthFingerprint();
+  return now !== null && now !== h.authFingerprint;
+}
+
 export class PiRpcRuntime implements AgentRuntime {
   readonly kind = 'pi-rpc' as const;
 
@@ -287,6 +315,11 @@ export class PiRpcRuntime implements AgentRuntime {
       const wanted = resolveMode(session.mode)?.name ?? null;
       if (wanted !== existing.mode) {
         evict(session.id, `mode changed ${existing.mode ?? 'none'} → ${wanted ?? 'none'}`);
+      } else if (await staleAuth(existing)) {
+        // Idle only — evicting mid-turn would abandon a reply that is still
+        // streaming, and the next tick catches the child once it is quiet.
+        if (await this.isWorking(existing)) return existing;
+        evict(session.id, 'auth credential rotated');
       } else {
         return existing;
       }
@@ -353,7 +386,12 @@ export class PiRpcRuntime implements AgentRuntime {
     // not. `pointer` without `resume` means we had a thread and lost the file —
     // the one case worth telling the user about, below.
     const pointer = readPiSession(session.id);
-    const resume = resumablePiSession(session.id);
+    const resume = resumablePiSession(session.id, undefined, { engine: 'pi' });
+
+    // One read, shared by the child's env and the fingerprint recorded for it —
+    // two reads could straddle a rotation and record a fingerprint the child
+    // never had, which reads as "already stale" on the very next tick.
+    const machineEnv = await machineProviderEnv();
 
     // The child inherits the gateway's env plus the provider key, resolved from
     // the encrypted store at start time so it never lands in a config file.
@@ -389,7 +427,7 @@ export class PiRpcRuntime implements AgentRuntime {
         // key when no session has pinned it. Injecting only the session pin
         // left machine-provider sessions keyless.
         ...(await providerEnv(session.provider ?? machineProvider)),
-        ...(await machineProviderEnv()),
+        ...machineEnv,
         ...(await visionEnv()),
         HERMIT_DASHBOARD_URL: DASHBOARD_URL,
         HERMIT_KEY: ASST_KEY,
@@ -431,6 +469,7 @@ export class PiRpcRuntime implements AgentRuntime {
         file: state.sessionFile,
         piSessionId: state.sessionId,
         cwd: session.agentDirectory,
+        engine: 'pi',
         // Carried forward, not recomputed. A reattach is itself proof the file
         // is on disk with a conversation in it, and a pointer that already
         // earned the flag must not lose it here — the flush-mark in onEvent
@@ -461,6 +500,7 @@ export class PiRpcRuntime implements AgentRuntime {
       // turn of the previous child wrote.
       bootId: `${state?.sessionId ?? 'pi'}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
       mode: mode?.name ?? null,
+      authFingerprint: fingerprintAuthEnv(machineEnv),
       emit,
       lastTurn: null,
       replayGuard: reattached,
@@ -511,6 +551,7 @@ export class PiRpcRuntime implements AgentRuntime {
               file: handle.sessionFile,
               piSessionId: handle.externalSessionId,
               cwd: session.agentDirectory,
+              engine: 'pi',
               flushed: true,
             });
           }
