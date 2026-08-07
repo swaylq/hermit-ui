@@ -176,15 +176,18 @@ function rebuild(existing: string, note: string, imports: string[]): string {
 
 // ── L1: the generated index skill ────────────────────────────────────────────
 
+// Only for the skill body's heading. Deliberately NOT in the description: the raw
+// hostname ("Mac.lan") tells the model nothing it doesn't know from being on the
+// machine, and the description is always-resident — every char there is rent.
 function machineLabel(): string {
-  return os.hostname().replace(/\.local$/i, '') || 'this machine';
+  return os.hostname().replace(/\.(local|lan)$/i, '') || 'this machine';
 }
 
 // The always-resident sentence: what's inside + when to consult it. A description
 // that only names the topic won't fire at the right moment, so the "consult when"
 // half is not decoration. Topics come from the files' own titles, so it tracks the
 // folder with no second place to edit.
-function renderDescription(machine: string, files: MemoryFile[]): string {
+function renderDescription(files: MemoryFile[]): string {
   const topics: string[] = [];
   let used = 0;
   for (const f of files) {
@@ -197,7 +200,7 @@ function renderDescription(machine: string, files: MemoryFile[]): string {
     used = next;
   }
   return (
-    `Shared memory for this machine (${machine}): ${topics.join('; ')}. ` +
+    `Shared memory for this machine: ${topics.join('; ')}. ` +
     `Consult it before asking the user for an account, URL, host, path, credential or local convention, ` +
     `and whenever a task touches one of the topics listed here.`
   );
@@ -207,7 +210,7 @@ function renderSkill(machine: string, files: MemoryFile[]): string {
   const index = files.map((f) => `- \`${f.abs}\` — ${f.summary ? `${f.title} · ${f.summary}` : f.title}`).join('\n');
   return `---
 name: global-memory
-description: ${JSON.stringify(renderDescription(machine, files))}
+description: ${JSON.stringify(renderDescription(files))}
 hermit_kind: memory
 ---
 # Global Memory — ${machine}

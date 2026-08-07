@@ -80,7 +80,7 @@ always: true                # optional; keeps this file an eager @import (defaul
 ```markdown
 ---
 name: global-memory
-description: "<machine>'s shared memory: 执楠系统入口与账号、常用主机与 ssh、secret CLI 用法。Consult before asking the user for a URL, host, account, or credential, or when a task touches 执楠 / 本机基础设施."
+description: "Shared memory for this machine: GitHub 账号; 常用主机与 ssh; secret CLI — 统一凭据的读写; 执楠系统入口与账号. Consult it before asking the user for an account, URL, host, path, credential or local convention, and whenever a task touches one of the topics listed here."
 hermit_kind: memory
 ---
 # Global Memory — <machine>
@@ -89,12 +89,14 @@ Shared notes for every agent on this machine. Read the specific file below rathe
 than answering from memory; the paths are absolute and readable as-is.
 
 Documents:
-- `/Users/mac/.claude/global-memory/zhinan-portals.md` — 执楠系统入口 · cms/pms/gitlab/autodeploy 的地址与登录方式
-- `/Users/mac/.claude/global-memory/hosts.md` — 常用主机 · zhinan-main / japan-dev 的 ssh 与 sudo
-- `/Users/mac/.claude/global-memory/secrets-usage.md` — secret CLI · 读写方式、安全铁律、现有 key 清单
+- `/Users/mac/.claude/global-memory/github.md` — GitHub 账号 · 账号 swaylq；token 在 secret store 的 GITHUB_TOKEN_SWAYLQ
+- `/Users/mac/.claude/global-memory/hosts.md` — 常用主机与 ssh · zhinan-main / japan-dev 的 ssh 命令，以及各自 sudo 密码所在的 secret key
+- `/Users/mac/.claude/global-memory/secrets-usage.md` — secret CLI — 统一凭据的读写 · 怎么读、怎么写、安全铁律、现有 key 清单
+- `/Users/mac/.claude/global-memory/zhinan-systems.md` — 执楠系统入口与账号 · cms / pms / autodeploy / gitlab 的地址与对应 secret key
 ```
 
-- `description` is the always-resident sentence. It must say **what is inside + when to consult it** — a description that only names the topic will not fire at the right time. Keep ≤200 chars.
+- `description` is the always-resident sentence — the only part of an arbitrarily large folder that every session pays for. It must say **what is inside + when to consult it**; one that only names the topic will not fire at the right time. The topic list is capped so the whole sentence stays ~250 chars.
+- The machine's hostname appears in the body heading but **not** in the description: it tells the model nothing it doesn't already know from being on the machine, and description bytes are rent.
 - `hermit_kind: memory` is the exclusion marker (§7), matching `hermit_kind: knowledge`.
 - Rendering is deterministic from a folder scan, so the writer is idempotent.
 
@@ -125,29 +127,32 @@ The mechanism alone does not compress the note; the UI has to make the cost visi
 
 None. Everything except the note is derived from disk — no schema change, no migration, so this ships with a gateway restart and does not need a VPS deploy to take effect.
 
-## 8. Concrete migration of this machine's memory
+## 8. Concrete migration of this machine's memory (done 2026-08-07)
 
-The design's payoff, applied to what is actually in `~/.claude/CLAUDE.md` today (§1).
+The design's payoff, applied to what was actually in `~/.claude/CLAUDE.md` (§1).
 
-**L0 — the new inline note (~300 chars, from 2,352):**
+**L0 — the inline note, 240 chars (from 581 + a 1,522-char eager import):**
 
 ```markdown
-# Global Memory · sway-mac
-- 凭据一律走 `secret` CLI（加密 store）。**绝不** echo、写进 reply/日志/commit；用 `secret exec KEY -- <cmd>` 注入。不确定有没有某 key：`secret list`。
-- 执楠系统入口与账号、常用主机 ssh、secret 详细用法 → 见 global-memory skill 的索引。
+凭据一律走 `secret` CLI：**绝不** echo、绝不写进回复/日志/commit，用 `secret exec KEY -- <命令>` 注入；不确定某 key 在不在就 `secret list`，不在就问 sway，别自己去文件系统爬 token。
+
+执楠系统入口与账号、常用主机 ssh/sudo、github、secret 用法明细 → 读 `global-memory` skill 的索引（文件在 `~/.claude/global-memory/`）。
 ```
 
-Everything kept: the one hard rule that must bind unconditionally, plus a pointer.
+Two things only: the one hard rule that must bind an agent that never opens the memory skill, and a pointer. Everything else moved down.
 
-**L2 — three files in `~/.claude/global-memory/`:**
+**L2 — the folder:**
 
 | File | From |
 |---|---|
-| `zhinan-portals.md` | cms / pms / gitlab / autodeploy URLs + `secret get …` account lines |
-| `hosts.md` | `zhinan-main` (139.198.179.233:221), `japan-dev` (45.89.234.110), sudo key names |
-| `secrets-usage.md` | unchanged — already the right shape for a lazy doc |
+| `zhinan-systems.md` | cms / pms / autodeploy / gitlab URLs + their account/password key names |
+| `hosts.md` | `zhinan-main` (139.198.179.233:221), `japan-dev` (45.89.234.110) + each one's sudo key |
+| `github.md` | account `swaylq` + `GITHUB_TOKEN_SWAYLQ` |
+| `secrets-usage.md` | unchanged content; gained `title`/`summary` frontmatter so its index line reads well |
 
-**Result:** always-on 2,352 → ~300 chars + a ~200-char skill description ≈ **80% cut**, and — the part that matters — it stays flat as the folder grows to ten runbooks.
+Splitting into four small files rather than one grab-bag is deliberate: under progressive loading the index line is what gets scanned, so a focused file with a sharp one-liner is *cheaper* to have than a broad one — the cost of an extra file is one line, and the payoff is the agent reading only what it needs.
+
+**Result:** always-on **2,352 → 484 chars** (240 note + 244 generated description) — a **79% cut** — and, the part that matters, flat from here: the fifth and fiftieth memory file cost one index line each, paid only when the skill fires.
 
 ## 9. Edge cases
 
