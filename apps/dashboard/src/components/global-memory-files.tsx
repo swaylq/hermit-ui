@@ -4,10 +4,16 @@
 // two-pane explorer as the agent "Files" tab (lazy tree left, inline content
 // right), but pointed at the global-memory root (globalMemory:true) and with
 // in-browser AUTHORING: New file + edit/save text (the folder is for writing
-// memory notes, not uploading binaries — so no upload button here). Every text
-// file dropped here is referenced into ~/.claude/CLAUDE.md as an @import by the
-// gateway, so all agents on this machine load it. The inline note (the CLAUDE.md
-// managed block) rides along as the explorer's first entry.
+// memory notes, not uploading binaries — so no upload button here). The inline
+// note (the CLAUDE.md managed block) rides along as the explorer's first entry.
+//
+// The two entries load very differently, which is what the note's budget meter
+// below is about: the note is ALWAYS in every agent's context on this machine,
+// while a file is only indexed (title + one line) in the generated global-memory
+// skill and read on demand — so reference material belongs in a file, and only
+// what an agent must never miss belongs in the note. A file can opt back into
+// always-on with `always: true` in its frontmatter.
+// See hermit-ui/docs/global-memory-progressive-design.md.
 
 import { useMemo, useState } from 'react';
 import { FolderPlus, FilePlus, RotateCw, Loader2, X, Check, Save, NotebookText } from 'lucide-react';
@@ -113,8 +119,16 @@ export function GlobalMemoryFiles() {
 
 // ── The inline note, shown as the explorer's first "file" ────────────────────
 // Persists to the DB-backed CLAUDE.md managed block (globalMemory.get/set), not
-// the folder — so it stays a managed block (no gateway change) while living in
-// the same explorer as the @import files.
+// the folder — so it stays a managed block while living in the same explorer as
+// the memory files.
+//
+// This is the machine's ONLY always-resident text, so it gets a budget meter: the
+// gateway inlines it into every session on the host, where the folder's files cost
+// nothing until an agent reads one. Past the budget the meter turns amber and says
+// what to do about it — without that back-pressure the note silently becomes the
+// context bloat the progressive design exists to remove.
+const NOTE_BUDGET = 800; // chars
+
 function NotePane() {
   const utils = trpc.useUtils();
   const q = trpc.globalMemory.get.useQuery();
@@ -159,8 +173,23 @@ function NotePane() {
                 'Not set yet'
               )}
             </span>
-            <span className="ml-auto text-[11px] tabular-nums text-muted-foreground/60">{value.length} chars</span>
+            <span
+              title="Always loaded into every agent session on this machine"
+              className={cn(
+                'ml-auto shrink-0 text-[11px] tabular-nums',
+                value.length > NOTE_BUDGET ? 'font-medium text-amber-600' : 'text-muted-foreground/60',
+              )}
+            >
+              {value.length} / {NOTE_BUDGET} chars always-on
+            </span>
           </div>
+          {value.length > NOTE_BUDGET && (
+            <div className="shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-600">
+              This whole note sits in every agent&apos;s context on this machine, every session. Keep identity and
+              hard rules here; move reference material (URLs, hosts, accounts, runbooks) into a file — files are
+              indexed in the <code className="font-mono">global-memory</code> skill and read only when needed.
+            </div>
+          )}
         </div>
       </div>
     </>

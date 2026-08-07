@@ -1,11 +1,15 @@
 'use client';
 
-// Global Memory — a per-machine inline note + a folder of files, all loaded by
-// every agent on this machine. The note (a managed block) and each text file
-// (an @import) are mirrored into this host's ~/.claude/CLAUDE.md by its gateway,
-// so Claude Code injects them into every session. The note and the files are
-// now edited TOGETHER in one explorer: the inline note is its first entry, edited
-// like any other file (it just persists to the DB block, not the folder).
+// Global Memory — a per-machine inline note + a folder of files, both reachable by
+// every agent on this machine, but loaded PROGRESSIVELY by its gateway: the note
+// becomes a managed block in ~/.claude/CLAUDE.md (always resident), while the files
+// are indexed into a generated `global-memory` skill and read on demand — so the
+// folder can grow without inflating every session's prompt.
+// See hermit-ui/docs/global-memory-progressive-design.md.
+//
+// The note and the files are edited TOGETHER in one explorer: the inline note is
+// its first entry, edited like any other file (it just persists to the DB block,
+// not the folder).
 
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -35,8 +39,9 @@ export default function GlobalMemoryPage() {
             <div className="min-w-0">
               <h2 className="text-sm font-semibold text-foreground">Global Memory</h2>
               <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-                Loaded by every agent on <span className="font-mono text-foreground/80">{machineName}</span> · imported into{' '}
-                <code className="font-mono">~/.claude/CLAUDE.md</code> · per-machine (switch top-left)
+                Loaded by every agent on <span className="font-mono text-foreground/80">{machineName}</span> · note →{' '}
+                <code className="font-mono">~/.claude/CLAUDE.md</code> (always on) · files → indexed as the{' '}
+                <code className="font-mono">global-memory</code> skill, read on demand · per-machine (switch top-left)
               </p>
             </div>
             <label className="flex shrink-0 items-center gap-2 pt-0.5 text-xs cursor-pointer select-none">

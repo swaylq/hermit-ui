@@ -152,7 +152,11 @@ function probe(dir: string, name: string): GlobalSkillRow | null {
   if (fs.existsSync(skillMd)) {
     const content = safeRead(skillMd) ?? '';
     const fm = parseFrontmatter(content);
-    if (fm.hermit_kind === 'knowledge') return null; // a materialized knowledge base, not a skill
+    // Generated, not authored: a materialized knowledge base, or the global-memory
+    // index skill (global-memory.ts). Both live under a skills dir but are managed
+    // from their own page — keep them out of the skill library so they can't be
+    // edited or deleted as if they were skills.
+    if (fm.hermit_kind === 'knowledge' || fm.hermit_kind === 'memory') return null;
     return {
       name,
       description: fm.description ?? null,
