@@ -17,6 +17,7 @@ import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { CtxBar } from '@/components/ctx-bar';
 import { sessionStatusView } from '@/lib/session-status';
 import { useMarkSessionRead } from '@/lib/session-read';
+import { lastSessionId, rememberSession } from '@/lib/last-session';
 import { markSessionWorking } from '@/lib/session-live';
 import { authedFetch } from '@/lib/asst-fetch';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
@@ -140,15 +141,24 @@ function ChatPageInner() {
 
   // Selection is URL-driven (?session=<id>); the global app sidebar owns the
   // session list + New chat. When nothing is selected and we're not composing a
-  // new chat, land on the most recent session so the area is never blank.
+  // new chat, land on the chat this browser last had open — falling back to the
+  // most recent one — so the area is never blank AND reopening the app (closed
+  // tab, relaunched PWA, machine switch) resumes the conversation you were in.
   useEffect(() => {
     if (sessionParam) return;
+    const rows = sessions.data ?? [];
+    // Prefer the remembered session, but only while it's still one we'd be willing
+    // to land on: it may have been deleted, hidden, or moved out of scope since.
+    const resume = (ok: (s: (typeof rows)[number]) => boolean) => {
+      const id = lastSessionId();
+      return (id ? rows.find((s) => s.id === id && ok(s)) : undefined) ?? rows.find(ok);
+    };
     // Scoped share session: the link drops you at /chat?agent=X. Default into the
     // most recent EXISTING chat with the agent; only show the new-chat compose
     // when there are none, or when New chat was explicitly clicked (?new=1).
     if (scope.scoped) {
       if (search.get('new')) return;
-      const recent = (sessions.data ?? []).find((s) => !s.hiddenAt && s.origin !== 'dispatch');
+      const recent = resume((s) => !s.hiddenAt && s.origin !== 'dispatch');
       if (recent) window.location.href = `/chat?session=${encodeURIComponent(recent.id)}`;
       return;
     }
@@ -158,9 +168,15 @@ function ChatPageInner() {
     const brainName = agents.data?.find((a) => a.isOrchestrator)?.name;
     // Also skip hidden sessions (the user decluttered them) and Brain's dispatch
     // sessions (origin:'dispatch' — those live only in /brain/dispatch).
-    const first = (sessions.data ?? []).find((s) => s.agentName !== brainName && !s.hiddenAt && s.origin !== 'dispatch');
+    const first = resume((s) => s.agentName !== brainName && !s.hiddenAt && s.origin !== 'dispatch');
     if (first) router.replace(`/chat?session=${encodeURIComponent(first.id)}`);
   }, [showNew, sessionParam, sessions.data, agents.data, router, scope.scoped, search]);
+
+  // Remember the open chat (per machine) so the landing effect above can resume it
+  // the next time this browser arrives at a bare /chat. See lib/last-session.ts.
+  useEffect(() => {
+    if (sessionParam) rememberSession(sessionParam);
+  }, [sessionParam]);
 
   if (showNew) {
     return (
