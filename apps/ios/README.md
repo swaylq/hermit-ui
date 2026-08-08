@@ -12,6 +12,12 @@ iOS cannot do:
    through native APNs — registered by the app, sent by the dashboard
    (`apps/dashboard/src/server/push/`).
 
+   Note that push is **no longer a reason to build this app**. The dashboard now
+   also speaks Web Push (to the installed PWA) and Bark, neither of which needs a
+   paid Apple Developer account — see `docs/no-app-push-design.md`. APNs here is
+   one transport among three, and everything below still applies if you want it.
+   The microphone is the reason the shell exists.
+
 Everything else is the existing web app, unmodified.
 
 Design notes: `docs/ios-shell-design.md`.

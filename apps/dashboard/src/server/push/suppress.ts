@@ -33,7 +33,16 @@ export const QUIET_END_HOUR = 8;
  * wasn't just awake, and being told at 23:40 that your 23:05 question went nowhere is
  * the whole point of it existing.
  */
-const ALWAYS: ReadonlySet<PushKind> = new Set<PushKind>(['blocked', 'host', 'stall']);
+export const URGENT_KINDS: ReadonlySet<PushKind> = new Set<PushKind>(['blocked', 'host', 'stall']);
+
+/**
+ * The same three kinds also drive per-transport urgency — Bark's `timeSensitive`
+ * level, Web Push's `Urgency: high`. "Worth waking someone up for" and "worth
+ * piercing a Focus mode for" are the same judgement, so they read one list.
+ */
+export function isUrgentKind(kind: PushKind): boolean {
+  return URGENT_KINDS.has(kind);
+}
 
 export interface SuppressInput {
   kind: PushKind;
@@ -51,7 +60,7 @@ export function shouldPush(i: SuppressInput): SuppressResult {
   if (i.lastReadAt && i.now - i.lastReadAt.getTime() < VIEWING_WINDOW_MS) {
     return { send: false, reason: 'viewing' };
   }
-  if (isQuietHour(i.hour) && !ALWAYS.has(i.kind)) {
+  if (isQuietHour(i.hour) && !isUrgentKind(i.kind)) {
     return { send: false, reason: 'quiet-hours' };
   }
   return { send: true };

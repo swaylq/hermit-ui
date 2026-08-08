@@ -1,6 +1,11 @@
 // Push fan-out: takes an event from a gateway write point and gets it onto the
 // phone, or decides not to. See docs/ios-shell-design.md.
 //
+// WHICH phone, and over which wire, is ./transport.ts's problem — a machine's
+// devices can be a mix of the native shell (APNs), the installed PWA (Web Push)
+// and Bark, and everything in this file is identical for all three. See
+// docs/no-app-push-design.md for why more than one wire is deliberate.
+//
 // Call site contract: `enqueuePush()` returns void and NEVER throws or awaits
 // anything the caller can see. Every trigger point sits inside a /api/sync write
 // that must not slow down or fail because a notification didn't go out.
@@ -17,8 +22,8 @@
 // worst case on restart is one duplicate notification.
 
 import { prisma } from '@/server/db';
-import { isConfigured, isDeadToken, sendApns, type ApnsEnv } from './apns';
-import { localHour, shouldPush } from './suppress';
+import { localHour, shouldPush, isUrgentKind } from './suppress';
+import { anyTransportConfigured, transportFor } from './transport';
 import type { PushEvent } from './types';
 
 export type { PushEvent, PushKind } from './types';
@@ -37,10 +42,10 @@ let warnedUnconfigured = false;
  * site contract above.
  */
 export function enqueuePush(event: PushEvent): void {
-  if (!isConfigured()) {
+  if (!anyTransportConfigured()) {
     if (!warnedUnconfigured) {
       warnedUnconfigured = true;
-      console.log('[push] APNS_* env incomplete — push notifications disabled');
+      console.log('[push] no transport configured — push notifications disabled');
     }
     return;
   }
@@ -94,26 +99,49 @@ async function deliver(event: PushEvent): Promise<void> {
 
   const devices = await prisma.pushDevice.findMany({
     where: { machineId: event.machineId },
-    select: { id: true, token: true, apnsEnv: true },
+    select: {
+      id: true,
+      platform: true,
+      token: true,
+      apnsEnv: true,
+      subscription: true,
+      barkServer: true,
+    },
   });
   if (devices.length === 0) return;
 
+  const payload = {
+    title: event.title,
+    body: event.body,
+    path: event.path,
+    collapseKey: event.collapseKey,
+    kind: event.kind,
+    // Same three kinds that ignore quiet hours also pierce Focus / DND.
+    urgent: isUrgentKind(event.kind),
+  };
+
+  // One device may be on a different wire than the next; each transport decides
+  // for itself whether a failure means "gone" or "try again next time".
   const dead: string[] = [];
   await Promise.all(
     devices.map(async (d) => {
-      const r = await sendApns(d.token, d.apnsEnv as ApnsEnv, {
-        title: event.title,
-        body: event.body,
-        path: event.path,
-        collapseKey: event.collapseKey,
-      });
-      if (isDeadToken(r)) dead.push(d.id);
-      else if (r.status !== 200) console.warn(`[push] ${event.kind} → ${r.status} ${r.reason ?? ''}`);
+      const transport = transportFor(d.platform);
+      if (!transport) {
+        console.warn(`[push] unknown platform '${d.platform}' on device ${d.id}`);
+        return;
+      }
+      // A transport whose credentials are absent stays quiet rather than logging
+      // once per device per event — enqueuePush already warned at startup.
+      if (!transport.isConfigured()) return;
+
+      const r = await transport.send(d, payload);
+      if (r.dead) dead.push(d.id);
+      else if (!r.ok) console.warn(`[push] ${event.kind} → ${d.platform}: ${r.detail ?? 'failed'}`);
     }),
   );
 
-  // A token APNs has disowned (app deleted, reinstalled, wrong environment) will
-  // never work again — drop the row rather than retry it forever.
+  // A device the transport has disowned (app deleted, subscription revoked, key
+  // unknown) will never work again — drop the row rather than retry it forever.
   if (dead.length > 0) {
     await prisma.pushDevice.deleteMany({ where: { id: { in: dead } } });
   }

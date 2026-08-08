@@ -3,10 +3,10 @@
 // JSX) so both can import it without a cycle — app-sidebar ↔ settings-tabs already
 // depend on each other. This is also the source the future Settings sidebar reads.
 
-import { Boxes, BarChart3, Wrench, HardDriveUpload, Brain, SunMoon, Activity, HelpCircle, Cpu, type LucideIcon } from 'lucide-react';
+import { Boxes, BarChart3, Wrench, HardDriveUpload, Brain, SunMoon, Activity, HelpCircle, Cpu, BellRing, type LucideIcon } from 'lucide-react';
 
 export type SettingsTabKey =
-  | 'skills' | 'memory' | 'usage' | 'ops' | 'system' | 'files' | 'appearance' | 'help' | 'pi';
+  | 'skills' | 'memory' | 'usage' | 'ops' | 'system' | 'files' | 'appearance' | 'help' | 'pi' | 'push';
 
 export const SETTINGS_TABS: { key: SettingsTabKey; label: string; href: string; Icon: LucideIcon }[] = [
   { key: 'usage', label: 'Usage', href: '/usage', Icon: BarChart3 },
@@ -15,6 +15,7 @@ export const SETTINGS_TABS: { key: SettingsTabKey; label: string; href: string; 
   { key: 'pi', label: 'Pi Runtime', href: '/pi', Icon: Cpu },
   { key: 'ops', label: 'Operations', href: '/ops', Icon: Wrench },
   { key: 'system', label: 'System', href: '/system', Icon: Activity },
+  { key: 'push', label: 'Push', href: '/push', Icon: BellRing },
   { key: 'files', label: 'File Station', href: '/file-station', Icon: HardDriveUpload },
   { key: 'appearance', label: 'Appearance', href: '/appearance', Icon: SunMoon },
   { key: 'help', label: 'Help', href: '/help', Icon: HelpCircle },

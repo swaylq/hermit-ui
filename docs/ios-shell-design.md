@@ -17,6 +17,8 @@
 
 注意第二行：套壳会**丢掉** Web Push 这条路。所以「壳」和「推送」是绑定决策——要壳就必须自己接 APNs。这也是本方案需要付费 Apple Developer 账号的唯一原因（`aps-environment` entitlement 免费账号拿不到）。
 
+> **后续（2026-08）：推送已经不再和这个壳绑定了。** `docs/no-app-push-design.md` 把最后一跳抽成 `push/transport.ts`，另外接了 Web Push（主屏 PWA）和 Bark 两条通道，两条都不需要付费开发者账号。本文其余部分照旧有效——**麦克风免弹框仍然只有原生壳能做到**，那才是这个壳现在的唯一理由。
+
 `apps/dashboard/src/lib/voice-capture.ts:36-38` 的注释早就点名了这件事：warm-mic 只修首字截断，「NOT a workaround for iOS's per-getUserMedia permission re-prompt (that's left to a future native app)」。本文就是那个 future native app。
 
 ## 选型：纯 Swift + WKWebView

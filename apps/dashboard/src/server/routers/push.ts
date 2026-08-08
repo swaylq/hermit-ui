@@ -1,10 +1,15 @@
-// push router — APNs device registry for the native iOS shell (apps/ios).
+// push router — the device registry, for all three transports.
 //
-// The shell deliberately holds no machine key. It hands its APNs device token to
-// the web layer, which calls `register` once per keyring entry through the normal
-// authenticated tRPC client — so a phone carrying three machine keys ends up with
-// three rows and receives pushes from all three machines. Auth is therefore the
-// existing one, with no native-side credential handling to get wrong.
+// Originally APNs-only, for the native iOS shell (apps/ios). It now also takes
+// Web Push subscriptions from the installed PWA and Bark device keys — the two
+// ways to get notifications onto an iPhone with no app to develop and no paid
+// Apple Developer account. See docs/no-app-push-design.md.
+//
+// Everything registers the same way and for the same reason: the CLIENT holds the
+// keyring, so it subscribes itself once per machine key through the normal
+// authenticated tRPC path. A phone carrying three machine keys ends up with three
+// rows and receives pushes from all three machines. No transport needs a
+// credential handled outside this file.
 //
 // machineProcedure throughout: a scoped agent-share key can't subscribe a device
 // (it would receive the machine's whole notification stream, well outside the one
@@ -13,7 +18,9 @@
 import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
-import { isConfigured } from '../push/apns';
+import { configuredPlatforms, type Platform } from '../push/transport';
+import { publicKey as vapidPublicKey } from '../push/webpush';
+import { DEFAULT_BARK_SERVER } from '../push/bark';
 import { enqueuePush } from '../push';
 
 // APNs tokens are 32 bytes today and 100+ has been signalled for the future; accept
@@ -22,6 +29,52 @@ const DeviceToken = z
   .string()
   .regex(/^[0-9a-f]{32,200}$/i, 'device token must be hex')
   .transform((t) => t.toLowerCase());
+
+// Bark device keys are short URL-safe ids minted by the Bark server. NOT lowercased
+// — unlike an APNs token they are case-sensitive.
+const BarkKey = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/, 'not a Bark device key');
+
+/**
+ * Base URL of a self-hosted bark-server. Free-form by necessity (it is the user's
+ * own host), so this only enforces that it is a well-formed http(s) origin and
+ * normalises away a trailing slash. That is not an SSRF guard and isn't meant as
+ * one: reaching this procedure already requires a machine key, whose holder can
+ * make the machine do considerably more than issue one POST.
+ */
+const BarkServer = z
+  .string()
+  .url()
+  .refine((u) => /^https?:$/.test(new URL(u).protocol), 'must be http(s)')
+  .transform((u) => u.replace(/\/+$/, ''));
+
+// A W3C PushSubscription, as `subscription.toJSON()` hands it over. p256dh is the
+// 65-byte uncompressed P-256 point and auth the 16-byte secret, both base64url —
+// checked by decoded length rather than string length so padding style can't matter.
+const b64urlBytes = (n: number) => (s: string) => Buffer.from(s, 'base64url').length === n;
+const WebSubscription = z.object({
+  endpoint: z.string().url().max(2000),
+  keys: z.object({
+    p256dh: z.string().refine(b64urlBytes(65), 'p256dh must decode to 65 bytes'),
+    auth: z.string().refine(b64urlBytes(16), 'auth must decode to 16 bytes'),
+  }),
+});
+
+/**
+ * A non-reversible label for a device, safe to render in the UI. For web the push
+ * service's host is both harmless and the most informative thing available
+ * ("web.push.apple.com" says iPhone); for the other two, the last few characters
+ * are enough to match a row against the key shown on the phone.
+ */
+function hint(platform: string, token: string): string {
+  if (platform === 'web') {
+    try {
+      return new URL(token).host;
+    } catch {
+      return 'unknown endpoint';
+    }
+  }
+  return `…${token.slice(-6)}`;
+}
 
 export const pushRouter = router({
   // Subscribe this device to the authenticated machine. Idempotent: the app
@@ -51,27 +104,120 @@ export const pushRouter = router({
         // phone moves from an Xcode build to TestFlight.
         update: { apnsEnv: input.apnsEnv, platform: input.platform },
       });
-      return { ok: true, configured: isConfigured() };
+      return { ok: true, configured: configuredPlatforms().includes('ios') };
     }),
 
-  // Unsubscribe (notifications turned off in iOS Settings, or signing a machine
-  // out of the keyring).
-  unregister: machineProcedure
-    .input(z.object({ token: DeviceToken }))
+  // Subscribe the installed PWA. The endpoint doubles as the row's `token` because
+  // it is precisely what identifies a subscription — re-subscribing after the
+  // browser rotates keys yields a new endpoint, hence a new row, and the old one is
+  // reaped on its next 410.
+  registerWeb: machineProcedure
+    .input(z.object({ subscription: WebSubscription }))
     .mutation(async ({ ctx, input }) => {
-      await prisma.pushDevice.deleteMany({
+      const { endpoint } = input.subscription;
+      await prisma.pushDevice.upsert({
+        where: { token_machineId: { token: endpoint, machineId: ctx.machine.id } },
+        create: {
+          token: endpoint,
+          machineId: ctx.machine.id,
+          platform: 'web',
+          subscription: input.subscription,
+        },
+        // The auth/p256dh pair can be re-minted for the same endpoint, so always
+        // overwrite rather than assuming the stored copy is still current.
+        update: { platform: 'web', subscription: input.subscription },
+      });
+      return { ok: true, configured: configuredPlatforms().includes('web') };
+    }),
+
+  // Subscribe a Bark device key. No credential of ours is involved — the key IS
+  // the credential, which is why this transport needs no server-side setup at all.
+  registerBark: machineProcedure
+    .input(z.object({ deviceKey: BarkKey, server: BarkServer.optional() }))
+    .mutation(async ({ ctx, input }) => {
+      await prisma.pushDevice.upsert({
+        where: { token_machineId: { token: input.deviceKey, machineId: ctx.machine.id } },
+        create: {
+          token: input.deviceKey,
+          machineId: ctx.machine.id,
+          platform: 'bark',
+          barkServer: input.server ?? null,
+        },
+        update: { platform: 'bark', barkServer: input.server ?? null },
+      });
+      return { ok: true, server: input.server ?? DEFAULT_BARK_SERVER };
+    }),
+
+  // Unsubscribe (notifications turned off in iOS Settings, the PWA deleted, or
+  // signing a machine out of the keyring). Keyed on the token alone so one call
+  // works for every platform.
+  unregister: machineProcedure
+    .input(z.object({ token: z.string().min(1).max(2000) }))
+    .mutation(async ({ ctx, input }) => {
+      const { count } = await prisma.pushDevice.deleteMany({
         where: { token: input.token, machineId: ctx.machine.id },
       });
-      return { ok: true };
+      return { ok: true, removed: count };
     }),
 
-  // Is push wired up at all, and does this machine have any device? Lets the app
-  // (and a future settings row) tell "no devices" apart from "server has no APNs
-  // credentials", which otherwise look identical from the outside.
+  // What can this machine actually do? Splits the two failure modes that look
+  // identical from a phone: "no device registered" vs "the server has no
+  // credentials for that transport". Bark reports configured unconditionally —
+  // it has no server-side secret to be missing.
   status: machineProcedure.query(async ({ ctx }) => {
-    const devices = await prisma.pushDevice.count({ where: { machineId: ctx.machine.id } });
-    return { configured: isConfigured(), devices };
+    const rows = await prisma.pushDevice.groupBy({
+      by: ['platform'],
+      where: { machineId: ctx.machine.id },
+      _count: { _all: true },
+    });
+    const devices = Object.fromEntries(rows.map((r) => [r.platform, r._count._all])) as Partial<
+      Record<Platform, number>
+    >;
+    return {
+      configured: configuredPlatforms(),
+      devices,
+      total: rows.reduce((n, r) => n + r._count._all, 0),
+      // Needed by the browser to call pushManager.subscribe; null when the server
+      // has no VAPID keypair, which is the whole "web push unavailable" signal.
+      vapidPublicKey: vapidPublicKey(),
+      defaultBarkServer: DEFAULT_BARK_SERVER,
+    };
   }),
+
+  // The machine's registered devices, for the settings screen.
+  //
+  // Tokens are NOT returned. Every one of them is a live capability — a Bark key
+  // lets its holder push to that phone, an APNs token identifies a device to
+  // Apple — and a settings list only needs enough to tell two phones apart. So
+  // each row carries a hint instead: the push service's host for web, a short
+  // tail for the other two.
+  list: machineProcedure.query(async ({ ctx }) => {
+    const rows = await prisma.pushDevice.findMany({
+      where: { machineId: ctx.machine.id },
+      select: {
+        id: true,
+        platform: true,
+        token: true,
+        barkServer: true,
+        apnsEnv: true,
+        createdAt: true,
+        lastSeenAt: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map(({ token, ...r }) => ({ ...r, hint: hint(r.platform, token) }));
+  }),
+
+  // Forget one device from the settings list. Scoped by machineId as well as id,
+  // so a key for machine A can never delete machine B's registration.
+  remove: machineProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const { count } = await prisma.pushDevice.deleteMany({
+        where: { id: input.id, machineId: ctx.machine.id },
+      });
+      return { ok: count > 0 };
+    }),
 
   // Send a test notification to every device on this machine. `host` kind so it
   // ignores quiet hours — a test you have to wait until morning to receive is not

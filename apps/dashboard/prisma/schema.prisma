@@ -853,17 +853,33 @@ model AgentSkillInstall {
 // authenticated tRPC client — so a phone holding three machine keys gets three
 // rows and receives pushes from all three. See docs/ios-shell-design.md.
 model PushDevice {
-  id         String   @id @default(cuid())
-  token      String // APNs device token, lowercase hex
+  id String @id @default(cuid())
+  // Transport-specific device identity, and the unique key alongside machineId:
+  //   ios  → APNs device token, lowercase hex
+  //   web  → the Web Push endpoint URL (it IS the subscription's identity)
+  //   bark → the Bark device key
+  token      String
   machineId  String
-  machine    Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  platform   String   @default("ios")
+  machine    Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  // Which wire this row goes out on: 'ios' | 'web' | 'bark'. See
+  // src/server/push/transport.ts and docs/no-app-push-design.md.
+  platform   String  @default("ios")
   // Which APNs host this token is valid against — decided by the installed build's
   // `aps-environment` entitlement, which the app reads from its embedded provisioning
   // profile and reports at registration. An Xcode-installed build is "sandbox";
   // TestFlight / App Store is "production". Sending to the wrong host fails with
-  // BadDeviceToken, so this is NOT guessable server-side.
-  apnsEnv    String   @default("sandbox")
+  // BadDeviceToken, so this is NOT guessable server-side. Meaningless for web/bark.
+  apnsEnv    String  @default("sandbox")
+  // web only — the full PushSubscription: { endpoint, keys: { p256dh, auth } }.
+  // `token` duplicates the endpoint so the unique constraint works for every
+  // platform; the keys have nowhere else to live and are useless without it.
+  subscription Json?
+  // bark only — base URL of a self-hosted bark-server. Null = the public
+  // api.day.app. Per-device rather than per-machine: two phones can legitimately
+  // sit on different servers, and the key is only valid against the one that
+  // issued it.
+  barkServer String?
+
   createdAt  DateTime @default(now())
   lastSeenAt DateTime @updatedAt
 
