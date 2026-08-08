@@ -50,6 +50,24 @@ export const BACKOFF_BASE_MS = 1_000;
 export const BACKOFF_MAX_MS = 30_000;
 
 /**
+ * Ceiling on simultaneous connections to the dashboard.
+ *
+ * undici's per-origin pool is unbounded by default, and so was Node's. Measured
+ * on macmini003 (2026-08-08, 27 agents): restarting the gateway peaks at ~1018
+ * sockets to the dashboard within 6 seconds — attributed to the gateway process
+ * itself, not the machine's proxied traffic — and takes ~30s to drain, throwing
+ * a few UND_ERR_CONNECT_TIMEOUT on the way. Steady state is 6-9.
+ *
+ * That is a tenfold spike in the machine's whole non-LISTEN socket count (127 →
+ * 1262) for a client that needs single digits, and it lands on hosts whose
+ * 16384 ephemeral ports become permanent tombstones the moment they cross the
+ * 49.7-day tcp_now bug. 64 leaves ~7x headroom over steady state while bounding
+ * the burst 16x; at typical response times the queued remainder drains in a few
+ * seconds, nowhere near the 30s request timeout.
+ */
+export const MAX_CONNECTIONS = 64;
+
+/**
  * Consecutive-failure circuit breaker with exponential backoff.
  *
  * Half-open by construction: once the window elapses `isOpen` goes false, so
@@ -102,7 +120,7 @@ let agent: Agent | undefined;
  */
 export function installDispatcher(): void {
   const previous = agent;
-  const next = new Agent({ allowH2: false });
+  const next = new Agent({ allowH2: false, connections: MAX_CONNECTIONS });
   agent = next;
   setGlobalDispatcher(next);
   previous?.destroy().catch(() => {});

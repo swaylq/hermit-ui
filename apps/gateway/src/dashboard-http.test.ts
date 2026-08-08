@@ -9,7 +9,11 @@
 // immediate once the dashboard answers again.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Breaker, FAILURES_BEFORE_OPEN, BACKOFF_BASE_MS, BACKOFF_MAX_MS } from './dashboard-http';
+import http from 'node:http';
+import {
+  Breaker, FAILURES_BEFORE_OPEN, BACKOFF_BASE_MS, BACKOFF_MAX_MS,
+  MAX_CONNECTIONS, installDispatcher,
+} from './dashboard-http';
 
 describe('Breaker', () => {
   it('stays closed while failures are below the threshold', () => {
@@ -74,5 +78,33 @@ describe('Breaker', () => {
     assert.ok(attempts < unthrottled / 10, `expected heavy throttling, got ${attempts}/${unthrottled}`);
     // At the 30s ceiling: ~2 probes/minute. Enough to notice recovery fast.
     assert.ok(attempts > HOURS * 60, `must keep probing, got only ${attempts}`);
+  });
+});
+
+describe('installDispatcher', () => {
+  // Pins the ceiling end-to-end — through Node's global fetch, our undici Agent
+  // and a real socket — rather than trusting that the option was passed. The
+  // regression it guards: an unbounded pool peaked at ~1018 sockets to the
+  // dashboard on every gateway restart on macmini003.
+  it('never opens more than MAX_CONNECTIONS sockets to one origin', async () => {
+    let live = 0;
+    let peak = 0;
+    const server = http.createServer((_req, res) => {
+      live++;
+      peak = Math.max(peak, live);
+      setTimeout(() => { live--; res.end('ok'); }, 20);
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const { port } = server.address() as { port: number };
+
+    installDispatcher();
+    try {
+      const url = `http://127.0.0.1:${port}/`;
+      await Promise.all(Array.from({ length: 200 }, () => fetch(url).then((r) => r.text())));
+      assert.ok(peak > 1, `expected real concurrency, saw peak ${peak}`);
+      assert.ok(peak <= MAX_CONNECTIONS, `peak ${peak} exceeded the ${MAX_CONNECTIONS} ceiling`);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 });
