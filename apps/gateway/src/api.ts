@@ -7,6 +7,12 @@ import { dashboardBackedOff, noteDashboardSuccess, noteDashboardFailure } from '
 // while doing nothing. The timeout turns a hang into a retryable error.
 const HTTP_TIMEOUT_MS = 30_000;
 
+function isSelfInflicted(e: unknown): boolean {
+  const code = (e as { code?: string; cause?: { code?: string } })?.code
+    ?? (e as { cause?: { code?: string } })?.cause?.code;
+  return code === 'UND_ERR_DESTROYED';
+}
+
 /**
  * Every dashboard call goes through here so the breaker sees the whole picture.
  *
@@ -22,7 +28,11 @@ async function dashboardFetch(url: string, init: RequestInit): Promise<Response>
   try {
     r = await fetch(url, init);
   } catch (e) {
-    noteDashboardFailure();
+    // UND_ERR_DESTROYED means WE tore the pool down under this request while
+    // rotating the connection. Self-inflicted, and says nothing about the
+    // dashboard — feeding it back to the breaker is how one failure turns into
+    // a rotation cascade.
+    if (!isSelfInflicted(e)) noteDashboardFailure();
     throw e;
   }
   noteDashboardSuccess();

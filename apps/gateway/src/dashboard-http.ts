@@ -97,11 +97,19 @@ export class Breaker {
   }
 
   noteFailure(now: number): void {
+    // A failure arriving while we are ALREADY open is not new information — it
+    // is a straggler that was dispatched before the trip, and most of them are
+    // self-inflicted: opening destroys the pool, which fails every in-flight
+    // request with UND_ERR_DESTROYED. Counting those was a genuine feedback
+    // loop (observed on macmini003 2026-08-09: one real failure cascaded into
+    // 25 rotations in the same millisecond, each destroy feeding the next, and
+    // the backoff slammed straight to its ceiling). Only a probe that got
+    // through — i.e. a failure while closed — is a signal about the dashboard.
+    if (this.isOpen(now)) return;
     this.failures += 1;
     if (this.failures < FAILURES_BEFORE_OPEN) return;
     this.openUntil = now + this.backoffMs();
-    // Drop the connection every time we open, not just on the first trip: the
-    // whole point is that the next probe must not reuse whatever is broken.
+    // Drop the connection on each open, so every probe starts on a fresh one.
     this.onOpen();
   }
 

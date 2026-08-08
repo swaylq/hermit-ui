@@ -32,24 +32,42 @@ describe('Breaker', () => {
 
   it('backs off exponentially and caps out', () => {
     const b = new Breaker();
-    for (let i = 0; i < FAILURES_BEFORE_OPEN; i++) b.noteFailure(0);
+    let t = 0;
+    for (let i = 0; i < FAILURES_BEFORE_OPEN; i++) b.noteFailure(t);
     assert.equal(b.backoffMs(), BACKOFF_BASE_MS);
-    b.noteFailure(0);
+    // Each further step needs the window to elapse first — that is what makes
+    // it a probe rather than a straggler.
+    t += BACKOFF_BASE_MS; b.noteFailure(t);
     assert.equal(b.backoffMs(), BACKOFF_BASE_MS * 2);
-    b.noteFailure(0);
+    t += BACKOFF_BASE_MS * 2; b.noteFailure(t);
     assert.equal(b.backoffMs(), BACKOFF_BASE_MS * 4);
-    for (let i = 0; i < 50; i++) b.noteFailure(0);
+    for (let i = 0; i < 50; i++) { t += b.backoffMs(); b.noteFailure(t); }
     assert.equal(b.backoffMs(), BACKOFF_MAX_MS, 'never grows past the ceiling');
   });
 
-  it('drops the connection on every open, not just the first', () => {
+  it('rotates once per failed probe', () => {
+    let rotations = 0;
+    const b = new Breaker(() => { rotations++; });
+    let t = 0;
+    for (let i = 0; i < FAILURES_BEFORE_OPEN; i++) b.noteFailure(t);
+    assert.equal(rotations, 1);
+    t += b.backoffMs(); b.noteFailure(t);
+    t += b.backoffMs(); b.noteFailure(t);
+    assert.equal(rotations, 3, 'every probe must start on a fresh connection');
+  });
+
+  it('ignores the in-flight failures its own rotation causes', () => {
+    // The macmini003 2026-08-09 cascade: opening destroys the pool, every
+    // in-flight request fails with UND_ERR_DESTROYED, and counting those
+    // re-opened the breaker again and again — 25 rotations inside one
+    // millisecond, backoff pinned to its ceiling. One trip, one rotation.
     let rotations = 0;
     const b = new Breaker(() => { rotations++; });
     for (let i = 0; i < FAILURES_BEFORE_OPEN; i++) b.noteFailure(0);
     assert.equal(rotations, 1);
-    b.noteFailure(0);
-    b.noteFailure(0);
-    assert.equal(rotations, 3, 'each retry must get a fresh connection');
+    for (let i = 0; i < 40; i++) b.noteFailure(0); // the destroyed stragglers
+    assert.equal(rotations, 1, 'stragglers must not re-trip the breaker');
+    assert.equal(b.backoffMs(), BACKOFF_BASE_MS, 'nor inflate the backoff');
   });
 
   it('closes immediately on success', () => {
