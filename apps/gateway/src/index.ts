@@ -40,6 +40,7 @@ import { globalMemoryTick } from './global-memory';
 import { seedPiConfigFromEnv } from './pi-config';
 import { chromeReaperTick } from './chrome-reaper';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
+import { installDispatcher, dashboardBackedOff } from './dashboard-http';
 
 // This process DRIVES tmux; it is never inside it. Scrub any inherited TMUX vars
 // before anything can shell out.
@@ -59,6 +60,13 @@ import { startControlChannel, shutdownControlChannel } from './control-channel';
 // value sitting in its dump waiting for the next one.
 delete process.env.TMUX;
 delete process.env.TMUX_PANE;
+
+// Own this process's outbound HTTP policy explicitly, and do it here — in the
+// module BODY, so it runs after every import's side effects and wins over any
+// dependency that installs a global dispatcher of its own (pi-coding-agent
+// does). Pins HTTP/1.1; see dashboard-http.ts for the two-day macmini003
+// outage that motivated it.
+installDispatcher();
 
 console.log('[gateway] starting');
 
@@ -204,8 +212,14 @@ async function pushTakeoverWatch() {
   });
 }
 
+// While the dashboard is unreachable at the transport level, skip ticks outright
+// instead of running them into a throw. Every one of these ticks is a dashboard
+// call, and firing them anyway is what produced 1732 log lines/minute for 28
+// hours on macmini003 (and a 911MB out.log). The breaker reopens on its own
+// schedule, so recovery still gets probed — see dashboard-http.ts.
 function loop(fn: () => Promise<void>, ms: number) {
   setInterval(() => {
+    if (dashboardBackedOff()) return;
     fn().catch(() => {});
   }, ms);
 }

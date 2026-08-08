@@ -1,4 +1,5 @@
 import { DASHBOARD_URL, ASST_KEY } from './config';
+import { dashboardBackedOff, noteDashboardSuccess, noteDashboardFailure } from './dashboard-http';
 
 // Hard ceiling on every dashboard HTTP call. Without it a hung connection (a
 // dashboard restart / network blip) never settles, and any tick that holds a
@@ -6,8 +7,30 @@ import { DASHBOARD_URL, ASST_KEY } from './config';
 // while doing nothing. The timeout turns a hang into a retryable error.
 const HTTP_TIMEOUT_MS = 30_000;
 
+/**
+ * Every dashboard call goes through here so the breaker sees the whole picture.
+ *
+ * Only TRANSPORT outcomes are reported. A 4xx/5xx means the connection is fine
+ * and the dashboard answered — rotating it would be wrong, and treating an
+ * application error as a transport one would trip the breaker on things like a
+ * single oversized skill tree 500ing. `fetch` itself rejecting (DNS, refused,
+ * reset, timeout, a poisoned HTTP/2 connection) is the case worth backing off.
+ */
+async function dashboardFetch(url: string, init: RequestInit): Promise<Response> {
+  if (dashboardBackedOff()) throw new Error('dashboard calls paused (backing off after repeated transport failures)');
+  let r: Response;
+  try {
+    r = await fetch(url, init);
+  } catch (e) {
+    noteDashboardFailure();
+    throw e;
+  }
+  noteDashboardSuccess();
+  return r;
+}
+
 async function post(path: string, body: unknown) {
-  const r = await fetch(`${DASHBOARD_URL}${path}`, {
+  const r = await dashboardFetch(`${DASHBOARD_URL}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-asst-key': ASST_KEY },
     body: JSON.stringify(body),
@@ -19,7 +42,7 @@ async function post(path: string, body: unknown) {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const r = await fetch(`${DASHBOARD_URL}${path}`, {
+  const r = await dashboardFetch(`${DASHBOARD_URL}${path}`, {
     headers: { 'x-asst-key': ASST_KEY },
     signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
   });
