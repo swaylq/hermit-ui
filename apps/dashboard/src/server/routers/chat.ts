@@ -404,8 +404,9 @@ export const chatRouter = router({
           runtimeProvider: input.runtimeProvider ?? null,
           runtimeModel: input.runtimeModel ?? null,
           // Omitted means "leave the mode alone", not "reset to default" — the
-          // backend picker in the session sheet does not show modes, and having
-          // it silently knock an ops session back to coding would be a trap.
+          // session sheet omits it when switching to claude (which has no
+          // modes), and having that silently knock an ops session back to
+          // coding on the way back to pi would be a trap.
           runtimeMode: input.runtimeMode === undefined ? s.runtimeMode : input.runtimeMode,
         },
         agent,

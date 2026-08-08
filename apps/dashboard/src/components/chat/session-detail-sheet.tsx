@@ -1,19 +1,24 @@
 'use client';
 
-// Everything about ONE chat session, and the one thing about it you can change
-// from here: which backend runs it.
+// Everything about ONE chat session, and what you can change about it from
+// here: which backend runs it, and — on pi — which mode.
 //
 // A sheet rather than a route: the conversation stays behind it, which is the
 // context you need to decide whether to move this session onto another backend.
 // Mirrors the agent detail sheet so the two feel like the same idea at two
 // scopes. See docs/pi-runtime-design.md.
+//
+// No model field. The pi model comes from Settings → Pi Runtime (the machine
+// default) or the agent's own pin; a free-text model box here sat right next to
+// "mode" and was read as one, while the setting that actually decides how a
+// session behaves — the mode — was the read-only one.
 
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -22,7 +27,7 @@ import { CtxBar } from '@/components/ctx-bar';
 import { BackendPicker } from './backend-picker';
 import { useScope } from '@/lib/use-scope';
 import { isRuntimeKind, runtimeLabel, type RuntimeKind } from '@/lib/runtime-labels';
-import { isPiMode, piModeLabel, PI_MODE_META } from '@/lib/pi-modes';
+import { isPiMode, piModeLabel, PI_MODES, PI_MODE_META, DEFAULT_PI_MODE, type PiMode } from '@/lib/pi-modes';
 
 function Row({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
   return (
@@ -76,25 +81,27 @@ export function SessionDetailSheet({
   // Adjusting state during render is React's own escape hatch for exactly this
   // (an effect here causes the cascading render the lint rule warns about).
   const [runtime, setRuntime] = useState<RuntimeKind | null>(null);
-  const [model, setModel] = useState<string | null>(null);
+  const [mode, setMode] = useState<PiMode | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [stamped, setStamped] = useState<string | null>(null);
 
-  const stamp = d ? `${sessionId}|${d.backend.runtime}|${d.runtimeModel ?? ''}` : null;
+  const stamp = d ? `${sessionId}|${d.backend.runtime}|${d.backend.runtimeMode ?? ''}` : null;
   if (stamp && stamped !== stamp) {
     setStamped(stamp);
     setRuntime(null);
-    setModel(null);
+    setMode(null);
     setErr(null);
   }
 
-  // The backend shows the RESOLVED value — the picker must say what is actually
-  // running. The model shows the session's OWN column, so an empty box means
-  // "inherit" and the placeholder can show what it inherits. Showing the
-  // resolved model instead would present an inherited one as a session pin.
+  // Both pickers show the RESOLVED value — they must say what is actually
+  // running, not what this session happens to have written in its own columns.
   const shownRuntime: RuntimeKind =
     runtime ?? (isRuntimeKind(d?.backend.runtime) ? d.backend.runtime : 'claude-tmux');
-  const shownModel = model ?? d?.runtimeModel ?? '';
+  // A claude session resolves to no mode at all, so when the picker is flipped
+  // to pi the mode select opens on what the AGENT would start pi in — the same
+  // answer "New chat" would give — rather than snapping to the fleet default.
+  const currentMode = d?.backend.runtimeMode ?? d?.agentBackend.runtimeMode ?? DEFAULT_PI_MODE;
+  const shownMode = mode ?? currentMode;
 
   const save = trpc.chat.setSessionRuntime.useMutation({
     onSuccess: () => {
@@ -107,21 +114,23 @@ export function SessionDetailSheet({
     onError: (e) => setErr(e.message),
   });
 
-  // Where the running mode came from, read off the two levels the server already
-  // returned rather than by re-deriving resolveRuntime's fallback chain here: a
-  // session pin wins, an equal agent value means it was inherited, and anything
-  // else is the resolver's default.
-  const mode = d?.backend.runtimeMode ?? null;
-  const modeBlurb = isPiMode(mode) ? PI_MODE_META[mode].blurb : null;
-  const modeSource = d?.runtimeMode
-    ? 'Set on this session.'
-    : mode && mode === d?.agentBackend.runtimeMode
-      ? `Inherited from ${d.agentName}.`
-      : 'The default mode.';
+  // Where the mode in the picker comes from, read off the two levels the server
+  // already returned rather than by re-deriving resolveRuntime's fallback chain
+  // here: a session pin wins, an equal agent value means it was inherited, and
+  // anything else is the resolver's default. Once a different mode is picked the
+  // line stops describing the past and says what Apply is about to do.
+  const modeBlurb = isPiMode(shownMode) ? PI_MODE_META[shownMode].blurb : null;
+  const modeSource = shownMode !== currentMode
+    ? 'Applying pins it to this session.'
+    : d?.runtimeMode
+      ? 'Set on this session.'
+      : currentMode === d?.agentBackend.runtimeMode
+        ? `Inherited from ${d.agentName}.`
+        : 'The default mode.';
 
   const dirty = !!d
     && (shownRuntime !== d.backend.runtime
-      || (shownRuntime === 'pi-rpc' && shownModel.trim() !== (d.runtimeModel ?? '')));
+      || (shownRuntime === 'pi-rpc' && shownMode !== d.backend.runtimeMode));
   const working = d?.state === 'working';
   // A share link is scoped to one agent and deliberately gets no machine-level
   // control (the terminal is closed to it for the same reason). It can read the
@@ -133,25 +142,31 @@ export function SessionDetailSheet({
     if (!d || !dirty) return;
     const changingBackend = shownRuntime !== d.backend.runtime;
     const ok = await confirm({
-      title: changingBackend ? `Switch to ${runtimeLabel(shownRuntime)}?` : `Re-point pi at ${shownModel.trim() || 'the default model'}?`,
+      title: changingBackend ? `Switch to ${runtimeLabel(shownRuntime)}?` : `Switch mode to ${piModeLabel(shownMode)}?`,
       message: (
         <>
           The conversation on this page is kept. What is <em>not</em> kept is the running context:{' '}
           {changingBackend ? runtimeLabel(d.backend.runtime) : 'pi'} is stopped, and the next message starts a fresh
-          turn on {runtimeLabel(shownRuntime)} with no memory of this thread beyond what you say in it.
+          turn on {changingBackend ? runtimeLabel(shownRuntime) : piModeLabel(shownMode)} with no memory of this thread
+          beyond what you say in it.
         </>
       ),
-      confirmLabel: changingBackend ? 'Switch' : 'Re-point',
+      confirmLabel: changingBackend ? 'Switch' : 'Switch mode',
     });
     if (!ok) return;
     save.mutate({
       id: sessionId,
       runtime: shownRuntime,
-      runtimeModel: shownRuntime === 'pi-rpc' && shownModel.trim() ? shownModel.trim() : null,
-      // The session's OWN provider pin, not the resolved one. Writing the
-      // resolved value would turn "inherits the agent's provider" into a pin,
-      // and on a cross-backend switch it would pin the OLD backend's provider.
+      // The session's OWN provider/model pins, not the resolved ones. Writing a
+      // resolved value would turn "inherits the agent's" into a pin, and on a
+      // cross-backend switch it would pin the OLD backend's. Neither is editable
+      // here any more, so both simply survive a mode change untouched.
       runtimeProvider: shownRuntime === 'pi-rpc' ? d.runtimeProvider ?? null : null,
+      runtimeModel: shownRuntime === 'pi-rpc' ? d.runtimeModel ?? null : null,
+      // Omitted on a switch to claude, which has no modes: leaving the column
+      // alone keeps the pi mode for a switch back, and the resolver already
+      // reports null for anything that is not pi.
+      ...(shownRuntime === 'pi-rpc' ? { runtimeMode: shownMode } : {}),
     });
   }
 
@@ -189,44 +204,35 @@ export function SessionDetailSheet({
                 agentDefault={d.agentBackend.runtime}
               />
 
-              {/* Which mode this session runs — the recipe picked at "New chat"
-                  and never shown again, though it is the setting that decides
-                  the most: the mode names the ENGINE (pi or omp), the system
-                  prompt, the tool list and the skills. Read-only and keyed off
-                  the SERVER's resolved backend, not `shownRuntime`, so it states
-                  what is running rather than predicting what an unapplied picker
-                  change would run. */}
-              {d.backend.runtime === 'pi-rpc' && (
-                <div className="mt-2.5">
-                  <span className="text-[11px] uppercase tracking-wide text-muted-foreground">mode</span>
-                  {/* The label alone. piModeLabel already falls back to the raw
-                      directory name for a machine-local mode, so pairing it with
-                      the raw value would read "Coding coding". */}
-                  <p className="mt-1 text-[13px] text-foreground/90">{piModeLabel(mode)}</p>
-                  <span className="mt-1 block text-[11px] leading-snug text-muted-foreground">
-                    {modeBlurb ? `${modeBlurb} ` : ''}
-                    {modeSource} Change it by starting a new chat.
-                  </span>
-                </div>
-              )}
-
+              {/* Which mode this session runs — the setting that decides the
+                  most: the mode names the ENGINE (pi or omp), the system prompt,
+                  the tool list and the skills. It used to be read-only here
+                  ("change it by starting a new chat"), which meant the one
+                  setting worth changing was the one you couldn't. Keyed off the
+                  PICKER's runtime, not the server's, so flipping to pi offers
+                  its mode in the same breath and one Apply lands both. */}
               {shownRuntime === 'pi-rpc' && (
                 <label className="mt-2.5 block">
-                  <span className="text-[11px] uppercase tracking-wide text-muted-foreground">model</span>
-                  {/* The placeholder is just "inherit". Putting the inherited
-                      model id there made an empty field read as a pinned one —
-                      the muted text is dark enough to pass for a value. The
-                      line below says what it inherits TO. */}
-                  <Input
-                    value={shownModel}
-                    onChange={(e) => { setModel(e.target.value); setErr(null); }}
-                    placeholder="inherit"
-                    aria-label="pi model"
+                  <span className="text-[11px] uppercase tracking-wide text-muted-foreground">mode</span>
+                  <Select
+                    value={shownMode}
+                    onValueChange={(v) => { setMode(isPiMode(v) ? v : DEFAULT_PI_MODE); setErr(null); }}
                     disabled={readOnly || working || save.isPending}
-                    className="mt-1 w-full text-sm font-mono"
-                  />
-                  <span className="mt-1 block text-[11px] text-muted-foreground">
-                    Empty inherits {d.agentBackend.runtimeModel ? <span className="font-mono">{d.agentBackend.runtimeModel}</span> : "the machine's pi default"}.
+                    modal={false}
+                  >
+                    <SelectTrigger aria-label="pi mode" className="mt-1 w-full py-1.5 text-sm">
+                      {/* piModeLabel falls back to the raw directory name, so a
+                          machine-local mode this build doesn't list still reads
+                          as itself rather than as the default. */}
+                      <SelectValue>{(v: string | null) => piModeLabel(v)}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PI_MODES.map((m) => <SelectItem key={m} value={m}>{PI_MODE_META[m].label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <span className="mt-1 block text-[11px] leading-snug text-muted-foreground">
+                    {modeBlurb ? `${modeBlurb} ` : ''}
+                    {modeSource}
                   </span>
                 </label>
               )}
@@ -260,7 +266,7 @@ export function SessionDetailSheet({
                     size="sm"
                     variant="ghost"
                     className="h-8"
-                    onClick={() => { setRuntime(null); setModel(null); setErr(null); }}
+                    onClick={() => { setRuntime(null); setMode(null); setErr(null); }}
                   >
                     reset
                   </Button>
@@ -268,6 +274,7 @@ export function SessionDetailSheet({
                 {save.data?.restarted && !dirty && (
                   <span className="text-[11px] text-muted-foreground">
                     stopped — the next message starts it on {runtimeLabel(d.backend.runtime)}
+                    {d.backend.runtime === 'pi-rpc' && ` · ${piModeLabel(d.backend.runtimeMode)}`}
                   </span>
                 )}
               </div>

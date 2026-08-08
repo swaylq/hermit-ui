@@ -128,9 +128,10 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
           )}
           {/* No model field here on purpose. Starting a chat should be: agent,
               backend, mode, go. The model comes from Settings → Pi Runtime
-              ("默认模型"), and a session that wants its own can be re-pointed
-              from the session detail sheet afterwards. This used to be a
-              free-text box you had to leave blank on every single new chat. */}
+              ("默认模型") or the agent's own pin. This used to be a free-text
+              box you had to leave blank on every single new chat — and for the
+              same reason the session detail sheet no longer carries one either,
+              so mode is the only pi dial in both places. */}
           <div className="flex gap-2">
             <Button type="submit" disabled={!agent || create.isPending} className="flex-1 h-10">
               {create.isPending ? 'creating…' : 'Start chat'}
