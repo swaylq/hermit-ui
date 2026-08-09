@@ -20,17 +20,24 @@ import {
   resolveLiveTranscript,
   encodedProjectDir,
   kill as killSession,
+  type TranscriptInfo,
 } from '@hermit-ui/tmux-driver';
 import { AGENTS_ROOT } from './config';
 import { api } from './api';
 import { paneIsWorking } from './pane';
 import { extractText, CcEvent, CcBlock } from './claude-code';
-import { buildMcpConfigArg } from './chat-runner';
+import { buildMcpConfigArg, chatOwnedUuids } from './chat-runner';
 import { tryAcquire, release, isLocked } from './op-locks';
 
 const RUN_TIMEOUT_MS = 120 * 60_000; // hard cap per run (2h)
 const IDLE_DONE_MS = 8_000;         // assistant quiet this long ⇒ turn complete
 const OUTPUT_TAIL = 4096;
+// How long to wait for the PINNED transcript before declaring drift. awaitTranscript's
+// 30s default is a coin flip on a box running 20+ claude processes: on 2026-08-09 the
+// file appeared at ~31s, one second past the deadline, and the fire went down the
+// drift-adopt path for no reason. Waiting longer is nearly free — the prompt isn't sent
+// until this resolves either way, and the run's own cap is RUN_TIMEOUT_MS (2h).
+const TRANSCRIPT_WAIT_MS = 90_000;
 
 type Cron = {
   id: string;
@@ -53,6 +60,26 @@ type Cron = {
 // claude-session uuids pinned by an in-flight fire — so the uuid-drift self-heal
 // never adopts a SIBLING cron's live transcript (agents share one project dir).
 const pinnedUuids = new Set<string>();
+
+// Which transcript should a fire adopt when its pinned one never appeared? The newest
+// transcript written at/after the fire started that NOBODY ELSE owns:
+//   • pinned    — uuids held by in-flight sibling crons in this process;
+//   • chatOwned — uuids held by the agent's dashboard CHAT sessions.
+// An agent's crons and its chats share ONE project dir. Only `pinned` was excluded until
+// 2026-08-09, and a chat that is mid-turn is by construction the newest file in that dir
+// — so a late-pinned cron adopted the live chat every time and reported the chat's last
+// assistant message as its own result. Genuine drift still heals: a claude that ignored
+// `--session-id` writes a transcript nobody owns, which is exactly what's left here.
+// Exported for cron-runner.test.ts.
+export function adoptDriftTranscript(
+  cwd: string,
+  opts: { pinned: Set<string>; chatOwned: Set<string>; minMtimeMs: number },
+): TranscriptInfo | null {
+  return resolveLiveTranscript(cwd, {
+    exclude: new Set([...opts.pinned, ...opts.chatOwned]),
+    minMtimeMs: opts.minMtimeMs,
+  });
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -185,14 +212,17 @@ async function fireInner(c: Cron): Promise<void> {
     // file never appears and we'd tail an empty path forever → a real run
     // misreported as no_output. Parity with chat-runner's drift self-heal: when the
     // pinned transcript doesn't show up, adopt the newest transcript written during
-    // THIS fire that isn't pinned by another in-flight cron. watchTranscript tails
-    // `-n +1` so the adopted file replays from line 1 — no early text is lost.
-    const appeared = await awaitTranscript(jsonlPath).then(() => true).catch(() => false);
+    // THIS fire that nobody else owns. watchTranscript tails `-n +1` so the adopted
+    // file replays from line 1 — no early text is lost.
+    const appeared = await awaitTranscript(jsonlPath, TRANSCRIPT_WAIT_MS).then(() => true).catch(() => false);
     if (!appeared) {
       // Adopt the newest transcript created around/after this run started (mtime lower
-      // bound), excluding uuids we've already pinned this process. Shared drift-adopt
-      // helper — see pickLiveTranscript in @hermit-ui/tmux-driver.
-      const live = resolveLiveTranscript(cwd, { exclude: pinnedUuids, minMtimeMs: startedAt - 2_000 });
+      // bound) that no sibling cron and no chat session owns — see adoptDriftTranscript.
+      const live = adoptDriftTranscript(cwd, {
+        pinned: pinnedUuids,
+        chatOwned: chatOwnedUuids(),
+        minMtimeMs: startedAt - 2_000,
+      });
       if (live) {
         console.warn(
           `[cron] ${c.id.slice(0, 8)}: session uuid drift — pinned ${claudeUuid.slice(0, 8)} ` +

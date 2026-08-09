@@ -148,13 +148,24 @@ const inFlightDeliveries = new Map<string, Promise<void>>();
 // Every claude uuid currently spoken for by ANOTHER session — live (sessionStates),
 // still starting (reservedUuids), or recorded in the DB (recordedUuids). Every
 // transcript-picking path (resume sniff, drift adoption, orphan recovery) excludes
-// these so two chats can never land on one transcript.
-function uuidsOwnedByOtherSessions(sessionId: string): Set<string> {
+// these so two chats can never land on one transcript. `sessionId = null` ⇒ no session
+// counts as self, so the result is every chat-owned uuid — see chatOwnedUuids.
+function uuidsOwnedByOtherSessions(sessionId: string | null): Set<string> {
   const owned = new Set<string>();
   for (const [sid, st] of sessionStates) if (sid !== sessionId) owned.add(st.claudeUuid);
   for (const [sid, uuid] of reservedUuids) if (sid !== sessionId) owned.add(uuid);
   for (const [sid, uuid] of recordedUuids) if (sid !== sessionId) owned.add(uuid);
   return owned;
+}
+
+// The same ownership set seen from OUTSIDE the chat runner: every uuid any chat session
+// holds. A cron owns no chat session, so every chat transcript in the project dir it
+// shares with the agent's chats is someone else's — cron-runner's drift-adopt excludes
+// these (2026-08-09: two daily-report crons whose pinned transcript was ~1s late adopted
+// the agent's live CHAT instead and reported the chat's last assistant message as the
+// cron's result; the reports themselves had run fine).
+export function chatOwnedUuids(): Set<string> {
+  return uuidsOwnedByOtherSessions(null);
 }
 
 // ── Cancellation tick ────────────────────────────────────────────────────────
