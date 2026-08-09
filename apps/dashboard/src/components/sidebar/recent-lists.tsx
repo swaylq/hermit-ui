@@ -17,7 +17,7 @@
 import { useState, useCallback, useMemo, useEffect, memo, lazy, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree, Brush } from 'lucide-react';
+import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree, Brush, ArchiveRestore } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
@@ -523,6 +523,12 @@ export function RecentSessions() {
   const hibernateSession = trpc.chat.requestHibernate.useMutation({
     onSuccess: () => { void utils.chat.listSessions.invalidate(); },
   });
+  // Bring an archived chat back into the sidebar. Only clears closedAt — the
+  // session stays hibernated and wakes on the next message (--resume), which is
+  // the same thing that would have happened had it never been archived.
+  const reopenSession = trpc.chat.reopenSession.useMutation({
+    onSuccess: () => { void utils.chat.listSessions.invalidate(); },
+  });
   // Routes through the recycle bin, not `deleteSession`: trashing hibernates the
   // pane first (so the ~500MB claude can't be stranded by the row disappearing —
   // see docs/session-cleanup-design.md) and stays recoverable for the machine's
@@ -792,10 +798,23 @@ export function RecentSessions() {
               },
             },
             ...(() => {
-              // Hibernate only makes sense for a live session (a pane to free);
-              // a sleeping one wakes on send, no menu action needed.
+              // Archived chats are only reachable through `Show hidden & archived`,
+              // so this is the one place the way back can live. First in the group
+              // because for an archived session it is the ONLY thing you want.
               const s = (sessions.data ?? []).find((x) => x.id === menu.id);
-              if (!s?.alive || s.hibernatedAt) return [];
+              if (!s?.closedAt) return [];
+              return [{
+                label: 'Restore from archive',
+                icon: <ArchiveRestore className="h-3.5 w-3.5" />,
+                onClick: () => reopenSession.mutate({ id: menu.id }),
+              }];
+            })(),
+            ...(() => {
+              // Hibernate only makes sense for a live session (a pane to free);
+              // a sleeping one wakes on send, no menu action needed. An archived
+              // one is already asleep — archiving hibernates.
+              const s = (sessions.data ?? []).find((x) => x.id === menu.id);
+              if (!s?.alive || s.hibernatedAt || s.closedAt) return [];
               return [{
                 label: 'Hibernate',
                 icon: <Moon className="h-3.5 w-3.5" />,
