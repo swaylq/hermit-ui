@@ -216,12 +216,15 @@ function BarkCard({ defaultServer, onChange }: { defaultServer: string; onChange
   const [msg, setMsg] = useState<string | null>(null);
 
   const register = trpc.push.registerBark.useMutation({
+    // Name the machine, not just "added": Bark registers against the ACTIVE
+    // machine only, and the failure this replaces was someone believing a device
+    // was registered when nothing had been written at all.
     onSuccess: (r) => {
-      setMsg(`已添加，走 ${r.server}`);
+      setMsg(`✓ 已添加到「${r.machine}」 · ${r.hint} · 走 ${r.server}。下面点「发条测试通知」验证。`);
       setDeviceKey('');
       onChange();
     },
-    onError: (e) => setMsg(`失败：${e.message}`),
+    onError: (e) => setMsg(`✗ ${e.message}`),
   });
 
   return (
@@ -231,7 +234,10 @@ function BarkCard({ defaultServer, onChange }: { defaultServer: string; onChange
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold text-foreground">Bark · 免费 App Store 中转</h3>
           <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-            App Store 装 <span className="text-foreground/80">Bark</span>，打开后它会给你一串 device key，粘到下面即可。
+            App Store 装 <span className="text-foreground/80">Bark</span>，打开后
+            <span className="text-foreground/80">把它首页那条 URL 整条复制粘到下面</span>（
+            <code className="rounded bg-muted px-1 py-0.5 text-[10px]">https://api.day.app/xxxxx/…</code>
+            ）—— key 会自动提取，自建服务器地址也会一并识别。只填 key 那一段也行。
             锁屏上显示的是 Bark 的图标，点开在 Safari 里打开对应页面。
             它不像主屏 Web App 那样会因为长期没打开而掉订阅，适合当兜底。
           </p>
@@ -240,7 +246,7 @@ function BarkCard({ defaultServer, onChange }: { defaultServer: string; onChange
             <input
               value={deviceKey}
               onChange={(e) => setDeviceKey(e.target.value.trim())}
-              placeholder="device key，例如 dQw4w9WgXcQ1a2b3c4d5e"
+              placeholder="粘 Bark 首页那条 URL，或只填 device key"
               spellCheck={false}
               autoCapitalize="none"
               className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-xs outline-none focus:border-foreground/30"
@@ -248,7 +254,7 @@ function BarkCard({ defaultServer, onChange }: { defaultServer: string; onChange
             <input
               value={server}
               onChange={(e) => setServer(e.target.value.trim())}
-              placeholder={`自建服务器（可选），留空用 ${defaultServer}`}
+              placeholder={`自建服务器（可选）—— 粘完整 URL 时会自动识别，留空用 ${defaultServer}`}
               spellCheck={false}
               autoCapitalize="none"
               className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-xs outline-none focus:border-foreground/30"

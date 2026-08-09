@@ -16,11 +16,12 @@
 // agent it was granted). See docs/ios-shell-design.md.
 
 import { z } from 'zod';
+import { TRPCError } from '@trpc/server';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { configuredPlatforms, type Platform } from '../push/transport';
 import { publicKey as vapidPublicKey } from '../push/webpush';
-import { DEFAULT_BARK_SERVER } from '../push/bark';
+import { DEFAULT_BARK_SERVER, parseBarkTarget } from '../push/bark';
 import { enqueuePush } from '../push';
 
 // APNs tokens are 32 bytes today and 100+ has been signalled for the future; accept
@@ -30,22 +31,20 @@ const DeviceToken = z
   .regex(/^[0-9a-f]{32,200}$/i, 'device token must be hex')
   .transform((t) => t.toLowerCase());
 
-// Bark device keys are short URL-safe ids minted by the Bark server. NOT lowercased
-// — unlike an APNs token they are case-sensitive.
-const BarkKey = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/, 'not a Bark device key');
+// Bark registration input is deliberately permissive here and parsed properly in
+// parseBarkTarget — the field accepts the whole URL the Bark app hands you as well
+// as a bare key. Validating with a zod regex at this layer was the original
+// mistake: it rejected the URL form (i.e. the normal one) and surfaced a wall of
+// zod JSON instead of a sentence telling anyone what to do about it.
+const BarkInput = z.string().min(1).max(2000);
 
 /**
  * Base URL of a self-hosted bark-server. Free-form by necessity (it is the user's
- * own host), so this only enforces that it is a well-formed http(s) origin and
- * normalises away a trailing slash. That is not an SSRF guard and isn't meant as
- * one: reaching this procedure already requires a machine key, whose holder can
- * make the machine do considerably more than issue one POST.
+ * own host); parseBarkTarget only enforces that it is a well-formed http(s) origin.
+ * That is not an SSRF guard and isn't meant as one: reaching this procedure already
+ * requires a machine key, whose holder can make the machine do considerably more
+ * than issue one POST.
  */
-const BarkServer = z
-  .string()
-  .url()
-  .refine((u) => /^https?:$/.test(new URL(u).protocol), 'must be http(s)')
-  .transform((u) => u.replace(/\/+$/, ''));
 
 // A W3C PushSubscription, as `subscription.toJSON()` hands it over. p256dh is the
 // 65-byte uncompressed P-256 point and auth the 16-byte secret, both base64url —
@@ -133,19 +132,39 @@ export const pushRouter = router({
   // Subscribe a Bark device key. No credential of ours is involved — the key IS
   // the credential, which is why this transport needs no server-side setup at all.
   registerBark: machineProcedure
-    .input(z.object({ deviceKey: BarkKey, server: BarkServer.optional() }))
+    .input(z.object({ deviceKey: BarkInput, server: z.string().max(2000).optional() }))
     .mutation(async ({ ctx, input }) => {
+      const target = parseBarkTarget(input.deviceKey, input.server);
+      if (!target.ok) {
+        // A sentence someone can act on, not a validation dump. Getting this wrong
+        // is indistinguishable from "push is broken" to the person holding a phone.
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message:
+            target.reason === 'bad-server'
+              ? '自建服务器要填完整地址，例如 https://bark.example.com'
+              : '认不出这是 Bark 的 device key。直接粘 Bark app 里那一整条 URL 就行（https://api.day.app/xxxxx/…），也可以只填中间 key 那一段。',
+        });
+      }
+
       await prisma.pushDevice.upsert({
-        where: { token_machineId: { token: input.deviceKey, machineId: ctx.machine.id } },
+        where: { token_machineId: { token: target.deviceKey, machineId: ctx.machine.id } },
         create: {
-          token: input.deviceKey,
+          token: target.deviceKey,
           machineId: ctx.machine.id,
           platform: 'bark',
-          barkServer: input.server ?? null,
+          barkServer: target.server,
         },
-        update: { platform: 'bark', barkServer: input.server ?? null },
+        update: { platform: 'bark', barkServer: target.server },
       });
-      return { ok: true, server: input.server ?? DEFAULT_BARK_SERVER };
+      return {
+        ok: true,
+        server: target.server ?? DEFAULT_BARK_SERVER,
+        // Echoed back so the UI can prove WHICH key landed — the whole failure
+        // this replaces was a registration the user believed had happened.
+        hint: hint('bark', target.deviceKey),
+        machine: ctx.machine.alias || ctx.machine.name,
+      };
     }),
 
   // Unsubscribe (notifications turned off in iOS Settings, the PWA deleted, or

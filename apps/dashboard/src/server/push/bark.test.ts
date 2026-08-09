@@ -8,7 +8,7 @@
 
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { barkTransport, isDeadKeyResponse, DEFAULT_BARK_SERVER } from './bark';
+import { barkTransport, isDeadKeyResponse, parseBarkTarget, DEFAULT_BARK_SERVER } from './bark';
 import type { PushDeviceRow, TransportPayload } from './transport';
 
 const realFetch = globalThis.fetch;
@@ -53,6 +53,67 @@ const payload = (over: Partial<TransportPayload> = {}): TransportPayload => ({
 
 test('needs no server-side credential — always configured', () => {
   assert.equal(barkTransport.isConfigured(), true);
+});
+
+// ── registration input ──────────────────────────────────────────────────────
+// Regression tests for a real failure: registration silently did nothing because
+// the field only took a bare key, while the Bark app's copy button gives you the
+// whole URL. Nothing was written and the person reasonably believed it had been.
+
+// 22 base57 chars, the shape shortuuid.New() actually produces.
+const KEY = 'zGkFvMxQrT7nBpLw3sHdCa';
+
+test('a bare device key is taken as-is, on the default server', () => {
+  assert.deepEqual(parseBarkTarget(KEY), { ok: true, deviceKey: KEY, server: null });
+});
+
+test('the full URL the Bark app copies is accepted', () => {
+  for (const url of [
+    `https://api.day.app/${KEY}`,
+    `https://api.day.app/${KEY}/`,
+    // What the app's home screen literally shows — key first, placeholder body after.
+    `https://api.day.app/${KEY}/%E6%8E%A8%E9%80%81%E5%86%85%E5%AE%B9`,
+    `https://api.day.app/${KEY}/title/body`,
+  ]) {
+    assert.deepEqual(parseBarkTarget(url), { ok: true, deviceKey: KEY, server: null }, url);
+  }
+});
+
+test('the key is the FIRST path segment, never the last', () => {
+  // Taking the last would grab the placeholder body text and register a device
+  // key that has never existed — which fails only later, at push time.
+  const r = parseBarkTarget(`https://api.day.app/${KEY}/some-body-text`);
+  assert.equal(r.ok && r.deviceKey, KEY);
+});
+
+test('a self-hosted URL carries its own server across', () => {
+  assert.deepEqual(parseBarkTarget(`https://bark.example.com/${KEY}/x`), {
+    ok: true,
+    deviceKey: KEY,
+    server: 'https://bark.example.com',
+  });
+});
+
+test('the public default is stored as null, not spelled out', () => {
+  // Writing the default in would become a lie the day the default moves.
+  const r = parseBarkTarget(KEY, DEFAULT_BARK_SERVER);
+  assert.equal(r.ok && r.server, null);
+});
+
+test('an explicitly typed server beats the pasted URL origin', () => {
+  const r = parseBarkTarget(`https://api.day.app/${KEY}`, 'https://bark.example.com/');
+  assert.equal(r.ok && r.server, 'https://bark.example.com');
+});
+
+test('unusable input is rejected with a reason, not a crash', () => {
+  assert.deepEqual(parseBarkTarget(''), { ok: false, reason: 'empty' });
+  assert.deepEqual(parseBarkTarget('   '), { ok: false, reason: 'empty' });
+  assert.deepEqual(parseBarkTarget('short'), { ok: false, reason: 'bad-key' });
+  assert.deepEqual(parseBarkTarget('has spaces in it'), { ok: false, reason: 'bad-key' });
+  assert.deepEqual(parseBarkTarget('https://api.day.app/'), { ok: false, reason: 'bad-key' });
+  // Not http(s) — no reason to let a javascript:/file: URL through the parser.
+  assert.deepEqual(parseBarkTarget(`ftp://api.day.app/${KEY}`), { ok: false, reason: 'bad-key' });
+  assert.deepEqual(parseBarkTarget(KEY, 'not a url'), { ok: false, reason: 'bad-server' });
 });
 
 test('posts to /push on the public server by default', async () => {

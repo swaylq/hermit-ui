@@ -31,6 +31,88 @@ import type { PushDeviceRow, Transport, TransportPayload, TransportResult } from
 /** Bark's public relay. Overridden per-device by PushDevice.barkServer. */
 export const DEFAULT_BARK_SERVER = 'https://api.day.app';
 
+// ── registration input ──────────────────────────────────────────────────────
+
+/**
+ * Device keys are `shortuuid.New()` on the server side — 22 base57 characters.
+ * The range is kept loose so a self-hosted server that mints them differently
+ * still works; the point is to reject things that are obviously not a key, not
+ * to mirror one implementation's alphabet.
+ */
+const KEY_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+export type BarkParse =
+  | { ok: true; deviceKey: string; server: string | null }
+  | { ok: false; reason: 'empty' | 'bad-key' | 'bad-server' };
+
+/**
+ * Turn whatever the user pasted into a (key, server) pair.
+ *
+ * This accepts the FULL URL as well as a bare key, because the full URL is what
+ * the Bark app's copy button actually produces — its home screen shows
+ * `https://api.day.app/<key>/推送内容` and hands you the lot. Requiring people to
+ * mentally slice the key out of that is a papercut that reads, from their side,
+ * as "registration silently didn't work".
+ *
+ * The key is the FIRST path segment, never the last: Bark's own routes are
+ * `/:key/:body`, `/:key/:title/:body` and `/:key/:title/:subtitle/:body`, so the
+ * last segment is usually the placeholder body text.
+ *
+ * A pasted URL also tells us the server, which is exactly what a self-hoster
+ * would otherwise have to type into the second field by hand.
+ */
+export function parseBarkTarget(input: string, explicitServer?: string | null): BarkParse {
+  const raw = (input ?? '').trim();
+  if (!raw) return { ok: false, reason: 'empty' };
+
+  let server: string | null = null;
+  if (explicitServer && explicitServer.trim()) {
+    const s = normalizeServer(explicitServer);
+    if (s === undefined) return { ok: false, reason: 'bad-server' };
+    server = s;
+  }
+
+  // Bare key.
+  if (KEY_RE.test(raw)) return { ok: true, deviceKey: raw, server };
+
+  // Full URL.
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { ok: false, reason: 'bad-key' };
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return { ok: false, reason: 'bad-key' };
+
+  const first = url.pathname.split('/').filter(Boolean)[0];
+  if (!first) return { ok: false, reason: 'bad-key' };
+  let key: string;
+  try {
+    key = decodeURIComponent(first);
+  } catch {
+    return { ok: false, reason: 'bad-key' };
+  }
+  if (!KEY_RE.test(key)) return { ok: false, reason: 'bad-key' };
+
+  // An explicitly typed server wins; otherwise the pasted URL's own origin is it.
+  return { ok: true, deviceKey: key, server: server ?? normalizeServer(url.origin) ?? null };
+}
+
+/** `null` = the public default, `undefined` = not a usable http(s) base URL. */
+function normalizeServer(s: string): string | null | undefined {
+  const t = s.trim().replace(/\/+$/, '');
+  if (!t) return null;
+  let u: URL;
+  try {
+    u = new URL(t);
+  } catch {
+    return undefined;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined;
+  // Storing the default explicitly would be a lie the day the default changes.
+  return u.origin === DEFAULT_BARK_SERVER ? null : u.origin;
+}
+
 const REQUEST_TIMEOUT_MS = 10_000;
 
 /**
