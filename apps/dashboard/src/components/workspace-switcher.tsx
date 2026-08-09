@@ -41,9 +41,10 @@ const go = () => {
 };
 
 /**
- * The leaving half of a machine switch: covers the app the instant you pick, so the
- * old workspace's data never sits there looking current while the next document
- * loads. The arriving half is `SwitchArrival`, mounted in the app shell.
+ * The leaving half of a machine switch, shown only when the swap is slow enough to
+ * need it (see the timer in `pick`): covers the app so the old workspace's data
+ * doesn't sit there looking current while the next document loads. The arriving
+ * half is `SwitchArrival`, mounted in the app shell.
  *
  * Rendered in a portal at the document body so it covers the whole app rather than
  * being clipped by the sidebar the switcher lives in.
@@ -114,7 +115,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
   // tap on phones — where the action icons can't hide behind hover — can't wipe a
   // workspace by accident.
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  // Non-null while a switch is in flight — drives the full-screen hand-off.
+  // Non-null once a switch has been in flight long enough to be worth mentioning.
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);
 
   // Reset any armed delete / open rename when the menu closes.
@@ -178,18 +179,20 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
 
   const pick = (id: string) => {
     if (id !== active?.id) {
-      // Paint the switch before starting it. A hard navigation leaves the OLD page
-      // on screen, fully interactive-looking, until the new document paints — so
-      // without this the click reads as "nothing happened", which is the actual
-      // complaint about switching, not the milliseconds.
-      setSwitchingTo(list.find((e) => e.id === id)?.alias || list.find((e) => e.id === id)?.name || '…');
+      const target = list.find((e) => e.id === id);
       setOpen(false);
       setActiveMachine(id);
       // Tell the NEXT document it arrived from a switch, so it fades in instead of
-      // popping. Cleared by the overlay on the other side.
+      // popping. Consumed by SwitchArrival on the other side.
       try { sessionStorage.setItem('hermit:switching', '1'); } catch { /* private mode */ }
-      // Let the overlay paint one frame before the navigation blocks the thread.
-      requestAnimationFrame(() => requestAnimationFrame(go));
+      // Feedback ONLY if the swap is actually slow. A hard navigation leaves the old
+      // page on screen until the next document paints, so a long switch needs to say
+      // something — but a fast one (53ms measured on desktop) would flash a spinner
+      // for three frames, which reads as jank rather than as reassurance. The timer
+      // needs no cleanup: either the document is replaced before it fires, or it
+      // fires because the document is still here.
+      setTimeout(() => setSwitchingTo(target?.alias || target?.name || '…'), 180);
+      go();
     } else {
       setOpen(false);
     }
