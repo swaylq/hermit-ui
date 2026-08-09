@@ -130,7 +130,7 @@ blocked 和 chat 共用 sessionId 作为 key 是刻意的：「agent 卡住了�
 
 **③ 决策**（纯函数 `shouldPush`，好单测）
 - **正在看的不推** — 该会话 `lastReadAt` 在 60 秒内 → 丢弃。
-- **静音时段** — 23:00–08:00 只放行 `blocked` 和 `host`。时区走 `PUSH_QUIET_TZ`（默认 `Asia/Shanghai`）而不是服务器时钟——VPS 跑 UTC，直接读会把静音时段落在下午。
+- ~~**静音时段**~~ — 曾经是 23:00–08:00 只放行 `blocked` / `host` / `stall`，**已移除**。服务端按时钟静默丢弃通知，意味着你凌晨一点真正需要的那条永远不会到、而且没有任何地方说得出原因。时段判断交给手机：iOS 专注模式能按人、按日程配，还对使用者可见。服务端只保留紧急度标记（`URGENT_KINDS`），让专注模式自己决定放不放行。
 
 ②③ 都在**投递时**求值而非入队时。对去抖中的 chat 事件这是个好性质：那 20 秒里你打开了会话，这条推送就自动取消了。
 
@@ -153,7 +153,6 @@ APNS_KEY_P8      # .p8 文件全文（单行 .env 里的字面 \n 会被还原�
 APNS_KEY_ID      # 10 位 Key ID
 APNS_TEAM_ID     # 10 位 Team ID
 APNS_BUNDLE_ID   # ai.swaylab.hermit
-PUSH_QUIET_TZ    # 静音时段时区，默认 Asia/Shanghai
 ```
 
 VPS 上 dashboard 由 pm2 起，从 `apps/dashboard/.env` 读（与既有的 `OPENROUTER_API_KEY` 同一个模式）。四个变量缺任何一个 → 推送模块自动 no-op 并在启动时 warn 一次，本地开发不受影响。

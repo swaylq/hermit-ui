@@ -156,10 +156,14 @@ so silence is never the failure mode:
 
 ## Delivery
 
-`enqueuePush` with a new `stall` kind. It joins `blocked` in the set that ignores
-quiet hours: it can only fire 30 minutes after the human themself typed something, so
-it cannot wake anyone who wasn't just awake, and "you asked and nothing came back" is
-the same urgency class as "an agent is stopped waiting on you".
+`enqueuePush` with a new `stall` kind. It joins `blocked` in `URGENT_KINDS`: it can
+only fire 30 minutes after the human themself typed something, so it cannot interrupt
+anyone who wasn't just at the keyboard, and "you asked and nothing came back" is the
+same urgency class as "an agent is stopped waiting on you".
+
+> That set used to also mean "ignores quiet hours". Quiet hours were removed (see
+> `docs/no-app-push-design.md`); the set now only marks a push time-sensitive so an
+> iOS Focus mode lets it through. Nothing on the server withholds a push by clock.
 
 The "you're already looking at it" suppression (`lastReadAt` within 60 s) applies and
 is safe here: the chat pane stamps `lastReadAt` on an effect keyed to the message

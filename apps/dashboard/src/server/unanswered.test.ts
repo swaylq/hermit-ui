@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isHumanRow, isUnanswered, UNANSWERED_MINUTES, type LastMessageRow } from './unanswered';
-import { shouldPush, isQuietHour } from './push/suppress';
+import { shouldPush, isUrgentKind } from './push/suppress';
 import { unansweredEvent } from './push/events';
 
 const NOW = new Date('2026-07-31T14:30:00Z');
@@ -85,20 +85,17 @@ test('the default threshold is the measured one, not a round number someone like
   assert.equal(UNANSWERED_MINUTES, 30);
 });
 
-test('a stall gets through quiet hours — it can only fire minutes after you typed', () => {
-  assert.equal(isQuietHour(1), true);
-  assert.deepEqual(shouldPush({ kind: 'stall', hour: 1, now: NOW.getTime() }), { send: true });
-  // ...unlike the kinds that are merely informative.
-  assert.deepEqual(shouldPush({ kind: 'chat', hour: 1, now: NOW.getTime() }), {
-    send: false,
-    reason: 'quiet-hours',
-  });
+test('a stall is urgent enough to pierce a Focus mode', () => {
+  // It can only fire some minutes after the human themself typed something, so it
+  // cannot interrupt anyone who was not just at the keyboard. Quiet hours used to
+  // be the thing this had to survive; now the phone owns time-of-day and all this
+  // asserts is that we mark it urgent rather than informative.
+  assert.equal(isUrgentKind('stall'), true);
+  assert.equal(isUrgentKind('chat'), false);
 });
 
 test('a stall you are staring at is not pushed', () => {
   const decision = shouldPush({
-    kind: 'stall',
-    hour: 14,
     now: NOW.getTime(),
     lastReadAt: new Date(NOW.getTime() - 10_000),
   });

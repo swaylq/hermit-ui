@@ -1,77 +1,52 @@
 // Noise rules for push notifications. These decide whether sway's phone buzzes,
-// so the boundaries (exactly-at-the-window, exactly-at-the-hour) are the point.
+// so the boundary (exactly-at-the-window) is the point.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isQuietHour, localHour, shouldPush, VIEWING_WINDOW_MS } from './suppress';
+import { isUrgentKind, shouldPush, VIEWING_WINDOW_MS } from './suppress';
+import type { PushKind } from './types';
 
-const NOON = 12; // a decidedly non-quiet hour
-const NIGHT = 2; // inside quiet hours
+const ALL_KINDS: PushKind[] = ['blocked', 'chat', 'cron', 'host', 'stall'];
 
 test('a plain event goes through', () => {
-  assert.deepEqual(shouldPush({ kind: 'chat', hour: NOON, now: 1_000_000 }), { send: true });
+  assert.deepEqual(shouldPush({ now: 1_000_000 }), { send: true });
 });
 
 test('viewing: a read marker inside the window suppresses', () => {
   const now = 1_000_000;
-  const r = shouldPush({
-    kind: 'chat',
-    hour: NOON,
-    now,
-    lastReadAt: new Date(now - (VIEWING_WINDOW_MS - 1)),
-  });
+  const r = shouldPush({ now, lastReadAt: new Date(now - (VIEWING_WINDOW_MS - 1)) });
   assert.deepEqual(r, { send: false, reason: 'viewing' });
 });
 
 test('viewing: exactly at the window boundary sends', () => {
   const now = 1_000_000;
-  const r = shouldPush({ kind: 'chat', hour: NOON, now, lastReadAt: new Date(now - VIEWING_WINDOW_MS) });
-  assert.deepEqual(r, { send: true });
-});
-
-test('viewing beats quiet hours — an open session never buzzes', () => {
-  const now = 1_000_000;
-  const r = shouldPush({ kind: 'blocked', hour: NIGHT, now, lastReadAt: new Date(now - 1_000) });
-  assert.deepEqual(r, { send: false, reason: 'viewing' });
-});
-
-test('a null read marker (never opened) does not suppress', () => {
-  assert.deepEqual(shouldPush({ kind: 'chat', hour: NOON, now: 1_000_000, lastReadAt: null }), {
+  assert.deepEqual(shouldPush({ now, lastReadAt: new Date(now - VIEWING_WINDOW_MS) }), {
     send: true,
   });
 });
 
-test('quiet hours drop chat and cron', () => {
-  for (const kind of ['chat', 'cron'] as const) {
-    assert.deepEqual(
-      shouldPush({ kind, hour: NIGHT, now: 1_000_000 }),
-      { send: false, reason: 'quiet-hours' },
-      kind,
-    );
+test('a null read marker (never opened) does not suppress', () => {
+  assert.deepEqual(shouldPush({ now: 1_000_000, lastReadAt: null }), { send: true });
+});
+
+test('the clock never suppresses — 03:00 delivers exactly like noon', () => {
+  // Quiet hours are gone. This is the regression guard: whatever the hour, an
+  // event with no read marker is delivered. If someone reintroduces time-of-day
+  // filtering, the notification you needed at 01:00 silently stops arriving and
+  // nothing anywhere says why.
+  for (const at of ['2026-07-26T03:00:00Z', '2026-07-26T12:00:00Z', '2026-07-26T23:30:00Z']) {
+    assert.deepEqual(shouldPush({ now: new Date(at).getTime() }), { send: true }, at);
   }
 });
 
-test('quiet hours let blocked and host through', () => {
-  for (const kind of ['blocked', 'host'] as const) {
-    assert.deepEqual(shouldPush({ kind, hour: NIGHT, now: 1_000_000 }), { send: true }, kind);
+test('every kind is delivered — urgency is a hint to the phone, not a filter', () => {
+  for (const kind of ALL_KINDS) {
+    assert.deepEqual(shouldPush({ now: 1_000_000 }), { send: true }, kind);
   }
 });
 
-test('quiet window spans midnight: 23 and 07 are quiet, 08 and 22 are not', () => {
-  assert.equal(isQuietHour(23), true);
-  assert.equal(isQuietHour(0), true);
-  assert.equal(isQuietHour(7), true);
-  assert.equal(isQuietHour(8), false);
-  assert.equal(isQuietHour(22), false);
-});
-
-test('localHour resolves the configured zone, not the server clock', () => {
-  // 2026-07-26T16:30:00Z → 00:30 next day in UTC+8.
-  const at = new Date('2026-07-26T16:30:00Z');
-  assert.equal(localHour(at, 'UTC'), 16);
-  assert.equal(localHour(at, 'Asia/Shanghai'), 0);
-});
-
-test('localHour renders midnight as 0, never 24', () => {
-  assert.equal(localHour(new Date('2026-07-26T00:00:00Z'), 'UTC'), 0);
+test('urgent kinds are the ones worth piercing a Focus mode', () => {
+  // Drives Bark's `timeSensitive` and Web Push's `Urgency: high` — and nothing
+  // else, now that it no longer gates delivery.
+  assert.deepEqual(ALL_KINDS.filter(isUrgentKind), ['blocked', 'host', 'stall']);
 });

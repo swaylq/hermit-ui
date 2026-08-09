@@ -22,7 +22,7 @@
 // worst case on restart is one duplicate notification.
 
 import { prisma } from '@/server/db';
-import { localHour, shouldPush, isUrgentKind } from './suppress';
+import { shouldPush, isUrgentKind } from './suppress';
 import { anyTransportConfigured, transportFor } from './transport';
 import type { PushEvent } from './types';
 
@@ -30,8 +30,6 @@ export type { PushEvent, PushKind } from './types';
 
 /** Wait this long after an agent's last message before pushing the turn. */
 const CHAT_DEBOUNCE_MS = 20_000;
-
-const QUIET_TZ = process.env.PUSH_QUIET_TZ || 'Asia/Shanghai';
 
 const pending = new Map<string, { timer: NodeJS.Timeout; event: PushEvent }>();
 
@@ -89,12 +87,7 @@ async function deliver(event: PushEvent): Promise<void> {
     lastReadAt = s?.lastReadAt ?? null;
   }
 
-  const decision = shouldPush({
-    kind: event.kind,
-    hour: localHour(new Date(now), QUIET_TZ),
-    now,
-    lastReadAt,
-  });
+  const decision = shouldPush({ now, lastReadAt });
   if (!decision.send) return;
 
   const devices = await prisma.pushDevice.findMany({
@@ -116,7 +109,8 @@ async function deliver(event: PushEvent): Promise<void> {
     path: event.path,
     collapseKey: event.collapseKey,
     kind: event.kind,
-    // Same three kinds that ignore quiet hours also pierce Focus / DND.
+    // Marks the push time-sensitive so a Focus mode lets it through. The only
+    // timing influence the server has — it never withholds by clock.
     urgent: isUrgentKind(event.kind),
   };
 

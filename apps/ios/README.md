@@ -65,7 +65,6 @@ APNS_KEY_P8="-----BEGIN PRIVATE KEY-----\nMIG...\n-----END PRIVATE KEY-----"
 APNS_KEY_ID=ABCD123456
 APNS_TEAM_ID=EFGH789012
 APNS_BUNDLE_ID=ai.swaylab.hermit
-PUSH_QUIET_TZ=Asia/Shanghai
 ```
 
 Literal `\n` in the value is fine — the loader converts it back. The `.p8` is a
@@ -103,6 +102,7 @@ Needs a real device — the simulator has no APNs.
 1. Launch the app, accept the notification prompt.
 2. Check it registered: the console logs `[hermit] push registered for N/M machines`.
 3. Trigger a test from the dashboard: `push.test` sends to every device on the
-   current machine (it uses the `host` kind, so quiet hours won't swallow it).
+   current machine (it uses the `host` kind, so it goes out urgent and a Focus
+   mode won't swallow it).
 4. Then the real thing: have an agent ask for a permission decision and confirm
    the notification arrives and opens the right session.

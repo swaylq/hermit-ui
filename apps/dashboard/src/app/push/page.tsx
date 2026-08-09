@@ -369,8 +369,11 @@ function DeviceList({
 
           {msg && <p className="mt-2 text-[11px] text-muted-foreground">{msg}</p>}
           <p className="mt-3 text-[11px] text-muted-foreground leading-relaxed">
-            测试通知走 <code className="rounded bg-muted px-1 py-0.5">host</code> 类型，会绕过 23:00–08:00 的静默时段 ——
-            要等到早上才能收到的测试算不上测试。
+            服务端不做时段过滤：事件什么时候发生就什么时候推。
+            <code className="rounded bg-muted px-1 py-0.5">blocked</code> /
+            <code className="mx-1 rounded bg-muted px-1 py-0.5">host</code> /
+            <code className="rounded bg-muted px-1 py-0.5">stall</code> 会标成
+            time-sensitive 穿透专注模式，其余按普通优先级投递 —— 几点该不该响由 iOS 专注模式决定，那里才能按人按日程配。
           </p>
         </div>
       </div>

@@ -220,8 +220,9 @@ export const pushRouter = router({
     }),
 
   // Send a test notification to every device on this machine. `host` kind so it
-  // ignores quiet hours — a test you have to wait until morning to receive is not
-  // a test. Verifying end-to-end delivery needs a real device; this is the button.
+  // goes out urgent and a Focus mode won't swallow it — a test you can't tell
+  // apart from a failure is not a test. Verifying end-to-end delivery needs a
+  // real device; this is the button.
   test: machineProcedure.mutation(async ({ ctx }) => {
     const devices = await prisma.pushDevice.count({ where: { machineId: ctx.machine.id } });
     if (devices === 0) return { ok: false, reason: 'no devices registered' as const };

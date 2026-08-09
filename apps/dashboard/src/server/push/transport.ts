@@ -60,9 +60,12 @@ export interface TransportPayload {
   collapseKey: string;
   kind: PushKind;
   /**
-   * Should this cut through Focus / Do Not Disturb? True for exactly the kinds
-   * that also ignore quiet hours (see suppress.ts) — being woken by an agent
-   * stopped dead on a permission prompt is the point; "agent replied" is not.
+   * Should this cut through Focus / Do Not Disturb? See URGENT_KINDS in
+   * suppress.ts — being interrupted by an agent stopped dead on a permission
+   * prompt is the point; "agent replied" is not.
+   *
+   * This is the whole of our influence over timing. The server delivers every
+   * event whenever it happens; the phone decides what that means at 03:00.
    */
   urgent: boolean;
 }

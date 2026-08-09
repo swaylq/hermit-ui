@@ -14,11 +14,11 @@
 |---|---|---|
 | `types.ts` | `PushEvent{kind,title,body,path,collapseKey,sessionId}` | ❌ |
 | `events.ts` | 6 个事件构造器（chat / blocked / cron / stall / host） | ❌ |
-| `suppress.ts` | 静默时段 23–08、「你正在看这个会话」60s 抑制 | ❌ |
+| `suppress.ts` | 「你正在看这个会话」60s 抑制 + 紧急度判定 | ❌ |
 | `index.ts` | `enqueuePush()` fire-and-forget、chat 20s 去抖、死设备回收 | 仅设备扇出那一段 |
 | `apns.ts` | ES256 JWT + HTTP/2 | ✅ 全部 |
 
-所以本方案**不是重写推送**，而是把 `index.ts` 里那次 `sendApns()` 换成一次 `transport.send()`。事件构造、去抖、静默时段、折叠语义、深链全部原样复用。
+所以本方案**不是重写推送**，而是把 `index.ts` 里那次 `sendApns()` 换成一次 `transport.send()`。事件构造、去抖、抑制规则、折叠语义、深链全部原样复用。
 
 卡点也只有一个：原生壳要 `aps-environment` entitlement，**必须付费 Apple Developer（$99/年）**。免费账号签的包 7 天过期。
 
@@ -46,7 +46,7 @@
 ```
                           src/server/push/
   PushEvent ──▶ index.ts ──▶ suppress.ts ──▶ transport.ts ──┬──▶ webpush.ts ──▶ Apple/Mozilla/Google 推送服务 ──▶ 主屏 PWA
-              (去抖/扇出)     (静默/在看)      (按 platform 分派) ├──▶ bark.ts    ──▶ api.day.app 或自建 ──▶ Bark app
+              (去抖/扇出)     (在看/紧急度)     (按 platform 分派) ├──▶ bark.ts    ──▶ api.day.app 或自建 ──▶ Bark app
                                                               └──▶ apns.ts    ──▶ APNs ──▶ apps/ios 原生壳
 ```
 
@@ -140,6 +140,21 @@ docker run -d --name bark -p 8080:8080 -v $PWD/bark-data:/data finab/bark-server
 自建 bark-server **同样不需要 Apple 账号** —— 它内置了 Bark 自己的 APNs 密钥（topic `me.fin.bark`，keyID `LH4T9V5U4R`）。
 
 手机侧：Safari 打开 dashboard → 分享 → 添加到主屏幕 → **从主屏图标打开** → Settings → Push → 开启。Bark 则是装 app、复制 device key、粘进同一页。
+
+## 为什么没有静默时段（2026-08-09 移除）
+
+原来 `suppress.ts` 有第二条规则：23:00–08:00 只放行 `blocked` / `host` / `stall`，时区走 `PUSH_QUIET_TZ`。已经删掉了。
+
+理由是**它的失败模式不可见**。服务端按时钟丢弃通知，意味着凌晨一点真正要紧的那条永远不会到，而且事后没有任何地方能说出为什么——`shouldPush` 返回 `{send:false}` 之后就什么都不剩了，不写日志、不进收件箱。想调整还得改服务端环境变量再重启。
+
+时段判断本来就属于手机：**iOS 专注模式按人、按日程配，对使用者可见，随时能改，还能设例外。** 服务端做同样的事只会做得更差，而且是两套规则互相打架。
+
+所以现在的分工是：
+
+- **服务端说这条有多重要** —— `URGENT_KINDS`（`blocked` / `host` / `stall`）标成 time-sensitive（Bark `level=timeSensitive`、Web Push `Urgency: high`），其余普通优先级。
+- **手机说现在响不响** —— 专注模式收到 time-sensitive 会放行，普通的攒着。
+
+`URGENT_KINDS` 因此**保留**了，只是含义收窄成「值得穿透专注模式」，不再兼任「值得吵醒你」。`suppress.ts` 只剩「你正在看这个会话」一条抑制规则；`SuppressInput` 里的 `kind` 和 `hour` 一并删掉——留着会暗示事件类型仍然影响投不投递，而这正是不再成立的那件事。
 
 ## 已知边界
 

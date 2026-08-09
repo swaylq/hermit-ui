@@ -1,83 +1,62 @@
 // Should this event actually reach the phone? Pure decision logic, kept separate
 // from delivery so the noise rules are unit-testable without APNs, a DB, or a clock.
 //
-// Two rules (the third — collapsing — isn't a decision, it's the `apns-collapse-id`
-// header every push carries, so a session/cron/machine occupies one lock-screen slot):
+// One rule (collapsing isn't a decision — it's the collapse key every push carries,
+// so a session/cron/machine occupies one lock-screen slot):
 //
-//   1. VIEWING — the session's read marker moved within the last minute, i.e. you
-//      have the chat open right now. Pushing what's already on your screen is the
-//      fastest way to make someone disable notifications.
-//   2. QUIET HOURS — 23:00–08:00 local, only `blocked`, `host` and `stall` get
-//      through. An agent stopped dead waiting on you, a machine about to OOM, or a
-//      question of yours that nothing answered are worth waking up for; "agent
-//      replied" and "cron failed" are not.
+//   VIEWING — the session's read marker moved within the last minute, i.e. you have
+//   the chat open right now. Pushing what's already on your screen is the fastest
+//   way to make someone disable notifications.
 //
 // Evaluated at DELIVERY time, not enqueue time — which matters for the debounced
 // chat events in ./index.ts: opening the session during the debounce window
 // retroactively cancels its push.
+//
+// There used to be a second rule here, QUIET HOURS: 23:00–08:00 local, everything
+// but `blocked` / `host` / `stall` held back. It was removed — silently dropping a
+// notification because of the clock means the one you needed at 01:00 never
+// arrives and nothing anywhere says why. Time-of-day filtering belongs to the
+// phone, which already does it properly: iOS Focus modes are per-person,
+// per-schedule, and visible to the person they affect. The urgency signal this
+// file still exports is what lets those modes make the decision — see below.
 
 import type { PushKind } from './types';
 
 /** A read marker this fresh means the session is on screen right now. */
 export const VIEWING_WINDOW_MS = 60_000;
 
-/** Quiet hours are [START, 24) ∪ [0, END) in local time. */
-export const QUIET_START_HOUR = 23;
-export const QUIET_END_HOUR = 8;
-
 /**
- * Kinds that ignore quiet hours — urgent enough to wake someone.
+ * Kinds urgent enough to pierce a Focus mode — Bark's `timeSensitive` level, Web
+ * Push's `Urgency: high`. An agent stopped dead waiting on you, a machine about to
+ * OOM, or a question of yours that nothing answered are worth interrupting for;
+ * "agent replied" and "cron failed" are not.
  *
- * `stall` belongs here despite being the least "live" of the three: it can only fire
- * some minutes after the human themself typed something, so it cannot wake anyone who
- * wasn't just awake, and being told at 23:40 that your 23:05 question went nowhere is
- * the whole point of it existing.
+ * This is now the ONLY thing the urgency judgement drives. Nothing here suppresses
+ * a push: an ordinary-urgency notification is still delivered, and iOS decides
+ * whether to make a sound. That split is the point — we say how important it is,
+ * the phone says whether now is a good time.
  */
 export const URGENT_KINDS: ReadonlySet<PushKind> = new Set<PushKind>(['blocked', 'host', 'stall']);
 
-/**
- * The same three kinds also drive per-transport urgency — Bark's `timeSensitive`
- * level, Web Push's `Urgency: high`. "Worth waking someone up for" and "worth
- * piercing a Focus mode for" are the same judgement, so they read one list.
- */
 export function isUrgentKind(kind: PushKind): boolean {
   return URGENT_KINDS.has(kind);
 }
 
+// `kind` deliberately does NOT appear here any more. It was only ever read by the
+// quiet-hours rule; leaving it in the input would imply the event's kind still
+// affects whether it is delivered, which is exactly what stopped being true.
 export interface SuppressInput {
-  kind: PushKind;
-  /** Local hour 0–23 in the quiet-hours timezone (see localHour). */
-  hour: number;
   /** Delivery-time clock, ms. */
   now: number;
   /** The session's ChatSession.lastReadAt. Undefined for non-session events. */
   lastReadAt?: Date | null;
 }
 
-export type SuppressResult = { send: true } | { send: false; reason: 'viewing' | 'quiet-hours' };
+export type SuppressResult = { send: true } | { send: false; reason: 'viewing' };
 
 export function shouldPush(i: SuppressInput): SuppressResult {
   if (i.lastReadAt && i.now - i.lastReadAt.getTime() < VIEWING_WINDOW_MS) {
     return { send: false, reason: 'viewing' };
   }
-  if (isQuietHour(i.hour) && !isUrgentKind(i.kind)) {
-    return { send: false, reason: 'quiet-hours' };
-  }
   return { send: true };
-}
-
-export function isQuietHour(hour: number): boolean {
-  return hour >= QUIET_START_HOUR || hour < QUIET_END_HOUR;
-}
-
-/**
- * Hour-of-day in the quiet-hours timezone. The VPS runs UTC while the human is in
- * UTC+8, so reading the server clock directly would put "quiet hours" in the middle
- * of his afternoon. `Intl` is used rather than an offset constant so DST-observing
- * zones stay correct if this ever moves.
- */
-export function localHour(at: Date, timeZone: string): number {
-  const h = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone }).format(at);
-  // 'en-US' + hour12:false renders midnight as "24" in some ICU versions.
-  return Number(h) % 24;
 }

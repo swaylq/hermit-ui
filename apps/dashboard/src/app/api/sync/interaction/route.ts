@@ -77,8 +77,9 @@ export async function POST(req: NextRequest) {
   await prisma.chatSession.update({ where: { id: session.id }, data: { lastMessageAt: new Date() } });
 
   // The agent is now stopped dead waiting on a human. This is the highest-value
-  // push there is, and unlike the others it bypasses quiet hours. Fire-and-forget:
-  // the blocked hook is already long-polling us and must not wait on APNs.
+  // push there is, and it goes out marked urgent so it pierces a Focus mode.
+  // Fire-and-forget: the blocked hook is already long-polling us and must not
+  // wait on the push transport.
   enqueuePush(
     blockedEvent({
       machineId: machine.id,

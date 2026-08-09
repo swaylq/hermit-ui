@@ -44,9 +44,10 @@ function publicOrigin(): string {
 
 /**
  * Bark's interruption levels. `timeSensitive` is the one that pierces a Focus
- * mode, which is exactly the set of kinds that also ignore our own quiet hours.
- * `critical` is deliberately NOT used: it overrides the mute switch and needs a
- * volume, which is more than an agent waiting on a permission prompt deserves.
+ * mode — and since the server no longer filters by time of day at all, this is
+ * the ONLY say we get in whether a notification interrupts. The phone decides the
+ * rest. `critical` is deliberately NOT used: it overrides the mute switch and
+ * needs a volume, which is more than an agent waiting on a prompt deserves.
  */
 function level(payload: TransportPayload): 'timeSensitive' | 'active' {
   return payload.urgent ? 'timeSensitive' : 'active';
