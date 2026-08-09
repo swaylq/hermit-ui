@@ -53,4 +53,37 @@ function textOf(content) {
     .trim();
 }
 
-module.exports = { MIME_BY_EXT, mimeForExt, textOf };
+/**
+ * Normalize cron_update's tool args into the tRPC patch: minutes in (what the model
+ * reasons about) → seconds out (what the DB stores). Only fields the caller actually
+ * passed come back, so editing a prompt never silently rewrites the interval — and an
+ * args object with nothing to change THROWS rather than sending an empty patch, which
+ * would report success while doing nothing. `id`/`sessionId` are the caller's to add.
+ * @param {any} args
+ * @returns {{prompt?: string, title?: string, intervalSec?: number, jitterSec?: number, enabled?: boolean}}
+ */
+function buildCronPatch(args) {
+  /** @type {{prompt?: string, title?: string, intervalSec?: number, jitterSec?: number, enabled?: boolean}} */
+  const patch = {};
+  if (typeof args?.prompt === 'string' && args.prompt.trim()) patch.prompt = args.prompt.trim();
+  if (typeof args?.title === 'string' && args.title.trim()) patch.title = args.title.trim().slice(0, 120);
+  if (args?.intervalMinutes != null) {
+    const m = Number(args.intervalMinutes);
+    if (!Number.isFinite(m) || m < 1) throw new Error('intervalMinutes must be ≥ 1');
+    patch.intervalSec = Math.round(m * 60);
+  }
+  if (args?.jitterMinutes != null) {
+    const j = Number(args.jitterMinutes);
+    if (!Number.isFinite(j) || j < 0) throw new Error('jitterMinutes must be ≥ 0');
+    patch.jitterSec = Math.round(j * 60);
+  }
+  if (typeof args?.enabled === 'boolean') patch.enabled = args.enabled;
+  if (Object.keys(patch).length === 0) {
+    throw new Error(
+      'nothing to update — pass at least one of prompt/title/intervalMinutes/jitterMinutes/enabled',
+    );
+  }
+  return patch;
+}
+
+module.exports = { MIME_BY_EXT, mimeForExt, textOf, buildCronPatch };

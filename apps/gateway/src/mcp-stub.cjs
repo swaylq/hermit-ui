@@ -11,6 +11,7 @@
 //   - attach_file(filePath, caption)  upload a local file + render a download chip
 //   - cron_create(prompt, intervalMinutes, jitterMinutes?, title?)  schedule a cron
 //   - cron_list()                     list this agent's crons
+//   - cron_update(id, ...)            edit one IN PLACE (keeps its fire time)
 //   - cron_delete(id)                 delete one of this agent's crons
 //
 // Talks JSON-RPC 2.0 over stdio per MCP spec — no SDK needed (the SDK pulls in
@@ -23,7 +24,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 // Pure helpers live in a sibling // @ts-check'd module (type-checked + unit-tested
 // in isolation; this stub is spawned by raw `node` so it stays outside the tsc gate).
-const { mimeForExt, textOf } = require('./mcp-stub-util.cjs');
+const { mimeForExt, textOf, buildCronPatch } = require('./mcp-stub-util.cjs');
 
 const SESSION_ID = process.env.HERMIT_SESSION_ID || '';
 const DASHBOARD_URL = process.env.HERMIT_DASHBOARD_URL || 'http://127.0.0.1:4101';
@@ -216,9 +217,29 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'cron_update',
+    description:
+      "Edit one of THIS agent's existing cron tasks IN PLACE (get the id from cron_list); pass only the fields that change. ALWAYS prefer this over cron_delete + cron_create when the schedule already exists: editing the prompt keeps the cron's PHASE, so a report that fires at 09:00 goes on firing at 09:00 — delete+recreate resets the next fire to now and silently moves the job to whatever time you happened to rewrite it. intervalMinutes is the only field that reschedules (from the last run). Use for: rewriting a cron's prompt after improving the task, renaming it, retiming it, or pausing it with enabled=false instead of deleting it.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The cron id (from cron_list).' },
+        prompt: { type: 'string', description: 'Replace the task prompt that runs on each fire.' },
+        title: { type: 'string', description: 'Replace the short label shown in the cron list.' },
+        intervalMinutes: {
+          type: 'number',
+          description: 'Change the interval, in minutes (minimum 1). The ONLY field that moves the next fire — it is recomputed from the last run.',
+        },
+        jitterMinutes: { type: 'number', description: 'Change the ± random float on the fire time, in minutes.' },
+        enabled: { type: 'boolean', description: 'false pauses the cron (kept, not deleted); true resumes it.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
     name: 'cron_delete',
     description:
-      "Delete one of THIS agent's cron tasks by id (get the id from cron_list). Use when the user asks to stop / remove a scheduled task.",
+      "Delete one of THIS agent's cron tasks by id (get the id from cron_list). Use when the user asks to stop / remove a scheduled task — to CHANGE one, use cron_update instead, and to pause one, cron_update with enabled=false.",
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string', description: 'The cron id (from cron_list).' } },
@@ -890,6 +911,21 @@ async function dispatchTool(name, args) {
       return `- ${c.id} · every ${every}${jit} · ${state} · ${c.title || String(c.prompt).slice(0, 40)}`;
     });
     return `crons for this agent:\n${lines.join('\n')}`;
+  }
+  if (name === 'cron_update') {
+    const id = args?.id;
+    if (typeof id !== 'string' || !id) throw new Error('id required');
+    const patch = buildCronPatch(args); // throws on an empty / malformed patch
+    const changed = Object.keys(patch);
+    const res = await trpcMutate('cron.updateFromSession', { sessionId: SESSION_ID, id, ...patch });
+    const saved = res?.[0]?.result?.data?.json;
+    // Report the fire time back either way: the whole reason to edit in place is that
+    // the phase survives, and that is the one thing the caller cannot see from here.
+    const next = saved?.nextFire ? String(saved.nextFire).slice(0, 16).replace('T', ' ') : null;
+    const phase = patch.intervalSec != null
+      ? `Interval changed, so the next fire was recomputed from the last run${next ? ` → ${next}` : ''}.`
+      : `Next fire unchanged${next ? ` (${next})` : ''} — the schedule keeps its phase.`;
+    return `ok — cron ${id} updated (${changed.join(', ')}). ${phase}`;
   }
   if (name === 'cron_delete') {
     const id = args?.id;

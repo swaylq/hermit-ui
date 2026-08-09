@@ -237,6 +237,56 @@ export const cronRouter = router({
       });
     }),
 
+  // Edit a cron in place. The point of "in place" is the PHASE: an agent that rewrites
+  // its own prompt must not move its own fire time. delete + create — the only route an
+  // agent had before this — resets nextFire to now, so a 09:00 daily report silently
+  // becomes a "whenever the agent last edited itself" report. Here only intervalSec
+  // reschedules, and it reschedules from lastFire, same rule as `update` above.
+  updateFromSession: agentProcedure
+    .input(
+      z
+        .object({
+          sessionId: z.string(),
+          id: z.string(),
+          prompt: z.string().min(1).max(16_000).optional(),
+          title: z.string().max(120).optional(),
+          intervalSec: z.number().int().min(60).max(604_800).optional(),
+          jitterSec: z.number().int().min(0).max(86_400).optional(),
+          enabled: z.boolean().optional(),
+        })
+        // An empty patch would be a silent no-op that still reports success.
+        .refine(
+          ({ sessionId: _s, id: _i, ...patch }) => Object.values(patch).some((v) => v !== undefined),
+          { message: 'nothing to update' },
+        ),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { sessionId, id, ...patch } = input;
+      const session = await prisma.chatSession.findUnique({
+        where: { id: sessionId },
+        select: { agentName: true, machineId: true },
+      });
+      if (!session || session.machineId !== ctx.machine.id) throw new Error('session not found');
+      ctx.assertAgent(session.agentName);
+      const cron = await prisma.cron.findUnique({ where: { id } });
+      if (!cron || cron.machineId !== ctx.machine.id || cron.agentName !== session.agentName) {
+        throw new Error('cron not found for this agent');
+      }
+      const data: Record<string, unknown> = { ...patch };
+      if (patch.intervalSec != null && cron.lastFire) {
+        data.nextFire = new Date(cron.lastFire.getTime() + patch.intervalSec * 1000);
+      }
+      const saved = await prisma.cron.update({ where: { id }, data });
+      return {
+        id: saved.id,
+        title: saved.title,
+        intervalSec: saved.intervalSec,
+        jitterSec: saved.jitterSec,
+        enabled: saved.enabled,
+        nextFire: saved.nextFire,
+      };
+    }),
+
   deleteFromSession: agentProcedure
     .input(z.object({ sessionId: z.string(), id: z.string() }))
     .mutation(async ({ ctx, input }) => {

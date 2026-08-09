@@ -38,10 +38,15 @@ mcp__hermit__cron_create({
 
 Then confirm to the user: the interval, the jitter (if any), and that it's now on the dashboard **/cron page** where they can see each run's result, edit the schedule / prompt, or stop it. Note results are recorded there (not posted into this chat) — if they want the results here every time, that's the `loop` skill.
 
-## Listing / stopping
+## Listing / editing / stopping
 
 - `mcp__hermit__cron_list()` → this agent's crons (id, interval, status). Use to report, or to find an id.
+- `mcp__hermit__cron_update({ id, prompt?, title?, intervalMinutes?, jitterMinutes?, enabled? })` → change one in place. Pass only what changes.
 - `mcp__hermit__cron_delete({ id })` → remove one (get the id from cron_list). Use when the user says 停掉 / 删除 that scheduled task.
+
+**Editing an existing cron is `cron_update`, never delete + create.** Rewriting the prompt through `cron_update` leaves the fire time alone, so a report that fires at 09:00 keeps firing at 09:00. Delete + create resets the next fire to *now*, which quietly re-times the job to whenever you happened to rewrite it — the failure is invisible until the user notices their morning report arriving in the afternoon. Only `intervalMinutes` reschedules (recomputed from the last run). To pause without losing the cron and its history, `cron_update({ id, enabled: false })`.
+
+So: improved the task? `cron_update` the prompt. This is the normal way a cron's instructions evolve — you are expected to edit your own schedules as you learn what the run should say.
 
 The user can also manage everything (enable/disable, edit interval + prompt, run-now, delete) directly on the **/cron page**.
 
