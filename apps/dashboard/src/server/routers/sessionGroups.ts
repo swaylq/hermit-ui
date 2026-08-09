@@ -13,6 +13,7 @@
 import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
+import { LIVE_SESSION } from '../session-cleanup';
 
 const Name = z.string().trim().min(1).max(40);
 
@@ -27,7 +28,7 @@ export const sessionGroupsRouter = router({
     if (groups.length === 0) return [];
     const counts = await prisma.chatSession.groupBy({
       by: ['groupId'],
-      where: { machineId: ctx.machine.id, closedAt: null, groupId: { not: null } },
+      where: { machineId: ctx.machine.id, closedAt: null, groupId: { not: null }, ...LIVE_SESSION },
       _count: { _all: true },
     });
     const byId = new Map(counts.map((c) => [c.groupId, c._count._all]));

@@ -565,7 +565,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // onCreated note), so leaving the now-deleted session via the router can
   // strand the user on a dead URL. window.location reloads to /chat, where the
   // landing effect picks the most-recent session.
-  const deleteSession = trpc.chat.deleteSession.useMutation({
+  // Recycle bin, not a hard delete — see the sidebar's note and
+  // docs/session-cleanup-design.md. Recoverable, and the pane is hibernated
+  // rather than stranded.
+  const deleteSession = trpc.chat.trashSessions.useMutation({
     onSuccess: () => { window.location.href = '/chat'; },
   });
   const restartSession = trpc.chat.requestSessionRestart.useMutation({
@@ -1537,10 +1540,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           <ConfirmIconButton
             icon={Trash2}
             danger
-            title="delete this session and its messages"
+            title="move this session to the recycle bin"
             busy={deleteSession.isPending}
             disabled={!session}
-            onConfirm={() => deleteSession.mutate({ id: sessionId })}
+            onConfirm={() => deleteSession.mutate({ ids: [sessionId], reason: 'manual' })}
           />
         </div>
       </div>

@@ -101,6 +101,42 @@ export function listSessions(prefix: string): string[] {
   return r.stdout.split('\n').filter((s) => s.startsWith(prefix));
 }
 
+/** A live tmux session with the two clocks the orphan sweep judges on. */
+export interface TmuxSessionInfo {
+  name: string;
+  /** When the session was created (epoch ms). */
+  createdAt: number;
+  /** Last activity in the session (epoch ms). */
+  activityAt: number;
+}
+
+/**
+ * Like `listSessions`, but carries `session_created` / `session_activity`.
+ *
+ * The orphan sweep needs BOTH: activity alone would kill a pane that was created
+ * seconds ago and hasn't produced output yet (its activity stamp is its birth),
+ * which is exactly the pane whose DB row is still in flight. Requiring both to be
+ * older than the grace closes that race.
+ *
+ * A session tmux can't stat is skipped rather than defaulted — a zero here would
+ * read as "created in 1970", i.e. always reapable, which is the wrong direction
+ * for a function whose callers kill things.
+ */
+export function listSessionsDetailed(prefix: string): TmuxSessionInfo[] {
+  const r = tmux(['list-sessions', '-F', '#{session_name}\t#{session_created}\t#{session_activity}']);
+  if (!r.ok) return [];
+  const out: TmuxSessionInfo[] = [];
+  for (const line of r.stdout.split('\n')) {
+    const [name, created, activity] = line.split('\t');
+    if (!name?.startsWith(prefix)) continue;
+    const createdAt = Number(created) * 1000;
+    const activityAt = Number(activity) * 1000;
+    if (!Number.isFinite(createdAt) || !Number.isFinite(activityAt) || createdAt <= 0) continue;
+    out.push({ name, createdAt, activityAt });
+  }
+  return out;
+}
+
 // ── Session lifecycle ────────────────────────────────────────────────────────
 
 export interface EnsureOpts {

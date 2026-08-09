@@ -21,6 +21,10 @@ const Stat = z.object({
   cpuCount: z.number().int().nullable().optional(),
   chromeCount: z.number().int().nullable().optional(),
   chromeRssMb: z.number().int().nullable().optional(),
+  transcriptTotalMb: z.number().int().nullable().optional(),
+  transcriptCount: z.number().int().nullable().optional(),
+  transcriptOrphanMb: z.number().int().nullable().optional(),
+  transcriptOrphanCount: z.number().int().nullable().optional(),
 });
 const Body = z.object({ stat: Stat });
 

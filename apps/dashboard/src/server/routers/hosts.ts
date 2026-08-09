@@ -5,6 +5,7 @@
 import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
+import { LIVE_SESSION } from '../session-cleanup';
 
 export const hostsRouter = router({
   // Latest RAM/swap/load/cpu snapshot for this machine (null until the gateway's
@@ -42,7 +43,7 @@ export const hostsRouter = router({
   // rows (closedAt null, hibernatedAt set) so they render dimmed with a 💤.
   topSessions: machineProcedure.query(async ({ ctx }) => {
     return prisma.chatSession.findMany({
-      where: { machineId: ctx.machine.id, closedAt: null },
+      where: { machineId: ctx.machine.id, closedAt: null, ...LIVE_SESSION },
       orderBy: [{ rssMb: { sort: 'desc', nulls: 'last' } }],
       take: 50,
       select: {

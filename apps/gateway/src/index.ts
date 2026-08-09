@@ -39,6 +39,8 @@ import { knowledgeRequestTick, reconcileKnowledgeOnStartup } from './knowledge';
 import { globalMemoryTick } from './global-memory';
 import { seedPiConfigFromEnv } from './pi-config';
 import { chromeReaperTick } from './chrome-reaper';
+import { orphanPaneReaperTick } from './orphan-pane-reaper';
+import { sessionPurgeTick } from './session-purge';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 import { installDispatcher, dashboardBackedOff } from './dashboard-http';
 
@@ -265,6 +267,12 @@ loop(pushTakeoverWatch, 8_000); // reactive Brain poke on takeover block/finish 
 loop(() => safe('hibernate-tick', chatHibernateTick), 3_000); // manual hibernate requests
 loop(() => safe('reaper', reaperTick), 10 * 60_000); // auto-reap idle sessions (resource governance)
 loop(() => safe('chrome-reaper', chromeReaperTick), 5 * 60_000); // reap idle per-agent Chrome (~1GB each) the session-reaper leaves orphaned
+loop(() => safe('cleanup-sweep', async () => {
+  const r = await api.runCleanupSweep();
+  if (r && (r.slept || r.archived)) console.log(`[cleanup-sweep] slept ${r.slept}, archived ${r.archived}`);
+}), 60 * 60_000); // auto-archive long-idle sessions (no-op unless cleanupIdleDays is set)
+loop(() => safe('session-purge', sessionPurgeTick), 10 * 60_000); // delete recycle-bin sessions past retention (pane confirmed dead first)
+loop(() => safe('orphan-pane', orphanPaneReaperTick), 10 * 60_000); // kill hermit-* panes no DB row accounts for (deleted sessions leak ~500MB each)
 loop(() => safe('agent-requests', agentRequestTick), 3_000);
 loop(() => safe('machine-requests', machineRequestTick), 3_000);
 loop(() => safe('file-transfers', fileTransferTick), 4_000);

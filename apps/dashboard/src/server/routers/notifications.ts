@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { fmtGB } from '@/lib/host-health';
+import { LIVE_SESSION } from '../session-cleanup';
 
 // A host's red-pressure alert is "pending" (show in the inbox) iff it was raised
 // (redAlertAt set, on a red crossing) and not yet read past that raise. Recovery
@@ -52,7 +53,10 @@ function firstText(content: unknown): string | null {
 // A plain `acked IS NULL` suffices for "not yet acknowledged" because the sweep resets
 // unansweredAckedMsgId to null every time it writes a new unansweredMsgId — so a
 // non-null ack always refers to the flag currently sitting in the row, never a stale one.
-const PENDING_UNANSWERED = { unansweredMsgId: { not: null }, unansweredAckedMsgId: null } as const;
+// `...LIVE_SESSION` is folded in here rather than at each call site: all three
+// users of this constant are ChatSession queries feeding the inbox, and a session
+// in the recycle bin must not ring a stall alert.
+const PENDING_UNANSWERED = { unansweredMsgId: { not: null }, unansweredAckedMsgId: null, ...LIVE_SESSION } as const;
 
 type UnreadSession = { id: string; lastMessageAt: Date | null; lastReadAt: Date | null };
 function isUnread(s: UnreadSession): boolean {
@@ -63,7 +67,7 @@ function isUnread(s: UnreadSession): boolean {
 // Lightweight scan (no message bodies) → unread session ids, for counts + markAllRead.
 async function scanUnreadSessionIds(machineId: string): Promise<string[]> {
   const rows = await prisma.chatSession.findMany({
-    where: { machineId },
+    where: { machineId, ...LIVE_SESSION },
     orderBy: { lastMessageAt: 'desc' },
     take: SESSION_SCAN,
     select: { id: true, lastMessageAt: true, lastReadAt: true },
@@ -93,7 +97,7 @@ export const notificationsRouter = router({
         before
           ? Promise.resolve([])
           : prisma.chatSession.findMany({
-              where: { machineId },
+              where: { machineId, ...LIVE_SESSION },
               orderBy: { lastMessageAt: 'desc' },
               take: SESSION_SCAN,
               select: { id: true, agentName: true, title: true, lastMessageAt: true, lastReadAt: true },
@@ -231,7 +235,7 @@ export const notificationsRouter = router({
     const machineId = ctx.machine.id;
     const [sessionRows, cron, hostStat, stall] = await Promise.all([
       prisma.chatSession.findMany({
-        where: { machineId },
+        where: { machineId, ...LIVE_SESSION },
         orderBy: { lastMessageAt: 'desc' },
         take: SESSION_SCAN,
         select: { id: true, lastMessageAt: true, lastReadAt: true },

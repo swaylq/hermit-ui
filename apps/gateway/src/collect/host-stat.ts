@@ -8,6 +8,7 @@
 
 import os from 'node:os';
 import { execFile } from 'node:child_process';
+import { collectTranscriptUsage } from './transcript-usage';
 
 export interface HostStatSample {
   ramTotalMb: number | null;
@@ -21,6 +22,13 @@ export interface HostStatSample {
   // browser processes (≈ one per agent); chromeRssMb = total RSS of all Chrome.
   chromeCount: number | null;
   chromeRssMb: number | null;
+  // Claude transcripts on disk, and how much of that no session accounts for.
+  // Report-only (see collect/transcript-usage.ts for why nothing deletes them);
+  // rescanned at most once a day, so carrying it on this 30s tick is free.
+  transcriptTotalMb: number | null;
+  transcriptCount: number | null;
+  transcriptOrphanMb: number | null;
+  transcriptOrphanCount: number | null;
 }
 
 const MB = 1024 * 1024;
@@ -105,6 +113,10 @@ export async function collectHostStat(): Promise<HostStatSample> {
     cpuCount: os.cpus().length || null,
     chromeCount: null,
     chromeRssMb: null,
+    transcriptTotalMb: null,
+    transcriptCount: null,
+    transcriptOrphanMb: null,
+    transcriptOrphanCount: null,
   };
   try {
     const extra =
@@ -124,6 +136,12 @@ export async function collectHostStat(): Promise<HostStatSample> {
     }
   } catch {
     /* leave Chrome stats null */
+  }
+  try {
+    const t = await collectTranscriptUsage();
+    if (t) Object.assign(base, t);
+  } catch {
+    /* leave transcript stats null */
   }
   return base;
 }

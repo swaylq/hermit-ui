@@ -408,7 +408,9 @@ function SessionsSection({
 }) {
   const utils = trpc.useUtils();
   const confirm = useConfirm();
-  const deleteSession = trpc.chat.deleteSession.useMutation({
+  // Recycle bin (docs/session-cleanup-design.md): recoverable, and it hibernates
+  // the pane instead of leaving a ~500MB claude with no row able to kill it.
+  const deleteSession = trpc.chat.trashSessions.useMutation({
     onSuccess: () => {
       // Invalidate every listSessions variant so the row also vanishes from the
       // main sidebar, not just this agent-filtered list.
@@ -434,7 +436,7 @@ function SessionsSection({
             const status = sessionStatusView(s, { unread: isSessionUnread(s) });
             // Only disable the row currently being deleted (isPending is shared
             // across rows, so narrow it by the in-flight variables' id).
-            const deleting = deleteSession.isPending && deleteSession.variables?.id === s.id;
+            const deleting = deleteSession.isPending && deleteSession.variables?.ids?.includes(s.id);
             return (
               <li key={s.id}>
                 <Link
@@ -472,15 +474,15 @@ function SessionsSection({
                         e.stopPropagation();
                         if (await confirm({
                           title: 'Delete session',
-                          message: 'Delete this session and its chat history? This cannot be undone.',
+                          message: 'Moves it to the recycle bin (Settings → System), where it can be restored until it is purged.',
                           confirmLabel: 'Delete',
                           danger: true,
                         })) {
-                          deleteSession.mutate({ id: s.id });
+                          deleteSession.mutate({ ids: [s.id], reason: 'manual' });
                         }
                       }}
                       aria-label="delete session"
-                      title="Delete session (with chat history — cannot be undone)"
+                      title="Delete session (moves to the recycle bin)"
                     >
                       <Trash2 className={cn('size-3.5', deleting && 'animate-pulse')} />
                     </Button>

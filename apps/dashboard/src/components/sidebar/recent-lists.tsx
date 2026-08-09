@@ -17,7 +17,7 @@
 import { useState, useCallback, useMemo, useEffect, memo, lazy, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree } from 'lucide-react';
+import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree, Brush } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
@@ -401,6 +401,23 @@ const SessionRow = memo(function SessionRow({
 // the agent tree; unlit = the list the way you filed it yourself (your groups,
 // then the loose recents). One control with a state, not two competing ones —
 // which is also why the header label says which arrangement you're looking at.
+// Cleanup lives on Settings → System, but the pile-up is felt in this list — so
+// the sidebar gets the doorway, not a second copy of the controls. Shown only
+// once the list is big enough for the question to be worth asking.
+function CleanupLink({ count }: { count: number }) {
+  if (count < 40) return null;
+  return (
+    <Link
+      href="/system"
+      aria-label="Session cleanup"
+      title={`${count} sessions — clean up`}
+      className="inline-flex h-6 w-6 shrink-0 items-center justify-center self-center rounded-md text-muted-foreground/50 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground cursor-pointer"
+    >
+      <Brush className="h-3.5 w-3.5" />
+    </Link>
+  );
+}
+
 function ViewToggle({ view }: { view: SessionView }) {
   const on = view === 'agents';
   return (
@@ -490,12 +507,17 @@ export function RecentSessions() {
   const hibernateSession = trpc.chat.requestHibernate.useMutation({
     onSuccess: () => { void utils.chat.listSessions.invalidate(); },
   });
-  const deleteSession = trpc.chat.deleteSession.useMutation({
+  // Routes through the recycle bin, not `deleteSession`: trashing hibernates the
+  // pane first (so the ~500MB claude can't be stranded by the row disappearing —
+  // see docs/session-cleanup-design.md) and stays recoverable for the machine's
+  // retention window. The menu item still reads "Delete" because that is what the
+  // user means; the confirm text is where the bin is explained.
+  const deleteSession = trpc.chat.trashSessions.useMutation({
     onSuccess: (_d, vars) => {
       // Deleting the session you're viewing: hard-nav to /chat (the Next 16
       // custom-server router strands you on the dead URL — see the chat page's
       // delete note). A background session: just refresh so its row vanishes.
-      if (vars.id === activeId) { window.location.href = '/chat'; return; }
+      if (vars.ids.includes(activeId ?? '')) { window.location.href = '/chat'; return; }
       void utils.chat.listSessions.invalidate();
     },
   });
@@ -671,6 +693,7 @@ export function RecentSessions() {
         <span>{view === 'agents' ? 'By agent' : 'Recents'}</span>
         <span className="tabular-nums text-muted-foreground/50">{shownCount}</span>
         {(sessions.data?.length ?? 0) > 0 && <ViewToggle view={view} />}
+        <CleanupLink count={sessions.data?.length ?? 0} />
       </div>
       {menu && (
         <ContextMenu
@@ -779,11 +802,11 @@ export function RecentSessions() {
                 const id = menu.id;
                 if (await confirm({
                   title: 'Delete session',
-                  message: 'Delete this session and all its messages? This cannot be undone.',
+                  message: 'Moves it to the recycle bin (Settings → System), where it can be restored until it is purged.',
                   confirmLabel: 'Delete',
                   danger: true,
                 }))
-                  deleteSession.mutate({ id });
+                  deleteSession.mutate({ ids: [id], reason: 'manual' });
               },
             },
           ]}

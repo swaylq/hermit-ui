@@ -182,6 +182,16 @@ export const api = {
     return r[0]?.result?.data?.json ?? [];
   },
 
+  // Every session this machine owns, for the orphan-pane sweep to diff against
+  // the live `hermit-*` panes. Includes closed / hibernated / trashed rows — the
+  // sweep only asks "does ANY row still account for this pane?".
+  knownSessions: async (): Promise<Array<{ id: string; transcriptPath: string | null }>> => {
+    const r = await get<any>(
+      '/api/trpc/chat.knownSessions?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+
   // Idle sessions the dashboard deems safe to auto-reap (empty if idleReapHours
   // is null). The gateway re-checks the live pane (working/exists) before killing.
   pollReapCandidates: async (): Promise<Array<{ id: string }>> => {
@@ -189,6 +199,30 @@ export const api = {
       '/api/trpc/chat.pollReapCandidates?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
     );
     return r[0]?.result?.data?.json ?? [];
+  },
+
+  // ── Session cleanup (docs/session-cleanup-design.md) ──────────────────────
+  // Trashed sessions whose retention has expired. `transcriptPath` rides along
+  // because it is the only safe basis for deleting a JSONL: the projects dir
+  // holds every claude run on this host, the user's own terminal sessions
+  // included, so we only ever delete a file a row we still hold claims.
+  pollPurgeDue: async (): Promise<Array<{ id: string; transcriptPath: string | null; claudeSessionId: string | null }>> => {
+    const r = await get<any>(
+      '/api/trpc/chat.pollPurgeDue?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r[0]?.result?.data?.json ?? [];
+  },
+
+  // Auto cleanup: the dashboard decides (gated on Machine.cleanupIdleDays) and
+  // does the work; the gateway only supplies the clock, like runDispatchWatch.
+  runCleanupSweep: async (): Promise<{ slept: number; archived: number } | null> => {
+    const j = await post('/api/trpc/chat.runCleanupSweep?batch=1', { '0': { json: null } });
+    return j?.[0]?.result?.data?.json ?? null;
+  },
+
+  ackPurged: async (sessionIds: string[]) => {
+    if (sessionIds.length === 0) return;
+    await post('/api/trpc/chat.ackPurged?batch=1', { '0': { json: { sessionIds } } });
   },
 
   ackHibernated: async (sessionIds: string[]) => {

@@ -116,6 +116,7 @@ export async function findUnanswered(now: Date, thresholdMs: number): Promise<La
       LIMIT 1
     ) m ON TRUE
     WHERE s."closedAt" IS NULL
+      AND s."trashedAt" IS NULL
       AND s.origin IS NULL
       AND s."lastMessageAt" IS NOT NULL
       AND s."lastMessageAt" < ${prefilterCutoff}
@@ -155,7 +156,7 @@ export async function sweepOnce(now: Date = new Date()): Promise<SweepResult> {
   const [rows, flagged] = await Promise.all([
     findUnanswered(now, thresholdMs),
     prisma.chatSession.findMany({
-      where: { unansweredMsgId: { not: null } },
+      where: { unansweredMsgId: { not: null }, trashedAt: null },
       select: { id: true, unansweredMsgId: true },
     }),
   ]);

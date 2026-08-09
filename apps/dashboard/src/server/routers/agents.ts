@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { router, gatewayProcedure, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
+import { LIVE_SESSION } from '../session-cleanup';
 import {
   BRAIN_PERSONA, BRAIN_DREAM_PROMPT,
   BRAIN_TEMPLATE_VERSION, BRAIN_OVERLAY_FILES, BRAIN_CREATE_FILES, BRAIN_DREAM_CRON,
@@ -105,7 +106,7 @@ export const agentsRouter = router({
     // Sessions count + active-sessions count per agent (one grouped query).
     const counts = await prisma.chatSession.groupBy({
       by: ['agentName', 'alive'],
-      where: { machineId: ctx.machine.id, agentName: { in: rows.map((r) => r.name) } },
+      where: { machineId: ctx.machine.id, agentName: { in: rows.map((r) => r.name) }, ...LIVE_SESSION },
       _count: { _all: true },
     });
     const sessionCount = new Map<string, number>();

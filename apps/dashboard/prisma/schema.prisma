@@ -34,6 +34,23 @@ model Machine {
   // reap disabled. See docs/resource-governance-design.md.
   idleReapHours Int?
 
+  // ── Session cleanup (docs/session-cleanup-design.md) ──
+  // Auto-archive threshold: a session idle longer than this many days is closed
+  // (closedAt) by the cleanup sweep. null = off. Only ever drives the REVERSIBLE
+  // tiers — nothing here can trash or purge a session, which stays a deliberate
+  // click. Sits next to idleReapHours because it is the same kind of dial one
+  // rung further along: reap frees the process, this frees the sidebar.
+  cleanupIdleDays Int?
+  // How long a trashed session sits recoverable before the gateway purges it.
+  trashRetainDays Int @default(14)
+  // Audit trail for the reversible half of cleanup. The destructive half audits
+  // itself — every binned session carries its own trashedAt + trashReason and is
+  // sitting right there in the trash view — but a sweep that quietly archived 30
+  // conversations would otherwise leave no trace at all. Shape:
+  // `{ slept, archived, trashed, auto }`.
+  lastCleanupAt      DateTime?
+  lastCleanupSummary Json?
+
   // Pi-runtime machine config, edited from the dashboard Settings → Pi Runtime
   // page and consumed by the machine's gateway when it spawns pi children.
   // { provider, baseUrl, api, models[], secretKey, image: { enabled, provider,
@@ -76,6 +93,14 @@ model HostStat {
   // processes (≈ one per agent), chromeRssMb = total RSS of all Chrome procs.
   chromeCount Int?
   chromeRssMb Int?
+  // Claude transcripts on disk (docs/session-cleanup-design.md). Report-only:
+  // ~/.claude/projects holds every claude run on the host, the human's own
+  // terminal sessions included, so nothing sweeps it — a transcript is only ever
+  // deleted at purge time, while the row naming it still exists.
+  transcriptTotalMb    Int?
+  transcriptCount      Int?
+  transcriptOrphanMb   Int?
+  transcriptOrphanCount Int?
   sampledAt   DateTime?
 
   // Red-pressure alert (A4). redAlertAt is stamped when the host CROSSES into red
@@ -459,6 +484,25 @@ model ChatSession {
   takeoverDraft       String?
   takeoverDraftAt     DateTime?
 
+  // ── Session cleanup (docs/session-cleanup-design.md) ──
+  // Recycle bin. Non-null = gone from every list but recoverable; the gateway
+  // purges it (row + messages + transcript) once it has sat here longer than the
+  // machine's trashRetainDays. Same shape as Agent.trashedAt so there is one
+  // trash mental model, not two.
+  //
+  // Distinct from closedAt, which is "I'm done with this task" — an archived
+  // session is a finished thing you might re-read. Trashed is "this context isn't
+  // worth keeping", the last stop before the content is actually gone.
+  trashedAt   DateTime?
+  // Why cleanup put it here ('dispatch-done' | 'stillborn' | 'empty' | 'idle' |
+  // 'agent-trashed' | 'manual'). Rendered in the trash view: a wrong call has to
+  // be legible at a glance, not reconstructed from timestamps after the fact.
+  trashReason String?
+  // The user pressed Keep: never propose this session as a cleanup candidate
+  // again. Without it, every session you decline gets re-proposed on the next
+  // run — any recurring cleanup UI needs a "stop asking me about this one".
+  keepAt      DateTime?
+
   // ── Unanswered-message alert (docs/unanswered-alert-design.md) ──
   // The human's message id this session was flagged on, i.e. the newest message in
   // the conversation was one THEY typed and it went unanswered past the threshold.
@@ -503,6 +547,14 @@ model ChatSession {
   // A fifth partial index — (machineId) WHERE unansweredMsgId IS NOT NULL — backs the
   // always-on inbox's stall lookup, which normally matches zero rows. Raw SQL for the
   // same reason, in migration 20260802010000_unanswered_alert.
+  //
+  // A sixth — (machineId, trashedAt) WHERE trashedAt IS NOT NULL — backs the trash
+  // view and the gateway's purge poller, both of which normally match zero rows.
+  // Migration 20260809180000_session_cleanup.
+  //
+  // Every list query now also carries `trashedAt IS NULL`. That is deliberately NOT
+  // indexed: it is the ~100% selective side of the predicate, so it costs a filter
+  // on rows already fetched, not a scan.
 }
 
 // A named, collapsible drawer in the sidebar's session list.

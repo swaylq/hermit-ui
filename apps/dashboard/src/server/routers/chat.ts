@@ -20,6 +20,14 @@ import {
 import { HUMAN_MESSAGES_MAX, humanMessages } from '../user-profile';
 import { resolveRuntime } from '../runtime-resolve';
 import { planRuntimeSwitch } from '../runtime-switch';
+import {
+  LIVE_SESSION,
+  computeCleanup,
+  DEFAULT_ARCHIVE_IDLE_DAYS,
+  DEFAULT_TRASH_IDLE_DAYS,
+  MAX_PER_RUN,
+  type CleanupReason,
+} from '../session-cleanup';
 
 const ContentBlock = z.union([
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -65,7 +73,7 @@ function hasRunningLoop(loopState: unknown): boolean {
 async function reapCandidateIds(machineId: string, reapHours: number): Promise<string[]> {
   const cutoff = Date.now() - reapHours * 3_600_000;
   const rows = await prisma.chatSession.findMany({
-    where: { machineId, closedAt: null, hibernatedAt: null, alive: true },
+    where: { machineId, closedAt: null, hibernatedAt: null, alive: true, ...LIVE_SESSION },
     select: { id: true, lastMessageAt: true, lastActivity: true, startedAt: true, state: true, loopState: true },
   });
   if (rows.length === 0) return [];
@@ -86,6 +94,34 @@ async function reapCandidateIds(machineId: string, reapHours: number): Promise<s
     .map((r) => r.id);
 }
 
+// Stamp what a cleanup run did onto the machine row. Merges rather than replaces,
+// so the "trashed 8" from a review-sheet confirm doesn't erase the "archived 30"
+// the same click's reversible pass just recorded a moment earlier — the two halves
+// of one cleanup arrive as two writes and should read back as one run.
+async function recordCleanupRun(
+  machineId: string,
+  delta: { slept?: number; archived?: number; trashed?: number; auto: boolean },
+): Promise<void> {
+  const m = await prisma.machine.findUnique({ where: { id: machineId }, select: { lastCleanupAt: true, lastCleanupSummary: true } });
+  // Same run = same few seconds. Anything older starts a fresh summary rather than
+  // accumulating forever into a number nobody can interpret.
+  const SAME_RUN_MS = 60_000;
+  const fresh = m?.lastCleanupAt != null && Date.now() - m.lastCleanupAt.getTime() < SAME_RUN_MS;
+  const prev = (fresh ? (m?.lastCleanupSummary as Record<string, number> | null) : null) ?? {};
+  await prisma.machine.update({
+    where: { id: machineId },
+    data: {
+      lastCleanupAt: new Date(),
+      lastCleanupSummary: {
+        slept: (prev.slept ?? 0) + (delta.slept ?? 0),
+        archived: (prev.archived ?? 0) + (delta.archived ?? 0),
+        trashed: (prev.trashed ?? 0) + (delta.trashed ?? 0),
+        auto: delta.auto,
+      },
+    },
+  });
+}
+
 // Content cast used everywhere we write a message row: the column is opaque JSON,
 // Prisma wants Prisma.InputJsonValue, and the block-shaped union confuses inference.
 type MessageContent = Parameters<typeof prisma.chatMessage.create>[0]['data']['content'];
@@ -102,7 +138,7 @@ const asContent = (blocks: Array<Record<string, unknown>>) => blocks as unknown 
  */
 async function pokeSession(sessionId: string, machineId: string, text: string): Promise<boolean> {
   const target = await prisma.chatSession.findFirst({
-    where: { id: sessionId, machineId, closedAt: null },
+    where: { id: sessionId, machineId, closedAt: null, ...LIVE_SESSION },
     select: { id: true },
   });
   if (!target) return false;
@@ -175,6 +211,7 @@ export const chatRouter = router({
         where: {
           machineId: ctx.machine.id,
           ...(agentName ? { agentName } : {}),
+          ...LIVE_SESSION,
         },
         orderBy: [{ closedAt: 'asc' }, { lastMessageAt: 'desc' }, { startedAt: 'desc' }],
         // Growth ceiling on the recents payload (S4): without a bound this returns
@@ -254,6 +291,7 @@ export const chatRouter = router({
           id: input.sessionId,
           machineId: ctx.machine.id,
           ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}),
+          ...LIVE_SESSION,
         },
         select: {
           id: true,
@@ -327,6 +365,7 @@ export const chatRouter = router({
           id: input.sessionId,
           machineId: ctx.machine.id,
           ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}),
+          ...LIVE_SESSION,
         },
         select: {
           id: true, agentName: true, title: true, titleAuto: true, origin: true,
@@ -534,10 +573,19 @@ export const chatRouter = router({
       return prisma.chatSession.update({ where: { id: input.id }, data: { closedAt: null } });
     }),
 
-  // Hard delete a session + its messages (ChatMessage cascades on the FK). The
-  // dashboard's "close" action maps to this now. The session's tmux pane (if
-  // any) is orphaned — harmless, idle, reclaimed on the next gateway restart;
-  // pollPending no longer returns the deleted session so nothing re-spawns it.
+  // Hard delete a session + its messages (ChatMessage cascades on the FK).
+  //
+  // This orphans the session's tmux pane, and that is NOT harmless: every
+  // pane-killing path (hibernate tick, reaper, reattach loop) is driven by a DB
+  // row, so a pane with no row is unreachable by all of them — it holds its
+  // ~100-500MB claude until the host reboots. (An older comment here claimed the
+  // next gateway restart reclaimed it. It does not; there is no startup sweep.)
+  //
+  // Two things now cover that: the gateway's orphan-pane sweep
+  // (gateway/src/orphan-pane-reaper.ts) kills such panes within ~10 min, and
+  // `trashSessions` — the path cleanup and the UI use — hibernates FIRST and only
+  // purges once the pane is confirmed gone. Prefer that path; this stays as the
+  // immediate, unconditional delete for a single session the user asked to remove.
   deleteSession: agentProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
@@ -1152,7 +1200,7 @@ export const chatRouter = router({
   // Active sessions + their unread user messages. Gateway polls this every 2s.
   pollPending: gatewayProcedure.query(async ({ ctx }) => {
     const sessions = await prisma.chatSession.findMany({
-      where: { machineId: ctx.machine.id, closedAt: null },
+      where: { machineId: ctx.machine.id, closedAt: null, ...LIVE_SESSION },
       select: {
         id: true, agentName: true, claudeSessionId: true,
         runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true,
@@ -1301,6 +1349,28 @@ export const chatRouter = router({
     });
   }),
 
+  // Every session this machine owns — the gateway's orphan-pane sweep diffs it
+  // against the live `hermit-*` tmux sessions to find panes NO row points at.
+  //
+  // Those exist because deleting a session removes the row while its ~100-500MB
+  // claude keeps running, and every pane-killing path (hibernate / reap) is driven
+  // by a DB row: no row, no killer, forever. Measured on mac001 2026-08-09: 13
+  // orphan panes, 1.54 GB, idle up to 8.6 days. See docs/session-cleanup-design.md.
+  //
+  // Deliberately EVERY row — closed, hibernated and trashed included. "Known" here
+  // means "some row still accounts for it", which is the only question the sweep
+  // asks; a hibernated session has no pane to begin with, and a trashed one's pane
+  // belongs to the purge pipeline, not to the sweep.
+  // `transcriptPath` rides along for the transcript-usage report, which asks the
+  // same question of the disk that the pane sweep asks of tmux: what is still
+  // accounted for? One poll serves both.
+  knownSessions: gatewayProcedure.query(async ({ ctx }) => {
+    return prisma.chatSession.findMany({
+      where: { machineId: ctx.machine.id },
+      select: { id: true, transcriptPath: true },
+    });
+  }),
+
   // Auto-reaper: the idle dashboard sessions safe to hibernate, computed here so
   // the gateway just kills + acks. Returns [] when this machine has auto-reap
   // disabled (idleReapHours null). A session qualifies only if ALL hold: alive
@@ -1345,6 +1415,268 @@ export const chatRouter = router({
       return { ok: true, updated: r.count };
     }),
 
+  // ── Session cleanup (docs/session-cleanup-design.md) ───────────────────────
+
+  // What one click would do, and why, without doing any of it. Splits into the
+  // reversible tiers (applied immediately by `cleanupApply`) and the trash list
+  // (which the human confirms first), plus the sessions that WOULD have been old
+  // enough but are spared — that last group is the point: it makes the guardrails
+  // visible instead of leaving you to trust them.
+  cleanupPreview: agentProcedure
+    .input(
+      z.preprocess((v) => (v == null ? undefined : v), z.object({
+        archiveIdleDays: z.number().int().min(1).max(3650).optional(),
+        trashIdleDays: z.number().int().min(1).max(3650).optional(),
+      }).default({})),
+    )
+    .query(async ({ ctx, input }) => {
+      const verdicts = await computeCleanup(ctx.machine.id, {
+        archiveIdleDays: input.archiveIdleDays,
+        trashIdleDays: input.trashIdleDays,
+        agentName: ctx.scopedAgent ?? null,
+      });
+      const trashed = await prisma.chatSession.count({
+        where: { machineId: ctx.machine.id, trashedAt: { not: null }, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+      });
+      const total = await prisma.chatSession.count({
+        where: { machineId: ctx.machine.id, trashedAt: null, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+      });
+      return {
+        total,
+        trashed,
+        maxPerRun: MAX_PER_RUN,
+        defaults: { archiveIdleDays: DEFAULT_ARCHIVE_IDLE_DAYS, trashIdleDays: DEFAULT_TRASH_IDLE_DAYS },
+        sleep: verdicts.filter((v) => v.tier === 'sleep'),
+        archive: verdicts.filter((v) => v.tier === 'archive'),
+        trash: verdicts.filter((v) => v.tier === 'trash'),
+        spared: verdicts.filter((v) => v.tier === 'keep'),
+      };
+    }),
+
+  // Run the REVERSIBLE half of a cleanup: hibernate the quiet-but-awake, archive
+  // the long-idle. Deliberately cannot trash anything — the irreversible rung is
+  // `trashSessions` with an explicit, human-reviewed id list, so a bug here (or a
+  // mis-set threshold) costs a `reopen`, never a conversation.
+  cleanupApply: machineProcedure
+    .input(
+      z.preprocess((v) => (v == null ? undefined : v), z.object({
+        archiveIdleDays: z.number().int().min(1).max(3650).optional(),
+        trashIdleDays: z.number().int().min(1).max(3650).optional(),
+      }).default({})),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const verdicts = await computeCleanup(ctx.machine.id, {
+        archiveIdleDays: input.archiveIdleDays,
+        trashIdleDays: input.trashIdleDays,
+      });
+      const sleepIds = verdicts.filter((v) => v.tier === 'sleep').map((v) => v.id).slice(0, MAX_PER_RUN);
+      const archiveIds = verdicts.filter((v) => v.tier === 'archive').map((v) => v.id).slice(0, MAX_PER_RUN);
+      const now = new Date();
+      // Hibernation is a REQUEST: the gateway's hibernate tick owns the actual
+      // pane kill (and re-checks 'working' on the live pane before it swings).
+      if (sleepIds.length > 0) {
+        await prisma.chatSession.updateMany({
+          where: { id: { in: sleepIds }, machineId: ctx.machine.id },
+          data: { hibernateRequestedAt: now },
+        });
+      }
+      if (archiveIds.length > 0) {
+        await prisma.chatSession.updateMany({
+          where: { id: { in: archiveIds }, machineId: ctx.machine.id },
+          data: { closedAt: now },
+        });
+      }
+      await recordCleanupRun(ctx.machine.id, { slept: sleepIds.length, archived: archiveIds.length, auto: false });
+      return { ok: true, slept: sleepIds.length, archived: archiveIds.length };
+    }),
+
+  // Auto cleanup. Called by the gateway on a slow tick and gated on the machine's
+  // cleanupIdleDays; does the SAME reversible work as cleanupApply and nothing
+  // more. There is deliberately no automatic path to the bin: sleeping and
+  // archiving cost a click to undo, and everything past that is a decision a
+  // person should be present for. Mirrors how idleReapHours drives the reaper.
+  runCleanupSweep: gatewayProcedure.mutation(async ({ ctx }) => {
+    const idleDays = ctx.machine.cleanupIdleDays;
+    if (idleDays == null) return { ok: true, slept: 0, archived: 0, skipped: 'disabled' as const };
+    const verdicts = await computeCleanup(ctx.machine.id, { archiveIdleDays: idleDays });
+    const sleepIds = verdicts.filter((v) => v.tier === 'sleep').map((v) => v.id).slice(0, MAX_PER_RUN);
+    const archiveIds = verdicts.filter((v) => v.tier === 'archive').map((v) => v.id).slice(0, MAX_PER_RUN);
+    if (sleepIds.length === 0 && archiveIds.length === 0) return { ok: true, slept: 0, archived: 0 };
+    const now = new Date();
+    if (sleepIds.length > 0) {
+      await prisma.chatSession.updateMany({
+        where: { id: { in: sleepIds }, machineId: ctx.machine.id },
+        data: { hibernateRequestedAt: now },
+      });
+    }
+    if (archiveIds.length > 0) {
+      await prisma.chatSession.updateMany({
+        where: { id: { in: archiveIds }, machineId: ctx.machine.id },
+        data: { closedAt: now },
+      });
+    }
+    await recordCleanupRun(ctx.machine.id, { slept: sleepIds.length, archived: archiveIds.length, auto: true });
+    return { ok: true, slept: sleepIds.length, archived: archiveIds.length };
+  }),
+
+  // Machine-level cleanup settings, read by the Settings → System card.
+  cleanupConfig: machineProcedure.query(async ({ ctx }) => ({
+    cleanupIdleDays: ctx.machine.cleanupIdleDays,
+    trashRetainDays: ctx.machine.trashRetainDays,
+    lastCleanupAt: ctx.machine.lastCleanupAt,
+    lastCleanupSummary: ctx.machine.lastCleanupSummary as { slept?: number; archived?: number; trashed?: number; auto?: boolean } | null,
+  })),
+
+  setCleanupConfig: machineProcedure
+    .input(z.object({
+      cleanupIdleDays: z.number().int().positive().max(3650).nullable().optional(),
+      trashRetainDays: z.number().int().min(1).max(365).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await prisma.machine.update({
+        where: { id: ctx.machine.id },
+        data: {
+          ...(input.cleanupIdleDays !== undefined ? { cleanupIdleDays: input.cleanupIdleDays } : {}),
+          ...(input.trashRetainDays !== undefined ? { trashRetainDays: input.trashRetainDays } : {}),
+        },
+      });
+      return { ok: true };
+    }),
+
+  // Move sessions to the recycle bin — the ONLY path the UI should use to get rid
+  // of a conversation.
+  //
+  // The invariant that makes bulk cleanup safe lives here: a trashed session that
+  // still has a pane is ALSO flagged for hibernation, so its claude is killed by
+  // the existing tick long before the purge deletes the row. Delete-then-orphan
+  // (the failure mode `deleteSession` has) becomes structurally impossible,
+  // because by the time anything is deleted the pane is already gone.
+  //
+  // agentProcedure, not machineProcedure: this REPLACED `deleteSession` as the UI's
+  // delete action, and that was agent-scoped — a share link must not lose the
+  // ability to get rid of its own agent's conversations. Scoped by loading the rows
+  // and asserting each agentName (pattern 2 in trpc.ts).
+  trashSessions: agentProcedure
+    .input(z.object({
+      ids: z.array(z.string()).min(1).max(MAX_PER_RUN),
+      reason: z.string().max(32).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const rows = await prisma.chatSession.findMany({
+        where: { id: { in: input.ids }, machineId: ctx.machine.id, trashedAt: null },
+        select: { id: true, alive: true, agentName: true },
+      });
+      for (const r of rows) ctx.assertAgent(r.agentName);
+      if (rows.length === 0) return { ok: true, trashed: 0 };
+      const now = new Date();
+      await prisma.chatSession.updateMany({
+        where: { id: { in: rows.map((r) => r.id) }, machineId: ctx.machine.id },
+        data: { trashedAt: now, trashReason: (input.reason as CleanupReason) ?? 'manual' },
+      });
+      const stillUp = rows.filter((r) => r.alive).map((r) => r.id);
+      if (stillUp.length > 0) {
+        await prisma.chatSession.updateMany({
+          where: { id: { in: stillUp }, machineId: ctx.machine.id },
+          data: { hibernateRequestedAt: now },
+        });
+      }
+      await recordCleanupRun(ctx.machine.id, { trashed: rows.length, auto: false });
+      return { ok: true, trashed: rows.length, hibernating: stillUp.length };
+    }),
+
+  // The recycle bin. Ordered oldest-trashed first — the ones about to be purged
+  // are the ones worth looking at.
+  listTrashed: agentProcedure.query(async ({ ctx }) => {
+    const rows = await prisma.chatSession.findMany({
+      where: {
+        machineId: ctx.machine.id,
+        trashedAt: { not: null },
+        ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}),
+      },
+      orderBy: { trashedAt: 'asc' },
+      take: 200,
+      select: {
+        id: true, agentName: true, title: true, preview: true, trashedAt: true,
+        trashReason: true, lastMessageAt: true, rssMb: true, contextTokens: true,
+      },
+    });
+    return { rows, retainDays: ctx.machine.trashRetainDays };
+  }),
+
+  // Take one back out of the bin. Restores it to exactly what it was — archived if
+  // it was archived, open if it was open — because trashing never touched closedAt.
+  restoreSession: agentProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const r = await prisma.chatSession.updateMany({
+        // scopedAgent-constrained WHERE (pattern 3): a scoped key simply matches
+        // nothing outside its own agent, so count===0 and the call is a no-op.
+        where: { id: input.id, machineId: ctx.machine.id, trashedAt: { not: null }, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+        data: { trashedAt: null, trashReason: null },
+      });
+      return { ok: r.count > 0 };
+    }),
+
+  // "Never propose this one again." Also lifts it out of the bin if it is in there,
+  // since the whole point is that this session should stop being a candidate.
+  keepSession: agentProcedure
+    .input(z.object({ id: z.string(), keep: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const r = await prisma.chatSession.updateMany({
+        where: { id: input.id, machineId: ctx.machine.id, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+        data: input.keep
+          ? { keepAt: new Date(), trashedAt: null, trashReason: null }
+          : { keepAt: null },
+      });
+      return { ok: r.count > 0 };
+    }),
+
+  // Skip the retention wait for one session. Doesn't delete anything itself —
+  // it back-dates trashedAt so the gateway's purge poll picks it up on the next
+  // tick, which keeps ONE code path (pane-confirmed-dead → delete) instead of a
+  // second one that could delete a row while its pane is still up.
+  purgeNow: agentProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const r = await prisma.chatSession.updateMany({
+        where: { id: input.id, machineId: ctx.machine.id, trashedAt: { not: null }, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+        data: { trashedAt: new Date(0) },
+      });
+      return { ok: r.count > 0 };
+    }),
+
+  // Gateway: sessions whose time in the bin is up. It confirms the pane is gone
+  // (killing it first if not), deletes the transcript, then calls ackPurged.
+  //
+  // transcriptPath rides along because it is the ONLY safe way to delete a
+  // transcript: ~/.claude/projects holds every claude run on the host, including
+  // the user's own terminal sessions, so age or directory alone can never justify
+  // deleting a file. We delete a transcript when we still hold the row that
+  // claims it, and never otherwise.
+  pollPurgeDue: gatewayProcedure.query(async ({ ctx }) => {
+    const retainDays = ctx.machine.trashRetainDays;
+    const cutoff = new Date(Date.now() - retainDays * 86_400_000);
+    return prisma.chatSession.findMany({
+      where: { machineId: ctx.machine.id, trashedAt: { not: null, lt: cutoff } },
+      select: { id: true, transcriptPath: true, claudeSessionId: true },
+      take: 50,
+    });
+  }),
+
+  // Gateway confirms the pane is dead and the transcript is gone → drop the row.
+  // ChatMessage / Interaction cascade on their FKs; Cron.reportSessionId is
+  // SET NULL, which is why a cron pointing here is a hard blocker upstream — by
+  // the time we get here nothing should be pointing at these rows at all.
+  ackPurged: gatewayProcedure
+    .input(z.object({ sessionIds: z.array(z.string()) }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.sessionIds.length === 0) return { ok: true, purged: 0 };
+      const r = await prisma.chatSession.deleteMany({
+        where: { id: { in: input.sessionIds }, machineId: ctx.machine.id, trashedAt: { not: null } },
+      });
+      return { ok: true, purged: r.count };
+    }),
+
   // ── Brain dispatch-watcher (docs/brain-design.md Phase 2) ──────────────────
   // Called by the gateway on a slow tick. The Brain delegates work to other agents
   // but only wakes on its own schedule, so it used to miss two things: a dispatched
@@ -1363,6 +1695,7 @@ export const chatRouter = router({
         origin: 'dispatch',
         closedAt: null,
         dispatchedBySessionId: { not: null },
+        ...LIVE_SESSION,
       },
       select: { id: true, agentName: true, state: true, dispatchNotify: true, dispatchedBySessionId: true },
     });
@@ -1653,6 +1986,7 @@ export const chatRouter = router({
         machineId: ctx.machine.id,
         origin: 'takeover',
         closedAt: null,
+        ...LIVE_SESSION,
         lastMessageAt: { lt: new Date(Date.now() - REAP_IDLE_MS) },
         NOT: { state: 'working' },
       },
