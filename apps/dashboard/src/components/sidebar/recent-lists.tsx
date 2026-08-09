@@ -14,7 +14,7 @@
 // cn / cronStatusTone) for all ~60 rows. Per-row handlers are created INSIDE the memo'd
 // row (from stable callback props), which doesn't defeat its memo (P1-3, finding C2).
 
-import { useState, useCallback, useMemo, useEffect, memo } from 'react';
+import { useState, useCallback, useMemo, useEffect, memo, lazy, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree } from 'lucide-react';
@@ -29,12 +29,18 @@ import { useLiveWorking } from '@/lib/session-live';
 import { usePins, togglePin } from '@/lib/session-pins';
 import { useSessionView, setSessionView, useAgentDrawers, setAgentDrawer, type SessionView } from '@/lib/session-view';
 import { useLongPress } from '@/lib/use-long-press';
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { ContextMenu } from '@/components/ui/context-menu';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-dialog';
 import { SidebarFindInput } from '@/components/sidebar/sidebar-find-input';
 import { TrashedAgents } from '@/components/sidebar/trashed-agents';
 import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
+
+// The agent filter dropdown, split off so base-ui's Select (and the floating-ui
+// positioning engine it carries) stays OUT of the app-shell chunk every route
+// loads before first paint — this file is reachable from the root layout via
+// AppSidebar. It's the only base-ui Select in that graph; behind lazy() it
+// becomes its own chunk, fetched when the chat recents list actually mounts.
+const AgentFilterSelect = lazy(() => import('@/components/sidebar/agent-filter-select'));
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type CronListItem = RouterOutputs['cron']['list'][number];
@@ -532,6 +538,13 @@ export function RecentSessions() {
     sessions.data?.forEach((s) => { if (s.agentName !== orchestratorName && s.origin !== 'dispatch') names.add(s.agentName); });
     return Array.from(names).sort();
   }, [sessions.data, orchestratorName]);
+  // Per-agent session count for the filter dropdown's option labels. A callback
+  // rather than a prebuilt map so it stays referentially stable across the 5s
+  // poll's structurally-shared no-op responses.
+  const agentSessionCount = useCallback(
+    (name: string) => (sessions.data ?? []).reduce((n, s) => (s.agentName === name ? n + 1 : n), 0),
+    [sessions.data],
+  );
   // Worker sessions (orchestrator/Brain lives only in /brain). Brain's dispatch
   // sessions (origin:'dispatch') are the brain's, shown only in /brain/dispatch —
   // keep them out of the worker chat recents.
@@ -858,31 +871,26 @@ export function RecentSessions() {
               </button>
             )}
           </div>
-          {/* Right: the existing per-agent filter (only when >1 agent). Custom
-              base-ui Select; modal={false} so its backdrop can't lock the page —
-              the default scroll-lock left sidebar links unclickable after a cycle. */}
+          {/* Right: the existing per-agent filter (only when >1 agent), lazy so
+              base-ui's Select isn't in the shell chunk. Until its chunk lands the
+              fallback holds the trigger's exact box, so the row doesn't reflow. */}
           {agentNames.length > 1 && (
-            <Select value={filter} onValueChange={(v) => onFilterChange(v ?? '')} modal={false}>
-              <SelectTrigger
-                aria-label="filter sessions by agent"
-                className="w-auto shrink-0 border-sidebar-border bg-sidebar/60 font-mono text-sidebar-foreground/90 hover:border-sidebar-foreground/20 hover:bg-sidebar-accent/60 focus-visible:border-sidebar-foreground/40 focus-visible:ring-sidebar-foreground/15"
-              >
-                <SelectValue>{(v: string | null) => (v ? v : 'All agents')}</SelectValue>
-              </SelectTrigger>
-              <SelectContent className="font-mono">
-                <SelectItem value="">
-                  All agents <span className="text-muted-foreground">· {sessions.data?.length ?? 0}</span>
-                </SelectItem>
-                {agentNames.map((n) => {
-                  const count = (sessions.data ?? []).filter((s) => s.agentName === n).length;
-                  return (
-                    <SelectItem key={n} value={n}>
-                      {n} <span className="text-muted-foreground">· {count}</span>
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
+            <Suspense
+              fallback={
+                <div
+                  aria-hidden="true"
+                  className="h-8 w-[86px] shrink-0 rounded-lg border border-sidebar-border bg-sidebar/60"
+                />
+              }
+            >
+              <AgentFilterSelect
+                value={filter}
+                onChange={onFilterChange}
+                agentNames={agentNames}
+                countFor={agentSessionCount}
+                total={sessions.data?.length ?? 0}
+              />
+            </Suspense>
           )}
         </div>
       )}

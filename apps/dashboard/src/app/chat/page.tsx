@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, Suspense } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, Suspense, lazy } from 'react';
 import { keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -30,7 +30,6 @@ import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
 import { useOlderPages } from '@/components/chat/use-older-pages';
 import { usePrependAnchor } from '@/components/chat/use-prepend-anchor';
 import { useCachedTimeline, useTimelineWriteThrough } from '@/lib/chat-cache/use-chat-cache';
-import { NewChatPane } from '@/components/chat/new-chat-pane';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 import { EmptyChat } from '@/components/chat/empty-chat';
 import { TypingIndicator } from '@/components/chat/message-bits';
@@ -61,6 +60,12 @@ const INITIAL_WINDOW = 60;
 // changes. Covers a multi-step composer growth (each new line is its own resize,
 // and the browser's own scroll adjustment lands a frame later).
 const SETTLE_AFTER_RESIZE_MS = 400;
+
+// Frames of "hold the end" granted to an explicit jump-to-latest while the
+// conversation is still growing — long enough to outlast the smooth scroll it
+// starts. Only ever spent on a user gesture, unlike the per-change budget in
+// the sticky-bottom effect.
+const SETTLE_CHASE_FRAMES = 24;
 
 // useLayoutEffect on the client (runs before the browser paints — used to restore
 // scroll position synchronously after a history prepend so there's no visible
@@ -106,6 +111,42 @@ function mergeMessagesById<T extends CachedMsg>(prev: T[] | undefined, next: T[]
   return changed ? out : prev;
 }
 
+// The "New chat" screen, split out behind React.lazy. It is a BRANCH you have to
+// click into (?new=1 / ?agent=…) — the normal /chat landing renders SessionPane —
+// yet it was the only static path from this module to @/components/ui/select, and
+// base-ui's Select drags its popup + floating-position engine along as a 136 KB
+// chunk. That chunk sat on the blocking script list of /chat, /brain and
+// /brain/dispatch (the three heaviest routes; /brain re-exports SessionPane from
+// here) for a form most page loads never show. Warmed on idle in ChatPageInner
+// below, so clicking New chat still finds it in cache.
+const NewChatPane = lazy(() => import('@/components/chat/new-chat-pane').then((m) => ({ default: m.NewChatPane })));
+
+// Shown only while that chunk is in flight. Mirrors the pane's own frame (header
+// + centered max-w-md card) so the swap doesn't move anything; the mobile sidebar
+// toggle stays live so the screen is never a dead end.
+function NewChatFallback() {
+  return (
+    <div className="flex flex-1 flex-col">
+      <header className="h-12 px-3 flex items-center gap-2 border-b border-border shrink-0">
+        <SidebarMobileToggle />
+        <span className="text-sm font-medium text-foreground">New chat</span>
+      </header>
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 space-y-5 shadow-sm" aria-hidden="true">
+          <div className="flex flex-col items-center gap-2">
+            <Skeleton className="h-12 w-12 rounded-2xl" />
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="h-3 w-32" />
+          </div>
+          <Skeleton className="h-[38px] w-full rounded-lg" />
+          <Skeleton className="h-[58px] w-full rounded-lg" />
+          <Skeleton className="h-10 w-full rounded-lg" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatPage() {
   return (
     <Suspense fallback={null}>
@@ -138,6 +179,17 @@ function ChatPageInner() {
   // listSessions every 5s; this shares that cache (used here only for the
   // landing redirect + empty state). Drops a duplicate 5s poll/re-render.
   const sessions = trpc.chat.listSessions.useQuery({});
+
+  // Warm the New-chat chunk on idle — same trick markdown.tsx uses. It is off the
+  // critical path (fires after first paint, at idle priority) but lands well before
+  // the New chat button gets clicked, so the split above costs no perceived latency.
+  // Lives HERE rather than at module scope on purpose: /brain imports SessionPane
+  // from this file and never shows the pane, so it should not pay for the fetch.
+  useEffect(() => {
+    const w = window as unknown as { requestIdleCallback?: (cb: () => void) => void };
+    const warm = () => { void import('@/components/chat/new-chat-pane'); };
+    (w.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1500)))(warm);
+  }, []);
 
   // Selection is URL-driven (?session=<id>); the global app sidebar owns the
   // session list + New chat. When nothing is selected and we're not composing a
@@ -180,23 +232,25 @@ function ChatPageInner() {
 
   if (showNew) {
     return (
-      <NewChatPane
-        agents={(agents.data ?? []).map((a) => a.name)}
-        preset={agentParam ?? undefined}
-        lockedAgent={scope.scoped ? scope.agentName ?? undefined : undefined}
-        // Land on the freshly-created session via a hard navigation. A
-        // programmatic router.replace()/push() does NOT reliably navigate here
-        // (Next 16 + custom server): createSession makes the row but the view
-        // stays stuck on the form — confirmed live whether the call sits in the
-        // mutation onSuccess callback OR a downstream effect. window.location is
-        // browser-native and can't be swallowed; the reload is fine for a
-        // deliberate "start chat" and lands cleanly on the new session.
-        onCreated={(id) => { window.location.href = `/chat?session=${encodeURIComponent(id)}`; }}
-        // Same Next16 swallow as onCreated: router.replace to a same-path query
-        // REMOVAL (/chat?new=1 → /chat) silently no-ops, so the cancel button did
-        // nothing. window.location is browser-native and can't be swallowed.
-        onCancel={() => { window.location.href = sessionParam ? `/chat?session=${encodeURIComponent(sessionParam)}` : '/chat'; }}
-      />
+      <Suspense fallback={<NewChatFallback />}>
+        <NewChatPane
+          agents={(agents.data ?? []).map((a) => a.name)}
+          preset={agentParam ?? undefined}
+          lockedAgent={scope.scoped ? scope.agentName ?? undefined : undefined}
+          // Land on the freshly-created session via a hard navigation. A
+          // programmatic router.replace()/push() does NOT reliably navigate here
+          // (Next 16 + custom server): createSession makes the row but the view
+          // stays stuck on the form — confirmed live whether the call sits in the
+          // mutation onSuccess callback OR a downstream effect. window.location is
+          // browser-native and can't be swallowed; the reload is fine for a
+          // deliberate "start chat" and lands cleanly on the new session.
+          onCreated={(id) => { window.location.href = `/chat?session=${encodeURIComponent(id)}`; }}
+          // Same Next16 swallow as onCreated: router.replace to a same-path query
+          // REMOVAL (/chat?new=1 → /chat) silently no-ops, so the cancel button did
+          // nothing. window.location is browser-native and can't be swallowed.
+          onCancel={() => { window.location.href = sessionParam ? `/chat?session=${encodeURIComponent(sessionParam)}` : '/chat'; }}
+        />
+      </Suspense>
     );
   }
 
@@ -651,6 +705,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const settleUntilRef = useRef(0);
   // Treat the very first paint as a "scroll to bottom" regardless of position.
   const firstScrollRef = useRef(true);
+  // Installed by the sticky-bottom effect below: "re-assert the bottom for the
+  // next N frames". scrollToBottom uses it to chase a bottom that is still
+  // moving; the effect owns it because the loop and its budget live there.
+  const settleKickRef = useRef<((frames: number) => void) | null>(null);
 
   const getViewport = useCallback((): HTMLElement | null => {
     return scrollRef.current?.querySelector(
@@ -664,6 +722,18 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     autoScrollRef.current = true;
     el.scrollTo({ top: el.scrollHeight, behavior });
     setPinned(true);
+    // A smooth scroll animates toward the offset captured RIGHT NOW. Fine on a
+    // settled conversation — but while a reply streams in, the bubble keeps
+    // growing under the animation and it lands short of the end, by more than
+    // the scroll listener's 60px slack, so nothing re-pins and the pill the user
+    // just clicked stays on screen. Chase the end for the length of the
+    // animation, but only when the content is known to be moving (the
+    // sticky-bottom observer refreshed this window within the last
+    // SETTLE_AFTER_RESIZE_MS) — an idle conversation keeps its smooth glide.
+    if (Date.now() <= settleUntilRef.current) {
+      settleUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
+      settleKickRef.current?.(SETTLE_CHASE_FRAMES);
+    }
     requestAnimationFrame(() => { autoScrollRef.current = false; });
   }, [getViewport, setPinned]);
 
@@ -700,10 +770,23 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // should re-subscribe when the anchor object identity changes.
   const prependAnchorRef = useRef(prependAnchor);
   prependAnchorRef.current = prependAnchor;
+  // Depend on the two CALLBACKS, not on the objects carrying them. Both
+  // `usePrependAnchor` and `useOlderPages` hand back a fresh object literal
+  // every render, so `[prependAnchor, older]` made this — and `pullEarlier`
+  // below, and the scroll listener that depends on it — a new identity on
+  // every tick. The listener effect then tore itself down and re-subscribed on
+  // every render, and its setup reads `clientHeight`/`scrollTop`, which forces
+  // a synchronous layout each time: 11 subscriptions and 9 forced reflows just
+  // to open a conversation, then 3 listeners swapped per render forever after.
+  // `capture` and `loadMore` are stable across ordinary renders (loadMore only
+  // changes when the top row does, i.e. after a prepend), so the listener now
+  // subscribes once and the refs above are what keep it current.
+  const capturePosition = prependAnchor.capture;
+  const loadMoreOlder = older.loadMore;
   const loadEarlier = useCallback(() => {
-    prependAnchor.capture();
-    older.loadMore();
-  }, [prependAnchor, older]);
+    capturePosition();
+    loadMoreOlder();
+  }, [capturePosition, loadMoreOlder]);
 
   // Put the reading position back BEFORE the browser paints the taller list.
   // A layout effect is the only place that can: by the time a rAF callback runs
@@ -777,21 +860,43 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     // Anchored mode positions the viewport on a specific message; jumping to the
     // bottom on first paint would undo exactly what the user clicked for.
     if (firstScrollRef.current && !anchoredActiveRef.current) { firstScrollRef.current = false; toBottom(); }
-    // Re-assert the bottom every frame until the settling window closes, so a
-    // single assignment losing a race to the browser's own adjustment doesn't
-    // leave the conversation parked short of the end.
+    // Re-assert the bottom for a few frames after each height change, so a single
+    // assignment losing a race to the browser's own adjustment doesn't leave the
+    // conversation parked short of the end.
+    //
+    // It is a short burst per change, NOT a poll of the whole settling window,
+    // so the work is 1 + SETTLE_FRAMES asserts per height change on any display
+    // instead of one per frame for as long as the height keeps changing. It used
+    // to run every frame until settleUntilRef expired — and since every resize
+    // pushed that 400ms out again, a streaming turn (this observer fires ~4×/s
+    // while a reply grows) kept it spinning at frame rate from the first token to
+    // the last: measured over a 10s stream, ~210 `scrollHeight` reads and ~370 rAF
+    // callbacks against 40 actual content changes, and `get scrollHeight` was the
+    // hottest app frame in the whole streaming state. Anything that moves the
+    // content later fires the observer again and gets its own burst, and a
+    // browser-side scroll adjustment is caught by the scroll listener (which
+    // still re-pins for the full settleUntilRef window — untouched below).
+    const SETTLE_FRAMES = 2;
+    let framesLeft = 0;     // re-asserts still owed to the last height change
+    let raf = 0;            // live settle chain, 0 when idle
     const settle = () => {
-      if (Date.now() > settleUntilRef.current) return;
+      raf = 0;
+      if (framesLeft <= 0 || Date.now() > settleUntilRef.current) return;
+      framesLeft -= 1;
       if (pinnedRef.current && !prependAnchorRef.current?.isHolding() && !anchoredActiveRef.current) toBottom();
-      requestAnimationFrame(settle);
+      raf = requestAnimationFrame(settle);
     };
+    const kick = (frames: number) => {
+      framesLeft = Math.max(framesLeft, frames);
+      if (!raf) raf = requestAnimationFrame(settle);
+    };
+    settleKickRef.current = kick;
     const ro = new ResizeObserver(() => {
       if (prependAnchorRef.current?.isHolding()) return; // holding a read position after a prepend
       if (anchoredActiveRef.current) return;   // reading history at a fixed anchor
-      const first = Date.now() > settleUntilRef.current;
       settleUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
       if (pinnedRef.current) toBottom();
-      if (first) requestAnimationFrame(settle);
+      kick(SETTLE_FRAMES);
     });
     ro.observe(content);
     // ALSO watch the viewport itself. The composer grows as you type a multi-line
@@ -799,7 +904,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     // untouched, so a content-only observer never fires and the last messages
     // slide behind the composer while the view sits there looking stuck.
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+      settleKickRef.current = null;
+    };
   }, [getViewport]);
 
 

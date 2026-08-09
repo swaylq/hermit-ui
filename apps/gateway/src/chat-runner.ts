@@ -714,6 +714,43 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   if (!state) {
     if (!tryAcquire('setup', session.id)) return;
     try {
+      // Big-resume heads-up: a cold start that resumes a large recorded
+      // transcript makes the user's first message sit at "排队中" for minutes
+      // while claude reloads history (observed: an 8.5MB / 336k-token session
+      // took >4min to boot before the first transcript write). Post a system
+      // row NOW so the dashboard shows "正在恢复历史…" instead of a silently
+      // stuck message. externalId is stable per session, so overlapping ticks
+      // collapse to one row via the sync route's (sessionId, externalId) upsert.
+      if (session.claudeSessionId && !tmuxSessionExists(session.id)) {
+        const cwd = session.agentDirectory ?? path.join(AGENTS_ROOT, session.agentName);
+        const tp = sessionTranscriptPath(session.claudeSessionId, cwd);
+        if (!tp) {
+          // claudeSessionId/cwd are both non-null here, so tp is only null if the
+          // project-dir encoding failed — let setupSession resolve it fresh.
+        } else {
+          try {
+            const mb = statSync(tp).size / (1024 * 1024);
+            if (mb >= 1) {
+              const estMin = Math.min(10, Math.max(1, Math.round(mb / 2)));
+              await api
+                .syncChatMessages([
+                  {
+                    sessionId: session.id,
+                    role: 'system',
+                    content: [
+                      {
+                        type: 'text',
+                        text: `[gateway] ⏳ 正在恢复历史会话（约 ${mb.toFixed(1)} MB），预计 ${estMin} 分钟内完成，新消息将先排队…`,
+                      },
+                    ],
+                    externalId: `resume-waking-${session.id}`,
+                  },
+                ])
+                .catch(() => {});
+            }
+          } catch { /* transcript gone from disk — setupSession will spawn fresh */ }
+        }
+      }
       state = await setupSession(session);
       sessionStates.set(session.id, state);
       freshSpawn = true;
@@ -1138,18 +1175,21 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     // hung on the reuse case → setup threw → the resumed pane ran untracked (replies never
     // synced, queued messages stuck at "排队中").
     //
-    // Timeout is generous (4 min): resuming a BIG session (answering the resume prompt +
-    // loading multi-MB history before the first transcript write) can take well over a
-    // minute — a zhinan-gitlab 2.1M session took ~90s and blew the old 90s window by a
-    // hair, so setup threw, the message got marked delivered but its keys never landed
-    // mid-load, and the user saw no reply ("发了消息没动静"). Only THIS session's setup
-    // waits; other sessions' ticks are unaffected.
+    // Timeout scales with the transcript being loaded — loading multi-MB history
+    // before the first transcript write is the dominant cost, and a fixed 240s
+    // window kept getting blown by genuinely large sessions (observed: an 8.5MB /
+    // 336k-token resume took >4min and timed out at 240s, only self-healing
+    // because the next 2s tick re-delivered). Floor stays 240s (a zhinan-gitlab
+    // 2.1M session took ~90s and blew the old 90s window by a hair); +60s per MB
+    // covers the giants (8.5MB → 12min). Only THIS session's setup waits; other
+    // sessions' ticks are unaffected.
+    const resumeTimeoutMs = 240_000 + Math.ceil(resumeBaselineSize / (1024 * 1024)) * 60_000;
     claudeUuid = await resolveResumedUuid({
       cwd,
       preExistingUuids,
       recordedUuid: session.claudeSessionId!,
       baselineSize: resumeBaselineSize,
-      timeoutMs: 240_000,
+      timeoutMs: resumeTimeoutMs,
       // Sampled per poll, not once up front: this wait can run for MINUTES on a big
       // resume, and the sibling that must be excluded is typically one that spawns
       // partway through it.

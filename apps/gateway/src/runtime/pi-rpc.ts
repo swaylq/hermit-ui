@@ -7,6 +7,7 @@
 // See docs/pi-runtime-design.md.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RpcClient } from '@earendil-works/pi-coding-agent';
@@ -45,6 +46,56 @@ function resolvePiCli(): string {
   const entry = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'));
   piCliPath = path.join(path.dirname(entry), 'cli.js');
   return piCliPath;
+}
+
+/**
+ * Keep pi's provider config in step with Settings → Pi Runtime.
+ *
+ * pi resolves `--provider <id>` against a persistent `~/.pi/agent/models.json`
+ * at CLI parse time — BEFORE extensions load, so the hermit extension's
+ * `registerProvider()` cannot satisfy it (measured on pi 0.83.0: a session
+ * spawned with `--provider hyqubit` died instantly with "Unknown provider
+ * hyqubit", exit 1, and the gateway crash-looped it every 2s). omp reads its
+ * providers from a config file too (ensureOmpModelsYaml); pi needs the same,
+ * in JSON and with `$VAR` apiKey references.
+ *
+ * Merges into an existing file rather than replacing it, so a human-authored
+ * models.json keeps its other providers. The machine's own provider is the
+ * source of truth from Settings → Pi Runtime and is (re)written to match.
+ */
+export function ensurePiModelsJson(
+  cfg: { provider?: string; baseUrl?: string; api?: string; models?: string[]; secretKey?: string | null },
+  agentDir = path.join(os.homedir(), '.pi', 'agent'),
+): void {
+  const provider = cfg.provider?.trim();
+  const baseUrl = cfg.baseUrl?.trim();
+  if (!provider || !baseUrl) return; // built-in provider (e.g. anthropic under the subscription) needs no file
+
+  const file = path.join(agentDir, 'models.json');
+  let providers: Record<string, unknown> = {};
+  try {
+    const existing = JSON.parse(fs.readFileSync(file, 'utf8')) as { providers?: unknown } | null;
+    const p = existing?.providers;
+    if (p && typeof p === 'object' && !Array.isArray(p)) providers = p as Record<string, unknown>;
+  } catch {
+    // missing or unparseable → start from an empty provider map
+  }
+
+  const models = (cfg.models ?? []).filter(Boolean).map((m) => ({ id: m, name: m }));
+  providers[provider] = {
+    name: provider,
+    baseUrl,
+    api: cfg.api?.trim() || 'anthropic-messages',
+    apiKey: '$HERMIT_PI_API_KEY', // env reference; the gateway injects the value per spawn
+    ...(models.length ? { models } : {}),
+  };
+
+  const next = JSON.stringify({ providers }, null, 2) + '\n';
+  const prev = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  if (prev === next) return;
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.writeFileSync(file, next, { mode: 0o600 });
+  console.log(`[pi] wrote ${file} for provider "${provider}"`);
 }
 
 type PiHandle = RuntimeHandle & {
@@ -369,10 +420,13 @@ export class PiRpcRuntime implements AgentRuntime {
     const mode = resolveMode(session.mode);
     const modeArgs = buildModeArgs(mode, { agentDirectory: session.agentDirectory });
     const globalMemoryArg = globalMemoryPrompt();
-    // The machine's default model, for sessions that pin none. Set on Settings →
-    // Pi Runtime so a new chat does not have to name a model to get a good one.
     const piConfig = await getPiConfig();
     const machineDefaultModel = resolveDefaultModel(piConfig);
+    // pi resolves --provider against a persistent config file at CLI parse time
+    // (before extensions load), so the extension's registerProvider cannot
+    // satisfy it — the child would die "Unknown provider" every boot. Keep the
+    // file in step the same way the omp engine keeps models.yml.
+    ensurePiModelsJson(piConfig);
     // ...and the provider that serves it. A model id alone is NOT enough: pi
     // resolves a bare id against its own built-in catalogue, so `claude-opus-5`
     // with no provider came back as {provider: 'anthropic', baseUrl:

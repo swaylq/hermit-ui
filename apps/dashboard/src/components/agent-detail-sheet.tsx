@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef, lazy, Suspense } from 'react';
 import Link from 'next/link';
 import { Pencil, Check, X, ChevronDown, Download, Trash2, Package, Info, Folder } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
@@ -16,22 +16,52 @@ import { relTime } from '@/lib/format';
 import { Markdown } from './markdown';
 import { CtxBar } from './ctx-bar';
 import { PublishToMarketButton } from './publish-to-market-button';
-import { InstallSkillDialog } from './install-skill-dialog';
 import { AgentKnowledgeSection } from './agent-knowledge-section';
-import { PublishTemplateDialog } from './publish-template-dialog';
 import { Overlay } from './overlay';
-import { SkillFilesModal } from './skill-files-modal';
 import { type FileItem as SkillFileItem } from './file-detail';
 import { sessionStatusView } from '@/lib/session-status';
 import { isSessionUnread } from '@/lib/session-read';
 import { removeAgentSkill } from '@/lib/optimistic-skills';
-import { AgentFiles } from './agent-files';
 import { useScope } from '@/lib/use-scope';
 import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
 import { BackendPicker } from './chat/backend-picker';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { isRuntimeKind, type RuntimeKind } from '@/lib/runtime-labels';
 import { PI_MODES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
+
+// ── Deferred sub-trees ───────────────────────────────────────────────────────
+// /agents renders this file inline (AgentDetailBody, not a sheet), so everything
+// it statically imports lands in that route's first-load script set — 1114 KB,
+// the heaviest route after /chat. Four of those imports are never on screen when
+// the page opens: the Files tab (a two-pane explorer + lazy tree) and three
+// click-gated modals. Behind `lazy()` they move into their own async chunk,
+// which the idle warm below fetches once first paint is done — so the Files tab
+// and the modals still open on the first click, they just stop being part of the
+// bytes /agents has to download before it can render anything.
+//
+// Everything on the default (Detail) tab stays a static import: the skills list,
+// its PublishToMarketButton rows, CtxBar, BackendPicker and the knowledge section
+// are all painted immediately, and deferring them would only trade bytes for a
+// visible pop-in.
+const AgentFiles = lazy(() => import('./agent-files').then((m) => ({ default: m.AgentFiles })));
+const InstallSkillDialog = lazy(() => import('./install-skill-dialog').then((m) => ({ default: m.InstallSkillDialog })));
+const PublishTemplateDialog = lazy(() => import('./publish-template-dialog').then((m) => ({ default: m.PublishTemplateDialog })));
+const SkillFilesModal = lazy(() => import('./skill-files-modal').then((m) => ({ default: m.SkillFilesModal })));
+
+// Same head start `markdown.tsx` and `ui/select.tsx` take: resolve the very same
+// chunks React.lazy will ask for, but only after first paint, so a click on the
+// Files tab or "Install skill" doesn't wait on the network. Fire-and-forget —
+// React.lazy owns the error path. requestIdleCallback isn't in Safari < 16.4.
+if (typeof window !== 'undefined') {
+  const warm = () => {
+    void import('./agent-files');
+    void import('./install-skill-dialog');
+    void import('./publish-template-dialog');
+    void import('./skill-files-modal');
+  };
+  if ('requestIdleCallback' in window) window.requestIdleCallback(warm);
+  else setTimeout(warm, 1500);
+}
 
 type SessionRow = inferRouterOutputs<AppRouter>['chat']['listSessions'][number];
 type AgentByNameOutput = NonNullable<inferRouterOutputs<AppRouter>['agents']['byName']>;
@@ -158,6 +188,23 @@ export function AgentDetailTabs({ tab, setTab }: { tab: DetailTab; setTab: (t: D
   );
 }
 
+// Placeholder for the deferred Files tab — same outer padding, same toolbar row
+// height and the same bordered min-h-[260px] two-pane box as agent-files.tsx, so
+// the real explorer swaps in without moving anything.
+function AgentFilesFallback() {
+  return (
+    <div className="flex flex-col flex-1 min-h-0 gap-2 p-3 sm:p-4" aria-busy="true">
+      <div className="flex items-center gap-1.5">
+        <Skeleton className="h-8 w-24" />
+        <Skeleton className="h-8 w-28" />
+      </div>
+      <div className="flex flex-1 min-h-[260px] rounded-lg border border-border overflow-hidden">
+        <div className="w-2/5 min-w-[150px] max-w-[320px] shrink-0 border-r border-border bg-muted/20" />
+      </div>
+    </div>
+  );
+}
+
 // Tabbed body, fill-height + controlled by `tab` (the strip lives in the parent
 // header). "详情" scrolls (centered, max-w-3xl); "文件" is the file manager
 // filling the whole pane. Fills its parent — wrap callers in a flex-1 min-h-0.
@@ -179,7 +226,11 @@ function AgentDetailContent({
       {tab === 'files' ? (
         // Keyed by agent so the tree/selection resets to the new agent's root
         // when you switch agents while staying on the Files tab.
-        <AgentFiles key={name} agentName={name} directory={agent.directory} />
+        // The fallback mirrors the explorer's own frame (toolbar row + bordered
+        // two-pane box) so the tab doesn't jump when the chunk lands.
+        <Suspense fallback={<AgentFilesFallback />}>
+          <AgentFiles key={name} agentName={name} directory={agent.directory} />
+        </Suspense>
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-5">
@@ -582,7 +633,13 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
           ))}
         </div>
       )}
-      {installOpen && <InstallSkillDialog agentName={agentName} installedNames={agent.skillNames} onClose={() => setInstallOpen(false)} />}
+      {/* Deferred: a modal renders nothing until it's open, so `null` while the
+          chunk lands is exactly what was on screen a frame earlier. */}
+      {installOpen && (
+        <Suspense fallback={null}>
+          <InstallSkillDialog agentName={agentName} installedNames={agent.skillNames} onClose={() => setInstallOpen(false)} />
+        </Suspense>
+      )}
       {openSkill && (
         <AgentSkillModal
           agentName={agentName}
@@ -618,13 +675,15 @@ function AgentSkillModal({ agentName, skill, content, onClose }: { agentName: st
     })),
   ];
   return (
-    <SkillFilesModal
-      title={`${skill}/`}
-      subtitle={`${agentName} · .claude/skills/${skill}`}
-      items={items}
-      loading={refsQ.isFetching && !refsQ.data}
-      onClose={onClose}
-    />
+    <Suspense fallback={null}>
+      <SkillFilesModal
+        title={`${skill}/`}
+        subtitle={`${agentName} · .claude/skills/${skill}`}
+        items={items}
+        loading={refsQ.isFetching && !refsQ.data}
+        onClose={onClose}
+      />
+    </Suspense>
   );
 }
 
@@ -644,7 +703,11 @@ function TemplatePublishSection({ agentName }: { agentName: string }) {
       >
         <Package className="h-3.5 w-3.5" /> Publish as template
       </button>
-      {open && <PublishTemplateDialog agentName={agentName} onClose={() => setOpen(false)} />}
+      {open && (
+        <Suspense fallback={null}>
+          <PublishTemplateDialog agentName={agentName} onClose={() => setOpen(false)} />
+        </Suspense>
+      )}
     </section>
   );
 }

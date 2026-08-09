@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contextTokensFrom, emitItemsFor, eventKeyFor, providerMismatch, singleFlight } from './pi-rpc';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { contextTokensFrom, emitItemsFor, ensurePiModelsJson, eventKeyFor, providerMismatch, singleFlight } from './pi-rpc';
 
 // The bug this guards: ensure() awaited client.start() between checking the
 // live map and populating it, so concurrent chatTicks each spawned their own pi
@@ -194,4 +197,59 @@ test('missing information on either side is not a mismatch', () => {
   assert.equal(providerMismatch(undefined, { model: { provider: 'anthropic' } }), null);
   assert.equal(providerMismatch('hyqubit', { model: {} }), null);
   assert.equal(providerMismatch('hyqubit', null), null);
+});
+
+// ── ensurePiModelsJson ──────────────────────────────────────────────────────
+// pi resolves --provider against ~/.pi/agent/models.json at CLI parse time,
+// before the hermit extension's registerProvider runs. Without the file every
+// pi session on a custom provider (hyqubit) dies "Unknown provider" at boot.
+// These guard the writer of that file.
+
+function tmpDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-models-'));
+}
+
+test('ensurePiModelsJson writes the machine provider with an env apiKey reference', () => {
+  const dir = tmpDir();
+  ensurePiModelsJson(
+    { provider: 'hyqubit', baseUrl: 'https://litellm.hyqubit.com', api: 'anthropic-messages', models: ['claude-opus-5', 'claude-sonnet-5'] },
+    dir,
+  );
+  const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'models.json'), 'utf8')) as {
+    providers: Record<string, { baseUrl: string; api: string; apiKey: string; models: Array<{ id: string }> }>;
+  };
+  const p = parsed.providers.hyqubit;
+  assert.ok(p, 'hyqubit provider should be present');
+  assert.equal(p.baseUrl, 'https://litellm.hyqubit.com');
+  assert.equal(p.api, 'anthropic-messages');
+  assert.equal(p.apiKey, '$HERMIT_PI_API_KEY');
+  assert.deepEqual(p.models.map((m) => m.id), ['claude-opus-5', 'claude-sonnet-5']);
+});
+
+test('ensurePiModelsJson is idempotent and does not rewrite an unchanged file', () => {
+  const dir = tmpDir();
+  ensurePiModelsJson({ provider: 'hyqubit', baseUrl: 'https://litellm.hyqubit.com' }, dir);
+  const file = path.join(dir, 'models.json');
+  const before = fs.readFileSync(file, 'utf8');
+  const mtime = fs.statSync(file).mtimeMs;
+  ensurePiModelsJson({ provider: 'hyqubit', baseUrl: 'https://litellm.hyqubit.com' }, dir);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal(fs.statSync(file).mtimeMs, mtime);
+});
+
+test('ensurePiModelsJson merges into an existing hand-written file', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'models.json');
+  fs.writeFileSync(file, JSON.stringify({ providers: { openrouter: { name: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1' } } }));
+  ensurePiModelsJson({ provider: 'hyqubit', baseUrl: 'https://litellm.hyqubit.com' }, dir);
+  const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { providers: Record<string, unknown> };
+  assert.ok(parsed.providers.openrouter, 'hand-written provider must survive');
+  assert.ok(parsed.providers.hyqubit, 'machine provider must be added');
+});
+
+test('ensurePiModelsJson skips when there is no provider or baseUrl', () => {
+  const dir = tmpDir();
+  ensurePiModelsJson({}, dir);
+  ensurePiModelsJson({ provider: 'anthropic' }, dir); // built-in, no baseUrl
+  assert.equal(fs.existsSync(path.join(dir, 'models.json')), false);
 });

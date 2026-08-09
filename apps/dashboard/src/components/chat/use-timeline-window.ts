@@ -57,8 +57,11 @@ export function useTimelineWindow(keys: string[], getViewport: () => HTMLElement
   }));
   // Read by the scroll listener, which must not re-subscribe on every render.
   const keysRef = useRef(keys);
+  // Read by the row observer below, which outlives any one render.
+  const planRef = useRef(plan);
   useIsoLayoutEffect(() => {
     keysRef.current = keys;
+    planRef.current = plan;
   });
 
   const recompute = useCallback(() => {
@@ -133,42 +136,111 @@ export function useTimelineWindow(keys: string[], getViewport: () => HTMLElement
     recompute();
   }, [sig, recompute]);
 
-  // Measure what is on screen, then hold the reading position if the space above
-  // it turned out to be a different size than we had guessed.
-  useIsoLayoutEffect(() => {
+  // Fold whatever has been measured into the plan, and hold the reading position
+  // if the space above the viewport turned out to be a different size than we
+  // had guessed. Called from the sweep below (synchronously, before paint) and
+  // from the row observer (in the same frame's rendering step, also before
+  // paint), so a row that settles never gets to shove the text.
+  const applyMeasured = useCallback(() => {
     const vp = getViewport();
-    if (!vp || keys.length <= THRESHOLD) return;
+    const ks = keysRef.current;
+    const p = planRef.current;
     // Only correct against a plan computed for THIS list. "Load earlier"
     // prepends a page, which shifts every index: the height above index `start`
     // then describes a different stretch of conversation than the plan's
     // `padTop` did, and the difference between them is not a measurement error
     // to be corrected — it is the prepend itself, which the prepend anchor is
     // already holding. Correcting it too moved the view by ~2,400px in one frame.
-    if (plan.sig !== sig) return;
-    let changed = false;
-    // The rows live inside the viewport we already have — no second ref needed.
-    for (const node of Array.from(vp.querySelectorAll(`[${WINDOW_ROW_ATTR}]`))) {
-      const key = (node as HTMLElement).getAttribute(WINDOW_ROW_ATTR);
-      if (!key) continue;
-      const h = (node as HTMLElement).getBoundingClientRect().height + ROW_GAP;
-      if (h > ROW_GAP && measured.current.get(key) !== h) {
-        measured.current.set(key, h);
-        changed = true;
-      }
-    }
-    if (!changed) return;
-    const heights = heightsFor(keys, measured.current, FALLBACK_ROW);
+    if (!vp || ks.length <= THRESHOLD || p.sig !== signature(ks)) return;
+    const heights = heightsFor(ks, measured.current, FALLBACK_ROW);
     let padTopNow = 0;
-    for (let i = 0; i < plan.start; i++) padTopNow += heights[i];
-    const delta = padTopNow - plan.padTop;
+    for (let i = 0; i < p.start; i++) padTopNow += heights[i];
+    const delta = padTopNow - p.padTop;
     if (Math.abs(delta) < 1) return;
     // Grow or shrink the space above the viewport and move with it, so the row
     // the reader is looking at does not move at all.
     vp.scrollTop += delta;
     let padBottomNow = 0;
-    for (let i = plan.end; i < heights.length; i++) padBottomNow += heights[i];
-    setPlan((prev) => (prev.sig === sig ? { ...prev, padTop: padTopNow, padBottom: padBottomNow } : prev));
+    for (let i = p.end; i < heights.length; i++) padBottomNow += heights[i];
+    setPlan((prev) => (prev.sig === p.sig ? { ...prev, padTop: padTopNow, padBottom: padBottomNow } : prev));
+  }, [getViewport]);
+
+  // A row's height is wanted for two different reasons, and they want it at two
+  // different moments:
+  //
+  //   · A row that has just mounted is replacing a GUESS. That has to be
+  //     measured here and now, in the layout effect, because the guess is part
+  //     of the space above the viewport and the correction must land before the
+  //     browser paints.
+  //   · A row that has been on screen for a while only changes height when its
+  //     content settles — markdown, a code block gaining a scrollbar, an image
+  //     resolving. Re-reading every mounted row on every render to catch that
+  //     was both the most expensive thing this hook did (~22 forced-layout rect
+  //     reads per scroll step, the hottest app frame in a windowed timeline) and
+  //     unreliable, since it only ever noticed a settle that happened to be
+  //     followed by a render.
+  //
+  // So: measure the new ones here, and let a ResizeObserver hand us the rest.
+  // It reports sizes the browser has already computed — no forced layout — and
+  // it fires whether or not anything re-rendered.
+  const rowObserver = useRef<ResizeObserver | null>(null);
+  const observedRows = useRef(new Set<Element>());
+  useIsoLayoutEffect(() => {
+    const vp = getViewport();
+    if (!vp || keys.length <= THRESHOLD) return;
+    if (plan.sig !== sig) return;
+    let ro = rowObserver.current;
+    if (!ro && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver((entries) => {
+        let dirty = false;
+        for (const entry of entries) {
+          const key = (entry.target as HTMLElement).getAttribute(WINDOW_ROW_ATTR);
+          if (!key) continue;
+          const h = (entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height) + ROW_GAP;
+          if (h > ROW_GAP && measured.current.get(key) !== h) {
+            measured.current.set(key, h);
+            dirty = true;
+          }
+        }
+        if (dirty) applyMeasured();
+      });
+      rowObserver.current = ro;
+    }
+    let changed = false;
+    // The rows live inside the viewport we already have — no second ref needed.
+    const live = new Set<Element>();
+    for (const node of vp.querySelectorAll(`[${WINDOW_ROW_ATTR}]`)) {
+      live.add(node);
+      const key = node.getAttribute(WINDOW_ROW_ATTR);
+      if (!key) continue;
+      if (ro && !observedRows.current.has(node)) {
+        ro.observe(node);
+        observedRows.current.add(node);
+      }
+      if (measured.current.has(key)) continue;
+      const h = (node as HTMLElement).getBoundingClientRect().height + ROW_GAP;
+      if (h > ROW_GAP) {
+        measured.current.set(key, h);
+        changed = true;
+      }
+    }
+    // Windowed-out rows are detached; keep the observer from holding them.
+    for (const node of observedRows.current) {
+      if (live.has(node)) continue;
+      ro?.unobserve(node);
+      observedRows.current.delete(node);
+    }
+    if (changed) applyMeasured();
   });
+
+  useEffect(
+    () => () => {
+      rowObserver.current?.disconnect();
+      rowObserver.current = null;
+      observedRows.current.clear();
+    },
+    []
+  );
 
   return { ...plan, active: keys.length > THRESHOLD };
 }

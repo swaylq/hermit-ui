@@ -1,93 +1,177 @@
 "use client"
 
-import { Select as SelectPrimitive } from "@base-ui/react/select"
-import { Check, ChevronDown } from "lucide-react"
+// Deferred entry point for the app's Select.
+//
+// base-ui's Select drags in the combobox machinery plus the floating-ui
+// positioning engine — 75 KB raw / 25 KB gzip of JS that only matters once a
+// dropdown is actually opened, yet it sat in the first-screen bundle of every
+// route that renders one (/agents, /cron, /pi, /market/skills). So the base-ui
+// parts live in select-impl.tsx and load on demand:
+//
+//   closed  → a plain <button> carrying the exact same classes and the same
+//             label (every call site formats the label itself via
+//             <SelectValue>{(v) => …}</SelectValue>), and no popup markup at all.
+//   opening → the first pointer-down / open-key swaps in the real base-ui Select
+//             mounted `defaultOpen`, so one click still opens the menu.
+//
+// The chunk is warmed on idle after first paint (same trick as markdown.tsx), so
+// by the time anyone reaches for a dropdown it is normally already in memory and
+// the swap is a synchronous state update. We deliberately do NOT swap on warm:
+// leaving the placeholder in place until it is used means a focused trigger can
+// never be yanked out from under the keyboard.
+
+import type {
+  SelectItemProps,
+  SelectPopupProps,
+  SelectRootProps,
+  SelectTriggerProps,
+  SelectValueProps,
+} from "@base-ui/react/select"
+import { ChevronDown } from "lucide-react"
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ButtonHTMLAttributes,
+  type ReactElement,
+} from "react"
 
 import { cn } from "@/lib/utils"
+import { SELECT_ICON_CLASS, SELECT_TRIGGER_CLASS, SELECT_VALUE_CLASS } from "./select-styles"
 
-// Root re-exported directly so its <Value, Multiple> generics pass through.
-const Select = SelectPrimitive.Root
+type SelectImpl = typeof import("./select-impl")
 
-function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
+// Module-level cache: once resolved, later Selects mount the real thing straight
+// away and `open()` becomes a synchronous setState (popup in the same frame).
+let impl: SelectImpl | null = null
+let implPromise: Promise<SelectImpl> | null = null
+function loadImpl(): Promise<SelectImpl> {
+  implPromise ??= import("./select-impl").then((m) => (impl = m))
+  return implPromise
+}
+
+if (typeof window !== "undefined") {
+  const w = window as unknown as { requestIdleCallback?: (cb: () => void) => void }
+  const warm = () => { void loadImpl() }
+  ;(w.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1500)))(warm)
+}
+
+// Non-null only after the swap; the parts below use it to hand rendering over to
+// the real base-ui components.
+const ImplContext = createContext<SelectImpl | null>(null)
+
+type Deferred = { value: unknown; disabled: boolean | undefined; open: () => void }
+const DeferredContext = createContext<Deferred | null>(null)
+
+// Keys that open a native <select>; anything else stays with the button.
+const OPEN_KEYS = new Set([" ", "Enter", "ArrowDown", "ArrowUp"])
+
+function Select<Value, Multiple extends boolean | undefined = false>(
+  props: SelectRootProps<Value, Multiple>,
+) {
+  const [loaded, setLoaded] = useState<SelectImpl | null>(impl)
+  const [openOnLoad, setOpenOnLoad] = useState(false)
+
+  const open = useCallback(() => {
+    setOpenOnLoad(true)
+    if (impl) { setLoaded(impl); return }
+    void loadImpl().then((m) => { setLoaded(m) })
+  }, [])
+
+  const { value, defaultValue, disabled, children } = props
+  const deferred = useMemo<Deferred>(
+    () => ({ value: value ?? defaultValue ?? null, disabled, open }),
+    [value, defaultValue, disabled, open],
+  )
+
+  if (!loaded) {
+    return <DeferredContext.Provider value={deferred}>{children}</DeferredContext.Provider>
+  }
+
+  const Root = loaded.SelectRoot as (p: SelectRootProps<Value, Multiple>) => ReactElement
   return (
-    <SelectPrimitive.Value
-      data-slot="select-value"
-      className={cn("min-w-0 flex-1 truncate text-left", className)}
-      {...props}
-    />
+    <ImplContext.Provider value={loaded}>
+      <Root {...props} defaultOpen={openOnLoad || props.defaultOpen} />
+    </ImplContext.Provider>
   )
 }
 
-function SelectTrigger({ className, children, ...props }: SelectPrimitive.Trigger.Props) {
+function SelectValue({ className, children, ...props }: SelectValueProps) {
+  const loaded = useContext(ImplContext)
+  const deferred = useContext(DeferredContext)
+  if (loaded) {
+    return <loaded.SelectValue className={className} {...props}>{children}</loaded.SelectValue>
+  }
   return (
-    <SelectPrimitive.Trigger
+    <span
+      data-slot="select-value"
+      className={cn(SELECT_VALUE_CLASS, typeof className === "string" ? className : undefined)}
+    >
+      {typeof children === "function" ? children(deferred?.value ?? null) : (children ?? props.placeholder)}
+    </span>
+  )
+}
+
+function SelectTrigger({ className, children, ...props }: SelectTriggerProps) {
+  const loaded = useContext(ImplContext)
+  const deferred = useContext(DeferredContext)
+  if (loaded) {
+    return <loaded.SelectTrigger className={className} {...props}>{children}</loaded.SelectTrigger>
+  }
+  // Only className / aria-label are ever passed here, but forward the rest and
+  // chain any handler so the placeholder behaves like the button it replaces.
+  const rest = props as ButtonHTMLAttributes<HTMLButtonElement>
+  return (
+    <button
+      type="button"
       data-slot="select-trigger"
-      className={cn(
-        "group flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-border bg-background px-2.5 py-1.5 text-[12px] text-foreground/90 outline-none transition-colors hover:border-foreground/20 hover:bg-accent/50 focus-visible:border-foreground/40 focus-visible:ring-1 focus-visible:ring-foreground/15 data-[popup-open]:border-foreground/30",
-        className,
-      )}
-      {...props}
+      aria-haspopup="listbox"
+      aria-expanded={false}
+      disabled={deferred?.disabled}
+      {...rest}
+      className={cn(SELECT_TRIGGER_CLASS, typeof className === "string" ? className : undefined)}
+      // Swap on `click`, not `pointerdown`: the real trigger mounts under the
+      // pointer, so a pointerdown swap leaves the browser's trailing click to
+      // land on base-ui's trigger, which toggles the just-opened popup shut.
+      // stopPropagation keeps that same click from reaching any document-level
+      // outside-press handler the popup installs as it mounts.
+      onClick={(e) => {
+        rest.onClick?.(e)
+        e.preventDefault()
+        e.stopPropagation()
+        deferred?.open()
+      }}
+      onKeyDown={(e) => {
+        rest.onKeyDown?.(e)
+        if (OPEN_KEYS.has(e.key)) { e.preventDefault(); deferred?.open() }
+      }}
+      // Cheap head start: by the time a click or key lands, the chunk is
+      // normally already parsed and the swap is a synchronous setState.
+      onPointerDown={(e) => { rest.onPointerDown?.(e); void loadImpl() }}
+      onPointerEnter={(e) => { rest.onPointerEnter?.(e); void loadImpl() }}
+      onFocus={(e) => { rest.onFocus?.(e); void loadImpl() }}
     >
       {children}
-      <SelectPrimitive.Icon className="shrink-0 text-muted-foreground/60 transition-transform duration-150 group-data-[popup-open]:rotate-180">
+      <span aria-hidden className={SELECT_ICON_CLASS}>
         <ChevronDown className="size-3.5" />
-      </SelectPrimitive.Icon>
-    </SelectPrimitive.Trigger>
+      </span>
+    </button>
   )
 }
 
-function SelectContent({
-  className,
-  children,
-  sideOffset = 4,
-  ...props
-}: SelectPrimitive.Popup.Props & { sideOffset?: number }) {
-  return (
-    <SelectPrimitive.Portal>
-      <SelectPrimitive.Positioner
-        data-slot="select-positioner"
-        side="bottom"
-        align="start"
-        sideOffset={sideOffset}
-        alignItemWithTrigger={false}
-        // z-[200] so the dropdown floats ABOVE modal overlays (Overlay = z-110,
-        // lightbox = z-100) when a Select is used inside one — e.g. the market
-        // skill detail's group setter. Was z-50, which hid behind the modal.
-        className="z-[200] outline-none"
-      >
-        <SelectPrimitive.Popup
-          data-slot="select-content"
-          className={cn(
-            "max-h-[var(--available-height)] min-w-[var(--anchor-width)] origin-[var(--transform-origin)] overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-            className,
-          )}
-          {...props}
-        >
-          {children}
-        </SelectPrimitive.Popup>
-      </SelectPrimitive.Positioner>
-    </SelectPrimitive.Portal>
-  )
+function SelectContent({ children, ...props }: SelectPopupProps & { sideOffset?: number }) {
+  const loaded = useContext(ImplContext)
+  // Closed and never loaded: the popup doesn't exist yet, so neither do its items.
+  if (!loaded) return null
+  return <loaded.SelectContent {...props}>{children}</loaded.SelectContent>
 }
 
-function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Props) {
-  return (
-    <SelectPrimitive.Item
-      data-slot="select-item"
-      className={cn(
-        "relative flex cursor-pointer items-center gap-2 rounded-md py-1.5 pl-2 pr-7 text-[12px] text-popover-foreground/90 outline-none transition-colors select-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
-        className,
-      )}
-      {...props}
-    >
-      <SelectPrimitive.ItemText className="min-w-0 flex-1 truncate">
-        {children}
-      </SelectPrimitive.ItemText>
-      <SelectPrimitive.ItemIndicator className="absolute right-2 inline-flex items-center text-foreground">
-        <Check className="size-3.5" />
-      </SelectPrimitive.ItemIndicator>
-    </SelectPrimitive.Item>
-  )
+function SelectItem({ children, ...props }: SelectItemProps) {
+  const loaded = useContext(ImplContext)
+  if (!loaded) return null
+  return <loaded.SelectItem {...props}>{children}</loaded.SelectItem>
 }
 
 export { Select, SelectValue, SelectTrigger, SelectContent, SelectItem }

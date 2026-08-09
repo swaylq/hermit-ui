@@ -2,26 +2,39 @@
 
 // Lazy entry point for the chat / cron / brain markdown renderer. The real
 // implementation (markdown-impl.tsx) pulls in react-markdown + rehype-highlight
-// + a highlight.js language pack — ~324 KB, the single biggest JS chunk in the
+// + a highlight.js language pack — ~370 KB, the single biggest JS chunk in the
 // app. None of it is needed for the app shell or first paint, only once message
 // bodies actually render, so it's split out behind React.lazy: the heavy deps
 // leave the initial bundle (faster cold-start parse / TTI) and load as their own
 // chunk. Until that chunk resolves, bubbles show their RAW text (prose reads fine
-// unstyled); the first markdown render swaps in the rendered version — a one-time,
-// sub-second upgrade. The service worker caches the chunk, so later cold-starts
-// load it from disk, and we warm it on idle below so the swap is usually invisible.
+// unstyled); the first markdown render swaps in the rendered version. The service
+// worker caches the chunk, so later cold-starts load it from disk.
+//
+// That swap is not free, so we start the fetch below the moment this module is
+// evaluated. It used to be warmed on `requestIdleCallback`, which fires only
+// AFTER first paint — on a cold /chat load that put the request at ~270ms, right
+// as the bubbles were mounting, so the raw text painted first and the rendered
+// markdown replaced it ~150ms later. Rendered markdown is a different height than
+// its source (a pipe table collapses into a table, a fenced block into a code
+// box), so that replacement re-laid out the whole timeline: 0.11 layout shift on
+// every cold /chat load, the only route in the app that had any. Starting the
+// fetch at module-evaluation time gets the chunk in place before the first bubble
+// renders, so bubbles mount as markdown once and nothing moves.
+//
+// This does not add bytes to any route: the idle warm already fetched the chunk
+// unconditionally wherever this module is imported, and only the timing changes.
+// It is still a `lazy()` boundary, not a static import — the chunk stays out of
+// every route's first-load script set, and a slow link simply falls back to the
+// raw-text path exactly as before.
 
 import { lazy, memo, Suspense } from 'react';
 
 const MarkdownImpl = lazy(() => import('./markdown-impl'));
 
-// Warm the chunk on idle (after first paint) so the first message render rarely
-// hits the raw-text fallback. Runs once when this module is first evaluated; the
-// dynamic import resolves to the SAME chunk React.lazy uses, so it's free.
+// Resolves to the SAME chunk React.lazy uses, so this is a head start, not a
+// second download. Fire-and-forget: React.lazy owns the error path.
 if (typeof window !== 'undefined') {
-  const w = window as unknown as { requestIdleCallback?: (cb: () => void) => void };
-  const warm = () => { void import('./markdown-impl'); };
-  (w.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1500)))(warm);
+  void import('./markdown-impl');
 }
 
 // Raw-text fallback, shown only while the markdown chunk is in flight (one-time
