@@ -14,7 +14,7 @@
 // cn / cronStatusTone) for all ~60 rows. Per-row handlers are created INSIDE the memo'd
 // row (from stable callback props), which doesn't defeat its memo (P1-3, finding C2).
 
-import { useState, useCallback, useMemo, useEffect, memo, lazy, Suspense } from 'react';
+import { useState, useCallback, useMemo, memo, lazy, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree, Archive, ArchiveRestore } from 'lucide-react';
@@ -29,6 +29,7 @@ import { useLiveWorking } from '@/lib/session-live';
 import { usePins, togglePin } from '@/lib/session-pins';
 import { useSessionView, setSessionView, useAgentDrawers, setAgentDrawer, type SessionView } from '@/lib/session-view';
 import { useLongPress } from '@/lib/use-long-press';
+import { readChatFilter, writeChatFilter } from '@/lib/chat-filter';
 import { ContextMenu } from '@/components/ui/context-menu';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-dialog';
 import { SidebarFindInput } from '@/components/sidebar/sidebar-find-input';
@@ -529,18 +530,33 @@ export function RecentSessions() {
 
   // Local agent filter — persisted in sessionStorage so it survives reloads
   // but doesn't pollute the URL. "" means "all agents".
-  const [filter, setFilter] = useState<string>('');
-  useEffect(() => {
-    const stored = typeof window !== 'undefined' ? sessionStorage.getItem('hermit:chat-filter') : null;
-    if (stored) setFilter(stored);
-  }, []);
+  //
+  // Scoped PER MACHINE, for the same reason lib/last-session.ts scopes its memory:
+  // the stored value is an agent NAME, and agents are machine-scoped. A single
+  // shared key survived a workspace switch and kept filtering by an agent the new
+  // machine has never heard of, so the recents list came back EMPTY — the reported
+  // "switching machines sometimes shows no sessions". Reproduced at 33 rows → 1,
+  // with the dropdown still displaying the other machine's agent.
+  // Read in a lazy initializer, not an effect: an effect would render the
+  // unfiltered list first and re-render filtered, and it is what tripped the
+  // setState-in-an-effect rule here.
+  const [stored, setStored] = useState<string>(() => readChatFilter());
   const onFilterChange = (v: string) => {
-    setFilter(v);
-    try {
-      if (v) sessionStorage.setItem('hermit:chat-filter', v);
-      else sessionStorage.removeItem('hermit:chat-filter');
-    } catch { /* private mode etc. — fine */ }
+    setStored(v);
+    writeChatFilter(v);
   };
+  // What actually applies. Second line of defence for what machine-scoping can't
+  // cover — the filtered agent was deleted, or the value predates the scoping — and
+  // DERIVED rather than corrected via setState, which matters beyond lint: the
+  // stored choice survives untouched, so a filter that means nothing here starts
+  // working again the moment you switch back to the machine it belongs to.
+  //
+  // While `sessions.data` is undefined every name looks unknown, so hold the stored
+  // value until the list settles; there are no rows to filter yet anyway.
+  const filter = useMemo(() => {
+    if (!stored || !sessions.data) return stored;
+    return sessions.data.some((s) => s.agentName === stored) ? stored : '';
+  }, [stored, sessions.data]);
 
   // Ephemeral text search over recents — matches the displayed title (or preview
   // fallback) + agent name. Not persisted: a quick find, not a scoping choice.
