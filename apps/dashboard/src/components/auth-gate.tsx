@@ -12,6 +12,21 @@ import { SwitchArrival } from '@/components/workspace-switcher';
 import { ScopedSidebar } from '@/components/scoped-sidebar';
 import { useScope } from '@/lib/use-scope';
 
+/**
+ * The app's frame, with nothing in it. Rendered by the server and by the client's
+ * first commit (they must agree), then replaced the moment the keyring has been
+ * read. Pure static markup — no browser APIs, nothing that can differ between the
+ * two renders.
+ */
+function AppShellSkeleton() {
+  return (
+    <div className="flex app-h w-full overflow-hidden bg-background text-foreground pwa-safe-t pwa-safe-x">
+      <div className="hidden w-64 shrink-0 border-r border-sidebar-border bg-sidebar lg:block" />
+      <div className="flex-1 min-w-0 min-h-0" />
+    </div>
+  );
+}
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [count, setCount] = useState(0);
   const [hydrated, setHydrated] = useState(false);
@@ -27,7 +42,17 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  if (!hydrated) return null;
+  // Not `null`. The shell is server-rendered EMPTY (the keyring lives in
+  // localStorage, which the server cannot read), so the first client render has to
+  // match that or hydration mismatches — the gate itself is structural and can't be
+  // removed. What it doesn't have to be is invisible: measured on a machine switch,
+  // the last JS chunk finishes at ~117ms but `<main>` doesn't reach the DOM until
+  // ~148ms, and before that the window is blank. A static frame paints as soon as
+  // the HTML arrives instead, so the app has shape while it boots.
+  //
+  // Deliberately no fake rows: a skeleton that guesses at content and then changes
+  // reads worse than one that just holds the geometry.
+  if (!hydrated) return <AppShellSkeleton />;
 
   // A share-link landing (/s/<token>) redeems the token and bootstraps its OWN
   // scoped keyring entry, so it must render before any key exists — skip the gate
