@@ -652,10 +652,15 @@ export function RecentSessions() {
     onSuccess: () => { utils.sessionGroups.list.invalidate(); utils.chat.listSessions.invalidate(); },
   });
   const visible = useMemo(() => {
-    // Hidden sessions drop out of the list unless the footer toggle is on.
-    let rows = showHidden ? baseRows : baseRows.filter((s) => !isPutAway(s));
-    if (filter) rows = rows.filter((s) => s.agentName === filter);
     const needle = q.trim().toLowerCase();
+    // Hidden and archived chats drop out of the list — but NOT out of search. They
+    // are put away, not gone, and most of a machine's history is now archived
+    // (88 of 124 here), so a "Search chats" that silently can't see it is worse
+    // than no search at all. Same rule the grouped filter below already follows,
+    // for the same reason: while you are searching you want it found wherever it
+    // is. They stay visually distinct — an archived row renders its `closed` badge.
+    let rows = showHidden || needle ? baseRows : baseRows.filter((s) => !isPutAway(s));
+    if (filter) rows = rows.filter((s) => s.agentName === filter);
     if (needle) {
       rows = rows.filter(
         (s) =>
