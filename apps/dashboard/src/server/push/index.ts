@@ -73,7 +73,26 @@ export function flushPending(): void {
   }
 }
 
-async function deliver(event: PushEvent): Promise<void> {
+/** What one device did with one event. Returned by deliverNow for the test button. */
+export interface DeliveryResult {
+  deviceId: string;
+  platform: string;
+  ok: boolean;
+  /** The row was removed because the transport says this device is gone. */
+  reaped: boolean;
+  detail?: string;
+}
+
+/**
+ * Deliver and report. `enqueuePush` throws the result away — nothing on a gateway
+ * write path can act on it — but `push.test` awaits it, because a test button that
+ * answers before the send has been attempted isn't testing anything.
+ */
+export async function deliverNow(event: PushEvent): Promise<DeliveryResult[]> {
+  return deliver(event);
+}
+
+async function deliver(event: PushEvent): Promise<DeliveryResult[]> {
   const now = Date.now();
 
   // Read state at DELIVERY time: during a chat debounce the user may have opened
@@ -88,7 +107,7 @@ async function deliver(event: PushEvent): Promise<void> {
   }
 
   const decision = shouldPush({ now, lastReadAt });
-  if (!decision.send) return;
+  if (!decision.send) return [];
 
   const devices = await prisma.pushDevice.findMany({
     where: { machineId: event.machineId },
@@ -101,7 +120,7 @@ async function deliver(event: PushEvent): Promise<void> {
       barkServer: true,
     },
   });
-  if (devices.length === 0) return;
+  if (devices.length === 0) return [];
 
   const payload = {
     title: event.title,
@@ -116,27 +135,36 @@ async function deliver(event: PushEvent): Promise<void> {
 
   // One device may be on a different wire than the next; each transport decides
   // for itself whether a failure means "gone" or "try again next time".
-  const dead: string[] = [];
-  await Promise.all(
-    devices.map(async (d) => {
+  const results: DeliveryResult[] = await Promise.all(
+    devices.map(async (d): Promise<DeliveryResult> => {
       const transport = transportFor(d.platform);
       if (!transport) {
         console.warn(`[push] unknown platform '${d.platform}' on device ${d.id}`);
-        return;
+        return { deviceId: d.id, platform: d.platform, ok: false, reaped: false, detail: 'unknown platform' };
       }
       // A transport whose credentials are absent stays quiet rather than logging
       // once per device per event — enqueuePush already warned at startup.
-      if (!transport.isConfigured()) return;
+      if (!transport.isConfigured()) {
+        return { deviceId: d.id, platform: d.platform, ok: false, reaped: false, detail: 'transport not configured' };
+      }
 
       const r = await transport.send(d, payload);
-      if (r.dead) dead.push(d.id);
-      else if (!r.ok) console.warn(`[push] ${event.kind} → ${d.platform}: ${r.detail ?? 'failed'}`);
+      if (!r.ok) console.warn(`[push] ${event.kind} → ${d.platform}: ${r.detail ?? 'failed'}${r.dead ? ' (reaping)' : ''}`);
+      return { deviceId: d.id, platform: d.platform, ok: r.ok, reaped: r.dead, detail: r.detail };
     }),
   );
 
   // A device the transport has disowned (app deleted, subscription revoked, key
   // unknown) will never work again — drop the row rather than retry it forever.
+  //
+  // This is LOGGED, not silent. Deleting someone's registration behind their back
+  // is how "I registered and nothing ever arrived" happens: the row vanishes from
+  // the settings list and no record anywhere says a send was ever attempted.
+  const dead = results.filter((r) => r.reaped).map((r) => r.deviceId);
   if (dead.length > 0) {
     await prisma.pushDevice.deleteMany({ where: { id: { in: dead } } });
+    console.warn(`[push] reaped ${dead.length} dead device(s) on machine ${event.machineId}`);
   }
+
+  return results;
 }

@@ -308,11 +308,34 @@ function DeviceList({
   onChange: () => void;
 }) {
   const [msg, setMsg] = useState<string | null>(null);
+  const [lines, setLines] = useState<string[]>([]);
   const remove = trpc.push.remove.useMutation({ onSuccess: onChange });
   const test = trpc.push.test.useMutation({
-    onSuccess: (r) =>
-      setMsg(r.ok ? `已发往 ${r.devices} 台设备` : '还没有注册任何设备'),
-    onError: (e) => setMsg(`失败：${e.message}`),
+    onSuccess: (r) => {
+      if (!('results' in r) || r.results.length === 0) {
+        setMsg('还没有注册任何设备');
+        setLines([]);
+        return;
+      }
+      // Per-device, because "sent to N devices" was the thing that hid a device
+      // key the Bark server had never heard of.
+      setLines(
+        r.results.map((d) =>
+          d.ok
+            ? `✓ ${PLATFORM_LABEL[d.platform] ?? d.platform} ${d.hint} — 已投递`
+            : d.reaped
+              ? `✗ ${PLATFORM_LABEL[d.platform] ?? d.platform} ${d.hint} — 这个注册无效，已移除（${d.detail ?? ''}）`
+              : `✗ ${PLATFORM_LABEL[d.platform] ?? d.platform} ${d.hint} — ${d.detail ?? '发送失败'}`,
+        ),
+      );
+      setMsg(r.ok ? '投递完成，看下手机。' : '每一台都失败了。');
+      // A reaped device just vanished from the table — refetch so the list agrees.
+      onChange();
+    },
+    onError: (e) => {
+      setMsg(`失败：${e.message}`);
+      setLines([]);
+    },
   });
 
   return (
@@ -327,7 +350,7 @@ function DeviceList({
             <button
               type="button"
               disabled={rows.length === 0 || test.isPending}
-              onClick={() => { setMsg(null); test.mutate(); }}
+              onClick={() => { setMsg(null); setLines([]); test.mutate(); }}
               className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs hover:bg-accent disabled:opacity-50"
             >
               <Send className="h-3.5 w-3.5" />
@@ -374,7 +397,25 @@ function DeviceList({
           )}
 
           {msg && <p className="mt-2 text-[11px] text-muted-foreground">{msg}</p>}
+          {lines.length > 0 && (
+            <ul className="mt-1.5 flex flex-col gap-0.5">
+              {lines.map((l) => (
+                <li
+                  key={l}
+                  className={cn(
+                    'font-mono text-[11px] leading-relaxed',
+                    l.startsWith('✓') ? 'text-emerald-500' : 'text-amber-600 dark:text-amber-400',
+                  )}
+                >
+                  {l}
+                </li>
+              ))}
+            </ul>
+          )}
           <p className="mt-3 text-[11px] text-muted-foreground leading-relaxed">
+            测试按钮是<span className="text-foreground/80">同步</span>的：它等真正发完再回报每台设备的结果，
+            不是「已发送」了事。
+            <br />
             服务端不做时段过滤：事件什么时候发生就什么时候推。
             <code className="rounded bg-muted px-1 py-0.5">blocked</code> /
             <code className="mx-1 rounded bg-muted px-1 py-0.5">host</code> /

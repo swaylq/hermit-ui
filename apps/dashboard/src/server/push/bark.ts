@@ -41,9 +41,25 @@ export const DEFAULT_BARK_SERVER = 'https://api.day.app';
  */
 const KEY_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
+/**
+ * A raw APNs device token: 64 lowercase hex characters.
+ *
+ * The Bark app shows this right under the device Key, labelled 「设备Token」, and
+ * it is the more official-looking of the two — so it gets pasted here. It is not
+ * a key and never will be: bark-server looks Keys up in its own database, so a
+ * token registers cleanly, fails the first send with "failed to get device
+ * token", and is then reaped. From the outside that is indistinguishable from
+ * push being broken, which is exactly what happened once already.
+ *
+ * Only checked on BARE input. A 64-hex string arriving as the path segment of a
+ * pasted URL came from the app's URL field, so it really is that server's key —
+ * which is also the escape hatch for anyone with a custom key of this shape.
+ */
+const APNS_TOKEN_RE = /^[0-9a-f]{64}$/i;
+
 export type BarkParse =
   | { ok: true; deviceKey: string; server: string | null }
-  | { ok: false; reason: 'empty' | 'bad-key' | 'bad-server' };
+  | { ok: false; reason: 'empty' | 'bad-key' | 'bad-server' | 'apns-token' };
 
 /**
  * Turn whatever the user pasted into a (key, server) pair.
@@ -72,7 +88,8 @@ export function parseBarkTarget(input: string, explicitServer?: string | null): 
     server = s;
   }
 
-  // Bare key.
+  // Bare key — but catch the device Token first; it also satisfies KEY_RE.
+  if (APNS_TOKEN_RE.test(raw)) return { ok: false, reason: 'apns-token' };
   if (KEY_RE.test(raw)) return { ok: true, deviceKey: raw, server };
 
   // Full URL.

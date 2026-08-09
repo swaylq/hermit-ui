@@ -105,6 +105,27 @@ test('an explicitly typed server beats the pasted URL origin', () => {
   assert.equal(r.ok && r.server, 'https://bark.example.com');
 });
 
+test('a pasted APNs device token is caught, not registered', () => {
+  // Bark shows 设备Token right under 设备Key. It is 64 hex chars, which the key
+  // pattern would otherwise happily accept — and then bark-server rejects it on
+  // the first send and the row is reaped, which looks exactly like "push is
+  // broken". This happened for real; the guard is the regression test.
+  const token = 'a3f19c7e5b0d4826fa71c93e0d5b8471e2c6a09fd83b4517ce20916af7d3e845';
+  assert.equal(token.length, 64);
+  assert.deepEqual(parseBarkTarget(token), { ok: false, reason: 'apns-token' });
+  assert.deepEqual(parseBarkTarget(token.toUpperCase()), { ok: false, reason: 'apns-token' });
+});
+
+test('64 hex inside a pasted URL is still honoured — it came from the app', () => {
+  // The escape hatch for a self-hoster whose custom key happens to look like one.
+  const odd = 'a3f19c7e5b0d4826fa71c93e0d5b8471e2c6a09fd83b4517ce20916af7d3e845';
+  assert.deepEqual(parseBarkTarget(`https://bark.example.com/${odd}`), {
+    ok: true,
+    deviceKey: odd,
+    server: 'https://bark.example.com',
+  });
+});
+
 test('unusable input is rejected with a reason, not a crash', () => {
   assert.deepEqual(parseBarkTarget(''), { ok: false, reason: 'empty' });
   assert.deepEqual(parseBarkTarget('   '), { ok: false, reason: 'empty' });

@@ -22,7 +22,7 @@ import { prisma } from '../db';
 import { configuredPlatforms, type Platform } from '../push/transport';
 import { publicKey as vapidPublicKey } from '../push/webpush';
 import { DEFAULT_BARK_SERVER, parseBarkTarget } from '../push/bark';
-import { enqueuePush } from '../push';
+import { deliverNow } from '../push';
 
 // APNs tokens are 32 bytes today and 100+ has been signalled for the future; accept
 // a generous hex range rather than pinning a length Apple may change.
@@ -138,13 +138,17 @@ export const pushRouter = router({
       if (!target.ok) {
         // A sentence someone can act on, not a validation dump. Getting this wrong
         // is indistinguishable from "push is broken" to the person holding a phone.
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message:
-            target.reason === 'bad-server'
-              ? '自建服务器要填完整地址，例如 https://bark.example.com'
-              : '认不出这是 Bark 的 device key。直接粘 Bark app 里那一整条 URL 就行（https://api.day.app/xxxxx/…），也可以只填中间 key 那一段。',
-        });
+        const MESSAGES: Record<typeof target.reason, string> = {
+          'bad-server': '自建服务器要填完整地址，例如 https://bark.example.com',
+          // The one people actually hit: Bark shows 设备Token right below 设备Key,
+          // and it is not a key — bark-server would reject it on the first send.
+          'apns-token':
+            '这是 Bark 里的「设备Token」（APNs token），不是 device key —— 用它推送一定失败。请改用它上面那条 URL（https://api.day.app/xxxxx/…），整条粘进来即可。',
+          'bad-key':
+            '认不出这是 Bark 的 device key。直接粘 Bark app 里那一整条 URL 就行（https://api.day.app/xxxxx/…），也可以只填中间 key 那一段。',
+          empty: '请填 Bark 的 URL 或 device key。',
+        };
+        throw new TRPCError({ code: 'BAD_REQUEST', message: MESSAGES[target.reason] });
       }
 
       await prisma.pushDevice.upsert({
@@ -243,9 +247,18 @@ export const pushRouter = router({
   // apart from a failure is not a test. Verifying end-to-end delivery needs a
   // real device; this is the button.
   test: machineProcedure.mutation(async ({ ctx }) => {
-    const devices = await prisma.pushDevice.count({ where: { machineId: ctx.machine.id } });
-    if (devices === 0) return { ok: false, reason: 'no devices registered' as const };
-    enqueuePush({
+    const before = await prisma.pushDevice.findMany({
+      where: { machineId: ctx.machine.id },
+      select: { id: true, platform: true, token: true },
+    });
+    if (before.length === 0) return { ok: false, reason: 'no devices registered' as const, results: [] };
+
+    // AWAITED, unlike every other call site. Everywhere else push is fire-and-
+    // forget because it hangs off a /api/sync write that must not slow down for
+    // a notification. Here the answer IS the product: the previous version
+    // reported "sent to N devices" before attempting a single send, so a key the
+    // Bark server had never heard of looked identical to a delivered push.
+    const results = await deliverNow({
       kind: 'host',
       machineId: ctx.machine.id,
       title: 'Hermit',
@@ -253,6 +266,23 @@ export const pushRouter = router({
       path: '/',
       collapseKey: `test-${ctx.machine.id}`,
     });
-    return { ok: true, devices };
+
+    const byId = new Map(before.map((d) => [d.id, d]));
+    return {
+      ok: results.some((r) => r.ok),
+      results: results.map((r) => {
+        const d = byId.get(r.deviceId);
+        return {
+          platform: r.platform,
+          hint: d ? hint(d.platform, d.token) : '—',
+          ok: r.ok,
+          // A reaped device is the interesting failure: the transport says this
+          // registration is bogus, so it has just been deleted. Say so plainly
+          // rather than letting the row quietly disappear from the list.
+          reaped: r.reaped,
+          detail: r.detail,
+        };
+      }),
+    };
   }),
 });
