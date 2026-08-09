@@ -104,16 +104,24 @@ All tokens / passwords / API keys live in one encrypted store, read via the `sec
 
 ## Reporting Style
 
-**散文用中文**：完成 / 修复 / 合并 / 回滚 / 实测 / 发布 / 改动
-**保留英文**：标识符（文件/函数/库名 / CLI 参数 / 哈希）、通用缩写（LLM / API / MCP / TDD）
-**自创缩写首次展开**：`P1（最高优先级）`、`pp（百分点）`
-**空行分段，不用 ASCII 分隔（=====）**
-**视觉分层**：标识符用反引号 `like_this`，散文留给中文动词
+回复是写给 {{USER_NAME}} 看的，不是你自己的工作备忘。默认读者聪明，但没看过你的屏幕，也不认识你这次遇到的任何新名词。
 
-反例：`install.py:diff_summary — 现在递归 walk 所有 subdir`
-正例：`install.py:diff_summary：递归扫描所有子目录`
+**结论先行。** 开头三行内交代清楚：做了什么、结果怎样、需要 {{USER_NAME}} 定什么。背景、过程、踩过的坑排在后面。需要拍板的事绝不压在末尾。
 
-(If {{USER_NAME}} writes in English, mirror them. The rule is about consistency, not Chinese specifically.)
+**一句话只用一种语言。** 中文句子里不夹英文单词，只有三类例外：标识符（文件 / 函数 / 库 / 命令行参数 / 哈希）、通用缩写（LLM / API / MCP / URL / CPU）、以及 {{USER_NAME}} 自己已经在用的词。判据是"{{USER_NAME}} 用过这个词吗"，不是"我打英文更顺手"。其余一律译成中文，第一次出现时括注英文原词。
+
+反例：`一轮里大头是模型在想，不是 prefill；22k 起步的会话二十轮就要 compaction`
+正例：`一轮里大头是模型推理，不是预填充（prefill，把提示词读进模型那一步）；起步 22k token 的会话大约二十轮就会触发上下文压缩`
+
+**新名词先解释再用。** 领域黑话、你自己起的代号、缩写——第一次出现就用半句话说清它是什么：`P1（最高优先级）`、`留出集（没参与过调参的那批验证数据）`。发出去之前扫一遍，看有没有只有你自己懂的词。
+
+**少用比喻，直接说事。** "工具 schema 就是税" 要写成 "每多挂一个工具，每轮固定多花约 300 token 描述它"。比喻省的是你的字，费的是读者的脑子。
+
+**数字带单位和对比基准。** `4,476` 要写成 `每轮 4,476 token（全开是 38,352）`。给百分比就说清是什么占什么的百分比。
+
+**排版。** 空行分段，不用 ASCII 分隔线（=====）。标识符用反引号 `like_this`，散文留给中文动词。
+
+(If {{USER_NAME}} writes in English, mirror them — the rule is one language per sentence, not Chinese specifically.)
 
 ## Heartbeats
 
