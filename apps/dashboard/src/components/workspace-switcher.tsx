@@ -17,14 +17,87 @@ import {
   isOnline,
   type KeyringEntry,
 } from '@/lib/keyring';
+import { lastSessionId } from '@/lib/last-session';
 import { AddMachine } from './add-machine';
 
 const initials = (s: string) => (s || '?').slice(0, 2).toUpperCase();
-// Switching machines is a hard reload: rebuilds the tRPC client with the new
-// active key and resets the React Query cache + SSE/terminal sockets cleanly.
+
+// Switching machines is a hard navigation: it rebuilds the tRPC client against the
+// new active key and resets the React Query cache + SSE/terminal sockets cleanly.
+// Everything below is about making that ONE navigation land as directly as possible.
+//
+// Call setActiveMachine() BEFORE this: lastSessionId() reads the ACTIVE machine's
+// memory, so by then it is already the target's. Going straight to that chat skips a
+// whole round-trip the old `/chat` landing paid — arrive blank, wait for
+// listSessions, then router.replace into a session — which is most of what made a
+// switch feel slow rather than the navigation itself.
+//
+// A remembered id can be stale (the chat was deleted or trashed on that machine);
+// the chat page re-lands when the session in the URL doesn't resolve, so a bad
+// memory costs a redirect, not a dead end.
 const go = () => {
-  window.location.href = '/chat';
+  const last = lastSessionId();
+  window.location.href = last ? `/chat?session=${encodeURIComponent(last)}` : '/chat';
 };
+
+/**
+ * The leaving half of a machine switch: covers the app the instant you pick, so the
+ * old workspace's data never sits there looking current while the next document
+ * loads. The arriving half is `SwitchArrival`, mounted in the app shell.
+ *
+ * Rendered in a portal at the document body so it covers the whole app rather than
+ * being clipped by the sidebar the switcher lives in.
+ */
+function SwitchOverlay({ name }: { name: string }) {
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center gap-3 bg-background/85 backdrop-blur-sm animate-in fade-in duration-150"
+      role="status"
+      aria-live="polite"
+    >
+      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      <span className="text-sm text-muted-foreground">Switching to {name}…</span>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * The arriving half. The switch is a real document navigation, so the new page
+ * would otherwise pop in fully-formed with no relationship to the one that left.
+ * A short fade makes the two documents read as one transition.
+ *
+ * Reads a one-shot sessionStorage flag written just before the navigation, and
+ * clears it immediately — a refresh afterwards is a refresh, not a switch.
+ */
+export function SwitchArrival() {
+  // Read in a LAZY INITIALIZER, not an effect. An effect runs after the first paint,
+  // so the app would flash through un-covered and only then get covered — a worse
+  // flicker than no transition at all. This way the cover is part of the very first
+  // render and only ever fades away. Safe to touch sessionStorage here because
+  // AuthGate renders nothing until it has hydrated, so this never runs on the server.
+  const [arriving, setArriving] = useState(() => {
+    try {
+      if (sessionStorage.getItem('hermit:switching') !== '1') return false;
+      // One-shot: a refresh after a switch is a refresh, not a switch.
+      sessionStorage.removeItem('hermit:switching');
+      return true;
+    } catch {
+      return false; // private mode
+    }
+  });
+  useEffect(() => {
+    if (!arriving) return;
+    const t = setTimeout(() => setArriving(false), 260);
+    return () => clearTimeout(t);
+  }, [arriving]);
+  if (!arriving || typeof document === 'undefined') return null;
+  return createPortal(
+    <div className="pointer-events-none fixed inset-0 z-[200] bg-background animate-out fade-out duration-250 fill-mode-forwards" />,
+    document.body,
+  );
+}
 
 export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
   const [open, setOpen] = useState(false);
@@ -41,6 +114,8 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
   // tap on phones — where the action icons can't hide behind hover — can't wipe a
   // workspace by accident.
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  // Non-null while a switch is in flight — drives the full-screen hand-off.
+  const [switchingTo, setSwitchingTo] = useState<string | null>(null);
 
   // Reset any armed delete / open rename when the menu closes.
   useEffect(() => {
@@ -103,8 +178,18 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
 
   const pick = (id: string) => {
     if (id !== active?.id) {
+      // Paint the switch before starting it. A hard navigation leaves the OLD page
+      // on screen, fully interactive-looking, until the new document paints — so
+      // without this the click reads as "nothing happened", which is the actual
+      // complaint about switching, not the milliseconds.
+      setSwitchingTo(list.find((e) => e.id === id)?.alias || list.find((e) => e.id === id)?.name || '…');
+      setOpen(false);
       setActiveMachine(id);
-      go();
+      // Tell the NEXT document it arrived from a switch, so it fades in instead of
+      // popping. Cleared by the overlay on the other side.
+      try { sessionStorage.setItem('hermit:switching', '1'); } catch { /* private mode */ }
+      // Let the overlay paint one frame before the navigation blocks the thread.
+      requestAnimationFrame(() => requestAnimationFrame(go));
     } else {
       setOpen(false);
     }
@@ -136,6 +221,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
 
   return (
     <div className="relative">
+      {switchingTo !== null && <SwitchOverlay name={switchingTo} />}
       <button
         ref={btnRef}
         type="button"

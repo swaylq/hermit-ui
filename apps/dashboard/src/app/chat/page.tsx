@@ -197,8 +197,19 @@ function ChatPageInner() {
   // most recent one — so the area is never blank AND reopening the app (closed
   // tab, relaunched PWA, machine switch) resumes the conversation you were in.
   useEffect(() => {
-    if (sessionParam) return;
-    const rows = sessions.data ?? [];
+    // A session id in the URL that this machine doesn't have is treated as no id at
+    // all, so the landing below runs instead of leaving the pane stranded on a chat
+    // that cannot load. Three ways to get one, and the switcher just made the first
+    // routine: arriving from a machine switch with a remembered id that has since
+    // been deleted there, a bookmark/PWA restore pointing at another machine's
+    // session, and an open chat that was trashed (getSession excludes the bin).
+    //
+    // Guarded on a SETTLED list — while listSessions is still loading, every id
+    // looks unknown, and redirecting then would fight the URL on every load.
+    const known = sessions.data;
+    const stale = !!sessionParam && !!known && !known.some((s) => s.id === sessionParam);
+    if (sessionParam && !stale) return;
+    const rows = known ?? [];
     // Prefer the remembered session, but only while it's still one we'd be willing
     // to land on: it may have been deleted, hidden, or moved out of scope since.
     const resume = (ok: (s: (typeof rows)[number]) => boolean) => {
@@ -221,7 +232,14 @@ function ChatPageInner() {
     // Also skip hidden sessions (the user decluttered them) and Brain's dispatch
     // sessions (origin:'dispatch' — those live only in /brain/dispatch).
     const first = resume((s) => s.agentName !== brainName && !s.hiddenAt && s.origin !== 'dispatch');
-    if (first) router.replace(`/chat?session=${encodeURIComponent(first.id)}`);
+    // `replace`, not push: a URL we are correcting should not become a back-button
+    // stop. When it was stale, go browser-native — a router.replace from
+    // /chat?session=A to /chat?session=B is same-path-different-param, the case
+    // this setup is documented to swallow (see the onCreated note below).
+    if (first) {
+      if (stale) window.location.href = `/chat?session=${encodeURIComponent(first.id)}`;
+      else router.replace(`/chat?session=${encodeURIComponent(first.id)}`);
+    }
   }, [showNew, sessionParam, sessions.data, agents.data, router, scope.scoped, search]);
 
   // Remember the open chat (per machine) so the landing effect above can resume it

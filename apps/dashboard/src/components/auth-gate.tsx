@@ -8,6 +8,7 @@ import { LoginScreen } from '@/components/login-screen';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { AppSidebar, SidebarProvider } from '@/components/app-sidebar';
+import { SwitchArrival } from '@/components/workspace-switcher';
 import { ScopedSidebar } from '@/components/scoped-sidebar';
 import { useScope } from '@/lib/use-scope';
 
@@ -97,6 +98,10 @@ function Authed({ onSignOut, children }: { onSignOut: () => void; children: Reac
 
   return (
     <SidebarProvider>
+      {/* The arriving half of a machine switch — see SwitchArrival. Mounted here
+          because this is the outermost thing that renders on every authed page,
+          so the fade covers the whole app regardless of route. */}
+      <SwitchArrival />
       <div className="flex app-h w-full overflow-hidden bg-background text-foreground pwa-safe-t pwa-safe-x">
         <AppSidebar />
         <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">{children}</main>
