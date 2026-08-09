@@ -477,7 +477,18 @@ export function RecentSessions() {
   // list — "not part of what I'm working on" — so they hide together and come back
   // together. Archiving used to leave the session in place wearing a `closed` badge,
   // which meant the tidying action didn't actually tidy the list.
-  const isPutAway = useCallback((s: SessionListItem) => Boolean(s.hiddenAt) || Boolean(s.closedAt), []);
+  //
+  // A PINNED session is never put away, whatever its flags say. Pins live in
+  // localStorage (session-pins.ts), so `computeCleanup` cannot see them and cannot
+  // spare a pinned chat the way it spares a grouped or human-named one — a pin is
+  // the strongest "keep this in front of me" signal in the product and the only one
+  // the server is blind to. Honouring it here is what stops an archive sweep from
+  // silently removing something the human explicitly pinned. (Archiving it is still
+  // fine: it stays visible, wearing its `closed` badge, one click from reopening.)
+  const isPutAway = useCallback(
+    (s: SessionListItem) => !pins.has(s.id) && (Boolean(s.hiddenAt) || Boolean(s.closedAt)),
+    [pins],
+  );
   // Hide/unhide optimistically so the row vanishes (or reappears) on the click,
   // not on the next 5s poll — then reconcile on settle.
   const setHidden = trpc.chat.setHidden.useMutation({

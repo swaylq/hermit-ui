@@ -119,6 +119,15 @@ Share 不用管：share key 是 agent 粒度的（`share.ts` 全按 `agentName`�
 （`nulls: 'last'` 同理：`DESC` 默认 `NULLS FIRST`，会把从没说过话的会话顶到最上面。）
 置顶（pin）仍然浮在最前，那是它存在的唯一意义。
 
+**置顶的会话永远不会被收起来**，不管它的 `closedAt` / `hiddenAt` 是什么。pin 存在
+localStorage（`session-pins.ts`），服务端看不见，所以 `computeCleanup` **没法**像豁免
+「已归组」「人起的标题」那样豁免一个置顶会话 —— 而 pin 是整个产品里最强的一句
+「把这个放在我眼前」，偏偏是唯一服务端瞎的那个。归档它没关系（它仍然留在列表里、挂着
+`closed` 标签、一键就能 reopen），让它从侧栏消失才是错的。
+
+真正的修法是把 pin 挪到服务端（像 `lastReadAt` / `hiddenAt` 当初那样，schema 注释里
+写明了理由：这样才能跨设备同步），那时它就能进阻断表。目前是客户端兜底。
+
 回收站这一档照抄 `Agent.trashedAt` 已经跑通的形状（gateway 把目录 mv 进 `.hermit-trash/`，恢复 mv 回来，purge 才 `rm -rf`）——
 同一套心智模型，用户不用学第二遍。
 
