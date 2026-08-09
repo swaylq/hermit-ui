@@ -81,11 +81,11 @@ pvypkrtuf1qi 3.1d
 | **待答交互** | `Interaction.status = 'pending'` | 卡在权限弹窗上的会话，长相和「闲置很久」一模一样，却恰恰最不能删 |
 | **排队未投递** | `role='user' AND deliveredAt IS NULL AND externalId IS NULL` | 你打了字，还没送进去 |
 | **未答标记** | `unansweredMsgId IS NOT NULL` | 你问了，没人答 |
-| **在跑 loop** | `loopState.loops[].status = 'running'` | reaper 已有此守卫，复用 `hasRunningLoop()` |
+| **在跑 loop** | `status='running'` **且** `lastRunAt` 在 14 天内 | `status` 只是意图，`lastRunAt` 才是证据：这个字段写进 `.loop-state.json` 之后，loop 随 pane / agent / 机器一起死掉时**没有人会去改它**。2026-08-09 实测：21 个会话挂着「running」的 loop 而已经闲置 3–42 天，其中一个**每小时**跑的 loop，它自己的 `lastRunAt` 是 30 天前。只信 flag 会让这些永远归档不掉。取 14 天是刻意远超所有在用的周期（每小时 / 每天 / 每周），只捞尸体，不误伤活的 |
 | **正在干活** | `state = 'working'` | 同上 |
 | **Brain 关联** | `dispatchedBySessionId` / `takeoverBySessionId` 非空，或被别人指着 | 删了子会话，Brain 的 dispatch-watcher / takeover-watcher 后续断链 |
 | **归了分组** | `groupId IS NOT NULL` | 有人专门把它归过档 |
-| **人起的标题** | `title` 非空 且 `titleAuto=false` 且 **`origin` 为空** | 有人专门给它起过名。`origin` 那个条件是上线后实测补的：`titleAuto` 列**默认就是 false**，而 `createSession` 收 `title` 时从不盖这个戳 —— 于是每个机器开出来带标题的会话（dispatch 的 `Brain → agent`、takeover、cron，全 fleet 27 行）都被读成「人特意起的名」而永久豁免。只有 `chat.setTitle`（重命名对话框）才真的代表人打了字，而那条路径的 `origin` 一定为空 |
+| **人起的标题**（软阻断） | `title` 非空 且 `titleAuto=false` 且 **`origin` 为空** | **只挡回收站，不挡归档。** 有人专门给它起过名。`origin` 那个条件是上线后实测补的：`titleAuto` 列**默认就是 false**，而 `createSession` 收 `title` 时从不盖这个戳 —— 于是每个机器开出来带标题的会话（dispatch 的 `Brain → agent`、takeover、cron，全 fleet 27 行）都被读成「人特意起的名」而永久豁免。只有 `chat.setTitle`（重命名对话框）才真的代表人打了字，而那条路径的 `origin` 一定为空 |
 | **置顶保留** | `keepAt IS NOT NULL`（新增） | 「别再问我这个」 |
 
 Share 不用管：share key 是 agent 粒度的（`share.ts` 全按 `agentName`），没有会话级分享链接。
@@ -120,6 +120,19 @@ Share 不用管：share key 是 agent 粒度的（`share.ts` 全按 `agentName`�
 `cleanupIdleDays`（72h → 3 天，**每台机器的内存行为原样保留** —— 这一步是「3 天后休眠」和
 「醒着躺两星期」之间唯一的东西，留空就等于后者）、把已经睡着但没归档的会话补成归档、
 然后删掉旧的那个字段。
+
+### 阻断分两个强度
+
+上面那张表最初是为**不可逆**那一档写的，然后被整张搬去挡**可逆**那一档 —— 这就是「为什么这些没有归档」的答案：
+2026-08-09 实测有 **32 个会话闲置 3–60 天却还堵在侧栏，唯一原因是你给它起过名字**。
+
+「我给它起了名」是一句关于**删掉它**的强话，是一句关于**把它在侧栏里留两个月**的弱话。
+归档一键可撤、而且开关一拨就看得见，所以名字不再阻止归档，只阻止进回收站。
+其余每一条要么是「还有人在等它」（cron / 待答交互 / 排队消息 / 未答标记 / 未读 / 在跑的 loop / working /
+在飞的 dispatch），要么是「人专门归置过它」（分组 / 你按过保留），这些仍然**两档都挡**。
+
+分组之所以仍然挡归档：会话归了组就已经离开扁平 recents、住进抽屉了，归档它只会把它从你亲手放的地方拿走，
+而侧栏并不会因此更干净。
 
 **归档 = 从侧栏消失。** 归档过的会话默认不在侧栏显示，和 `hiddenAt` 同一个待遇，
 由底部 `Show hidden & archived` 一起放出来。在这之前，归档只是给它挂个 `closed` 标签、

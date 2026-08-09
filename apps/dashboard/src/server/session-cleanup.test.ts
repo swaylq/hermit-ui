@@ -104,8 +104,23 @@ test('an unread last message blocks — never delete something never seen', () =
 
 test('a running loop blocks', () => {
   assert.equal(verdict({ loopState: { loops: [{ status: 'running' }] } })?.blockedBy, 'loop');
+  assert.equal(verdict({ loopState: { loops: [{ status: 'running', lastRunAt: ago(2).toISOString() }] } })?.blockedBy, 'loop');
   // A finished loop is not a reason to keep anything.
   assert.notEqual(verdict({ loopState: { loops: [{ status: 'stopped' }] } })?.blockedBy, 'loop');
+});
+
+test('a loop that stopped firing is finished, whatever its status says', () => {
+  // `status: 'running'` is written once and never corrected when the loop dies with
+  // its pane. Measured 2026-08-09: 21 sessions carried a "running" loop while idle
+  // 3-42 days, one of them HOURLY with a lastRunAt 30 days old. Trusting the flag
+  // alone made those permanently un-archivable.
+  const dead = { loopState: { loops: [{ status: 'running', lastRunAt: ago(30).toISOString() }] } };
+  assert.notEqual(verdict(dead)?.blockedBy, 'loop');
+  assert.equal(verdict({ ...dead, lastMessageAt: ago(40), closedAt: null })?.tier, 'archive');
+});
+
+test('an undateable loop still blocks — the safe direction', () => {
+  assert.equal(verdict({ loopState: { loops: [{ status: 'running', lastRunAt: 'nonsense' }] } })?.blockedBy, 'loop');
 });
 
 test('a working session blocks', () => {
@@ -133,10 +148,28 @@ test('a FINISHED dispatch is not pinned by its own routing field', () => {
   assert.equal(v?.reason, 'dispatch-done');
 });
 
-test('deliberate human organisation blocks: a group, a hand-typed title, an explicit Keep', () => {
+test('deliberate human organisation blocks: a group and an explicit Keep', () => {
   assert.equal(verdict({ groupId: 'g1' })?.blockedBy, 'grouped');
-  assert.equal(verdict({ title: 'Q3 planning', titleAuto: false })?.blockedBy, 'named');
   assert.equal(verdict({ keepAt: ago(1) })?.blockedBy, 'kept');
+});
+
+test('a name you typed stops deletion, NOT archiving', () => {
+  // The bug this splits apart: the blocker table was written for the destructive
+  // rung and applied wholesale to the reversible one, so 32 sessions idle 3-60 days
+  // stayed in the sidebar purely because they had been named. Archiving is one click
+  // from undone; the bin is not.
+  const named = { title: 'Q3 planning', titleAuto: false, origin: null };
+  assert.equal(verdict({ ...named, lastMessageAt: ago(40), closedAt: null })?.tier, 'archive');
+  const v = verdict({ ...named, lastMessageAt: ago(80), closedAt: ago(40) });
+  assert.equal(v?.tier, 'keep');
+  assert.equal(v?.blockedBy, 'named');
+});
+
+test('a name also protects the disposable-by-construction shortcuts', () => {
+  // stillborn/empty/dispatch-done skip the age gate, so without this they would
+  // route a named conversation into the bin within a day of it going quiet.
+  const v = verdict({ title: 'notes', titleAuto: false, lastMessageAt: ago(40) }, { hasAssistant: new Set() });
+  assert.notEqual(v?.tier, 'trash');
 });
 
 test('an auto-generated title is NOT organisation — it blocks nothing', () => {
@@ -149,10 +182,12 @@ test('a title a MACHINE opened the session with is not organisation either', () 
   // as "the human named this" and was spared forever. `origin` is what tells the
   // two apart: only the rename dialog means a person typed it, and that always
   // leaves origin null.
-  assert.notEqual(verdict({ title: 'Brain → finance-agent', titleAuto: false, origin: 'dispatch' })?.blockedBy, 'named');
-  assert.notEqual(verdict({ title: 'daily report', titleAuto: false, origin: 'cron' })?.blockedBy, 'named');
-  // A human-typed title on a human-opened session still blocks.
-  assert.equal(verdict({ title: 'monitor 迁移', titleAuto: false, origin: null })?.blockedBy, 'named');
+  // Both are past the bin threshold and archived, so the split is visible: a
+  // machine title lets them through, a human one holds them at `keep`.
+  const old = { lastMessageAt: ago(80), closedAt: ago(40) };
+  assert.equal(verdict({ ...old, title: 'Brain → finance-agent', titleAuto: false, origin: 'dispatch' })?.tier, 'trash');
+  assert.equal(verdict({ ...old, title: 'daily report', titleAuto: false, origin: 'cron' })?.tier, 'trash');
+  assert.equal(verdict({ ...old, title: 'monitor 迁移', titleAuto: false, origin: null })?.blockedBy, 'named');
 });
 
 test('a blocked session that is not old enough is not surfaced at all', () => {

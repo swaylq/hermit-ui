@@ -108,16 +108,39 @@ export const BLOCKER_LABEL: Record<string, string> = {
   working: 'working right now',
   dispatch: 'wired to a Brain dispatch or takeover',
   grouped: 'filed in a group',
-  named: 'you gave it a name',
+  named: 'you gave it a name — archived, but never auto-deleted',
   kept: 'you marked it Keep',
 };
 
-// A loop is running when loopState carries one with status 'running' — the same
-// test the reaper uses (routers/chat.ts hasRunningLoop), duplicated rather than
-// imported to keep this module free of router imports.
-function hasRunningLoop(loopState: unknown): boolean {
-  const loops = (loopState as { loops?: Array<{ status?: string }> } | null)?.loops;
-  return Array.isArray(loops) && loops.some((l) => l?.status === 'running');
+// A loop that hasn't fired in this long is finished, whatever its status says.
+//
+// `status: 'running'` is written into <agent>/.loop-state.json when a loop starts
+// and is simply never corrected if the loop dies with the pane, the agent, or the
+// machine. Measured 2026-08-09: 21 sessions carried a "running" loop while idle
+// 3–42 days, including an HOURLY loop whose own `lastRunAt` was 30 days old.
+// Trusting the flag alone made those permanently un-archivable.
+//
+// 14 days is deliberately far past any cadence in use (hourly, daily, weekly), so
+// a live loop is never mistaken for a dead one — this only catches the corpses.
+const LOOP_STALE_DAYS = 14;
+
+/**
+ * Is a loop actually running in this session?
+ *
+ * The loop's own `lastRunAt` is the evidence; `status` is only its intent. When
+ * `lastRunAt` is missing we fall back to trusting `status`, which is the safe
+ * direction: a loop we can't date blocks cleanup rather than being archived out
+ * from under itself.
+ */
+function hasRunningLoop(loopState: unknown, nowMs: number): boolean {
+  const loops = (loopState as { loops?: Array<{ status?: string; lastRunAt?: string }> } | null)?.loops;
+  if (!Array.isArray(loops)) return false;
+  return loops.some((l) => {
+    if (l?.status !== 'running') return false;
+    const last = l.lastRunAt ? Date.parse(l.lastRunAt) : NaN;
+    if (!Number.isFinite(last)) return true;
+    return (nowMs - last) / DAY_MS < LOOP_STALE_DAYS;
+  });
 }
 
 const DAY_MS = 86_400_000;
@@ -290,7 +313,19 @@ export function classifySession(
     lastMessageAt: s.lastMessageAt, idleDays, rssMb: s.rssMb, contextTokens: s.contextTokens,
   };
 
-  // ── Blockers. Any hit and the session is off the table entirely. ──
+  // ── Blockers, in two strengths. ──
+  //
+  // The table below was written for the DESTRUCTIVE rung and was then applied
+  // wholesale to the reversible one, which is why nothing was getting archived:
+  // 32 sessions idle 3–60 days sat in the sidebar solely because the human had
+  // typed a name for them.
+  //
+  // "I named this" is a strong statement about DELETING it and a weak one about
+  // keeping it in the sidebar for two months. Archiving is reversible in a click
+  // and the chat is still one toggle away, so a name no longer prevents it — it
+  // only prevents the bin. Everything else here means "someone is still waiting
+  // on this" or "the human filed this deliberately", and both still block outright.
+  //
   // Ordered most-specific first so the reason shown is the interesting one:
   // "a cron reports here" is worth reading, "not old enough" is not.
   const unread = s.lastMessageAt != null && (s.lastReadAt == null || s.lastMessageAt > s.lastReadAt);
@@ -301,7 +336,7 @@ export function classifySession(
     : refs.hasQueued.has(s.id) ? 'queued'
     : s.unansweredMsgId ? 'unanswered'
     : unread ? 'unread'
-    : hasRunningLoop(s.loopState) ? 'loop'
+    : hasRunningLoop(s.loopState, nowMs) ? 'loop'
     : s.state === 'working' ? 'working'
     // A dispatch pins its session only while it is IN FLIGHT. `dispatchedBySessionId`
     // is set on every dispatch child for the lifetime of the row — it is how the
@@ -312,19 +347,10 @@ export function classifySession(
     // A takeover is different: `takeoverBySessionId` is CLEARED when the takeover
     // ends (endTakeover), so a non-null value always means live.
     : ((!s.closedAt && s.dispatchedBySessionId) || s.takeoverBySessionId || refs.isPokeTarget.has(s.id)) ? 'dispatch'
+    // A group is the human's own filing, and a grouped session has already left
+    // the flat recents for its drawer — archiving it would take it out of the
+    // place they filed it, for no decluttering gain.
     : s.groupId ? 'grouped'
-    // "The human named it" is inferred from titleAuto=false, and that inference
-    // has a false positive: the column DEFAULTS to false, and `chat.createSession`
-    // accepts a `title` without ever stamping it — so every session a machine
-    // opened with a title (Brain dispatch's "Brain → agent", takeover, cron,
-    // cron-report: 27 rows fleet-wide on 2026-08-09) reads as deliberate human
-    // organisation and is spared forever.
-    //
-    // `origin` is the discriminator: it is non-null exactly when something other
-    // than a person opened the session, and then its title is machine-written by
-    // construction. Only `chat.setTitle` — the rename dialog — means a human typed
-    // it, and that path always leaves origin null.
-    : (s.title && !s.titleAuto && !s.origin) ? 'named'
     : null;
 
   if (blocker) {
@@ -335,26 +361,40 @@ export function classifySession(
       : null;
   }
 
+  // Soft blocker: enough to keep a conversation out of the bin, not enough to keep
+  // it in the sidebar forever.
+  //
+  // "The human named it" is inferred from titleAuto=false, and that inference has a
+  // false positive: the column DEFAULTS to false, and `chat.createSession` accepts a
+  // `title` without ever stamping it — so every session a machine opened with a
+  // title (Brain dispatch's "Brain → agent", takeover, cron, cron-report) would read
+  // as deliberate human organisation. `origin` is the discriminator: non-null exactly
+  // when something other than a person opened the session. Only `chat.setTitle` —
+  // the rename dialog — means a human typed it, and that path leaves origin null.
+  const named = Boolean(s.title) && !s.titleAuto && !s.origin;
+
   // ── Disposable by construction, regardless of age. ──
   // A Brain dispatch is a one-shot delegation whose result was already reported
   // back to the dispatcher; its context is redundant BY DEFINITION, which makes
   // it the one case where "you can just start a new conversation" is provably
   // true rather than a judgement call. Still requires the session to be finished.
-  if (s.origin === 'dispatch' && s.closedAt && idleDays >= 1) {
+  if (!named && s.origin === 'dispatch' && s.closedAt && idleDays >= 1) {
     return { ...base, tier: 'trash', reason: 'dispatch-done', blockedBy: null };
   }
-  if (!refs.anyMessage.has(s.id) && idleDays >= 1) {
+  if (!named && !refs.anyMessage.has(s.id) && idleDays >= 1) {
     return { ...base, tier: 'trash', reason: 'empty', blockedBy: null };
   }
   // Opened, spoken to, never answered — a failed spawn, not a conversation.
-  if (!refs.hasAssistant.has(s.id) && idleDays >= 1) {
+  if (!named && !refs.hasAssistant.has(s.id) && idleDays >= 1) {
     return { ...base, tier: 'trash', reason: 'stillborn', blockedBy: null };
   }
-  if (refs.trashedAgentNames.has(s.agentName)) {
+  if (!named && refs.trashedAgentNames.has(s.agentName)) {
     return { ...base, tier: 'trash', reason: 'agent-trashed', blockedBy: null };
   }
 
   // ── Age-driven rungs. ──
+  // A named conversation is archived like any other, but never proposed for
+  // deletion: past the bin threshold it surfaces as spared, with the reason.
   // Archived, and still untouched a month AFTER that.
   //
   // Both clocks matter, and the second one is the whole point of the rung. The
@@ -371,7 +411,9 @@ export function classifySession(
   // So the bin asks for something archiving cannot supply: a month of you not
   // reopening it. `closedAt` is when it was archived; reopening clears it.
   if (idleDays >= thresholds.trashDays && s.closedAt && daysSince(s.closedAt, nowMs) >= thresholds.trashDays) {
-    return { ...base, tier: 'trash', reason: 'idle', blockedBy: null };
+    return named
+      ? { ...base, tier: 'keep', reason: 'blocked', blockedBy: 'named' }
+      : { ...base, tier: 'trash', reason: 'idle', blockedBy: null };
   }
   // Archive = out of the sidebar AND asleep. One action, because they are one
   // intent; see CleanupTier.
