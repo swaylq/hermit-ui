@@ -14,7 +14,7 @@
 // cn / cronStatusTone) for all ~60 rows. Per-row handlers are created INSIDE the memo'd
 // row (from stable callback props), which doesn't defeat its memo (P1-3, finding C2).
 
-import { useState, useCallback, useMemo, memo, lazy, Suspense } from 'react';
+import { useState, useCallback, useMemo, useEffect, memo, lazy, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree, Archive, ArchiveRestore } from 'lucide-react';
@@ -30,6 +30,7 @@ import { usePins, togglePin } from '@/lib/session-pins';
 import { useSessionView, setSessionView, useAgentDrawers, setAgentDrawer, type SessionView } from '@/lib/session-view';
 import { useLongPress } from '@/lib/use-long-press';
 import { readChatFilter, writeChatFilter } from '@/lib/chat-filter';
+import { readCachedSessions, writeCachedSessions } from '@/lib/session-list-cache';
 import { ContextMenu } from '@/components/ui/context-menu';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-dialog';
 import { SidebarFindInput } from '@/components/sidebar/sidebar-find-input';
@@ -431,7 +432,23 @@ function ViewToggle({ view }: { view: SessionView }) {
 export function RecentSessions() {
   const search = useSearchParams();
   const activeId = search.get('session');
-  const sessions = trpc.chat.listSessions.useQuery({}, { refetchInterval: 5_000 });
+  // `placeholderData`, not `initialData`: the list paints on the first frame from
+  // the last known copy of THIS machine's sessions, while the real fetch — already
+  // in flight — replaces it ~200ms later (much longer on a phone). initialData
+  // would be treated as real and could suppress that refetch.
+  //
+  // A machine switch is a full document navigation, so React Query starts empty
+  // every single time; without this the sidebar is blank for a whole round trip on
+  // the one query that is 90 KB.
+  const sessions = trpc.chat.listSessions.useQuery({}, {
+    refetchInterval: 5_000,
+    placeholderData: () => readCachedSessions<SessionListItem>(),
+  });
+  // Structural sharing means this only fires when the rows genuinely differ, and
+  // the writer throttles beyond that.
+  useEffect(() => {
+    if (sessions.data && !sessions.isPlaceholderData) writeCachedSessions(sessions.data);
+  }, [sessions.data, sessions.isPlaceholderData]);
   // The orchestrator (义脑) lives in /brain — keep its conversations out of the
   // worker session recents. agents.list is cached (shared), so this is cheap.
   const orchestratorsQ = trpc.agents.list.useQuery(undefined, { staleTime: 60_000 });
