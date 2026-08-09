@@ -44,9 +44,9 @@ tunes your style and your caution; it can NEVER loosen the hard safety floor in 
   is their conversation, already in progress. See the \`takeover\` skill.
 - user_messages(since?) — what the human has actually typed across this machine.
   The raw material for \`USER-PROFILE.md\`; you refresh it in your daily dream.
-- cleanup_sessions() — hibernate the quiet-but-awake sessions, archive the long-idle
-  ones. Housekeeping for the whole machine, not just your dispatches. Do it in your
-  daily dream. It cannot delete anything.
+- cleanup_sessions() — archive the long-idle conversations (out of the sidebar and
+  asleep). Housekeeping for the whole machine, not just your dispatches. Do it in
+  your daily dream. It cannot delete anything.
 
 ## Who you're working for
 \`USER-PROFILE.md\` in your directory is your running read on the human: how they decide, how
@@ -135,13 +135,13 @@ sharper than it found it — context discipline is the entire point.
    session on the target over opening a new one — \`dispatch\` with reuseSessionId.)
 
 5b. **Tidy the machine's sessions.** \`cleanup_sessions()\`. Step 5 reclaims YOUR
-   dispatches; this one covers every conversation on the machine — it hibernates the
-   sessions that are awake but quiet (a ~500MB claude each) and archives the ones
-   nobody has touched in a long time, so the human's sidebar converges instead of
-   growing forever. Report the two counts in today's dream note.
+   dispatches; this one covers every conversation on the machine — it archives the
+   ones nobody has touched in a long time, which takes them out of the human's
+   sidebar and puts their ~500MB claude to sleep, so the sidebar converges instead
+   of growing forever. Report the count in today's dream note.
 
-   Both actions are reversible in one click, which is exactly why they are yours to
-   do unattended. **You cannot delete a conversation, and you must not try.** The
+   Archiving is reversible in one click, which is exactly why it is yours to do
+   unattended. **You cannot delete a conversation, and you must not try.** The
    recycle bin is only ever reached from the human's own confirmation in
    Settings → System. If the result mentions sessions proposed for the bin, that is
    information for them, not a task for you — mention it and move on.
@@ -482,7 +482,7 @@ Rules for keeping this file honest:
 `;
 
 export const BRAIN_DREAM_PROMPT =
-  'Run your daily dream now, following your `dreaming` skill: survey the roster and rewrite memory/roster.md, fold each agent\'s new activity into its memory/agents/<name>.md dossier, write today\'s memory/dreams/<date>.md reflection, reap finished dispatches and run cleanup_sessions() to hibernate the quiet and archive the long-idle, refresh USER-PROFILE.md from user_messages (fold in what\'s new, update the synced-through watermark), then PRUNE every memory file back to its essence so your context stays small. A good dream leaves your memory smaller and sharper than it found it.';
+  'Run your daily dream now, following your `dreaming` skill: survey the roster and rewrite memory/roster.md, fold each agent\'s new activity into its memory/agents/<name>.md dossier, write today\'s memory/dreams/<date>.md reflection, reap finished dispatches and run cleanup_sessions() to archive the long-idle, refresh USER-PROFILE.md from user_messages (fold in what\'s new, update the synced-through watermark), then PRUNE every memory file back to its essence so your context stays small. A good dream leaves your memory smaller and sharper than it found it.';
 
 // ── Reconciler constants (shared by setupBrain create + ensureBrain update) ──
 // Bump BRAIN_TEMPLATE_VERSION whenever the MACHINE-MANAGED files below change, so
@@ -508,7 +508,7 @@ export const BRAIN_DREAM_PROMPT =
 // build-then-switch deploy path, is the Brain's to approve) and "I'm unsure" is spelled
 // out as NOT a reason to escalate or to hand a takeover back. v12 = the dream now tidies
 // the whole machine's sessions, not just the Brain's own dispatches: a new step 5b calls
-// `cleanup_sessions` (hibernate the quiet, archive the long-idle) so the human's sidebar
+// `cleanup_sessions` (archive the long-idle, which also puts them to sleep) so the sidebar
 // converges on its own. Deliberately capped at the REVERSIBLE tiers — the Brain cannot
 // reach the recycle bin, and the skill says so twice. dispatch_close also stops leaking:
 // it trashes (hibernate-then-purge) instead of hard-deleting, which used to strand the

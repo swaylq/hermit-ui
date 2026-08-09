@@ -188,9 +188,11 @@ test('archiving something already ancient does NOT make it bin-eligible the same
   assert.equal(verdict({ lastMessageAt: ago(80), closedAt: ago(31) })?.tier, 'trash');
 });
 
-test('awake but quiet → sleep, which never touches the conversation', () => {
-  const v = verdict({ lastMessageAt: ago(3), alive: true });
-  assert.equal(v?.tier, 'sleep');
+test('a session quiet for days but inside the archive window is left alone', () => {
+  // There is no longer a `sleep` rung to catch it: the machine's idle-TTL reaper
+  // (Machine.idleReapHours) already hibernates these, and cleanup duplicating that
+  // bought a second threshold and a second row in the UI for no new outcome.
+  assert.equal(verdict({ lastMessageAt: ago(3), alive: true }), null);
 });
 
 test('a session used today is left entirely alone', () => {

@@ -10,7 +10,7 @@
 // only ever about the recycle bin.
 
 import { useState } from 'react';
-import { Moon, Archive, Trash2, RotateCcw, ShieldCheck, Brush } from 'lucide-react';
+import { Archive, Trash2, RotateCcw, ShieldCheck, Brush } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -116,7 +116,7 @@ export function SessionCleanupView() {
     else {
       await confirm({
         title: 'Cleanup done',
-        message: `Slept ${r.slept}, archived ${r.archived}. Nothing looked disposable enough to propose for the bin.`,
+        message: `Archived ${r.archived}. Nothing looked disposable enough to propose for the bin.`,
         confirmLabel: 'OK',
       });
     }
@@ -134,7 +134,6 @@ export function SessionCleanupView() {
     setOpen(false);
   }
 
-  const sleepN = preview?.sleep.length ?? 0;
   const archiveN = preview?.archive.length ?? 0;
   const trashN = preview?.trash.length ?? 0;
   const sparedN = preview?.spared.length ?? 0;
@@ -151,19 +150,15 @@ export function SessionCleanupView() {
         </div>
 
         <p className="mb-3 text-xs text-muted-foreground">
-          Sleeping frees the process, archiving frees the sidebar — both undo in a click and run
-          immediately. The recycle bin is the only step that removes anything, and it always asks first.
+          Archiving takes a conversation out of the sidebar and puts its process to sleep. It runs
+          immediately and undoes in a click. The recycle bin is the only step that removes anything,
+          and it always asks first.
         </p>
 
         <div className="space-y-1 text-xs">
           <div className="flex items-center gap-2 rounded-md px-1 py-1">
-            <Moon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <span className="flex-1">Awake but quiet — free the process</span>
-            <span className="tabular-nums">{sleepN}</span>
-          </div>
-          <div className="flex items-center gap-2 rounded-md px-1 py-1">
             <Archive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <span className="flex-1">Idle &gt; {cfg?.cleanupIdleDays ?? preview?.defaults.archiveIdleDays}d — archive</span>
+            <span className="flex-1">Idle &gt; {cfg?.cleanupIdleDays ?? preview?.defaults.archiveIdleDays}d — archive + sleep</span>
             <span className="tabular-nums">{archiveN}</span>
           </div>
           <div className="flex items-center gap-2 rounded-md px-1 py-1">
@@ -199,7 +194,7 @@ export function SessionCleanupView() {
           <button
             type="button"
             onClick={() => void runCleanup()}
-            disabled={busy || (sleepN + archiveN + trashN === 0)}
+            disabled={busy || archiveN + trashN === 0}
             className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer disabled:opacity-50"
           >
             <Brush className="h-3.5 w-3.5" />
@@ -221,7 +216,7 @@ export function SessionCleanupView() {
         <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
           <span>
             {cfg?.lastCleanupAt
-              ? `Last run ${fmtAgo(cfg.lastCleanupAt)}${cfg.lastCleanupSummary ? ` — slept ${cfg.lastCleanupSummary.slept ?? 0}, archived ${cfg.lastCleanupSummary.archived ?? 0}, binned ${cfg.lastCleanupSummary.trashed ?? 0}${cfg.lastCleanupSummary.auto ? ' (auto)' : ''}` : ''}`
+              ? `Last run ${fmtAgo(cfg.lastCleanupAt)}${cfg.lastCleanupSummary ? ` — archived ${cfg.lastCleanupSummary.archived ?? 0}, binned ${cfg.lastCleanupSummary.trashed ?? 0}${cfg.lastCleanupSummary.auto ? ' (auto)' : ''}` : ''}`
               : 'Never run'}
           </span>
           <button type="button" onClick={() => setShowTrash((v) => !v)} className="underline-offset-2 hover:underline cursor-pointer">
@@ -284,7 +279,7 @@ export function SessionCleanupView() {
             <div>
               <p className="text-sm font-semibold">Move {picked.size} to the recycle bin?</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Slept {apply.data?.slept ?? 0} and archived {apply.data?.archived ?? 0} already — those undo in a click.
+                Archived {apply.data?.archived ?? 0} already — that undoes in a click.
                 These below still hold their conversation; they sit in the bin for {cfg?.trashRetainDays ?? 14} days
                 before anything is actually deleted.
               </p>

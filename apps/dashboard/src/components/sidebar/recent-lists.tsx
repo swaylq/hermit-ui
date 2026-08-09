@@ -473,6 +473,11 @@ export function RecentSessions() {
 
   // Hidden sessions are dropped from the list; a footer toggle reveals them.
   const [showHidden, setShowHidden] = useState(false);
+  // What the footer toggle reveals. Hidden and archived mean the same thing to this
+  // list — "not part of what I'm working on" — so they hide together and come back
+  // together. Archiving used to leave the session in place wearing a `closed` badge,
+  // which meant the tidying action didn't actually tidy the list.
+  const isPutAway = useCallback((s: SessionListItem) => Boolean(s.hiddenAt) || Boolean(s.closedAt), []);
   // Hide/unhide optimistically so the row vanishes (or reappears) on the click,
   // not on the next 5s poll — then reconcile on settle.
   const setHidden = trpc.chat.setHidden.useMutation({
@@ -574,7 +579,7 @@ export function RecentSessions() {
     () => (sessions.data ?? []).filter((s) => s.agentName !== orchestratorName && s.origin !== 'dispatch'),
     [sessions.data, orchestratorName],
   );
-  const hiddenCount = useMemo(() => baseRows.filter((s) => s.hiddenAt).length, [baseRows]);
+  const putAwayCount = useMemo(() => baseRows.filter((s) => isPutAway(s)).length, [baseRows, isPutAway]);
 
   // ── Groups ────────────────────────────────────────────────────────────────
   // Drawers above the recents. A grouped session LEAVES the flat list — that's the
@@ -615,7 +620,7 @@ export function RecentSessions() {
   });
   const visible = useMemo(() => {
     // Hidden sessions drop out of the list unless the footer toggle is on.
-    let rows = showHidden ? baseRows : baseRows.filter((s) => !s.hiddenAt);
+    let rows = showHidden ? baseRows : baseRows.filter((s) => !isPutAway(s));
     if (filter) rows = rows.filter((s) => s.agentName === filter);
     const needle = q.trim().toLowerCase();
     if (needle) {
@@ -632,11 +637,11 @@ export function RecentSessions() {
     // order within the pinned and unpinned groups.
     if (pins.size) rows = [...rows].sort((a, b) => (pins.has(b.id) ? 1 : 0) - (pins.has(a.id) ? 1 : 0));
     return rows;
-  }, [baseRows, showHidden, filter, q, pins]);
+  }, [baseRows, showHidden, isPutAway, filter, q, pins]);
 
   // Sessions per drawer, in the same recency order the flat list uses.
   const grouped = useMemo(() => {
-    const rows = showHidden ? baseRows : baseRows.filter((s) => !s.hiddenAt);
+    const rows = showHidden ? baseRows : baseRows.filter((s) => !isPutAway(s));
     const by = new Map<string, typeof rows>();
     for (const s of rows) {
       if (!s.groupId) continue;
@@ -645,7 +650,7 @@ export function RecentSessions() {
       else by.set(s.groupId, [s]);
     }
     return by;
-  }, [baseRows, showHidden]);
+  }, [baseRows, showHidden, isPutAway]);
 
   // ── By-agent view ─────────────────────────────────────────────────────────
   // A different lens on the same sessions, not a second filing system: the manual
@@ -653,7 +658,7 @@ export function RecentSessions() {
   // its agent. Nothing is written — switching back leaves the groups as they were.
   const agentSections = useMemo(() => {
     if (view !== 'agents') return [];
-    let rows = showHidden ? baseRows : baseRows.filter((s) => !s.hiddenAt);
+    let rows = showHidden ? baseRows : baseRows.filter((s) => !isPutAway(s));
     if (filter) rows = rows.filter((s) => s.agentName === filter);
     const by = new Map<string, SessionListItem[]>();
     for (const s of rows) {
@@ -669,7 +674,7 @@ export function RecentSessions() {
         ? [...list].sort((a, b) => (pins.has(b.id) ? 1 : 0) - (pins.has(a.id) ? 1 : 0))
         : list,
     }));
-  }, [view, baseRows, showHidden, filter, pins]);
+  }, [view, baseRows, showHidden, isPutAway, filter, pins]);
 
   // The agent whose session is open — its drawer starts open so switching views
   // doesn't lose sight of where you are.
@@ -1038,14 +1043,14 @@ export function RecentSessions() {
           </>
         )}
       </div>
-      {hiddenCount > 0 && (
+      {putAwayCount > 0 && (
         <button
           type="button"
           onClick={() => setShowHidden((v) => !v)}
           className="mx-2 mb-2 mt-1 flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] text-muted-foreground/70 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground/80 cursor-pointer"
         >
           {showHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-          <span>{showHidden ? 'Hide hidden chats' : `Show hidden (${hiddenCount})`}</span>
+          <span>{showHidden ? 'Hide put-away chats' : `Show hidden & archived (${putAwayCount})`}</span>
         </button>
       )}
     </div>

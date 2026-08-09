@@ -94,13 +94,31 @@ async function reapCandidateIds(machineId: string, reapHours: number): Promise<s
     .map((r) => r.id);
 }
 
+/**
+ * Archive the sessions a sweep picked: out of the sidebar AND asleep.
+ *
+ * Hibernation is a REQUEST, not an act — the gateway's hibernate tick owns the
+ * actual pane kill and re-checks `working` on the live pane before it swings. So
+ * an archive that races a turn starting can't cut it off.
+ */
+async function archiveSessions(machineId: string, verdicts: Array<{ id: string; tier: string }>): Promise<number> {
+  const ids = verdicts.filter((v) => v.tier === 'archive').map((v) => v.id).slice(0, MAX_PER_RUN);
+  if (ids.length === 0) return 0;
+  const now = new Date();
+  await prisma.chatSession.updateMany({
+    where: { id: { in: ids }, machineId },
+    data: { closedAt: now, hibernateRequestedAt: now },
+  });
+  return ids.length;
+}
+
 // Stamp what a cleanup run did onto the machine row. Merges rather than replaces,
 // so the "trashed 8" from a review-sheet confirm doesn't erase the "archived 30"
 // the same click's reversible pass just recorded a moment earlier — the two halves
 // of one cleanup arrive as two writes and should read back as one run.
 async function recordCleanupRun(
   machineId: string,
-  delta: { slept?: number; archived?: number; trashed?: number; auto: boolean },
+  delta: { archived?: number; trashed?: number; auto: boolean },
 ): Promise<void> {
   const m = await prisma.machine.findUnique({ where: { id: machineId }, select: { lastCleanupAt: true, lastCleanupSummary: true } });
   // Same run = same few seconds. Anything older starts a fresh summary rather than
@@ -113,7 +131,6 @@ async function recordCleanupRun(
     data: {
       lastCleanupAt: new Date(),
       lastCleanupSummary: {
-        slept: (prev.slept ?? 0) + (delta.slept ?? 0),
         archived: (prev.archived ?? 0) + (delta.archived ?? 0),
         trashed: (prev.trashed ?? 0) + (delta.trashed ?? 0),
         auto: delta.auto,
@@ -213,13 +230,21 @@ export const chatRouter = router({
           ...(agentName ? { agentName } : {}),
           ...LIVE_SESSION,
         },
-        orderBy: [{ closedAt: 'asc' }, { lastMessageAt: 'desc' }, { startedAt: 'desc' }],
+        // STRICTLY most-recent-first. The previous order led with `closedAt: 'asc'`,
+        // which reads as "open ones first" and does the opposite: Postgres sorts ASC
+        // NULLS LAST, so every ARCHIVED session (non-null closedAt) came before every
+        // open one, ordered by when it was archived rather than by when it was last
+        // spoken to. The sidebar's top was archived conversations and the live ones
+        // were pushed below them.
+        //
+        // `nulls: 'last'` matters for the same class of reason: DESC defaults to NULLS
+        // FIRST, which would float never-messaged sessions to the top.
+        orderBy: [{ lastMessageAt: { sort: 'desc', nulls: 'last' } }, { startedAt: 'desc' }],
         // Growth ceiling on the recents payload (S4): without a bound this returns
         // every session ever, unbounded, polled every 5s on every page. 200 is well
         // above the current fleet count (~61) so it never truncates today — it just
         // caps future growth to what the sidebar/agent-detail recents actually show.
-        // (Order is closedAt-then-lastMessageAt-desc; with no closed sessions that's
-        // just most-recent-first, so the cap keeps the freshest sessions.)
+        // Pure recency order means the cap keeps the freshest sessions.
         take: 200,
         select: {
           id: true,
@@ -1446,7 +1471,6 @@ export const chatRouter = router({
         trashed,
         maxPerRun: MAX_PER_RUN,
         defaults: { archiveIdleDays: DEFAULT_ARCHIVE_IDLE_DAYS, trashIdleDays: DEFAULT_TRASH_IDLE_DAYS },
-        sleep: verdicts.filter((v) => v.tier === 'sleep'),
         archive: verdicts.filter((v) => v.tier === 'archive'),
         trash: verdicts.filter((v) => v.tier === 'trash'),
         spared: verdicts.filter((v) => v.tier === 'keep'),
@@ -1469,25 +1493,9 @@ export const chatRouter = router({
         archiveIdleDays: input.archiveIdleDays,
         trashIdleDays: input.trashIdleDays,
       });
-      const sleepIds = verdicts.filter((v) => v.tier === 'sleep').map((v) => v.id).slice(0, MAX_PER_RUN);
-      const archiveIds = verdicts.filter((v) => v.tier === 'archive').map((v) => v.id).slice(0, MAX_PER_RUN);
-      const now = new Date();
-      // Hibernation is a REQUEST: the gateway's hibernate tick owns the actual
-      // pane kill (and re-checks 'working' on the live pane before it swings).
-      if (sleepIds.length > 0) {
-        await prisma.chatSession.updateMany({
-          where: { id: { in: sleepIds }, machineId: ctx.machine.id },
-          data: { hibernateRequestedAt: now },
-        });
-      }
-      if (archiveIds.length > 0) {
-        await prisma.chatSession.updateMany({
-          where: { id: { in: archiveIds }, machineId: ctx.machine.id },
-          data: { closedAt: now },
-        });
-      }
-      await recordCleanupRun(ctx.machine.id, { slept: sleepIds.length, archived: archiveIds.length, auto: false });
-      return { ok: true, slept: sleepIds.length, archived: archiveIds.length };
+      const archived = await archiveSessions(ctx.machine.id, verdicts);
+      await recordCleanupRun(ctx.machine.id, { archived, auto: false });
+      return { ok: true, archived };
     }),
 
   // Auto cleanup. Called by the gateway on a slow tick and gated on the machine's
@@ -1497,26 +1505,12 @@ export const chatRouter = router({
   // person should be present for. Mirrors how idleReapHours drives the reaper.
   runCleanupSweep: gatewayProcedure.mutation(async ({ ctx }) => {
     const idleDays = ctx.machine.cleanupIdleDays;
-    if (idleDays == null) return { ok: true, slept: 0, archived: 0, skipped: 'disabled' as const };
+    if (idleDays == null) return { ok: true, archived: 0, skipped: 'disabled' as const };
     const verdicts = await computeCleanup(ctx.machine.id, { archiveIdleDays: idleDays });
-    const sleepIds = verdicts.filter((v) => v.tier === 'sleep').map((v) => v.id).slice(0, MAX_PER_RUN);
-    const archiveIds = verdicts.filter((v) => v.tier === 'archive').map((v) => v.id).slice(0, MAX_PER_RUN);
-    if (sleepIds.length === 0 && archiveIds.length === 0) return { ok: true, slept: 0, archived: 0 };
-    const now = new Date();
-    if (sleepIds.length > 0) {
-      await prisma.chatSession.updateMany({
-        where: { id: { in: sleepIds }, machineId: ctx.machine.id },
-        data: { hibernateRequestedAt: now },
-      });
-    }
-    if (archiveIds.length > 0) {
-      await prisma.chatSession.updateMany({
-        where: { id: { in: archiveIds }, machineId: ctx.machine.id },
-        data: { closedAt: now },
-      });
-    }
-    await recordCleanupRun(ctx.machine.id, { slept: sleepIds.length, archived: archiveIds.length, auto: true });
-    return { ok: true, slept: sleepIds.length, archived: archiveIds.length };
+    const archived = await archiveSessions(ctx.machine.id, verdicts);
+    if (archived === 0) return { ok: true, archived: 0 };
+    await recordCleanupRun(ctx.machine.id, { archived, auto: true });
+    return { ok: true, archived };
   }),
 
   // Machine-level cleanup settings, read by the Settings → System card.
@@ -1524,7 +1518,7 @@ export const chatRouter = router({
     cleanupIdleDays: ctx.machine.cleanupIdleDays,
     trashRetainDays: ctx.machine.trashRetainDays,
     lastCleanupAt: ctx.machine.lastCleanupAt,
-    lastCleanupSummary: ctx.machine.lastCleanupSummary as { slept?: number; archived?: number; trashed?: number; auto?: boolean } | null,
+    lastCleanupSummary: ctx.machine.lastCleanupSummary as { archived?: number; trashed?: number; auto?: boolean } | null,
   })),
 
   setCleanupConfig: machineProcedure

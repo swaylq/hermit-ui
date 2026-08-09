@@ -47,8 +47,19 @@ export const DEFAULT_TRASH_IDLE_DAYS = 30;
 // so, and letting the human look at the result before the next batch.
 export const MAX_PER_RUN = 50;
 
-/** Lightest-to-heaviest. `keep` means the session was examined and left alone. */
-export type CleanupTier = 'keep' | 'sleep' | 'archive' | 'trash';
+/**
+ * Lightest-to-heaviest. `keep` means the session was examined and left alone.
+ *
+ * There used to be a `sleep` rung between keep and archive, for sessions that were
+ * awake but quiet. It is gone, for two reasons that point the same way: the machine
+ * already has a hibernator (the idle-TTL reaper, Machine.idleReapHours, running
+ * every 10 min) so cleanup was duplicating it, and as a user-facing CONCEPT
+ * "asleep" and "archived" were never distinct enough to be worth two rows and two
+ * thresholds. Archiving now hibernates as part of archiving, which is what anyone
+ * would assume it did: a conversation that has left the sidebar has no business
+ * holding a ~500MB process.
+ */
+export type CleanupTier = 'keep' | 'archive' | 'trash';
 
 export interface CleanupVerdict {
   id: string;
@@ -362,13 +373,10 @@ export function classifySession(
   if (idleDays >= thresholds.trashDays && s.closedAt && daysSince(s.closedAt, nowMs) >= thresholds.trashDays) {
     return { ...base, tier: 'trash', reason: 'idle', blockedBy: null };
   }
+  // Archive = out of the sidebar AND asleep. One action, because they are one
+  // intent; see CleanupTier.
   if (idleDays >= thresholds.archiveDays && !s.closedAt) {
     return { ...base, tier: 'archive', reason: 'idle', blockedBy: null };
-  }
-  // Awake but quiet: free the ~500MB process without touching the conversation.
-  // The reaper does this on its own TTL; cleanup catches whatever it guarded off.
-  if (s.alive && idleDays >= 1) {
-    return { ...base, tier: 'sleep', reason: 'idle', blockedBy: null };
   }
   return null;
 }

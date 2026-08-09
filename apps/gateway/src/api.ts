@@ -215,7 +215,7 @@ export const api = {
 
   // Auto cleanup: the dashboard decides (gated on Machine.cleanupIdleDays) and
   // does the work; the gateway only supplies the clock, like runDispatchWatch.
-  runCleanupSweep: async (): Promise<{ slept: number; archived: number } | null> => {
+  runCleanupSweep: async (): Promise<{ archived: number } | null> => {
     const j = await post('/api/trpc/chat.runCleanupSweep?batch=1', { '0': { json: null } });
     return j?.[0]?.result?.data?.json ?? null;
   },

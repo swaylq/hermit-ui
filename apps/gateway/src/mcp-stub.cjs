@@ -447,7 +447,7 @@ const BRAIN_TOOLS = [
   {
     name: 'cleanup_sessions',
     description:
-      "Tidy this machine's chat sessions: hibernate the ones that are awake but quiet (frees a ~500MB claude each) and archive the ones nobody has touched in a long time (clears the sidebar). Run it in your daily dream. It CANNOT delete anything — both actions undo in one click, and the recycle bin is only ever reachable from the human's own confirmation. A session is skipped when anything still points at it: a cron reporting in, a pending question, a queued message, a live dispatch, a group, a name the human typed. Pass `preview` to see what it WOULD do without doing it.",
+      "Tidy this machine's chat sessions: archive the ones nobody has touched in a long time. Archiving takes a conversation out of the human's sidebar AND puts its ~500MB claude to sleep. Run it in your daily dream. It CANNOT delete anything — archiving undoes in one click, and the recycle bin is only ever reachable from the human's own confirmation. A session is skipped when anything still points at it: a cron reporting in, a pending question, a queued message, a live dispatch, a group, a name the human typed. Pass `preview` to see what it WOULD do without doing it.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -701,7 +701,6 @@ async function dispatchBrainTool(name, args) {
       return JSON.stringify({
         preview: true,
         total: p.total,
-        wouldSleep: (p.sleep || []).length,
         wouldArchive: (p.archive || []).length,
         // Reported but NOT actionable from here: only the human's own confirmation
         // can move anything into the bin.
@@ -710,7 +709,7 @@ async function dispatchBrainTool(name, args) {
       });
     }
     const r = (await trpcMutate('chat.cleanupApply', input)) || {};
-    return JSON.stringify({ ok: true, slept: r.slept ?? 0, archived: r.archived ?? 0 });
+    return JSON.stringify({ ok: true, archived: r.archived ?? 0 });
   }
   if (name === 'dispatch_answer') {
     const sessionId = args?.sessionId;

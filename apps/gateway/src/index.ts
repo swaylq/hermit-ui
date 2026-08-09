@@ -269,7 +269,7 @@ loop(() => safe('reaper', reaperTick), 10 * 60_000); // auto-reap idle sessions 
 loop(() => safe('chrome-reaper', chromeReaperTick), 5 * 60_000); // reap idle per-agent Chrome (~1GB each) the session-reaper leaves orphaned
 loop(() => safe('cleanup-sweep', async () => {
   const r = await api.runCleanupSweep();
-  if (r && (r.slept || r.archived)) console.log(`[cleanup-sweep] slept ${r.slept}, archived ${r.archived}`);
+  if (r?.archived) console.log(`[cleanup-sweep] archived ${r.archived}`);
 }), 60 * 60_000); // auto-archive long-idle sessions (no-op unless cleanupIdleDays is set)
 loop(() => safe('session-purge', sessionPurgeTick), 10 * 60_000); // delete recycle-bin sessions past retention (pane confirmed dead first)
 loop(() => safe('orphan-pane', orphanPaneReaperTick), 10 * 60_000); // kill hermit-* panes no DB row accounts for (deleted sessions leak ~500MB each)
