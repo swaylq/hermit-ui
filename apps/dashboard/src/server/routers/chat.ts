@@ -1320,17 +1320,32 @@ export const chatRouter = router({
   // to free memory, keeping claudeSessionId + transcript so the next message
   // respawns via --resume. Sets hibernateRequestedAt; the gateway's hibernate
   // tick does the kill + stamps hibernatedAt. Mirrors requestSessionRestart.
-  requestHibernate: agentProcedure
+  // Archive one session by hand — the manual twin of what the sweep does, and the
+  // replacement for the old `requestHibernate`.
+  //
+  // Hibernating without archiving was the one remaining way to hand-produce the
+  // state this whole feature exists to eliminate: a session asleep and yet still
+  // sitting in the sidebar looking live. The automatic mechanism that did that was
+  // retired in 20260809210000; this is the manual one. `hibernateRequestedAt` is
+  // still how the process gets freed — it just isn't a user-facing concept any more.
+  archiveSession: agentProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
       ctx.assertAgent(s.agentName);
-      await prisma.chatSession.update({ where: { id: input.id }, data: { hibernateRequestedAt: new Date() } });
+      const now = new Date();
+      await prisma.chatSession.update({
+        where: { id: input.id },
+        // closedAt only if it isn't already archived: re-archiving an archived
+        // session must not restart the recycle bin's "archived a month ago" clock.
+        data: { hibernateRequestedAt: now, ...(s.closedAt ? {} : { closedAt: now }) },
+      });
       return { ok: true };
     }),
 
-  // Gateway polls for manual hibernate requests (kill pane → ackHibernated).
+  // Gateway polls for pane kills to perform (archive, manual or swept →
+  // hibernateRequestedAt → kill pane → ackHibernated).
   pollHibernations: gatewayProcedure.query(async ({ ctx }) => {
     return prisma.chatSession.findMany({
       where: { machineId: ctx.machine.id, hibernateRequestedAt: { not: null } },

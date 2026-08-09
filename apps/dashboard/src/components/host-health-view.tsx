@@ -7,9 +7,11 @@
 // The auto-reap TTL and the bulk "hibernate idle now" button used to live at the
 // bottom of this card. They went with the idle reaper: freeing a session's process
 // is now something ARCHIVING does, configured one card down under Session cleanup.
-// The per-row 💤 stays — that one is a manual act on a specific session.
+// The per-row action stays, but it archives rather than merely hibernating — the
+// same merge as the sidebar's context menu. 💤 remains as a STATE (a restored chat
+// is still asleep until you send), just never as a verb.
 
-import { Moon } from 'lucide-react';
+import { Moon, Archive } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { Card } from '@/components/ui/card';
@@ -45,7 +47,7 @@ export function HostHealthView() {
     void utils.hosts.topSessions.invalidate();
     void utils.chat.listSessions.invalidate();
   };
-  const hibernate = trpc.chat.requestHibernate.useMutation({ onSuccess: invalidate });
+  const archive = trpc.chat.archiveSession.useMutation({ onSuccess: invalidate });
 
   const stale = isStale(stat?.sampledAt);
   const health: HostHealth = stat ? hostHealth(stat) : 'green';
@@ -114,15 +116,15 @@ export function HostHealthView() {
                   {s.title ? <span className="text-muted-foreground"> · {s.title}</span> : null}
                 </span>
                 {hibernated ? (
-                  <Moon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-label="hibernated" />
+                  <Moon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-label="asleep — wakes on send" />
                 ) : s.alive ? (
                   <button
                     type="button"
-                    title="Hibernate — free memory; wakes on send"
-                    onClick={() => hibernate.mutate({ id: s.id })}
+                    title="Archive — out of the sidebar and asleep; wakes on send"
+                    onClick={() => archive.mutate({ id: s.id })}
                     className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-foreground cursor-pointer"
                   >
-                    <Moon className="h-3.5 w-3.5" />
+                    <Archive className="h-3.5 w-3.5" />
                   </button>
                 ) : null}
                 <span className="w-10 shrink-0 text-right tabular-nums text-muted-foreground">{fmtIdle(s.lastMessageAt)}</span>

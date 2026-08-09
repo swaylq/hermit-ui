@@ -30,15 +30,16 @@ const GUIDE: { title: string; points: string[] }[] = [
     points: [
       'Compact — summarize history to shrink the context window.',
       'Restart — kill the pane; your next message respawns it with full history (--resume).',
-      'Hibernate (💤) — free its memory; it sleeps until you send, then wakes with history.',
-      'Delete — remove the session and all its messages.',
+      'Archive — take it out of the sidebar and free its memory; it sleeps until you send, then wakes with history.',
+      'Restore from archive — bring an archived chat back (right-click it under "Show hidden & archived").',
+      'Delete — move it to the recycle bin, restorable until it is purged.',
     ],
   },
   {
     title: 'Host health',
     points: [
       'Settings → System shows the machine RAM, swap, load, and the memory each session uses.',
-      'Idle sessions auto-hibernate past the configured TTL; hibernate the heaviest manually anytime.',
+      'Long-idle sessions are archived automatically — Settings → System → Session cleanup sets the threshold, and archiving is what frees their memory.',
       'A red-pressure alert lands in Notifications when a machine runs critically low on memory.',
     ],
   },

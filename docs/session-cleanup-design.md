@@ -134,6 +134,16 @@ Share 不用管：share key 是 agent 粒度的（`share.ts` 全按 `agentName`�
 分组之所以仍然挡归档：会话归了组就已经离开扁平 recents、住进抽屉了，归档它只会把它从你亲手放的地方拿走，
 而侧栏并不会因此更干净。
 
+**「休眠」作为一个动词已经不存在了。** 右键菜单里的 `Hibernate` 换成了 `Archive`，
+Host health 那张卡上每行的 💤 按钮也改成归档 —— 手动休眠是最后一条还能**手工造出**
+「睡着了却还堵在侧栏里」这个状态的路径，而那正是整个功能要消灭的东西。
+`chat.requestHibernate` 换成了 `chat.archiveSession`（同时写 `closedAt` 和 `hibernateRequestedAt`；
+已经归档的不重写 `closedAt`，否则回收站那个「归档满一个月」的时钟会被重置）。
+
+`hibernateRequestedAt` / `hibernatedAt` 作为**机制**保留 —— 进程就是靠它释放的。
+💤 也作为**状态**保留：一个刚从归档恢复出来的会话仍然是睡着的，要等你发消息才醒。
+只是它不再是一个你能按的动词。
+
 **归档 = 从侧栏消失。** 归档过的会话默认不在侧栏显示，和 `hiddenAt` 同一个待遇，
 由底部 `Show hidden & archived` 一起放出来。在这之前，归档只是给它挂个 `closed` 标签、
 人还留在列表里 —— 那等于整理动作没有整理任何东西。

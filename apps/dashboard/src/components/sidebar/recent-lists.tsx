@@ -17,7 +17,7 @@
 import { useState, useCallback, useMemo, useEffect, memo, lazy, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree, Brush, ArchiveRestore } from 'lucide-react';
+import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree, Brush, Archive, ArchiveRestore } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
@@ -375,7 +375,7 @@ const SessionRow = memo(function SessionRow({
                 <EyeOff className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hidden" />
               )}
               {s.hibernatedAt && (
-                <Moon className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hibernated — wakes on send" />
+                <Moon className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="asleep — wakes on send" />
               )}
               <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
                 {relTime(s.lastMessageAt ?? s.startedAt)}
@@ -520,7 +520,7 @@ export function RecentSessions() {
   const restartSession = trpc.chat.requestSessionRestart.useMutation({
     onSuccess: () => { void utils.chat.listSessions.invalidate(); },
   });
-  const hibernateSession = trpc.chat.requestHibernate.useMutation({
+  const archiveSession = trpc.chat.archiveSession.useMutation({
     onSuccess: () => { void utils.chat.listSessions.invalidate(); },
   });
   // Bring an archived chat back into the sidebar. Only clears closedAt — the
@@ -810,22 +810,24 @@ export function RecentSessions() {
               }];
             })(),
             ...(() => {
-              // Hibernate only makes sense for a live session (a pane to free);
-              // a sleeping one wakes on send, no menu action needed. An archived
-              // one is already asleep — archiving hibernates.
+              // Was "Hibernate", which freed the process but left the chat sitting in
+              // the sidebar looking live — the exact half-state this feature exists to
+              // remove, and the last way left to produce it by hand. Archiving does
+              // both. Offered for anything not already archived, asleep or not: the
+              // point is getting it out of the list, which applies either way.
               const s = (sessions.data ?? []).find((x) => x.id === menu.id);
-              if (!s?.alive || s.hibernatedAt || s.closedAt) return [];
+              if (!s || s.closedAt) return [];
               return [{
-                label: 'Hibernate',
-                icon: <Moon className="h-3.5 w-3.5" />,
+                label: 'Archive',
+                icon: <Archive className="h-3.5 w-3.5" />,
                 onClick: async () => {
                   const id = menu.id;
                   if (await confirm({
-                    title: 'Hibernate session',
-                    message: "Kill this session's pane to free its memory? It sleeps until your next message, which wakes it with full history (--resume).",
-                    confirmLabel: 'Hibernate',
+                    title: 'Archive session',
+                    message: "Take this chat out of the sidebar and free its memory? It sleeps until your next message, which wakes it with full history (--resume). Right-click it under `Show hidden & archived` to restore.",
+                    confirmLabel: 'Archive',
                   }))
-                    hibernateSession.mutate({ id });
+                    archiveSession.mutate({ id });
                 },
               }];
             })(),
