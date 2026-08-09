@@ -29,7 +29,7 @@ import { collectUsageWindows } from './collect/window';
 import { collectPlanUsage } from './collect/plan-usage';
 import { api } from './api';
 import { tick as cronTick } from './cron-runner';
-import { chatTick, chatCancelTick, chatRestartTick, chatHibernateTick, reaperTick, shutdownChatRunner } from './chat-runner';
+import { chatTick, chatCancelTick, chatRestartTick, chatHibernateTick, shutdownChatRunner } from './chat-runner';
 import { agentRequestTick } from './agent-lifecycle';
 import { machineRequestTick } from './machine-requests';
 import { startLoginBridge } from './login-bridge';
@@ -265,12 +265,13 @@ loop(pushChatRestartTick, 2_000);
 loop(pushDispatchWatch, 30_000); // reactive Brain poke on dispatch block/finish
 loop(pushTakeoverWatch, 8_000); // reactive Brain poke on takeover block/finish + cap sweep
 loop(() => safe('hibernate-tick', chatHibernateTick), 3_000); // manual hibernate requests
-loop(() => safe('reaper', reaperTick), 10 * 60_000); // auto-reap idle sessions (resource governance)
 loop(() => safe('chrome-reaper', chromeReaperTick), 5 * 60_000); // reap idle per-agent Chrome (~1GB each) the session-reaper leaves orphaned
 loop(() => safe('cleanup-sweep', async () => {
   const r = await api.runCleanupSweep();
   if (r?.archived) console.log(`[cleanup-sweep] archived ${r.archived}`);
-}), 60 * 60_000); // auto-archive long-idle sessions (no-op unless cleanupIdleDays is set)
+}), 10 * 60_000); // archive long-idle sessions — out of the sidebar AND asleep. Replaced the
+// separate idle-reaper tick: same 10 min beat, but one mechanism instead of two with
+// different thresholds. No-op unless the machine has cleanupIdleDays set.
 loop(() => safe('session-purge', sessionPurgeTick), 10 * 60_000); // delete recycle-bin sessions past retention (pane confirmed dead first)
 loop(() => safe('orphan-pane', orphanPaneReaperTick), 10 * 60_000); // kill hermit-* panes no DB row accounts for (deleted sessions leak ~500MB each)
 loop(() => safe('agent-requests', agentRequestTick), 3_000);

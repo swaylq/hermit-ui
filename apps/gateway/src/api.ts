@@ -192,15 +192,6 @@ export const api = {
     return r[0]?.result?.data?.json ?? [];
   },
 
-  // Idle sessions the dashboard deems safe to auto-reap (empty if idleReapHours
-  // is null). The gateway re-checks the live pane (working/exists) before killing.
-  pollReapCandidates: async (): Promise<Array<{ id: string }>> => {
-    const r = await get<any>(
-      '/api/trpc/chat.pollReapCandidates?batch=1&input=' + encodeURIComponent(JSON.stringify({ '0': { json: null } })),
-    );
-    return r[0]?.result?.data?.json ?? [];
-  },
-
   // ── Session cleanup (docs/session-cleanup-design.md) ──────────────────────
   // Trashed sessions whose retention has expired. `transcriptPath` rides along
   // because it is the only safe basis for deleting a JSONL: the projects dir
@@ -213,16 +204,16 @@ export const api = {
     return r[0]?.result?.data?.json ?? [];
   },
 
+  ackPurged: async (sessionIds: string[]) => {
+    if (sessionIds.length === 0) return;
+    await post('/api/trpc/chat.ackPurged?batch=1', { '0': { json: { sessionIds } } });
+  },
+
   // Auto cleanup: the dashboard decides (gated on Machine.cleanupIdleDays) and
   // does the work; the gateway only supplies the clock, like runDispatchWatch.
   runCleanupSweep: async (): Promise<{ archived: number } | null> => {
     const j = await post('/api/trpc/chat.runCleanupSweep?batch=1', { '0': { json: null } });
     return j?.[0]?.result?.data?.json ?? null;
-  },
-
-  ackPurged: async (sessionIds: string[]) => {
-    if (sessionIds.length === 0) return;
-    await post('/api/trpc/chat.ackPurged?batch=1', { '0': { json: { sessionIds } } });
   },
 
   ackHibernated: async (sessionIds: string[]) => {

@@ -1,9 +1,13 @@
 'use client';
 
-// Host-health view — the full RAM/swap/load + per-session memory + reap controls,
-// rendered inline on the Settings → System tab (relocated from the old sidebar
-// chip/popover). Reads the same trpc.hosts.* the gateway feeds; health keys on
-// free-RAM + load (never swap-used — macOS lazily reclaims swapfiles).
+// Host-health view — RAM/swap/load + per-session memory, rendered inline on the
+// Settings → System tab. Reads the same trpc.hosts.* the gateway feeds; health keys
+// on free-RAM + load (never swap-used — macOS lazily reclaims swapfiles).
+//
+// The auto-reap TTL and the bulk "hibernate idle now" button used to live at the
+// bottom of this card. They went with the idle reaper: freeing a session's process
+// is now something ARCHIVING does, configured one card down under Session cleanup.
+// The per-row 💤 stays — that one is a manual act on a specific session.
 
 import { Moon } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -36,15 +40,12 @@ function Bar({ usedPct, tone }: { usedPct: number; tone: string }) {
 export function HostHealthView() {
   const stat = trpc.hosts.stat.useQuery(undefined, { refetchInterval: 10_000 }).data;
   const sessions = trpc.hosts.topSessions.useQuery(undefined, { refetchInterval: 10_000 }).data ?? [];
-  const reapConfig = trpc.hosts.reapConfig.useQuery().data;
   const utils = trpc.useUtils();
   const invalidate = () => {
     void utils.hosts.topSessions.invalidate();
     void utils.chat.listSessions.invalidate();
   };
   const hibernate = trpc.chat.requestHibernate.useMutation({ onSuccess: invalidate });
-  const reapNow = trpc.chat.reapIdleNow.useMutation({ onSuccess: invalidate });
-  const setReap = trpc.hosts.setIdleReapHours.useMutation({ onSuccess: () => void utils.hosts.reapConfig.invalidate() });
 
   const stale = isStale(stat?.sampledAt);
   const health: HostHealth = stat ? hostHealth(stat) : 'green';
@@ -130,31 +131,6 @@ export function HostHealthView() {
           })}
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs">
-          <label className="flex items-center gap-1.5 text-muted-foreground">
-            Auto-reap idle &gt;
-            <input
-              type="number"
-              min={1}
-              key={reapConfig?.idleReapHours ?? 'off'}
-              defaultValue={reapConfig?.idleReapHours ?? ''}
-              onBlur={(e) => {
-                const v = e.target.value.trim();
-                setReap.mutate({ hours: v ? Math.max(1, Math.round(Number(v))) : null });
-              }}
-              className="w-14 rounded border border-border bg-background px-1.5 py-0.5 text-right text-foreground tabular-nums"
-            />
-            h <span className="text-muted-foreground/60">(blank = off)</span>
-          </label>
-          <button
-            type="button"
-            onClick={() => reapNow.mutate({ hours: reapConfig?.idleReapHours ?? 24 })}
-            disabled={reapNow.isPending}
-            className="rounded-md border border-border px-2.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer disabled:opacity-50"
-          >
-            {reapNow.isPending ? 'Hibernating…' : reapNow.data ? `Hibernated ${reapNow.data.count}` : 'Hibernate idle now'}
-          </button>
-        </div>
       </Card>
     </div>
   );

@@ -51,13 +51,13 @@ export const MAX_PER_RUN = 50;
  * Lightest-to-heaviest. `keep` means the session was examined and left alone.
  *
  * There used to be a `sleep` rung between keep and archive, for sessions that were
- * awake but quiet. It is gone, for two reasons that point the same way: the machine
- * already has a hibernator (the idle-TTL reaper, Machine.idleReapHours, running
- * every 10 min) so cleanup was duplicating it, and as a user-facing CONCEPT
- * "asleep" and "archived" were never distinct enough to be worth two rows and two
- * thresholds. Archiving now hibernates as part of archiving, which is what anyone
- * would assume it did: a conversation that has left the sidebar has no business
- * holding a ~500MB process.
+ * awake but quiet, mirroring a second automatic mechanism (the idle-TTL reaper).
+ * Both are gone. Hibernating and archiving were never distinct enough as CONCEPTS
+ * to earn two rows and two thresholds, and running both produced the one state
+ * nobody wants: a sleeping session still sitting in the sidebar looking normal.
+ * Archiving now hibernates as part of archiving, which is what anyone would assume
+ * it did — a conversation that has left the sidebar has no business holding a
+ * ~500MB process. See migration 20260809210000_retire_idle_reaper.
  */
 export type CleanupTier = 'keep' | 'archive' | 'trash';
 

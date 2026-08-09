@@ -24,23 +24,11 @@ export const hostsRouter = router({
     return { ok: true };
   }),
 
-  // Auto-reap TTL for this machine (null = disabled). Panel config control.
-  reapConfig: machineProcedure.query(async ({ ctx }) => {
-    return { idleReapHours: ctx.machine.idleReapHours };
-  }),
-
-  // Set/clear the auto-reap TTL (null disables the reaper for this machine).
-  setIdleReapHours: machineProcedure
-    .input(z.object({ hours: z.number().int().positive().max(8760).nullable() }))
-    .mutation(async ({ ctx, input }) => {
-      await prisma.machine.update({ where: { id: ctx.machine.id }, data: { idleReapHours: input.hours } });
-      return { ok: true };
-    }),
-
   // This machine's open chat sessions, heaviest first — the panel's "Top memory
   // sessions" list. Deliberately light (no message-preview subquery, unlike
-  // chat.listSessions) since it polls alongside the panel. Includes hibernated
-  // rows (closedAt null, hibernatedAt set) so they render dimmed with a 💤.
+  // chat.listSessions) since it polls alongside the panel. Archived sessions are
+  // excluded (closedAt null): archiving now hibernates too, so an archived session
+  // has no process left to account for.
   topSessions: machineProcedure.query(async ({ ctx }) => {
     return prisma.chatSession.findMany({
       where: { machineId: ctx.machine.id, closedAt: null, ...LIVE_SESSION },

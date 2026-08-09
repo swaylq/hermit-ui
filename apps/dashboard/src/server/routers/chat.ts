@@ -58,42 +58,6 @@ const ContentBlock = z.union([
 // all four so they can never drift apart.
 const USER_QUEUE_FILTER = { role: 'user', deliveredAt: null, externalId: null } as const;
 
-// A session is "looping" when its loopState carries a loop with status 'running'
-// (the loop skill runs autonomous turns in the session) — the reaper must never
-// hibernate such a session out from under its loop.
-function hasRunningLoop(loopState: unknown): boolean {
-  const loops = (loopState as { loops?: Array<{ status?: string }> } | null)?.loops;
-  return Array.isArray(loops) && loops.some((l) => l?.status === 'running');
-}
-
-// Shared by the auto-reaper (pollReapCandidates) and the panel's bulk reap
-// (reapIdleNow): the alive idle dashboard sessions safe to hibernate at a given
-// TTL. Guards: not closed/hibernated/working, no running loop, no queued message;
-// idle = no user message OR pane activity past the cutoff.
-async function reapCandidateIds(machineId: string, reapHours: number): Promise<string[]> {
-  const cutoff = Date.now() - reapHours * 3_600_000;
-  const rows = await prisma.chatSession.findMany({
-    where: { machineId, closedAt: null, hibernatedAt: null, alive: true, ...LIVE_SESSION },
-    select: { id: true, lastMessageAt: true, lastActivity: true, startedAt: true, state: true, loopState: true },
-  });
-  if (rows.length === 0) return [];
-  const queued = await prisma.chatMessage.findMany({
-    where: { sessionId: { in: rows.map((r) => r.id) }, ...USER_QUEUE_FILTER },
-    select: { sessionId: true },
-    distinct: ['sessionId'],
-  });
-  const queuedSet = new Set(queued.map((q) => q.sessionId));
-  return rows
-    .filter((r) => {
-      if (r.state === 'working') return false;
-      if (queuedSet.has(r.id)) return false;
-      if (hasRunningLoop(r.loopState)) return false;
-      const last = Math.max(r.lastMessageAt?.getTime() ?? 0, r.lastActivity?.getTime() ?? 0, r.startedAt.getTime());
-      return last < cutoff;
-    })
-    .map((r) => r.id);
-}
-
 /**
  * Archive the sessions a sweep picked: out of the sidebar AND asleep.
  *
@@ -1396,37 +1360,8 @@ export const chatRouter = router({
     });
   }),
 
-  // Auto-reaper: the idle dashboard sessions safe to hibernate, computed here so
-  // the gateway just kills + acks. Returns [] when this machine has auto-reap
-  // disabled (idleReapHours null). A session qualifies only if ALL hold: alive
-  // (a pane to free), not closed / already-hibernated, not 'working', no running
-  // loop, no undelivered user message, and idle (no message OR pane activity)
-  // past the TTL. The gateway re-checks 'working' on the live pane before killing.
-  pollReapCandidates: gatewayProcedure.query(async ({ ctx }) => {
-    const reapHours = ctx.machine.idleReapHours;
-    if (reapHours == null) return [];
-    const ids = await reapCandidateIds(ctx.machine.id, reapHours);
-    return ids.map((id) => ({ id }));
-  }),
-
-  // Immediate bulk reap from the Host-health panel: flag every idle candidate at
-  // the given TTL for hibernation (the gateway's hibernate tick kills them within
-  // ~3s). Same guardrails as the auto-reaper; `hours` lets the panel offer e.g.
-  // "hibernate idle > 24h now" independent of the machine's auto-reap setting.
-  reapIdleNow: machineProcedure
-    .input(z.object({ hours: z.number().positive() }))
-    .mutation(async ({ ctx, input }) => {
-      const ids = await reapCandidateIds(ctx.machine.id, input.hours);
-      if (ids.length === 0) return { ok: true, count: 0 };
-      await prisma.chatSession.updateMany({
-        where: { id: { in: ids }, machineId: ctx.machine.id },
-        data: { hibernateRequestedAt: new Date() },
-      });
-      return { ok: true, count: ids.length };
-    }),
-
-  // Gateway acks a kill (auto-reap OR manual hibernate): mark hibernated + dead +
-  // clear the manual request flag. claudeSessionId + transcript are kept, so the
+  // Gateway acks a kill (a cleanup archive, or a manual hibernate): mark hibernated
+  // + dead + clear the request flag. claudeSessionId + transcript are kept, so the
   // next user message respawns with --resume (the snapshot route clears
   // hibernatedAt once the pane is back up).
   ackHibernated: gatewayProcedure
@@ -1456,7 +1391,11 @@ export const chatRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const verdicts = await computeCleanup(ctx.machine.id, {
-        archiveIdleDays: input.archiveIdleDays,
+        // The machine's dial is the default, not DEFAULT_ARCHIVE_IDLE_DAYS: with the
+        // reaper gone this is the single threshold in the system, and a preview that
+        // quietly used 14d while the machine was set to 3d would describe a cleanup
+        // nobody was going to run.
+        archiveIdleDays: input.archiveIdleDays ?? ctx.machine.cleanupIdleDays ?? undefined,
         trashIdleDays: input.trashIdleDays,
         agentName: ctx.scopedAgent ?? null,
       });
@@ -1490,7 +1429,7 @@ export const chatRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const verdicts = await computeCleanup(ctx.machine.id, {
-        archiveIdleDays: input.archiveIdleDays,
+        archiveIdleDays: input.archiveIdleDays ?? ctx.machine.cleanupIdleDays ?? undefined,
         trashIdleDays: input.trashIdleDays,
       });
       const archived = await archiveSessions(ctx.machine.id, verdicts);
@@ -1502,7 +1441,7 @@ export const chatRouter = router({
   // cleanupIdleDays; does the SAME reversible work as cleanupApply and nothing
   // more. There is deliberately no automatic path to the bin: sleeping and
   // archiving cost a click to undo, and everything past that is a decision a
-  // person should be present for. Mirrors how idleReapHours drives the reaper.
+  // person should be present for.
   runCleanupSweep: gatewayProcedure.mutation(async ({ ctx }) => {
     const idleDays = ctx.machine.cleanupIdleDays;
     if (idleDays == null) return { ok: true, archived: 0, skipped: 'disabled' as const };

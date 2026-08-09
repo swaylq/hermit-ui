@@ -304,36 +304,6 @@ export async function chatHibernateTick() {
   }
 }
 
-// Auto-reaper: the dashboard returns idle sessions safe to hibernate; we re-check
-// the LIVE pane (exists + not working) right before killing, since the snapshot
-// state it judged on can be a few seconds stale. Resident `claude-<name>` agents
-// are never ChatSessions, so they're never candidates.
-export async function reaperTick() {
-  let rows: Awaited<ReturnType<typeof api.pollReapCandidates>>;
-  try {
-    rows = await api.pollReapCandidates();
-  } catch (e) {
-    console.error('[reaper] poll failed:', e);
-    return;
-  }
-  if (rows.length === 0) return;
-  const ackIds: string[] = [];
-  for (const row of rows) {
-    // No pane → nothing to free; the snapshot tick corrects alive=false and it
-    // drops out of the candidate set. Working since the poll → leave it alone.
-    if (!tmuxSessionExists(row.id)) continue;
-    if (await paneIsWorking(row.id)) continue;
-    const did = await hibernateOneSession(row.id);
-    if (did) ackIds.push(row.id);
-  }
-  try {
-    await api.ackHibernated(ackIds);
-  } catch (e) {
-    console.error('[reaper] ack failed:', e);
-  }
-  if (ackIds.length > 0) console.log(`[reaper] hibernated ${ackIds.length} idle session(s)`);
-}
-
 export async function chatCancelTick() {
   let rows: Awaited<ReturnType<typeof api.pollChatCancellations>>;
   try {

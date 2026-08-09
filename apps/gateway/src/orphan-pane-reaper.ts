@@ -2,7 +2,7 @@
 // accounts for (docs/session-cleanup-design.md).
 //
 // Every pane-killing path in this system is driven by a DB row: chatHibernateTick
-// polls `hibernateRequestedAt`, reaperTick polls the idle candidates, and the
+// polls `hibernateRequestedAt`, the cleanup sweep archives the long-idle, and the
 // reattach loop only ever iterates what `pollChatPending` returned. So deleting a
 // session — which drops the row and leaves the pane running — produces a claude
 // process that NOTHING can reap. `chat.deleteSession` used to claim these were

@@ -51,8 +51,8 @@ export const machineProcedure = withScope.use(async ({ ctx, next }) => {
 // runtime state. Enforcement is IDENTICAL to machineProcedure (rejects scoped share
 // keys, ctx.machine intact) — this is a NAMED alias so "gateway plumbing" reads
 // distinctly from a browser-facing full-access endpoint, and gives one seam to add
-// gateway-only policy later. NOT for browser-driven machine actions (e.g. the bulk-
-// reap panel's reapIdleNow, or hosts.ackAlert) — those stay machineProcedure.
+// gateway-only policy later. NOT for browser-driven machine actions (e.g.
+// chat.cleanupApply, or hosts.ackAlert) — those stay machineProcedure.
 export const gatewayProcedure = machineProcedure;
 
 // Agent-scoped: accepts machine keys (full access) AND scoped share tokens, but a

@@ -29,17 +29,20 @@ model Machine {
   fiveHourLimitUsd Float?
   weeklyLimitUsd   Float?
 
-  // Idle-TTL for the session reaper: a dashboard (hermit-*) session idle longer
-  // than this is hibernated (pane killed; --resume on next message). null = auto-
-  // reap disabled. See docs/resource-governance-design.md.
-  idleReapHours Int?
-
   // ── Session cleanup (docs/session-cleanup-design.md) ──
-  // Auto-archive threshold: a session idle longer than this many days is closed
-  // (closedAt) by the cleanup sweep. null = off. Only ever drives the REVERSIBLE
-  // tiers — nothing here can trash or purge a session, which stays a deliberate
-  // click. Sits next to idleReapHours because it is the same kind of dial one
-  // rung further along: reap frees the process, this frees the sidebar.
+  // THE session-lifecycle dial. A session idle longer than this many days is
+  // archived — out of the sidebar and asleep — by the Brain's nightly dream and by
+  // the gateway's hourly sweep. null = off, which also means nothing ever puts a
+  // session to sleep, so treat a null here as "this machine will hold every
+  // conversation's ~500MB until someone intervenes".
+  //
+  // Replaced `idleReapHours` (migration 20260809210000). That was a second
+  // automatic mechanism with its own threshold whose only effect — hibernate —
+  // is a strict subset of archiving's, so all it could produce was the
+  // half-tidied state of a sleeping session still sitting in the sidebar.
+  //
+  // Only ever drives the REVERSIBLE tier: nothing here can trash or purge a
+  // session, which stays a deliberate human click.
   cleanupIdleDays Int?
   // How long a trashed session sits recoverable before the gateway purges it.
   trashRetainDays Int @default(14)

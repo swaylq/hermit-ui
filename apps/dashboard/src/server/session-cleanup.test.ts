@@ -189,9 +189,9 @@ test('archiving something already ancient does NOT make it bin-eligible the same
 });
 
 test('a session quiet for days but inside the archive window is left alone', () => {
-  // There is no longer a `sleep` rung to catch it: the machine's idle-TTL reaper
-  // (Machine.idleReapHours) already hibernates these, and cleanup duplicating that
-  // bought a second threshold and a second row in the UI for no new outcome.
+  // There is no `sleep` rung any more, and no idle reaper either: a session is
+  // freed by being ARCHIVED, on the machine's single cleanupIdleDays threshold.
+  // Inside that window it is left alone, process and all.
   assert.equal(verdict({ lastMessageAt: ago(3), alive: true }), null);
 });
 
