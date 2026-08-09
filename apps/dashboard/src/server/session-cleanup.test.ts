@@ -143,6 +143,18 @@ test('an auto-generated title is NOT organisation — it blocks nothing', () => 
   assert.notEqual(verdict({ title: 'auto label', titleAuto: true })?.blockedBy, 'named');
 });
 
+test('a title a MACHINE opened the session with is not organisation either', () => {
+  // titleAuto defaults to false and chat.createSession never stamps it, so a
+  // dispatch/takeover/cron session carrying a machine-written title used to read
+  // as "the human named this" and was spared forever. `origin` is what tells the
+  // two apart: only the rename dialog means a person typed it, and that always
+  // leaves origin null.
+  assert.notEqual(verdict({ title: 'Brain → finance-agent', titleAuto: false, origin: 'dispatch' })?.blockedBy, 'named');
+  assert.notEqual(verdict({ title: 'daily report', titleAuto: false, origin: 'cron' })?.blockedBy, 'named');
+  // A human-typed title on a human-opened session still blocks.
+  assert.equal(verdict({ title: 'monitor 迁移', titleAuto: false, origin: null })?.blockedBy, 'named');
+});
+
 test('a blocked session that is not old enough is not surfaced at all', () => {
   // Spared rows exist to make the guardrails visible on the sheet, not to list
   // every session on the machine.

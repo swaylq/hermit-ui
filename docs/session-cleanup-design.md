@@ -85,7 +85,7 @@ pvypkrtuf1qi 3.1d
 | **正在干活** | `state = 'working'` | 同上 |
 | **Brain 关联** | `dispatchedBySessionId` / `takeoverBySessionId` 非空，或被别人指着 | 删了子会话，Brain 的 dispatch-watcher / takeover-watcher 后续断链 |
 | **归了分组** | `groupId IS NOT NULL` | 有人专门把它归过档 |
-| **人起的标题** | `titleAuto = false` | 有人专门给它起过名 |
+| **人起的标题** | `title` 非空 且 `titleAuto=false` 且 **`origin` 为空** | 有人专门给它起过名。`origin` 那个条件是上线后实测补的：`titleAuto` 列**默认就是 false**，而 `createSession` 收 `title` 时从不盖这个戳 —— 于是每个机器开出来带标题的会话（dispatch 的 `Brain → agent`、takeover、cron，全 fleet 27 行）都被读成「人特意起的名」而永久豁免。只有 `chat.setTitle`（重命名对话框）才真的代表人打了字，而那条路径的 `origin` 一定为空 |
 | **置顶保留** | `keepAt IS NOT NULL`（新增） | 「别再问我这个」 |
 
 Share 不用管：share key 是 agent 粒度的（`share.ts` 全按 `agentName`），没有会话级分享链接。

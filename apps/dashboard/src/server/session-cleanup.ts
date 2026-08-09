@@ -300,7 +300,18 @@ export function classifySession(
     // ends (endTakeover), so a non-null value always means live.
     : ((!s.closedAt && s.dispatchedBySessionId) || s.takeoverBySessionId || refs.isPokeTarget.has(s.id)) ? 'dispatch'
     : s.groupId ? 'grouped'
-    : (s.title && !s.titleAuto) ? 'named'
+    // "The human named it" is inferred from titleAuto=false, and that inference
+    // has a false positive: the column DEFAULTS to false, and `chat.createSession`
+    // accepts a `title` without ever stamping it — so every session a machine
+    // opened with a title (Brain dispatch's "Brain → agent", takeover, cron,
+    // cron-report: 27 rows fleet-wide on 2026-08-09) reads as deliberate human
+    // organisation and is spared forever.
+    //
+    // `origin` is the discriminator: it is non-null exactly when something other
+    // than a person opened the session, and then its title is machine-written by
+    // construction. Only `chat.setTitle` — the rename dialog — means a human typed
+    // it, and that path always leaves origin null.
+    : (s.title && !s.titleAuto && !s.origin) ? 'named'
     : null;
 
   if (blocker) {
