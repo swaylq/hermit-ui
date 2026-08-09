@@ -445,6 +445,18 @@ const BRAIN_TOOLS = [
     },
   },
   {
+    name: 'cleanup_sessions',
+    description:
+      "Tidy this machine's chat sessions: hibernate the ones that are awake but quiet (frees a ~500MB claude each) and archive the ones nobody has touched in a long time (clears the sidebar). Run it in your daily dream. It CANNOT delete anything — both actions undo in one click, and the recycle bin is only ever reachable from the human's own confirmation. A session is skipped when anything still points at it: a cron reporting in, a pending question, a queued message, a live dispatch, a group, a name the human typed. Pass `preview` to see what it WOULD do without doing it.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        preview: { type: 'boolean', description: 'true = report only, change nothing.' },
+        archiveIdleDays: { type: 'number', description: "Archive threshold in days. Omit for the machine's setting (default 14)." },
+      },
+    },
+  },
+  {
     name: 'user_messages',
     description:
       "Read what the HUMAN has actually typed across this machine's conversations, oldest first — the raw material for USER-PROFILE.md. Only their own messages: your takeover messages and the gateway's [dispatch update] pokes are excluded, so you can never mistake your own voice for theirs. Pass `since` (the synced-through watermark at the bottom of USER-PROFILE.md) to get only what's new; omit it for a first pass.",
@@ -669,8 +681,36 @@ async function dispatchBrainTool(name, args) {
     const s = (Array.isArray(sessions) ? sessions : []).find((x) => x.id === sessionId);
     if (!s) throw new Error('session not found');
     if (s.origin !== 'dispatch') throw new Error('not a dispatch session — dispatch_close only reaps dispatches');
-    await trpcMutate('chat.deleteSession', { id: sessionId });
+    // Recycle bin, NOT chat.deleteSession. This tool's whole promise is "frees the
+    // worker's idle claude process", and the delete path did the opposite: it drops
+    // the row, and every pane-killing path is driven by that row, so the process was
+    // stranded with nothing able to reap it. The Brain closes dispatches every dream,
+    // which made this a daily orphan factory. Trashing hibernates the pane first and
+    // keeps the conversation recoverable until it is purged.
+    // See docs/session-cleanup-design.md.
+    await trpcMutate('chat.trashSessions', { ids: [sessionId], reason: 'dispatch-done' });
     return JSON.stringify({ ok: true, closed: sessionId, agent: s.agentName });
+  }
+  if (name === 'cleanup_sessions') {
+    const archiveIdleDays = Number.isFinite(Number(args?.archiveIdleDays)) && Number(args.archiveIdleDays) > 0
+      ? Math.round(Number(args.archiveIdleDays))
+      : undefined;
+    const input = archiveIdleDays ? { archiveIdleDays } : {};
+    if (args?.preview) {
+      const p = (await trpcQuery('chat.cleanupPreview', input)) || {};
+      return JSON.stringify({
+        preview: true,
+        total: p.total,
+        wouldSleep: (p.sleep || []).length,
+        wouldArchive: (p.archive || []).length,
+        // Reported but NOT actionable from here: only the human's own confirmation
+        // can move anything into the bin.
+        proposedForBin: (p.trash || []).length,
+        spared: (p.spared || []).length,
+      });
+    }
+    const r = (await trpcMutate('chat.cleanupApply', input)) || {};
+    return JSON.stringify({ ok: true, slept: r.slept ?? 0, archived: r.archived ?? 0 });
   }
   if (name === 'dispatch_answer') {
     const sessionId = args?.sessionId;

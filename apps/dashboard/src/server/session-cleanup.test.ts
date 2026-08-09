@@ -169,12 +169,23 @@ test('idle past the archive threshold and still open → archive', () => {
 });
 
 test('the irreversible tier needs MORE evidence than the reversible one', () => {
-  // Same 40-day silence. Open → archive; already archived → bin. Archiving was
-  // the human saying "done"; the extra month on top is what promotes it.
+  // Same 40-day silence. Open → archive; archived 35 days ago and still untouched
+  // → bin. The extra month AFTER archiving is what promotes it.
   assert.equal(verdict({ lastMessageAt: ago(40), closedAt: null })?.tier, 'archive');
   assert.equal(verdict({ lastMessageAt: ago(40), closedAt: ago(35) })?.tier, 'trash');
   // …and an archived session inside the trash threshold stays put.
   assert.equal(verdict({ lastMessageAt: ago(20), closedAt: ago(20) }), null);
+});
+
+test('archiving something already ancient does NOT make it bin-eligible the same day', () => {
+  // The rung that collapsed the ladder. A session quiet for 50 days that a sweep
+  // archived a minute ago satisfies "idle >= 30d AND archived" instantly, so the
+  // bin proposal would carry no evidence the archive step didn't already have.
+  // Harmless while archiving was manual and rare; a daily auto-archive (the
+  // Brain's dream) would have pushed every old session straight at deletion.
+  assert.equal(verdict({ lastMessageAt: ago(50), closedAt: ago(0.01) })?.tier, undefined);
+  // A month later, with nobody having reopened it, it qualifies.
+  assert.equal(verdict({ lastMessageAt: ago(80), closedAt: ago(31) })?.tier, 'trash');
 });
 
 test('awake but quiet → sleep, which never touches the conversation', () => {

@@ -111,6 +111,8 @@ function hasRunningLoop(loopState: unknown): boolean {
 
 const DAY_MS = 86_400_000;
 
+const daysSince = (d: Date, nowMs: number) => (nowMs - d.getTime()) / DAY_MS;
+
 export interface CleanupOptions {
   archiveIdleDays?: number;
   trashIdleDays?: number;
@@ -342,10 +344,22 @@ export function classifySession(
   }
 
   // ── Age-driven rungs. ──
-  // Already archived and still untouched a month later. Archiving was the human
-  // saying "done with this"; a month of silence on top is the evidence that the
-  // context isn't being come back to.
-  if (idleDays >= thresholds.trashDays && s.closedAt) {
+  // Archived, and still untouched a month AFTER that.
+  //
+  // Both clocks matter, and the second one is the whole point of the rung. The
+  // original rule was `idle >= 30d AND closedAt`, which looks equivalent and is
+  // not: once a sweep archives a session that has ALREADY been quiet for 50 days,
+  // it satisfies both halves the same minute, and the bin proposal adds no
+  // evidence the archive step didn't already have. The ladder collapses into one
+  // rung — everything old goes straight to "propose for deletion".
+  //
+  // That was invisible while archiving was rare and manual. It stops being
+  // invisible the moment something archives on a schedule (the Brain's dream, or
+  // cleanupIdleDays), which is exactly when it would have mattered most.
+  //
+  // So the bin asks for something archiving cannot supply: a month of you not
+  // reopening it. `closedAt` is when it was archived; reopening clears it.
+  if (idleDays >= thresholds.trashDays && s.closedAt && daysSince(s.closedAt, nowMs) >= thresholds.trashDays) {
     return { ...base, tier: 'trash', reason: 'idle', blockedBy: null };
   }
   if (idleDays >= thresholds.archiveDays && !s.closedAt) {
