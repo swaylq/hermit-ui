@@ -1,0 +1,14 @@
+{
+  "label": "Patch",
+  "blurb": "Bounded code change. Read, edit, run the check, report the diff.",
+  "engine": "pi",
+  "tools": ["read", "grep", "find", "ls", "edit", "write", "bash"],
+  "skills": [],
+  "extensions": [],
+  "model": null,
+  "_note": [
+    "Seven built-ins plus hermit's six. The full working set for changing a codebase, and still ~4.5k standing tokens against omp's 22.1k.",
+    "bash is here for the verification step — running the test, the type-check, the linter. A change nobody ran is not a change, and routing that step to another harness would mean re-reading the whole context to do it.",
+    "For open-ended multi-file work that needs lsp / ast_edit / browser, the router escalates to the built-in `omp` mode instead. This harness is for changes whose shape is already known."
+  ]
+}

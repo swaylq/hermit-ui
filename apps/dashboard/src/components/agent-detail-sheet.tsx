@@ -26,8 +26,10 @@ import { useScope } from '@/lib/use-scope';
 import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
 import { BackendPicker } from './chat/backend-picker';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
-import { isRuntimeKind, type RuntimeKind } from '@/lib/runtime-labels';
-import { PI_MODES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
+import {
+  isRuntimeKind, toBackendOption, TRIAGE_MODE, type RuntimeKind, type BackendOption,
+} from '@/lib/runtime-labels';
+import { PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
 
 // ── Deferred sub-trees ───────────────────────────────────────────────────────
 // /agents renders this file inline (AgentDetailBody, not a sheet), so everything
@@ -324,16 +326,24 @@ export function AgentDetailSheet({
 function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput['agent']; agentName: string }) {
   const utils = trpc.useUtils();
   const storedRuntime: RuntimeKind = isRuntimeKind(agent.runtime) ? agent.runtime : 'claude-tmux';
-  const storedMode: PiMode | null = isPiMode(agent.runtimeMode) ? agent.runtimeMode : null;
-  const [draftRuntime, setDraftRuntime] = useState<RuntimeKind | null>(null);
+  // triage is excluded here on purpose: it is shown as its own card, so leaving
+  // it out means flipping triage → pi opens the Mode select on the fleet default
+  // instead of on a mode the select does not even offer.
+  const storedMode: PiMode | null =
+    isPiMode(agent.runtimeMode) && agent.runtimeMode !== TRIAGE_MODE ? agent.runtimeMode : null;
+  const storedBackend: BackendOption = toBackendOption(agent.runtime, agent.runtimeMode);
+  const [draftRuntime, setDraftRuntime] = useState<BackendOption | null>(null);
   const [draftMode, setDraftMode] = useState<PiMode | null>(null);
-  const shownRuntime: RuntimeKind = draftRuntime ?? storedRuntime;
+  const shownBackend: BackendOption = draftRuntime ?? storedBackend;
+  const shownRuntime: RuntimeKind = shownBackend === TRIAGE_MODE ? 'pi-rpc' : shownBackend;
   const shownMode: PiMode = draftMode ?? storedMode ?? DEFAULT_PI_MODE;
   // The stored value's shape: DEFAULT_PI_MODE is stored as null (fleet default).
   const storeMode = (m: PiMode) => (m === DEFAULT_PI_MODE ? null : m);
-  const dirty =
-    shownRuntime !== storedRuntime ||
-    storeMode(shownMode) !== (isPiMode(agent.runtimeMode) ? agent.runtimeMode : null);
+  // What Save would write. Triage pins its own mode — the card IS the mode —
+  // so it is never subject to the DEFAULT_PI_MODE-as-null rule.
+  const nextMode: string | null =
+    shownBackend === TRIAGE_MODE ? TRIAGE_MODE : shownRuntime === 'pi-rpc' ? storeMode(shownMode) : null;
+  const dirty = shownRuntime !== storedRuntime || nextMode !== (agent.runtimeMode ?? null);
   const save = trpc.agents.setDefaultRuntime.useMutation({
     onSuccess: () => {
       // byName is cached at 30s (detail) / 60s (new-chat); invalidate so the
@@ -351,8 +361,8 @@ function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput[
     <section>
       <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">default backend</h3>
       <div className="rounded-lg border border-border bg-card p-3 space-y-3">
-        <BackendPicker value={shownRuntime} onChange={setDraftRuntime} agentDefault={storedRuntime} />
-        {shownRuntime === 'pi-rpc' && (
+        <BackendPicker value={shownBackend} onChange={setDraftRuntime} agentDefault={storedBackend} />
+        {shownBackend === 'pi-rpc' && (
           <label className="block">
             <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Mode</span>
             <Select value={shownMode} onValueChange={(v) => setDraftMode(isPiMode(v) ? v : DEFAULT_PI_MODE)} modal={false}>
@@ -360,7 +370,7 @@ function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput[
                 <SelectValue>{(v: string | null) => PI_MODE_META[isPiMode(v) ? v : DEFAULT_PI_MODE].label}</SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {PI_MODES.map((m) => <SelectItem key={m} value={m}>{PI_MODE_META[m].label}</SelectItem>)}
+                {PI_MODE_CHOICES.map((m) => <SelectItem key={m} value={m}>{PI_MODE_META[m].label}</SelectItem>)}
               </SelectContent>
             </Select>
             <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
@@ -376,7 +386,7 @@ function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput[
               save.mutate({
                 name: agentName,
                 runtime: shownRuntime,
-                runtimeMode: shownRuntime === 'pi-rpc' ? storeMode(shownMode) : null,
+                runtimeMode: nextMode,
               })
             }
           >

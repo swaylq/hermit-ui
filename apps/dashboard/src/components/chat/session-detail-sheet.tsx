@@ -26,8 +26,11 @@ import { relTime } from '@/lib/format';
 import { CtxBar } from '@/components/ctx-bar';
 import { BackendPicker } from './backend-picker';
 import { useScope } from '@/lib/use-scope';
-import { isRuntimeKind, runtimeLabel, type RuntimeKind } from '@/lib/runtime-labels';
-import { isPiMode, piModeLabel, PI_MODES, PI_MODE_META, DEFAULT_PI_MODE, type PiMode } from '@/lib/pi-modes';
+import {
+  isRuntimeKind, runtimeLabel, toBackendOption, backendLabel, TRIAGE_MODE,
+  type RuntimeKind, type BackendOption,
+} from '@/lib/runtime-labels';
+import { isPiMode, piModeLabel, PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, type PiMode } from '@/lib/pi-modes';
 
 function Row({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
   return (
@@ -80,7 +83,7 @@ export function SessionDetailSheet({
   // landed, or another device switched this session — the override is dropped.
   // Adjusting state during render is React's own escape hatch for exactly this
   // (an effect here causes the cascading render the lint rule warns about).
-  const [runtime, setRuntime] = useState<RuntimeKind | null>(null);
+  const [runtime, setRuntime] = useState<BackendOption | null>(null);
   const [mode, setMode] = useState<PiMode | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [stamped, setStamped] = useState<string | null>(null);
@@ -95,13 +98,23 @@ export function SessionDetailSheet({
 
   // Both pickers show the RESOLVED value — they must say what is actually
   // running, not what this session happens to have written in its own columns.
+  // Which CARD is lit. `triage` is pi with its mode already decided, so the
+  // resolved pair has to be read together or an agent defaulting to triage
+  // would open on the plain pi card.
+  const shownBackend: BackendOption =
+    runtime ?? toBackendOption(d?.backend.runtime, d?.backend.runtimeMode);
   const shownRuntime: RuntimeKind =
-    runtime ?? (isRuntimeKind(d?.backend.runtime) ? d.backend.runtime : 'claude-tmux');
+    shownBackend === TRIAGE_MODE ? 'pi-rpc' : (isRuntimeKind(shownBackend) ? shownBackend : 'claude-tmux');
   // A claude session resolves to no mode at all, so when the picker is flipped
   // to pi the mode select opens on what the AGENT would start pi in — the same
   // answer "New chat" would give — rather than snapping to the fleet default.
-  const currentMode = d?.backend.runtimeMode ?? d?.agentBackend.runtimeMode ?? DEFAULT_PI_MODE;
-  const shownMode = mode ?? currentMode;
+  // triage filtered out for the same reason as in the agent sheet: it is a card,
+  // not a row, so flipping triage → pi must open the select on something it offers.
+  const resolvedMode = d?.backend.runtimeMode ?? d?.agentBackend.runtimeMode ?? DEFAULT_PI_MODE;
+  const currentMode = resolvedMode === TRIAGE_MODE ? DEFAULT_PI_MODE : resolvedMode;
+  // Picking Triage IS picking the mode, so the Mode select is hidden below and
+  // any half-made choice in it is discarded rather than saved alongside.
+  const shownMode = shownBackend === TRIAGE_MODE ? TRIAGE_MODE : (mode ?? currentMode);
 
   const save = trpc.chat.setSessionRuntime.useMutation({
     onSuccess: () => {
@@ -142,12 +155,12 @@ export function SessionDetailSheet({
     if (!d || !dirty) return;
     const changingBackend = shownRuntime !== d.backend.runtime;
     const ok = await confirm({
-      title: changingBackend ? `Switch to ${runtimeLabel(shownRuntime)}?` : `Switch mode to ${piModeLabel(shownMode)}?`,
+      title: changingBackend ? `Switch to ${backendLabel(shownBackend)}?` : `Switch mode to ${piModeLabel(shownMode)}?`,
       message: (
         <>
           The conversation on this page is kept. What is <em>not</em> kept is the running context:{' '}
           {changingBackend ? runtimeLabel(d.backend.runtime) : 'pi'} is stopped, and the next message starts a fresh
-          turn on {changingBackend ? runtimeLabel(shownRuntime) : piModeLabel(shownMode)} with no memory of this thread
+          turn on {changingBackend ? backendLabel(shownBackend) : piModeLabel(shownMode)} with no memory of this thread
           beyond what you say in it.
         </>
       ),
@@ -198,10 +211,10 @@ export function SessionDetailSheet({
           <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5">
             <Section title="backend">
               <BackendPicker
-                value={shownRuntime}
+                value={shownBackend}
                 onChange={(v) => { setRuntime(v); setErr(null); }}
                 disabled={readOnly || working || save.isPending}
-                agentDefault={d.agentBackend.runtime}
+                agentDefault={toBackendOption(d.agentBackend.runtime, d.agentBackend.runtimeMode)}
               />
 
               {/* Which mode this session runs — the setting that decides the
@@ -211,7 +224,7 @@ export function SessionDetailSheet({
                   setting worth changing was the one you couldn't. Keyed off the
                   PICKER's runtime, not the server's, so flipping to pi offers
                   its mode in the same breath and one Apply lands both. */}
-              {shownRuntime === 'pi-rpc' && (
+              {shownBackend === 'pi-rpc' && (
                 <label className="mt-2.5 block">
                   <span className="text-[11px] uppercase tracking-wide text-muted-foreground">mode</span>
                   <Select
@@ -227,7 +240,7 @@ export function SessionDetailSheet({
                       <SelectValue>{(v: string | null) => piModeLabel(v)}</SelectValue>
                     </SelectTrigger>
                     <SelectContent>
-                      {PI_MODES.map((m) => <SelectItem key={m} value={m}>{PI_MODE_META[m].label}</SelectItem>)}
+                      {PI_MODE_CHOICES.map((m) => <SelectItem key={m} value={m}>{PI_MODE_META[m].label}</SelectItem>)}
                     </SelectContent>
                   </Select>
                   <span className="mt-1 block text-[11px] leading-snug text-muted-foreground">

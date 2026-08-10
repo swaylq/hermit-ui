@@ -11,8 +11,8 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { BackendPicker } from './backend-picker';
-import { isRuntimeKind, type RuntimeKind } from '@/lib/runtime-labels';
-import { PI_MODES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
+import { toBackendOption, fromBackendOption, type BackendOption } from '@/lib/runtime-labels';
+import { PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
 
 export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }: { agents: string[]; preset?: string; lockedAgent?: string; onCreated: (id: string) => void; onCancel: () => void }) {
   const [picked, setPicked] = useState('');
@@ -25,7 +25,7 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
   // Holds only an explicit choice; null = "the agent's default", resolved at
   // render. That way the picker is right the instant the agent lookup lands,
   // without a re-seed that would overwrite a choice made while it was in flight.
-  const [runtime, setRuntime] = useState<RuntimeKind | null>(null);
+  const [runtime, setRuntime] = useState<BackendOption | null>(null);
   // pi only. Same "explicit choice or null" shape as `runtime`: null means the
   // agent's default, resolved at render once the agent lookup lands.
   const [mode, setMode] = useState<PiMode | null>(null);
@@ -52,7 +52,10 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
     setMode(null);
   }
 
-  const chosen: RuntimeKind = runtime ?? (isRuntimeKind(agentRuntime) ? agentRuntime : 'claude-tmux');
+  // The card, not the stored backend: `triage` is pi with its mode already
+  // decided, so the agent's default has to be read as the PAIR to open on the
+  // right card for an agent that defaults to it.
+  const chosen: BackendOption = runtime ?? toBackendOption(agentRuntime, agentMode);
   const chosenMode: PiMode = mode ?? (isPiMode(agentMode) ? agentMode : DEFAULT_PI_MODE);
 
   const create = trpc.chat.createSession.useMutation({ onSuccess: (s) => onCreated(s.id) });
@@ -68,13 +71,17 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
           onSubmit={(e) => {
             e.preventDefault();
             if (!agent) return;
+            const backend = fromBackendOption(chosen);
             create.mutate({
               agentName: agent,
-              runtime: chosen,
+              runtime: backend.runtime,
               // Written explicitly, for the same reason the backend is: a
               // session that states its mode keeps the one you started it in
-              // when the agent's default is later edited.
-              ...(chosen === 'pi-rpc' ? { runtimeMode: chosenMode } : {}),
+              // when the agent's default is later edited. Triage pins its own
+              // (the card IS the mode); pi takes whatever the Mode select holds.
+              ...(backend.runtimeMode
+                ? { runtimeMode: backend.runtimeMode }
+                : chosen === 'pi-rpc' ? { runtimeMode: chosenMode } : {}),
             });
           }}
         >
@@ -103,7 +110,7 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
           <div className="block">
             <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Backend</span>
             <div className="mt-1.5">
-              <BackendPicker value={chosen} onChange={setRuntime} agentDefault={agentRuntime ?? 'claude-tmux'} />
+              <BackendPicker value={chosen} onChange={setRuntime} agentDefault={toBackendOption(agentRuntime, agentMode)} />
             </div>
           </div>
           {chosen === 'pi-rpc' && (
@@ -118,7 +125,7 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
                   <SelectValue>{(v: string | null) => PI_MODE_META[isPiMode(v) ? v : DEFAULT_PI_MODE].label}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {PI_MODES.map((m) => <SelectItem key={m} value={m}>{PI_MODE_META[m].label}</SelectItem>)}
+                  {PI_MODE_CHOICES.map((m) => <SelectItem key={m} value={m}>{PI_MODE_META[m].label}</SelectItem>)}
                 </SelectContent>
               </Select>
               <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">

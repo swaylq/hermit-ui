@@ -1,0 +1,15 @@
+{
+  "label": "Web",
+  "blurb": "Anything that needs the internet. Search, read the actual page, cite it.",
+  "engine": "omp",
+  "tools": ["web_search", "read"],
+  "skills": [],
+  "extensions": [],
+  "model": null,
+  "_note": [
+    "The only harness in this set on the omp engine, and only because `web_search` exists nowhere else. omp's floor is 8.1k standing tokens even with --no-tools, so it has to earn it with a tool pi cannot provide (docs/01-measurements.md).",
+    "omp's `read` takes a URL as well as a path, so no separate fetch tool is needed.",
+    "Two built-ins, not the full 31: measured 22.1k → this recipe's number is recorded in docs/01-measurements.md. omp's --tools covers built-ins ONLY and hard-errors on an unknown name, so hermit's tools are deliberately NOT unioned in here — buildModeArgs does that only for the pi engine.",
+    "Exa's hosted MCP works keyless (verified by asst 2026-08-06), so no API key is needed."
+  ]
+}

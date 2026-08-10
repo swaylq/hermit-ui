@@ -1,0 +1,14 @@
+{
+  "label": "Answer",
+  "blurb": "Think and reply. No repo, no web, no shell — the fastest harness there is.",
+  "engine": "pi",
+  "tools": ["read"],
+  "skills": [],
+  "extensions": [],
+  "model": null,
+  "_note": [
+    "The floor of the fleet. Measured 2026-08-10: pi + read + hermit's six = ~3.0k standing tokens, against 22.1k for the omp default (docs/01-measurements.md).",
+    "`read` is the one built-in kept. A question that names a file is common enough that losing it costs a whole extra routing hop, and one tool schema is ~300 tokens.",
+    "No bash on purpose: the moment a task needs to RUN something it is not this harness's task, and the router should have sent it to shell or patch."
+  ]
+}

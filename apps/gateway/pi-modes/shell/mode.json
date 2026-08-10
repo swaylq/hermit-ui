@@ -1,0 +1,14 @@
+{
+  "label": "Shell",
+  "blurb": "Run and inspect things on this machine. Status, logs, processes, one-off commands.",
+  "engine": "pi",
+  "tools": ["bash", "read"],
+  "skills": [],
+  "extensions": [],
+  "model": null,
+  "_note": [
+    "Two built-ins. The smallest harness that can operate a machine, ~3.3k standing tokens.",
+    "Distinct from the built-in `ops` mode, which is for REMOTE hosts and ships ssh_run plus a full investigation prompt. This one is local-only and deliberately cheap: 'is the gateway up', 'what is on :8443', 'tail that log'.",
+    "No edit/write: a task that changes a file is patch's, and the split keeps this harness from quietly turning into a code editor with a worse prompt."
+  ]
+}

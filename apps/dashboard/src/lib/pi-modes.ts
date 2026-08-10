@@ -17,7 +17,15 @@
 //
 // See docs/pi-modes-design.md.
 
-export const PI_MODES = ['coding', 'ops', 'omp', 'frontend', 'consultant', 'writer'] as const;
+export const PI_MODES = [
+  'coding', 'ops', 'omp', 'frontend', 'consultant', 'writer',
+  // Task-shaped harnesses: split by which tools the work needs rather than by
+  // role, which is what makes them routable. See apps/gateway/pi-modes/.
+  'answer', 'scout', 'patch', 'shell', 'web',
+  // The router. Offered as a card on the backend picker, not as a row below —
+  // see PI_MODE_CHOICES.
+  'triage',
+] as const;
 export type PiMode = (typeof PI_MODES)[number];
 
 // The fleet default pi mode (stored as NULL on agent/session rows). omp
@@ -27,6 +35,17 @@ export const DEFAULT_PI_MODE: PiMode = 'omp';
 export function isPiMode(v: string | null | undefined): v is PiMode {
   return PI_MODES.includes(v as PiMode);
 }
+
+/**
+ * What a Mode dropdown offers — every mode except `triage`.
+ *
+ * triage is picked as a BACKEND card (runtime-labels.ts), and the new-chat
+ * screen shows both controls at once: the same choice appearing as a card and
+ * as a row on one screen reads as two different settings. It stays in PI_MODES
+ * so `piModeLabel('triage')` still renders "Triage" wherever a session reports
+ * running it.
+ */
+export const PI_MODE_CHOICES = PI_MODES.filter((m) => m !== 'triage');
 
 /** Full name plus what the mode actually is, shown under the picker. */
 export const PI_MODE_META: Record<PiMode, { label: string; blurb: string }> = {
@@ -53,6 +72,30 @@ export const PI_MODE_META: Record<PiMode, { label: string; blurb: string }> = {
   writer: {
     label: 'Writer',
     blurb: 'Long-form prose and copy. Voice, structure, editing passes.',
+  },
+  answer: {
+    label: 'Answer',
+    blurb: 'Think and reply. No repo, no web, no shell — the fastest harness there is.',
+  },
+  scout: {
+    label: 'Scout',
+    blurb: 'Read-only investigation. Where is it, how does it work, what calls it.',
+  },
+  patch: {
+    label: 'Patch',
+    blurb: 'Bounded code change. Read, edit, run the check, report the diff.',
+  },
+  shell: {
+    label: 'Shell',
+    blurb: 'Run and inspect things on this machine. Status, logs, processes.',
+  },
+  web: {
+    label: 'Web',
+    blurb: 'Anything that needs the internet. Search, read the page, cite it.',
+  },
+  triage: {
+    label: 'Triage',
+    blurb: 'Reads the task, then becomes the leanest harness that can finish it.',
   },
 };
 export function piModeLabel(v: string | null | undefined): string {

@@ -42,3 +42,55 @@ export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
   'claude-tmux': 'Claude Code in a tmux pane. Slash commands, subagents, terminal access.',
   'pi-rpc': 'pi or omp as an RPC child process. Pick the engine and recipe under Mode.',
 };
+
+// ── the picker's own vocabulary ─────────────────────────────────────────────
+//
+// The card list is NOT the same set as RUNTIME_KINDS, and that is deliberate.
+// `triage` is not a third backend: it is an ordinary pi session whose MODE
+// decides, on its first turn, which harness it becomes. Nothing downstream
+// knows about it — runtimeFor() sees pi-rpc, resolveMode() finds triage on
+// disk, buildModeArgs() expands it like any other mode.
+//
+// It gets a card rather than a row in the Mode dropdown because from the user's
+// side the question this picker asks is "who runs this", and the honest answer
+// for triage is "it decides" — which is a peer of "Claude" and "pi", not a
+// variant of one. Picking it also has to hide the Mode select, since choosing a
+// mode by hand is exactly what it exists to avoid.
+
+/** The mode value that means "the harness picks itself". */
+export const TRIAGE_MODE = 'triage';
+
+export const BACKEND_OPTIONS = ['claude-tmux', 'pi-rpc', TRIAGE_MODE] as const;
+export type BackendOption = (typeof BACKEND_OPTIONS)[number];
+
+export function backendLabel(v: BackendOption): string {
+  return v === TRIAGE_MODE ? 'Triage' : runtimeLabel(v);
+}
+
+export const BACKEND_BLURB: Record<BackendOption, string> = {
+  'claude-tmux': RUNTIME_BLURB['claude-tmux'],
+  'pi-rpc': RUNTIME_BLURB['pi-rpc'],
+  [TRIAGE_MODE]: 'A pi session that reads the task and becomes the leanest harness that can finish it.',
+};
+
+/** The stored columns → which card is selected. */
+export function toBackendOption(
+  runtime: string | null | undefined,
+  runtimeMode: string | null | undefined,
+): BackendOption {
+  if (runtime === 'pi-rpc' && runtimeMode === TRIAGE_MODE) return TRIAGE_MODE;
+  return isRuntimeKind(runtime) ? runtime : 'claude-tmux';
+}
+
+/**
+ * Which card is selected → what to store.
+ *
+ * `runtimeMode: null` for the two real backends means "this card says nothing
+ * about the mode" — the caller keeps whatever the Mode select holds. Only
+ * triage pins one, because for triage the mode IS the choice.
+ */
+export function fromBackendOption(v: BackendOption): { runtime: RuntimeKind; runtimeMode: string | null } {
+  return v === TRIAGE_MODE
+    ? { runtime: 'pi-rpc', runtimeMode: TRIAGE_MODE }
+    : { runtime: v, runtimeMode: null };
+}

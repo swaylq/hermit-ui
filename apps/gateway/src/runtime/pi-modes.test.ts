@@ -209,3 +209,69 @@ test('writer mode stays on pi and unions hermit tools', () => {
   assert.ok(args.includes('--append-system-prompt'), 'writer keeps its SYSTEM.md');
   assert.ok(toolsIdx < args.indexOf('--append-system-prompt'));
 });
+
+// ── task harnesses + triage ─────────────────────────────────────────────────
+// The modes above are role-shaped (Writer, Consultant). These are task-shaped:
+// the split is by which tools the work needs, which is what makes them
+// routable. See docs/pi-harness-design.md.
+
+test('every task harness is discoverable on disk', () => {
+  const names = listModeNames();
+  for (const n of ['answer', 'scout', 'patch', 'shell', 'web', 'triage']) {
+    assert.ok(names.includes(n), `${n} missing from [${names.join(', ')}]`);
+  }
+});
+
+test('the pi task harnesses stay on pi and keep hermit tools', () => {
+  for (const n of ['answer', 'scout', 'patch', 'shell']) {
+    const m = loadMode(n);
+    assert.ok(m, `${n} should load`);
+    assert.notEqual(m.engine, 'omp', `${n} must stay on pi — omp's floor is above every pi harness's full price`);
+    assert.ok(m.systemPrompt.length > 0, `${n} needs a SYSTEM.md`);
+    const tools = buildModeArgs(m, { agentDirectory: '/tmp' })[
+      buildModeArgs(m, { agentDirectory: '/tmp' }).indexOf('--tools') + 1
+    ].split(',');
+    for (const h of HERMIT_TOOL_NAMES) assert.ok(tools.includes(h), `${n} must keep hermit tool ${h}`);
+  }
+});
+
+test('web is the only omp task harness, and gets no hermit-tool union', () => {
+  const m = loadMode('web');
+  assert.ok(m, 'web should load');
+  assert.equal(m.engine, 'omp');
+  const args = buildModeArgs(m, { agentDirectory: '/tmp' });
+  const tools = args[args.indexOf('--tools') + 1].split(',');
+  // omp's --tools covers built-ins ONLY and hard-errors on anything else, so
+  // unioning hermit's in here would fail the spawn outright.
+  for (const h of HERMIT_TOOL_NAMES) assert.ok(!tools.includes(h), `web must not list hermit tool ${h}`);
+  assert.ok(tools.includes('web_search'), 'web exists for web_search');
+});
+
+test('triage lists `delegate` in its allowlist, not just in its extension', () => {
+  // pi's --tools allowlists EXTENSION tools too. delegate is registered by
+  // triage's extension, and leaving it out of mode.json made setActiveTools()
+  // accept the name while the model got "Tool delegate not found", fell back to
+  // bash, and — with bash narrowed away — blocked on `ask`'s 4h timeout.
+  const m = loadMode('triage');
+  assert.ok(m, 'triage should load');
+  assert.equal(m.engine ?? 'pi', 'pi');
+  const args = buildModeArgs(m, { agentDirectory: '/tmp' });
+  const tools = args[args.indexOf('--tools') + 1].split(',');
+  assert.ok(tools.includes('delegate'), 'triage must allowlist its own delegate tool');
+});
+
+test('triage ships the extension that does the routing', () => {
+  const m = loadMode('triage');
+  assert.ok(m, 'triage should load');
+  const args = buildModeArgs(m, { agentDirectory: '/tmp' });
+  const exts = args.filter((_, i) => args[i - 1] === '--extension');
+  assert.equal(exts.length, 1, 'triage loads exactly its own extension');
+  assert.ok(exts[0].endsWith('/triage/extensions/triage.ts'));
+  // The router module has to travel with it: the extension imports ./route.mjs
+  // beside itself, and a mode directory that reaches back into a dev checkout
+  // at runtime would break on the machine that never had one.
+  assert.ok(
+    fs.existsSync(path.join(path.dirname(exts[0]), 'route.mjs')),
+    'triage/extensions/route.mjs must ship alongside the extension',
+  );
+});

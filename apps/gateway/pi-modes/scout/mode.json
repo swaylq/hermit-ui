@@ -1,0 +1,13 @@
+{
+  "label": "Scout",
+  "blurb": "Read-only investigation. Where is it, how does it work, what calls it.",
+  "engine": "pi",
+  "tools": ["read", "grep", "find", "ls"],
+  "skills": [],
+  "extensions": [],
+  "model": null,
+  "_note": [
+    "The highest-frequency task class in the fleet and the cheapest harness that can serve it. Measured 2026-08-10 on the 15-file fixture: 2,132 ms / 2,945 input tokens, against 4,018 ms / 38,352 for the omp default — same correct answer.",
+    "No edit, no write, no bash. Not as a permission boundary (the router can always send the work to patch) but because a harness that CAN change things spends turns deciding whether to."
+  ]
+}
