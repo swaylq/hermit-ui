@@ -89,6 +89,34 @@ Two things that are load-bearing and non-obvious:
   is one obvious step; a custom tool has to be understood first. Prompting
   against it is not enough — the general tool has to go.
 
+### What `delegate` costs, and how it shows its work
+
+First contact with a real session (2026-08-10, `asst` on mobile) produced one
+opaque `→ delegate 搜索 2025 年…` row and a spinner for four minutes. Two
+separate causes, both now fixed:
+
+- **It ran on opus.** The `--model` pin was gated on `HERMIT_PI_MODEL`, a name
+  the gateway never sets — it sets `HERMIT_PI_MODELS`, the plural catalogue. So
+  every delegated run went out unpinned and omp resolved its own default, which
+  on this fleet is `claude-opus-5`. `delegateModel()` now picks the fastest model
+  the machine publishes (haiku, then sonnet, else omp's choice). Same query:
+  ~4 min → 51 s.
+- **Nothing streamed.** `translatePiEvent` does not translate
+  `tool_execution_update`, so even pi's own `onUpdate` channel cannot reach the
+  dashboard. The delegate now runs omp with `--mode json`, reads its event
+  stream, and rewrites a **single live chat row** — `/api/sync/chat-message` is
+  unique on `(sessionId, externalId)` and a conflict is an UPDATE that
+  deliberately does not bump `lastMessageAt`, so a stable id gives a status line
+  with no row spam and no unread badge.
+
+A third thing surfaced while testing the ceiling. `omp --max-time` exits **0**,
+so the exit code cannot distinguish a finished run from a guillotined one: at
+`--max-time 45` the last assistant text was *"Verified OpenAI Presence
+(official). Now verifying other claims against primary sources."* — a progress
+sentence, 88 characters, which the parent would have read as the finding. Any
+run that reaches 90% of its budget is now labelled TRUNCATED in the tool result,
+with an instruction to re-delegate something narrower.
+
 Routing accuracy on a held-out set of 30 tasks written without looking at the
 rules: **83–87% exact, 90% safe** (safe = the pick could still finish the job),
 ~700 ms per decision, once per session. Ties resolve toward *more* capability and
