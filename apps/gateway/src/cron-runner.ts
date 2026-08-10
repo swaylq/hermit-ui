@@ -31,7 +31,12 @@ import { tryAcquire, release, isLocked } from './op-locks';
 
 const RUN_TIMEOUT_MS = 120 * 60_000; // hard cap per run (2h)
 const IDLE_DONE_MS = 8_000;         // assistant quiet this long ⇒ turn complete
-const OUTPUT_TAIL = 4096;
+// Cap on the output shipped to the dashboard. CronRun.output is @db.Text and the sync
+// route sets no bound of its own, so this number is the only limit in the path — and at
+// 4096 it was cutting ordinary daily reports in half (2026-08-10: a 14,101-char report
+// arrived starting mid-sentence). 32K fits any report a cron should be writing while
+// still bounding a runaway turn that dumps a whole file into its final message.
+const OUTPUT_MAX = 32_768;
 // How long to wait for the PINNED transcript before declaring drift. awaitTranscript's
 // 30s default is a coin flip on a box running 20+ claude processes: on 2026-08-09 the
 // file appeared at ~31s, one second past the deadline, and the fire went down the
@@ -79,6 +84,30 @@ export function adoptDriftTranscript(
     exclude: new Set([...opts.pinned, ...opts.chatOwned]),
     minMtimeMs: opts.minMtimeMs,
   });
+}
+
+// Cap the run's output for the dashboard, and SAY SO when it doesn't fit.
+//
+// Two things were wrong with the old `output.slice(-OUTPUT_TAIL)`:
+//   • it kept the wrong end. A cron's output is the agent's final message, and every
+//     instruction we give cron authors says to LEAD with the outcome (see the
+//     cron_create tool description). Keeping the tail therefore drops the headline and
+//     keeps the sign-off — the reader gets a report starting mid-sentence.
+//   • it was SILENT. Nothing in the delivered message said anything had been removed,
+//     so a truncated report is indistinguishable from a cron that failed to write one.
+//     That is the part that actually costs you a morning: on 2026-08-10 a 14,101-char
+//     daily report lost its first 10K characters and read as "the report never ran".
+// The marker is appended past `max` on purpose — it is the one line that must survive,
+// and the column it lands in is unbounded (@db.Text).
+export function capOutput(output: string, max: number, transcriptPath?: string): string {
+  if (output.length <= max) return output;
+  const dropped = output.length - max;
+  return (
+    output.slice(0, max) +
+    `\n\n[cron-runner] ⚠️ output truncated — kept the first ${max.toLocaleString()} of ` +
+    `${output.length.toLocaleString()} characters (${dropped.toLocaleString()} dropped).` +
+    (transcriptPath ? ` Full text: ${transcriptPath}` : '')
+  );
 }
 
 function sleep(ms: number): Promise<void> {
@@ -177,6 +206,10 @@ async function fireInner(c: Cron): Promise<void> {
   // however we exit.
   const claudeUuid = randomUUID();
   pinnedUuids.add(claudeUuid);
+  // The transcript we ended up tailing (the pinned one, or a drift-adopted one).
+  // Hoisted for the same reason: a truncation notice has to name the file that still
+  // holds the full text, and that is decided inside the try.
+  let jsonlPath = '';
 
   try {
     // The orchestrator (Brain) runs its crons (e.g. the daily dream) WITH the
@@ -206,7 +239,7 @@ async function fireInner(c: Cron): Promise<void> {
         CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
       },
     });
-    let jsonlPath = path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`);
+    jsonlPath = path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`);
     // We pinned --session-id <claudeUuid>, so claude should write exactly this
     // transcript. If it didn't honor the flag (respawn / version quirk) the pinned
     // file never appears and we'd tail an empty path forever → a real run
@@ -312,15 +345,18 @@ async function fireInner(c: Cron): Promise<void> {
     await killSession(runSessionId).catch(() => {});
   }
 
-  const tail = output.length > OUTPUT_TAIL ? output.slice(-OUTPUT_TAIL) : output;
+  const capped = capOutput(output, OUTPUT_MAX, jsonlPath || undefined);
   const durationMs = Date.now() - startedAt;
+  if (capped.length !== output.length) {
+    console.warn(`[cron] ${c.id.slice(0, 8)}: output truncated ${output.length} → ${OUTPUT_MAX} chars`);
+  }
   try {
     await api.cronRun({
       phase: 'finish',
       cronId: c.id,
       runId,
       status,
-      output: tail,
+      output: capped,
       durationMs,
     });
   } catch (e) {

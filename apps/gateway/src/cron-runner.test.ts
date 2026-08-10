@@ -1,5 +1,10 @@
-// Unit tests for adoptDriftTranscript — the "my pinned transcript never showed up,
-// which file is actually mine?" pick a cron fire makes.
+// Unit tests for the two pure decisions a cron fire makes about its OWN OUTPUT:
+// which transcript is mine (adoptDriftTranscript), and how much of the result
+// survives the trip to the dashboard (capOutput). Both have shipped a wrong report
+// to a real reader.
+//
+// adoptDriftTranscript — the "my pinned transcript never showed up, which file is
+// actually mine?" pick.
 //
 // An agent's crons and its dashboard chats write into ONE ~/.claude/projects/<cwd> dir.
 // The exclusion set used to hold only sibling CRON uuids, and a chat that is mid-turn is
@@ -16,7 +21,7 @@ import path from 'node:path';
 
 // config.ts exits the process without a key; nothing here talks to the dashboard.
 process.env.ASST_KEY ||= 'test-key-unused';
-const { adoptDriftTranscript } = await import('./cron-runner');
+const { adoptDriftTranscript, capOutput } = await import('./cron-runner');
 
 const CWD = '/Users/test/agent';
 const PINNED = '11111111-1111-4111-8111-111111111111';       // this fire's own uuid
@@ -97,5 +102,48 @@ describe('adoptDriftTranscript', () => {
   it('with no chat sessions live, behaves exactly as before', () => {
     transcript(DRIFTED, FIRE_START + 1_000);
     assert.equal(adopt([])?.uuid, DRIFTED);
+  });
+});
+
+// capOutput — the cap on what a run ships to the dashboard. The old cut kept the LAST
+// 4096 chars and said nothing about it, so a long daily report was delivered starting
+// mid-sentence with its headline gone, and read as a cron that never wrote one.
+describe('capOutput', () => {
+  it('leaves anything within the cap completely untouched', () => {
+    assert.equal(capOutput('short report', 4096), 'short report');
+    const exact = 'x'.repeat(100);
+    assert.equal(capOutput(exact, 100), exact);
+  });
+
+  it('keeps the HEAD — a report leads with its outcome', () => {
+    const report = 'THE HEADLINE\n' + 'body '.repeat(1000);
+    const out = capOutput(report, 200);
+    assert.ok(out.startsWith('THE HEADLINE'), 'the lead must survive the cut');
+  });
+
+  it('never truncates silently — the notice states what was dropped', () => {
+    const out = capOutput('y'.repeat(14_101), 4_096);
+    assert.match(out, /output truncated/);
+    assert.match(out, /4,096/);  // kept
+    assert.match(out, /14,101/); // original length
+    assert.match(out, /10,005/); // dropped
+  });
+
+  it('names the transcript that still holds the full text', () => {
+    const out = capOutput('z'.repeat(500), 100, '/tmp/projects/run.jsonl');
+    assert.match(out, /Full text: \/tmp\/projects\/run\.jsonl/);
+    // …and stays sane when the run never resolved one.
+    assert.doesNotMatch(capOutput('z'.repeat(500), 100), /Full text/);
+  });
+
+  it('lets the notice exceed the cap rather than cutting itself off', () => {
+    const out = capOutput('w'.repeat(500), 100);
+    assert.ok(out.length > 100, 'the marker is appended past the cap on purpose');
+    assert.equal(out.slice(0, 100), 'w'.repeat(100));
+  });
+
+  it('a 14k report at the new 32K cap is delivered whole', () => {
+    const report = 'r'.repeat(14_101);
+    assert.equal(capOutput(report, 32_768), report);
   });
 });
