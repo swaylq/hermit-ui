@@ -6,6 +6,7 @@
 // anything keeps working exactly as before. The dashboard config wins when set.
 
 import { api } from './api';
+import type { ModelLimits } from './pi-model-limits';
 
 export type PiImageConfig = {
   enabled?: boolean;
@@ -28,6 +29,14 @@ export type PiConfig = {
   baseUrl?: string;
   api?: string;
   models?: string[];
+  /**
+   * Per-model context window / output cap, keyed by model id, for a model
+   * pi-model-limits has never heard of. Known families need no entry here — the
+   * generated model config already states their real limits. Only set this when
+   * the machine serves something the table does not cover, or when the relay's
+   * window genuinely differs from the vendor's.
+   */
+  modelLimits?: Record<string, ModelLimits>;
   /**
    * Model for a pi session that pins none of its own. Blank falls back to the
    * first entry of `models` — see resolveDefaultModel.
@@ -147,6 +156,7 @@ function mergeRemote(remote: PiConfig | null): PiConfig {
     baseUrl: remote.baseUrl?.trim() || env.baseUrl,
     api: remote.api?.trim() || env.api || 'anthropic-messages',
     models: (remote.models?.length ? remote.models : env.models),
+    modelLimits: remote.modelLimits,
     defaultModel: remote.defaultModel?.trim() || env.defaultModel,
     secretKey: remote.secretKey || env.secretKey,
     image: remote.image?.provider && remote.image.provider !== 'none' ? remote.image : undefined,

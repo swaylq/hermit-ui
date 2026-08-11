@@ -226,6 +226,44 @@ test('ensurePiModelsJson writes the machine provider with an env apiKey referenc
   assert.deepEqual(p.models.map((m) => m.id), ['claude-opus-5', 'claude-sonnet-5']);
 });
 
+// Without these fields pi has no catalog entry to match a machine-declared
+// provider against, falls back to a 128k window, and truncates a reply
+// mid-sentence once the conversation passes ~124k tokens.
+test('ensurePiModelsJson states each model context window and output cap', () => {
+  const dir = tmpDir();
+  ensurePiModelsJson(
+    { provider: 'hyqubit', baseUrl: 'https://litellm.hyqubit.com', models: ['claude-opus-5', 'kimi-k3'] },
+    dir,
+  );
+  const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'models.json'), 'utf8')) as {
+    providers: Record<string, { models: Array<{ id: string; contextWindow?: number; maxTokens?: number }> }>;
+  };
+  const [opus, unknown] = parsed.providers.hyqubit.models;
+  assert.equal(opus.contextWindow, 1_000_000);
+  assert.equal(opus.maxTokens, 128_000);
+  // An unknown model is left alone rather than pinned to a made-up number.
+  assert.equal(unknown.contextWindow, undefined);
+  assert.equal(unknown.maxTokens, undefined);
+});
+
+test('ensurePiModelsJson lets a machine override the limits table', () => {
+  const dir = tmpDir();
+  ensurePiModelsJson(
+    {
+      provider: 'hyqubit',
+      baseUrl: 'https://litellm.hyqubit.com',
+      models: ['kimi-k3'],
+      modelLimits: { 'kimi-k3': { contextWindow: 256_000, maxTokens: 32_000 } },
+    },
+    dir,
+  );
+  const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'models.json'), 'utf8')) as {
+    providers: Record<string, { models: Array<{ contextWindow?: number; maxTokens?: number }> }>;
+  };
+  assert.equal(parsed.providers.hyqubit.models[0].contextWindow, 256_000);
+  assert.equal(parsed.providers.hyqubit.models[0].maxTokens, 32_000);
+});
+
 test('ensurePiModelsJson is idempotent and does not rewrite an unchanged file', () => {
   const dir = tmpDir();
   ensurePiModelsJson({ provider: 'hyqubit', baseUrl: 'https://litellm.hyqubit.com' }, dir);

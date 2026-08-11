@@ -13,6 +13,21 @@ export const PI_CONFIG_SCHEMA = z.object({
   baseUrl: z.string().trim().url().optional(),
   api: z.string().trim().optional(), // 'anthropic-messages' | 'openai' | ...
   models: z.array(z.string().trim().min(1)).optional(),
+  // Escape hatch for a model the gateway's own limits table does not know
+  // (apps/gateway/src/pi-model-limits.ts). Known families need no entry: the
+  // generated pi/omp model config already declares their real window, which is
+  // what stops the engine guessing 128k and truncating long conversations
+  // mid-sentence. Schemas strip what they do not name, so this has to be here
+  // for a stored override to survive a settings save at all.
+  modelLimits: z
+    .record(
+      z.string().trim().min(1),
+      z.object({
+        contextWindow: z.number().int().positive().optional(),
+        maxTokens: z.number().int().positive().optional(),
+      }),
+    )
+    .optional(),
   // Which of them a new pi session gets when neither the session nor its agent
   // pins one. Without this the model had to be typed into the new-chat picker
   // every time, or left blank and decided by pi. Blank falls back to the first

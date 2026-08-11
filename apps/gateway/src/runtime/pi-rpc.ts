@@ -23,6 +23,7 @@ import { resolveMode, buildModeArgs } from './pi-modes';
 import { readPiSession, rememberPiSession, resumablePiSession } from './pi-sessions';
 import { globalMemoryPrompt } from './context-files';
 import { getPiConfig, resolveDefaultModel } from '../pi-config';
+import { modelLimitsFor, type ModelLimits } from '../pi-model-limits';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 
 // RpcClient's default cliPath search is cwd-relative, so it looks for
@@ -62,9 +63,17 @@ function resolvePiCli(): string {
  * Merges into an existing file rather than replacing it, so a human-authored
  * models.json keeps its other providers. The machine's own provider is the
  * source of truth from Settings → Pi Runtime and is (re)written to match.
+ *
+ * Each model carries its context window and output cap — see pi-model-limits.
+ * Without them pi treats every model on a machine-declared provider as a
+ * 128k-window unknown and truncates replies mid-sentence once the conversation
+ * passes ~124k tokens.
  */
 export function ensurePiModelsJson(
-  cfg: { provider?: string; baseUrl?: string; api?: string; models?: string[]; secretKey?: string | null },
+  cfg: {
+    provider?: string; baseUrl?: string; api?: string; models?: string[]; secretKey?: string | null;
+    modelLimits?: Record<string, ModelLimits> | null;
+  },
   agentDir = path.join(os.homedir(), '.pi', 'agent'),
 ): void {
   const provider = cfg.provider?.trim();
@@ -81,7 +90,9 @@ export function ensurePiModelsJson(
     // missing or unparseable → start from an empty provider map
   }
 
-  const models = (cfg.models ?? []).filter(Boolean).map((m) => ({ id: m, name: m }));
+  const models = (cfg.models ?? [])
+    .filter(Boolean)
+    .map((m) => ({ id: m, name: m, ...modelLimitsFor(m, cfg.modelLimits) }));
   providers[provider] = {
     name: provider,
     baseUrl,

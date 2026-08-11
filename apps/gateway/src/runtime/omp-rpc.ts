@@ -29,6 +29,7 @@ import {
 } from './pi-credentials';
 import { readPiSession, rememberPiSession, resumablePiSession } from './pi-sessions';
 import { getPiConfig, resolveDefaultModel } from '../pi-config';
+import { modelLimitsFor, type ModelLimits } from '../pi-model-limits';
 import { OmpTransport, type OmpEvent } from './omp-transport';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 
@@ -113,15 +114,23 @@ const SUBSCRIPTION_SYSTEM_PROMPT = [
  * expects and what lets the value stay out of the file; boot() injects it.
  *
  * A file without our marker was written by a human and is left alone.
+ *
+ * Each model carries its context window and output cap — see pi-model-limits.
+ * omp has not been caught truncating the way pi has, but it resolves models
+ * through the same provider-keyed catalog, so it is one unlucky model id away
+ * from the same 128k guess.
  */
-function ensureOmpModelsYaml(cfg: {
-  provider?: string; baseUrl?: string; api?: string; models?: string[]; secretKey?: string | null;
-}): void {
+export function ensureOmpModelsYaml(
+  cfg: {
+    provider?: string; baseUrl?: string; api?: string; models?: string[]; secretKey?: string | null;
+    modelLimits?: Record<string, ModelLimits> | null;
+  },
+  dir = path.join(os.homedir(), '.omp', 'agent'),
+): void {
   const provider = cfg.provider?.trim();
   const baseUrl = cfg.baseUrl?.trim();
   if (!provider || !baseUrl) return;
 
-  const dir = path.join(os.homedir(), '.omp', 'agent');
   const file = path.join(dir, 'models.yml');
   if (fs.existsSync(file)) {
     const existing = fs.readFileSync(file, 'utf8');
@@ -142,7 +151,15 @@ function ensureOmpModelsYaml(cfg: {
     // LiteLLM-style proxies reject Anthropic's `strict` tool field outright.
     '    disableStrictTools: true',
     ...(models.length
-      ? ['    models:', ...models.flatMap((m) => [`      - id: ${q(m)}`, `        name: ${q(m)}`])]
+      ? ['    models:', ...models.flatMap((m) => {
+          const limits = modelLimitsFor(m, cfg.modelLimits);
+          return [
+            `      - id: ${q(m)}`,
+            `        name: ${q(m)}`,
+            ...(limits.contextWindow ? [`        contextWindow: ${limits.contextWindow}`] : []),
+            ...(limits.maxTokens ? [`        maxTokens: ${limits.maxTokens}`] : []),
+          ];
+        })]
       : []),
     '',
   ];
