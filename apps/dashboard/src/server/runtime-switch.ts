@@ -41,6 +41,13 @@ export function planRuntimeSwitch(
 
   if (before.runtime !== after.runtime) return { ok: true, restart: true };
 
+  // codex reads the model off these columns like pi does, but it has no
+  // long-lived process to tear down — each turn is its own `codex exec`, and
+  // the gateway rebuilds the thread object (resuming the same thread id, so the
+  // conversation survives) the moment it sees a different model. Restarting
+  // would hibernate a session to achieve something the next turn does anyway.
+  if (after.runtime === 'codex-exec') return { ok: true, restart: false };
+
   // Same backend. Only the child-process backends read provider/model/mode off
   // these columns; claude takes its model from the machine's settings.json.
   if (after.runtime === 'pi-rpc') {

@@ -555,7 +555,7 @@ export const agentsRouter = router({
   setDefaultRuntime: machineProcedure
     .input(z.object({
       name: z.string(),
-      runtime: z.enum(['claude-tmux', 'pi-rpc']),
+      runtime: z.enum(['claude-tmux', 'pi-rpc', 'codex-exec']),
       runtimeMode: z.string().max(64).nullish(),
     }))
     .mutation(async ({ ctx, input }) => {

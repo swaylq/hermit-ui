@@ -1,10 +1,12 @@
 import type { AgentRuntime } from './types';
 import { PiRpcRuntime } from './pi-rpc';
 import { OmpRpcRuntime } from './omp-rpc';
+import { CodexExecRuntime } from './codex-exec';
 import { resolveMode } from './pi-modes';
 
 const piRuntime = new PiRpcRuntime();
 const ompRuntime = new OmpRpcRuntime();
+const codexRuntime = new CodexExecRuntime();
 
 /**
  * Pick the backend for a session.
@@ -13,6 +15,10 @@ const ompRuntime = new OmpRpcRuntime();
  * its existing inline tmux path, which this deliberately does not touch — that
  * path is the fleet's critical path and the only one that bills against Claude
  * Max's Interactive bucket.
+ *
+ * 'codex-exec' is its own backend and takes no mode: codex has no equivalent of
+ * a pi mode (no spawn recipe, no tool allowlist we compose), so there is
+ * nothing for one to select and resolveRuntime already nulls it out upstream.
  *
  * There is one *backend* in the pi family and two *engines* under it. Which
  * engine runs is declared by the MODE, not chosen separately: from the user's
@@ -36,6 +42,7 @@ export function runtimeFor(
   kind: string | null | undefined,
   mode: string | null | undefined,
 ): AgentRuntime | null {
+  if (kind === 'codex-exec') return codexRuntime;
   if (kind !== 'pi-rpc') return null;
   return resolveMode(mode)?.engine === 'omp' ? ompRuntime : piRuntime;
 }
@@ -51,7 +58,7 @@ export function runtimeFor(
  * the three sites, and so that adding a third never does either.
  */
 export function allRuntimes(): AgentRuntime[] {
-  return [piRuntime, ompRuntime];
+  return [piRuntime, ompRuntime, codexRuntime];
 }
 
 export type {

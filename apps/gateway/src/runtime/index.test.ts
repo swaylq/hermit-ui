@@ -35,6 +35,15 @@ test('each runtime is a singleton, so the handle map survives across ticks', () 
   assert.equal(runtimeFor('pi-rpc', 'coding'), runtimeFor('pi-rpc', 'coding'));
 });
 
+test('codex is its own backend and takes no mode', () => {
+  assert.equal(runtimeFor('codex-exec', null)?.kind, 'codex-exec');
+  assert.equal(runtimeFor('codex-exec', 'omp')?.kind, 'codex-exec');
+  assert.equal(runtimeFor('codex-exec', 'coding')?.kind, 'codex-exec');
+  // Singleton for the same reason the others are: probeRuntime looks a session
+  // up by id in the runtime's own map.
+  assert.equal(runtimeFor('codex-exec', null), runtimeFor('codex-exec', null));
+});
+
 test('teardown paths see every engine', () => {
-  assert.deepEqual(allRuntimes().map((r) => r.kind).sort(), ['omp-rpc', 'pi-rpc']);
+  assert.deepEqual(allRuntimes().map((r) => r.kind).sort(), ['codex-exec', 'omp-rpc', 'pi-rpc']);
 });

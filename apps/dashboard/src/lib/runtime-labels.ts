@@ -6,11 +6,15 @@
 //
 // See docs/pi-runtime-design.md.
 
-// Two backends, not three. omp (oh-my-pi) is a second ENGINE inside the pi
-// backend, selected by the mode — see lib/pi-modes.ts. Which engine runs and
-// which recipe it runs are one decision from the user's side, and keeping them
-// one also keeps a single auth configuration serving both.
-export const RUNTIME_KINDS = ['claude-tmux', 'pi-rpc'] as const;
+// Three backends. omp (oh-my-pi) is NOT one of them: it is a second ENGINE
+// inside the pi backend, selected by the mode — see lib/pi-modes.ts. Which
+// engine runs and which recipe it runs are one decision from the user's side,
+// and keeping them one also keeps a single auth configuration serving both.
+//
+// codex IS its own backend rather than an engine under something else: it is a
+// different vendor on a different subscription, with its own login, its own
+// thread store and no mode vocabulary to share.
+export const RUNTIME_KINDS = ['claude-tmux', 'pi-rpc', 'codex-exec'] as const;
 export type RuntimeKind = (typeof RUNTIME_KINDS)[number];
 
 export function isRuntimeKind(v: string | null | undefined): v is RuntimeKind {
@@ -19,12 +23,16 @@ export function isRuntimeKind(v: string | null | undefined): v is RuntimeKind {
 
 /** Full name, for pickers and headings. */
 export function runtimeLabel(kind: string | null | undefined): string {
-  return kind === 'pi-rpc' ? 'pi' : 'Claude Code';
+  if (kind === 'pi-rpc') return 'pi';
+  if (kind === 'codex-exec') return 'Codex';
+  return 'Claude Code';
 }
 
 /** Short name for the chat header, where the meta line is tight at 390px. */
 export function runtimeShortLabel(kind: string | null | undefined): string {
-  return kind === 'pi-rpc' ? 'pi' : 'Claude';
+  if (kind === 'pi-rpc') return 'pi';
+  if (kind === 'codex-exec') return 'Codex';
+  return 'Claude';
 }
 
 /** One line of hover detail: the backend plus whatever qualifies it. */
@@ -33,6 +41,10 @@ export function runtimeDetail(
   provider?: string | null,
   model?: string | null,
 ): string {
+  // No provider for codex: it authenticates as itself (`codex login`) and has
+  // no equivalent of pi's machine-configured endpoint, so naming one would be
+  // a field the user cannot set and the backend does not read.
+  if (kind === 'codex-exec') return ['Codex', model].filter(Boolean).join(' · ');
   if (kind !== 'pi-rpc') return 'Claude Code (interactive, tmux pane)';
   return ['pi', provider, model].filter(Boolean).join(' · ');
 }
@@ -41,6 +53,7 @@ export function runtimeDetail(
 export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
   'claude-tmux': 'Claude Code in a tmux pane. Slash commands, subagents, terminal access.',
   'pi-rpc': 'pi or omp as an RPC child process. Pick the engine and recipe under Mode.',
+  'codex-exec': 'OpenAI Codex, one run per turn. Uses this machine’s own codex login.',
 };
 
 // ── the picker's own vocabulary ─────────────────────────────────────────────
@@ -60,7 +73,7 @@ export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
 /** The mode value that means "the harness picks itself". */
 export const TRIAGE_MODE = 'triage';
 
-export const BACKEND_OPTIONS = ['claude-tmux', 'pi-rpc', TRIAGE_MODE] as const;
+export const BACKEND_OPTIONS = ['claude-tmux', 'pi-rpc', 'codex-exec', TRIAGE_MODE] as const;
 export type BackendOption = (typeof BACKEND_OPTIONS)[number];
 
 export function backendLabel(v: BackendOption): string {
@@ -70,6 +83,7 @@ export function backendLabel(v: BackendOption): string {
 export const BACKEND_BLURB: Record<BackendOption, string> = {
   'claude-tmux': RUNTIME_BLURB['claude-tmux'],
   'pi-rpc': RUNTIME_BLURB['pi-rpc'],
+  'codex-exec': RUNTIME_BLURB['codex-exec'],
   [TRIAGE_MODE]: 'A pi session that reads the task and becomes the leanest harness that can finish it.',
 };
 
