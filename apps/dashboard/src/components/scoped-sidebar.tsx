@@ -12,6 +12,7 @@ import { SquarePen, Folder, KeyRound, LogOut } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
+import { sessionRecencyAt } from '@/lib/session-recency';
 import { useSidebar } from '@/components/app-sidebar';
 import { getKeyring, getActiveEntry, removeMachine } from '@/lib/keyring';
 import { AddMachine } from './add-machine';
@@ -110,7 +111,11 @@ export function ScopedSidebar({ agentName }: { agentName: string }) {
                 )}
               >
                 <span className="truncate text-sm">{s.title || s.preview || 'New chat'}</span>
-                {s.lastMessageAt && <span className="text-[10px] text-muted-foreground/70">{relTime(s.lastMessageAt)}</span>}
+                {/* Same key the list is ordered by — a chat with no message yet is
+                    dated from when it was created, not left blank. It now sorts to
+                    the TOP like everywhere else, where a missing line would read as
+                    a broken row rather than as "nothing said here yet". */}
+                <span className="text-[10px] text-muted-foreground/70">{relTime(sessionRecencyAt(s))}</span>
               </Link>
             ))
           )}
