@@ -148,6 +148,16 @@ Host health 那张卡上每行的 💤 按钮也改成归档 —— 手动休眠
 由底部 `Show hidden & archived` 一起放出来。在这之前，归档只是给它挂个 `closed` 标签、
 人还留在列表里 —— 那等于整理动作没有整理任何东西。
 
+**恢复也得在会话自己身上有一个入口。** 侧栏右键那条 `Restore from archive` 一度是
+唯一的回头路，可归档会话照样能被搜索（`Search chats` 覆盖 hidden / archived）或者一个
+存下来的 `?session=` 链接直接打开 —— 打开之后是个死胡同：输入框灰着写 `session is closed`，
+页面上没有任何一处告诉你怎么把它弄回来。所以聊天页头部右上角在 `closedAt` 非空时多一个
+恢复按钮（`chat.reopenSession`，和侧栏那条同一个 mutation，只清 `closedAt`）。它常驻、
+不进手机端的溢出抽屉、并且带底色 —— 会话一旦归档，头部其余按钮基本都是禁用的，
+它是那一刻唯一有用的动作。点完先就地改写 `listSessions` / `getSession` 两份缓存再 refetch：
+头部和输入框优先读 `listSessions` 那一行，而那是 0.5–0.9s 的慢查询，只 refetch 的话
+输入框会在点击后继续灰着大半秒。
+
 **侧栏排序严格按最后消息时间倒序。** 原来的 `orderBy` 以 `closedAt: 'asc'` 打头，
 读起来像「没归档的在前」，实际相反：Postgres 的 `ASC` 默认 `NULLS LAST`，
 于是**每个已归档的会话都排在所有未归档的前面**，而且按归档时间而不是按最后说话时间排。

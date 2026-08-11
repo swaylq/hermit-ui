@@ -6,7 +6,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   RotateCw, Trash2, Terminal, Pencil, ListCollapse, Search, FoldVertical, Sparkles,
-  MoreHorizontal, ChevronRight, SquarePen, Info,
+  MoreHorizontal, ChevronRight, SquarePen, Info, ArchiveRestore,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -591,6 +591,29 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   });
   const restartSession = trpc.chat.requestSessionRestart.useMutation({
     onSuccess: () => sessionMeta.refetch(),
+  });
+  // Take an archived chat back out of the archive, from inside the chat itself.
+  // Until this existed the only way back was the sidebar's right-click menu under
+  // `Show hidden & archived` — but an archived chat is perfectly reachable from
+  // search (or a bookmarked ?session= url), and landing in one meant a dead end: a
+  // greyed composer reading "session is closed" and no visible way out.
+  //
+  // Clears closedAt only, exactly like the sidebar's `Restore from archive`. The
+  // session stays hibernated and wakes on the next message (--resume).
+  //
+  // Writes both caches before refetching: the header and the composer read
+  // `closedAt` off the listSessions ROW in preference to getSession (see `session`
+  // above), and that list is the ~0.5–0.9s query — so a refetch-only path would
+  // leave the composer disabled for most of a second after the click.
+  const reopenSession = trpc.chat.reopenSession.useMutation({
+    onSuccess: () => {
+      utils.chat.listSessions.setData({}, (old) =>
+        old?.map((s) => (s.id === sessionId ? { ...s, closedAt: null } : s)),
+      );
+      utils.chat.getSession.setData({ sessionId }, (old) => (old ? { ...old, closedAt: null } : old));
+      void sessionMeta.refetch();
+      void sessionOne.refetch();
+    },
   });
   // "Another chat with this same agent" — the header shortcut for the flow that
   // otherwise costs a trip through /chat?new=1 and re-picking the agent. Hard
@@ -1511,6 +1534,22 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           </div>
         </div>
         <div ref={moreRef} className="relative flex items-center gap-1 shrink-0">
+          {/* The way out of an archived chat. Persistent (never in the phone's
+              overflow tray) and tinted, because for a closed session it is the only
+              action that does anything — everything else here is disabled, and the
+              composer just says "session is closed". */}
+          {session?.closedAt && (
+            <button
+              type="button"
+              onClick={() => reopenSession.mutate({ id: sessionId })}
+              disabled={reopenSession.isPending}
+              aria-label="restore from archive"
+              title="Restore from archive — bring this chat back into the sidebar. It stays asleep until your next message, which wakes it with full history (--resume)."
+              className="inline-flex items-center justify-center h-7 w-7 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-400 transition-colors cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-wait"
+            >
+              <ArchiveRestore className="h-4 w-4" />
+            </button>
+          )}
           {/* Secondary actions. Inline on ≥sm; on a phone they live in the tray
               below, which is the same JSX rendered into a different container. */}
           <div className="hidden sm:flex items-center gap-1">{secondaryActions}</div>
