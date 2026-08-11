@@ -341,14 +341,24 @@ export function sendKeys(sessionId: string, text: string): void {
 // "submitted" on 'clear' — returning false here on a capture timeout used to
 // silently strand a multi-line / image paste whose submit Enter got swallowed.
 function composerStatus(name: string): 'text' | 'clear' | 'unknown' {
+  const line = composerLine(name);
+  if (line === null) return 'unknown';
+  return line.length > 0 ? 'text' : 'clear';
+}
+
+// The composer's input line (`❯ …`) as TEXT: '' when it is positively empty, null when
+// it could not be read at all. composerStatus is the tri-state view of this; the probe
+// below needs the characters themselves, because "did this pane react to a keystroke"
+// is a question about the content changing, not about empty-vs-not.
+function composerLine(name: string): string | null {
   const r = tmux(['capture-pane', '-t', `${name}.0`, '-p'], { timeoutMs: 2000 });
-  if (!r.ok) return 'unknown';
+  if (!r.ok) return null;
   const lines = r.stdout.replace(/\x1b\[[0-9;]*m/g, '').split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
     const idx = lines[i].indexOf('❯');
-    if (idx >= 0) return lines[i].slice(idx + 1).trim().length > 0 ? 'text' : 'clear';
+    if (idx >= 0) return lines[i].slice(idx + 1).trim();
   }
-  return 'unknown';
+  return null;
 }
 
 /**
@@ -387,6 +397,133 @@ export async function confirmSubmitted(sessionId: string, tries = 40, gapMs = 50
 /** Public read of a pane's composer state (tri-state; see composerStatus). */
 export function readComposer(sessionId: string): 'text' | 'clear' | 'unknown' {
   return composerStatus(paneName(sessionId));
+}
+
+/**
+ * The text currently stranded in a pane's composer, or null if it can't be read.
+ *
+ * Text sitting here has been TYPED but never submitted, so it exists in exactly one
+ * place on the machine — this pane's screen. It is in no transcript, no DB row, no
+ * log. Read it before killing a pane so the message can be re-sent (or at minimum
+ * quoted back to the user) instead of dying with the process.
+ */
+export function readComposerText(sessionId: string): string | null {
+  return composerLine(paneName(sessionId));
+}
+
+/** See probeInputPath. */
+export type InputPathVerdict = 'alive' | 'deaf' | 'inconclusive';
+
+/**
+ * Ask a pane whether anything is still READING its stdin.
+ *
+ * Every other health check in this driver answers a different question: hasSession
+ * says the pane exists, pane_pid says the process is up, capture-pane says the TUI is
+ * painting. A claude can pass all three and still be unusable — the Ink render loop
+ * keeps drawing while the stdin event loop has stopped, so keys land in the terminal
+ * and are never consumed. The pane looks perfect and is deaf. That state cost a
+ * ceo-session message permanently (2026-08-10): the text went into the composer, the
+ * submit Enter was swallowed, no turn ever started, and because the message had never
+ * been submitted it existed in no transcript — it could only be re-typed by the user.
+ * The pane then sat "healthy" for 24h.
+ *
+ * The only way to answer the question is to press a key and look for a reaction, so:
+ * type one marker character and watch for it on screen. A pane that is reading stdin
+ * shows it within a frame; a deaf one never changes.
+ *
+ * The probe is NET-ZERO on the buffer, which matters because a wrong 'alive' must not
+ * damage the message: it types PROBE_CHAR and then always sends BSpace, in every
+ * outcome and every ordering. If the pane is deaf, neither key ever lands. If it is
+ * alive, the character appears and is deleted again. If it was merely slow and the
+ * marker arrives after we gave up, the trailing BSpace still removes it. (Deleting
+ * first instead — backspace, look for a shorter line — would be simpler, but it eats a
+ * real character of the user's text on every healthy pane it misjudges.)
+ *
+ * Two refusals, because a false 'deaf' costs a process:
+ *  - the composer must be readable and non-empty; on an empty one the marker is
+ *    indistinguishable from a stray keystroke landing → 'inconclusive';
+ *  - with `expectText`, the composer must actually be holding THAT message. This is
+ *    the guard against condemning a healthy pane that is merely BLOCKED: a permission
+ *    prompt and the resume picker both paint a `❯`, and a menu ignores a typed
+ *    character much the way a corpse does. If the line isn't our stranded text, we
+ *    decline to judge rather than guess.
+ *
+ * 'inconclusive' is never grounds to kill anything — only 'deaf' is.
+ */
+const PROBE_CHAR = '.';
+
+export async function probeInputPath(
+  sessionId: string,
+  opts: { expectText?: string; timeoutMs?: number; gapMs?: number } = {},
+): Promise<InputPathVerdict> {
+  const name = paneName(sessionId);
+  if (!hasSession(name)) return 'inconclusive';
+
+  const before = composerLine(name);
+  if (!before) return 'inconclusive'; // null (unreadable) or '' (empty — nothing to compare against)
+
+  if (opts.expectText) {
+    // Compare on the TAIL: the composer renders on one line, so a long message is
+    // elided, and Chinese text plus the box drawing make an exact match hopeless. The
+    // last few characters are what survives on screen, and they are enough to tell our
+    // own stranded message from a menu.
+    const tail = opts.expectText.trim().slice(-12);
+    if (tail && !before.includes(tail)) return 'inconclusive';
+  }
+
+  try {
+    // `--` so the marker is never parsed as a flag.
+    tmux(['send-keys', '-t', `${name}.0`, '-l', '--', PROBE_CHAR]);
+    const deadline = Date.now() + (opts.timeoutMs ?? 4_000);
+    while (Date.now() < deadline) {
+      await sleep(opts.gapMs ?? 250);
+      const now = composerLine(name);
+      if (now !== null && now !== before) return 'alive'; // it consumed the keystroke
+    }
+    // Unchanged for the whole window. One last read, so a single failed capture inside
+    // the loop is not what decides a pane's fate.
+    return composerLine(name) === before ? 'deaf' : 'alive';
+  } finally {
+    // Undo the marker on EVERY path — including 'deaf', where it is a no-op now but
+    // cleans up if the pane was only slow and the marker lands later.
+    tmux(['send-keys', '-t', `${name}.0`, 'BSpace']);
+  }
+}
+
+/**
+ * Kill a pane WITHOUT going through its stdin, and confirm it is gone.
+ *
+ * `kill()` above types `/exit` and waits — which is worthless against the case this
+ * exists for. A claude whose input path is dead never reads the command, so the
+ * graceful path burns its grace period every time and only the fallback does any
+ * work. Signals don't travel through stdin, so SIGTERM lands on a deaf process just
+ * as it does on a healthy one (verified during the 2026-08-10 recovery).
+ *
+ * SIGTERM first so claude tears down its own children (notably the mcp-stub) rather
+ * than orphaning them, SIGKILL if it won't go, then kill-session to reclaim the tmux
+ * session itself. Returns true once the session is gone.
+ *
+ * Losing the process does NOT lose the conversation: the transcript is on disk, and
+ * the next setupSession spawns with `--resume <uuid>` onto the same history.
+ */
+export async function hardKill(sessionId: string, graceMs = 5_000): Promise<boolean> {
+  const name = paneName(sessionId);
+  if (!hasSession(name)) return true;
+
+  const r = tmux(['display-message', '-p', '-t', `${name}.0`, '#{pane_pid}']);
+  const pid = Number(r.stdout);
+  if (Number.isInteger(pid) && pid > 0) {
+    try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+    const deadline = Date.now() + graceMs;
+    while (Date.now() < deadline) {
+      if (!hasSession(name)) return true;
+      await sleep(200);
+    }
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    await sleep(300);
+  }
+  if (hasSession(name)) tmux(['kill-session', '-t', name]);
+  return !hasSession(name);
 }
 
 /**

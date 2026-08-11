@@ -5,12 +5,12 @@
 // behavior here is what makes the P1 dedup safe — the hand copies must produce
 // exactly these strings. Tested from the gateway package because it already
 // depends on @hermit-ui/tmux-driver and ships tsx.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg, chunkLiteral, ensureSession } from '@hermit-ui/tmux-driver';
+import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg, chunkLiteral, ensureSession, probeInputPath, hardKill, readComposerText } from '@hermit-ui/tmux-driver';
 
 describe('tmuxPaneName', () => {
   it('keeps the last 12 id chars behind the hermit- prefix', () => {
@@ -213,5 +213,132 @@ describe('ensureSession vs a stale $TMUX', () => {
       if (saved === undefined) delete process.env.TMUX;
       else process.env.TMUX = saved;
     }
+  });
+});
+
+// The health check the gateway did not have on 2026-08-10, when a claude kept painting
+// its TUI at 0% CPU while its stdin loop was dead: every existing check (pane exists,
+// pid alive, composer renders) passed, the message went into the composer, the submit
+// Enter was swallowed, and — never having been submitted — it was in no transcript to
+// recover from. These panes reproduce that shape exactly:
+//
+//   deaf  — `stty -echo` + paints a `❯` line + never reads stdin. A real claude TUI puts
+//           the terminal in raw/no-echo mode, so when its reader dies the tty echoes
+//           nothing either; keys land in the pty and disappear. This is the corpse.
+//   alive — same painted line, then a `read` on a normal tty. The kernel line
+//           discipline echoes a typed character and erases it on backspace, which is
+//           precisely a composer's observable behaviour — so this fixture exercises the
+//           net-zero property for real, not just the detection.
+//
+// The pair is the whole point: 'deaf' is what authorizes killing a process, so the
+// tests have to prove BOTH that a corpse is detected and that a live pane never is.
+describe('probeInputPath — is anything reading this pane stdin?', () => {
+  const haveTmux = spawnSync('tmux', ['-V'], { encoding: 'utf8' }).status === 0;
+  const LINE = 'hello world';
+  const started: string[] = [];
+
+  // `sh -c` bodies are passed to ensureSession as the "claude binary + args" so the
+  // driver's own naming/spawn path is what creates these panes.
+  const spawnPane = (body: string) => {
+    const sessionId = 'zzprobe' + Math.random().toString(36).slice(2, 8);
+    started.push(sessionId);
+    const saved = process.env.TMUX;
+    delete process.env.TMUX;
+    try {
+      ensureSession({ sessionId, cwd: os.tmpdir(), claudeBin: '/bin/sh', claudeArgs: ['-c', body] });
+    } finally {
+      if (saved !== undefined) process.env.TMUX = saved;
+    }
+    return sessionId;
+  };
+  const DEAF = `stty -echo; printf '❯ ${LINE}'; sleep 60`;
+  const ALIVE = `printf '❯ ${LINE}'; read x; sleep 60`;
+  const settle = () => new Promise((r) => setTimeout(r, 700));
+
+  after(() => {
+    for (const id of started) spawnSync('tmux', ['kill-session', '-t', tmuxPaneName(id)]);
+  });
+
+  it('says DEAF for a pane that paints a composer but never reads stdin', { skip: !haveTmux }, async () => {
+    const id = spawnPane(DEAF);
+    await settle();
+    assert.equal(readComposerText(id), LINE, 'precondition: the composer line is readable');
+    assert.equal(await probeInputPath(id, { expectText: LINE, timeoutMs: 2_000 }), 'deaf');
+  });
+
+  it('says ALIVE for a pane that consumes the keystroke', { skip: !haveTmux }, async () => {
+    const id = spawnPane(ALIVE);
+    await settle();
+    assert.equal(await probeInputPath(id, { expectText: LINE, timeoutMs: 4_000 }), 'alive');
+  });
+
+  // A probe that damages the buffer is worse than no probe: 'alive' means we are about
+  // to tell the user "resend / press Enter", and the text they would send must be the
+  // text they wrote. So the marker has to be taken back.
+  it('leaves the buffer byte-identical on a live pane — a probe must never corrupt the message', { skip: !haveTmux }, async () => {
+    const id = spawnPane(ALIVE);
+    await settle();
+    assert.equal(readComposerText(id), LINE);
+    assert.equal(await probeInputPath(id, { expectText: LINE, timeoutMs: 4_000 }), 'alive');
+    await settle(); // let the undoing BSpace land
+    assert.equal(readComposerText(id), LINE, 'probe must restore the buffer exactly');
+  });
+
+  // The guard that decides whether this feature is safe to ship. A permission prompt
+  // and the resume picker BOTH paint a `❯`, and a menu ignores a typed character much
+  // the way a corpse does — so without this, "claude is waiting for you to approve a
+  // tool call" would read as "claude is dead" and we would kill a working session.
+  it('refuses to judge when the composer is not holding the message we sent', { skip: !haveTmux }, async () => {
+    const id = spawnPane(DEAF);
+    await settle();
+    assert.equal(
+      await probeInputPath(id, { expectText: 'a completely different message', timeoutMs: 2_000 }),
+      'inconclusive',
+    );
+  });
+
+  it('refuses to judge a pane with no composer line at all', { skip: !haveTmux }, async () => {
+    const id = spawnPane('stty -echo; sleep 60'); // paints nothing → no ❯
+    await settle();
+    assert.equal(readComposerText(id), null);
+    assert.equal(await probeInputPath(id, { timeoutMs: 2_000 }), 'inconclusive');
+  });
+
+  it('refuses to judge a session that does not exist', { skip: !haveTmux }, async () => {
+    assert.equal(await probeInputPath('zzprobe-nonexistent-xyz', { timeoutMs: 2_000 }), 'inconclusive');
+  });
+});
+
+// The kill that has to work on the pane probeInputPath just condemned. `kill()` types
+// `/exit` and waits for it to be obeyed — which is exactly what a process that has
+// stopped reading stdin cannot do. hardKill signals the pid instead, because signals
+// do not travel through stdin.
+describe('hardKill — killing a process that cannot hear you', () => {
+  const haveTmux = spawnSync('tmux', ['-V'], { encoding: 'utf8' }).status === 0;
+
+  it('removes a pane that ignores everything typed at it', { skip: !haveTmux }, async () => {
+    const sessionId = 'zzkill' + Math.random().toString(36).slice(2, 8);
+    const saved = process.env.TMUX;
+    delete process.env.TMUX;
+    try {
+      // Ignores SIGTERM too, so the SIGKILL fallback is what has to finish the job.
+      ensureSession({
+        sessionId,
+        cwd: os.tmpdir(),
+        claudeBin: '/bin/sh',
+        claudeArgs: ['-c', "trap '' TERM; stty -echo; printf '❯ stuck'; sleep 60"],
+      });
+    } finally {
+      if (saved !== undefined) process.env.TMUX = saved;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(spawnSync('tmux', ['has-session', '-t', tmuxPaneName(sessionId)]).status, 0, 'precondition: pane is up');
+
+    assert.equal(await hardKill(sessionId, 1_500), true);
+    assert.notEqual(spawnSync('tmux', ['has-session', '-t', tmuxPaneName(sessionId)]).status, 0, 'pane must be gone');
+  });
+
+  it('is a no-op that reports success when the session is already gone', { skip: !haveTmux }, async () => {
+    assert.equal(await hardKill('zzkill-nonexistent-xyz'), true);
   });
 });

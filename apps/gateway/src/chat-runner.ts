@@ -33,6 +33,9 @@ import {
   encodedProjectDir,
   tmuxSessionExists,
   readComposer,
+  readComposerText,
+  probeInputPath,
+  hardKill,
   waitForReplReady,
   listTranscripts,
   pickLiveTranscript,
@@ -889,17 +892,48 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
       // composer on a cold start, sends, confirms a turn actually started (the
       // transcript grew), and re-types once if a not-yet-ready TUI dropped the first
       // prompt (issue #2 — otherwise a dropped first message strands the chat on
-      // "starting" forever). So we do NOT sendKeys here. It returns false only if no
-      // turn ever started after all retries.
-      const delivered = await robustSubmit(session, state, promptText, freshSpawn);
-      if (!delivered) {
-        console.warn(`[chat] ${session.id.slice(0, 8)}: message never started a turn after retries — likely unsent`);
+      // "starting" forever). So we do NOT sendKeys here. It returns a non-'delivered'
+      // outcome only if no turn ever started after all retries.
+      let outcome = await robustSubmit(session, state, promptText, freshSpawn);
+
+      // 'deaf-pane' = the pane is not reading stdin (see diagnoseFailedSubmit). No
+      // number of retries fixes that, and leaving it alone is what turned one wedged
+      // claude into 24h of a silently-swallowing session and one message lost for good
+      // (2026-08-10). Replace the pane and re-send onto the replacement — we still hold
+      // the text, which is the only reason it can be saved at all: it was never
+      // submitted, so it is in no transcript, and it was acked, so it is not re-queued.
+      if (outcome === 'deaf-pane') {
         await api
           .syncChatMessages([
             {
               sessionId: session.id,
               role: 'system',
-              content: [{ type: 'text', text: '[gateway] ⚠️ your last message may not have submitted — it is sitting in the agent\'s input. Press Enter in the pane, or resend.' }],
+              content: [{ type: 'text', text: '[gateway] ⚠️ 这个会话的 claude 进程输入通路已死（界面正常但收不到键盘输入）。正在杀掉并用 --resume 重启，然后自动重发你刚才那条消息，历史不会丢。' }],
+              externalId: null,
+            },
+          ])
+          .catch(() => {});
+        if (await healDeafPane(session, state, promptText)) outcome = 'delivered';
+      }
+
+      if (outcome !== 'delivered') {
+        console.warn(`[chat] ${session.id.slice(0, 8)}: message never started a turn after retries — likely unsent`);
+        // Quote the message back. A never-submitted message is written to no transcript
+        // and was acked out of the queue, so this row is the ONLY place it still exists
+        // that the user can actually see — on 2026-08-10 the equivalent text was
+        // reconstructed from a tmux pane by hand, and it would have been unrecoverable
+        // had the pane been killed first. Truncated so a huge paste can't wreck the view.
+        const echo = promptText.length > 600 ? `${promptText.slice(0, 600)}…（已截断）` : promptText;
+        await api
+          .syncChatMessages([
+            {
+              sessionId: session.id,
+              role: 'system',
+              content: [{
+                type: 'text',
+                text: '[gateway] ⚠️ 这条消息没能提交给 agent，需要你重发。原文：\n\n' +
+                  `> ${echo.split('\n').join('\n> ')}`,
+              }],
               externalId: null,
             },
           ])
@@ -1350,23 +1384,36 @@ function transcriptSize(p: string): number {
  *   3. if no turn started and the composer is empty, the text was dropped → re-send
  *      once (cold start only). If the composer still HOLDS text, only re-press Enter
  *      (never re-type → never a duplicate turn).
- * Returns true once a turn started. Happy path is unchanged: a clean send grows the
- * transcript within a second and it returns immediately.
+ * Happy path is unchanged: a clean send grows the transcript within a second and it
+ * returns 'delivered' immediately.
+ *
+ * On failure it says WHICH failure, because the two need opposite responses:
+ *   'deaf-pane' — the pane is not reading stdin at all (see diagnoseFailedSubmit).
+ *                 Retrying is pointless; the pane has to be replaced.
+ *   'unsent'    — the message did not start a turn, but the pane still responds.
+ *                 Tell the user; a retry may well work.
  */
-async function robustSubmit(session: PendingSession, state: SessionState, promptText: string, freshSpawn: boolean): Promise<boolean> {
+type SubmitOutcome = 'delivered' | 'deaf-pane' | 'unsent';
+
+async function robustSubmit(session: PendingSession, state: SessionState, promptText: string, freshSpawn: boolean): Promise<SubmitOutcome> {
   const nap = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
   // Warm pane: the composer is already up, so the cold-start drop can't happen here.
   // Send + confirm submission exactly as before (a cleared composer reliably means
   // submitted) — no transcript poll, no re-type — so the common path is unchanged.
+  // The transcript baseline is taken on BOTH paths now, not just the cold one: growth
+  // is proof a turn ran, and its absence is the corroboration diagnoseFailedSubmit
+  // needs before it is allowed to condemn a pane.
+  const base = transcriptSize(state.jsonlPath);
+  const started = () => transcriptSize(state.jsonlPath) > base;
+
   if (!freshSpawn) {
     sendKeys(session.id, promptText);
-    return confirmSubmitted(session.id, 40);
+    if (await confirmSubmitted(session.id, 40)) return 'delivered';
+    return diagnoseFailedSubmit(session.id, promptText, started);
   }
 
   // Cold / fresh spawn: the Ink TUI may not be ready, so use the robust path.
-  const base = transcriptSize(state.jsonlPath);
-  const started = () => transcriptSize(state.jsonlPath) > base;
   await waitForReplReady(session.id, 45_000);
   await nap(800); // settle: Ink can drop the very first keys right after `❯` renders
 
@@ -1374,17 +1421,138 @@ async function robustSubmit(session: PendingSession, state: SessionState, prompt
     sendKeys(session.id, promptText);            // type + submit
     await confirmSubmitted(session.id, 120);      // re-press Enter until the composer clears
     for (let i = 0; i < 30 && !started(); i++) await nap(500); // ≤15s for the turn's first line
-    if (started()) return true;
+    if (started()) return 'delivered';
     // No turn ran. If text is still buffered it only needs more Enter (hammer it,
     // never re-type → no duplicate). If the composer is empty, it was dropped → re-send.
     if (readComposer(session.id) === 'text') {
       await confirmSubmitted(session.id, 120);
       for (let i = 0; i < 30 && !started(); i++) await nap(500);
-      return started();
+      if (started()) return 'delivered';
+      return diagnoseFailedSubmit(session.id, promptText, started);
     }
     // composer empty + nothing started → dropped → loop re-sends once
   }
-  return started();
+  return started() ? 'delivered' : 'unsent';
+}
+
+/**
+ * We typed a message, pressed Enter dozens of times over ≥20s, and no turn started.
+ * Ask the pane the one question that separates "busy or unlucky" from "dead": is
+ * anything reading its stdin?
+ *
+ * This is the check the codebase was missing on 2026-08-10. Every gate here — the
+ * idle gate, the deliver gate, the reattach path — asks whether the PANE EXISTS, and
+ * a claude with a wedged stdin loop passes all of them while silently swallowing
+ * every message sent to it. Ours sat "healthy" for 24h: process up, 0% CPU, TUI
+ * painting normally, and one user message lost for good because it never got
+ * submitted and so was never written to any transcript.
+ *
+ * The verdict kills a process, so it is deliberately hard to reach. It reproduces the
+ * criteria chain the 2026-08-10 diagnosis was built on, and every link must hold:
+ *
+ *   ① the composer is still holding OUR message  — probeInputPath's expectText guard,
+ *      which is what keeps a pane merely BLOCKED (permission prompt, resume picker —
+ *      both paint a `❯`) from being mistaken for a dead one;
+ *   ② the transcript never grew — no turn started by any route. Growth means something
+ *      in there is alive, and that alone vetoes the whole verdict;
+ *   ③ a typed character produced no reaction — twice, seconds apart. One round is not
+ *      enough: this box runs a dozen claudes and can stall a healthy TUI, and a stall
+ *      resolves given a moment while a corpse looks identical on every retry.
+ *
+ * Anything short of all three returns 'unsent' — we tell the user and leave the pane
+ * alone. Being wrong in that direction costs a re-send; being wrong the other way kills
+ * someone's working session.
+ */
+async function diagnoseFailedSubmit(
+  sessionId: string,
+  promptText: string,
+  started: () => boolean,
+): Promise<SubmitOutcome> {
+  const short = sessionId.slice(0, 8);
+  if (started()) return 'unsent'; // ② something ran — whatever went wrong, the pane is not deaf
+
+  if (await probeInputPath(sessionId, { expectText: promptText }) !== 'deaf') return 'unsent';
+
+  // Second opinion after a pause, for the "healthy but wedged for a few seconds" case.
+  console.warn(`[chat] ${short}: pane ignored a keystroke — re-checking before condemning it`);
+  await new Promise((r) => setTimeout(r, 5_000));
+  if (started()) return 'unsent';
+  if (await probeInputPath(sessionId, { expectText: promptText }) !== 'deaf') return 'unsent';
+
+  console.error(
+    `[chat] ${short}: pane INPUT PATH IS DEAD — composer held our text through every Enter, ` +
+      `no transcript growth, and two keystroke probes 5s apart got no reaction. The claude ` +
+      `process is alive and painting but is not reading stdin; replacing it.`,
+  );
+  return 'deaf-pane';
+}
+
+/**
+ * Replace a pane whose input path is dead, and re-deliver the message onto its
+ * replacement.
+ *
+ * The re-delivery is the point. `deliverMessage` acks the row BEFORE sending (so a
+ * throw can't cause an infinite redeliver loop), which means by the time we get here
+ * the message exists nowhere but this dead pane's composer — never submitted, so never
+ * in a transcript, and already acked, so never re-queued. Killing without re-sending
+ * would destroy it exactly the way the 2026-08-10 incident did. So we carry
+ * `promptText` across the respawn ourselves.
+ *
+ * The conversation survives the kill: setupSession re-spawns with `--resume <uuid>`
+ * against the on-disk transcript, so only the wedged process is lost.
+ *
+ * Returns true if the message landed on the new pane.
+ */
+async function healDeafPane(session: PendingSession, state: SessionState, promptText: string): Promise<boolean> {
+  const short = session.id.slice(0, 8);
+  // Hold the SAME lock the spawn path takes, for the whole kill→respawn→resend. The
+  // heal drops sessionStates before the pane is gone, which is precisely the window in
+  // which a concurrent chatTick would see "no state" and spawn its own claude for this
+  // session. If another setup is already in flight, do nothing and let it finish —
+  // never fight it.
+  if (!tryAcquire('setup', session.id)) {
+    console.warn(`[chat] ${short}: deaf-pane heal skipped — another setup holds the lock`);
+    return false;
+  }
+  try {
+    // Read the composer BEFORE the kill: this is the last moment the stranded text
+    // exists anywhere on the machine.
+    const stranded = readComposerText(session.id);
+
+    try { state.stopWatcher(); } catch { /* watcher already down */ }
+    sessionStates.delete(session.id);
+    reservedUuids.delete(session.id);
+
+    const gone = await hardKill(session.id);
+    console.warn(`[chat] ${short}: killed deaf pane (removed=${gone}); respawning with --resume and re-sending`);
+    if (!gone) return false; // tmux wouldn't let go — leave it for the next tick rather than double-spawning
+
+    let fresh: SessionState;
+    try {
+      fresh = await setupSession(session);
+    } catch (e) {
+      console.error(`[chat] ${short}: respawn after deaf-pane kill failed:`, e);
+      return false;
+    }
+    sessionStates.set(session.id, fresh);
+
+    const outcome = await robustSubmit(session, fresh, promptText, true);
+    if (outcome === 'delivered') {
+      console.log(`[chat] ${short}: re-delivered onto the fresh pane after a deaf-pane heal`);
+      return true;
+    }
+    // Second failure — do NOT kill again. Two dead panes in a row is not a wedged
+    // process, it's something we don't understand, and a kill loop would burn the
+    // session. Report and stop; `stranded` is quoted back so the text is at least
+    // recoverable by hand.
+    console.error(
+      `[chat] ${short}: message still undeliverable after respawn (outcome=${outcome})` +
+        (stranded ? ` — stranded text was: ${JSON.stringify(stranded.slice(0, 200))}` : ''),
+    );
+    return false;
+  } finally {
+    release('setup', session.id);
+  }
 }
 
 // extractText now lives in ./claude-code (shared transcript vocabulary).
