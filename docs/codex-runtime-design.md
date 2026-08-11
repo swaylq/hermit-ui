@@ -93,13 +93,13 @@ codex 不会：第三轮（换了个进程 resume 的）只发自己这轮的 it
 
 ### 模型与推理档位
 
-默认 `gpt-5.6-sol` + effort `max`，两者都可被覆盖（session 的 `runtimeModel` > `HERMIT_CODEX_MODEL` > 内置默认）。
+默认 `gpt-5.6-sol` + effort `ultra`，两者都可被覆盖（session 的 `runtimeModel` > `HERMIT_CODEX_MODEL` > 内置默认）。
 
 数据来自 codex 自己的 `~/.codex/models_cache.json`（client_version 0.147.0）：
 
 | model | 有效上下文 | 档位阶梯 | 自带默认 |
 |---|---|---|---|
-| `gpt-5.6-sol` ← 用这个 | 258,400 | low·medium·high·xhigh·**max**·ultra | **low** |
+| `gpt-5.6-sol` ← 用这个 | 258,400 | low·medium·high·xhigh·max·**ultra** | **low** |
 | `gpt-5.6-terra` / `luna` | 258,400 | 同上（luna 无 ultra） | medium |
 | `gpt-5.5` / `5.4` / `5.4-mini` | 258,400 | 到 xhigh 为止 | medium |
 | `gpt-5.3-codex-spark` | 121,600 | 到 xhigh 为止 | high |
@@ -107,12 +107,26 @@ codex 不会：第三轮（换了个进程 resume 的）只发自己这轮的 it
 两个容易搞错的点：
 
 1. **模型自带默认是 `low`**，不是 medium。也就是说改之前每个 codex 会话都跑在阶梯最底下。
-2. **`max` 不在 SDK 的 `ModelReasoningEffort` 联合类型里**（那个类型停在 `xhigh`，比服务端目录旧）。
-   所以那个 `as` 断言是**必需的**，不是图省事——实测 codex-cli 0.147.0 接受 `max`，
-   rollout 的 turn_context 里记着 `"effort": "max"`。别"顺手修掉"改回 xhigh。
+2. **`max` / `ultra` 都不在 SDK 的 `ModelReasoningEffort` 联合类型里**（那个类型停在 `xhigh`，
+   比服务端目录旧）。所以那个 `as` 断言是**必需的**，不是图省事——实测 codex-cli 0.147.0
+   接受 `ultra`，rollout 的 turn_context 里记着 `"effort": "ultra"`。别"顺手修掉"改回 xhigh。
 
-阶梯上还有一个 `ultra`（"maximum reasoning with automatic task delegation"），
-比 max 更高，但它改的是行为（自动派发子任务）而不只是深度，属于另一个决定，没用。
+`ultra` 宣称 "automatic task delegation"，所以实测过它到底发什么事件：
+只有 `agent_message` / `command_execution` / `file_change` —— 全是翻译层已经认识的类型，
+没有会被静默丢掉的新 item type。
+
+### 档位钳制（不是防御性代码）
+
+**不支持的 model+effort 组合是硬失败，不是降级**：`gpt-5.4` + `ultra` 直接
+`Codex Exec exited with code 1`，模型根本没看到 prompt。而 session 可以在 dashboard 里
+自己钉 `runtimeModel`，所以一刀切 ultra 会让 gpt-5.5 / 5.4 / 5.4-mini / 5.3-codex-spark /
+5.6-luna 上的**每一轮**都死——在一个地方改的设置，弄坏另一个地方配置的会话。
+
+`clampEffort()` 按模型的实际上限往下压（表来自 codex 自己的 catalog），压的时候 warn 一次。
+实测：一个钉了 gpt-5.4 的 session 现在正常跑完（自动降到 xhigh），而不是每轮报错。
+
+表里没有的模型**不压**：新的前沿模型更可能支持得更多，猜低了会永久静默封顶；
+猜错了则是响亮失败，且 runtime 已经把 codex 的原话贴进聊天。
 
 ### 上下文大小
 

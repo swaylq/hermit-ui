@@ -108,23 +108,81 @@ function codexHome(): string {
  */
 const DEFAULT_MODEL = 'gpt-5.6-sol';
 
+/** codex's reasoning ladder, weakest first. */
+const EFFORT_LADDER = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+type Effort = (typeof EFFORT_LADDER)[number];
+
 /**
  * Reasoning effort when the machine names none.
  *
- * The ladder is low → medium → high → xhigh → max → ultra, and the model's own
- * default is **low** — so a session left alone was running at the bottom of it.
- * `max` is "Maximum reasoning depth for the hardest problems"; `ultra` sits
- * above it but changes behaviour rather than just depth ("maximum reasoning
- * with automatic task delegation"), which is a different decision from turning
- * the dial up.
+ * The model's OWN default is `low` — the bottom of that ladder — so a session
+ * left alone was running as cheaply as codex offers. `ultra` is the top:
+ * "maximum reasoning with automatic task delegation".
  *
- * Note this value is NOT in the SDK's ModelReasoningEffort union, which stops
- * at 'xhigh' — the published types lag the server's catalog. Verified against
- * codex-cli 0.147.0: a turn spawned with 'max' is accepted and its rollout
- * records `"effort": "max"` in the turn context. The cast below is therefore
- * load-bearing, not cosmetic; do not "fix" it by dropping back to xhigh.
+ * Neither `max` nor `ultra` is in the SDK's ModelReasoningEffort union, which
+ * stops at 'xhigh' — the published types lag the server's catalog. Verified
+ * against codex-cli 0.147.0: a turn spawned with 'ultra' is accepted, its
+ * rollout records `"effort": "ultra"`, and it emits only item types the
+ * translator already understands (agent_message, command_execution,
+ * file_change) despite the delegation — so nothing is silently dropped from the
+ * chat. The cast where this is applied is therefore load-bearing, not cosmetic.
  */
-const DEFAULT_EFFORT = 'max';
+const DEFAULT_EFFORT: Effort = 'ultra';
+
+/**
+ * The highest effort each model actually accepts — longest prefix wins.
+ *
+ * This is not defensive padding. An unsupported pair is a HARD failure, not a
+ * downgrade: `gpt-5.4` with `ultra` dies with "Codex Exec exited with code 1"
+ * before the model sees the prompt (measured). Since a session can pin its own
+ * `runtimeModel` from the dashboard, a blanket ultra would mean every turn on
+ * gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark or gpt-5.6-luna failing —
+ * a setting made in one place breaking a session configured in another.
+ *
+ * Values from codex's own catalog (~/.codex/models_cache.json,
+ * supported_reasoning_levels).
+ */
+const TOP_EFFORT: ReadonlyArray<{ prefix: string; top: Effort }> = [
+  // Longest first: 'gpt-5.6-luna' must be found before the 'gpt-5.6' family
+  // entry, or the one 5.6 model without ultra would be handed it.
+  { prefix: 'gpt-5.3-codex-spark', top: 'xhigh' },
+  { prefix: 'gpt-5.6-luna', top: 'max' },
+  { prefix: 'gpt-5.6', top: 'ultra' },
+  { prefix: 'gpt-5.5', top: 'xhigh' },
+  { prefix: 'gpt-5.4', top: 'xhigh' },
+  { prefix: 'gpt-5.3', top: 'xhigh' },
+];
+
+/** Warned-about pairs, so a clamp is reported once and not every turn. */
+const clampWarned = new Set<string>();
+
+/**
+ * The requested effort, lowered to what this model supports.
+ *
+ * A model the table has never heard of is passed through UNCLAMPED. A new
+ * frontier model is more likely to support more than less, and guessing low
+ * would silently cap it forever; if the guess is wrong the turn fails loudly
+ * with codex's own message, which the runtime already surfaces into the chat.
+ */
+export function clampEffort(effort: string, model: string): string {
+  const wanted = EFFORT_LADDER.indexOf(effort as Effort);
+  if (wanted < 0) return effort; // not one of ours — let codex judge it
+  const id = model.trim().toLowerCase();
+  const entry = TOP_EFFORT.find((m) => id.startsWith(m.prefix));
+  if (!entry) return effort;
+  const cap = EFFORT_LADDER.indexOf(entry.top);
+  if (wanted <= cap) return effort;
+  const key = `${id}:${effort}`;
+  if (!clampWarned.has(key)) {
+    clampWarned.add(key);
+    console.warn(
+      `[codex] ${model} does not support effort "${effort}" (its ceiling is `
+      + `"${entry.top}"); using "${entry.top}". An unsupported pair is a hard `
+      + 'failure, not a downgrade, so this is lowered rather than attempted.',
+    );
+  }
+  return entry.top;
+}
 
 /**
  * Session first (the dashboard's per-session model), then the machine's env,
@@ -140,7 +198,10 @@ export function resolveCodexModel(session: RuntimeSession): string {
 
 function threadOptions(session: RuntimeSession): ThreadOptions {
   const model = resolveCodexModel(session);
-  const effort = process.env.HERMIT_CODEX_EFFORT?.trim() || DEFAULT_EFFORT;
+  // Clamped even when the env named it explicitly: the alternative to lowering
+  // an impossible pair is not "the user gets what they asked for", it is every
+  // turn on that session dying before the model reads the prompt.
+  const effort = clampEffort(process.env.HERMIT_CODEX_EFFORT?.trim() || DEFAULT_EFFORT, model);
   return {
     workingDirectory: session.agentDirectory,
     skipGitRepoCheck: true,

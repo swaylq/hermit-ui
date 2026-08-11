@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { usageFromTurn, readRolloutTokens, findRolloutFile, resolveCodexModel } from './codex-exec';
+import {
+  usageFromTurn, readRolloutTokens, findRolloutFile, resolveCodexModel, clampEffort,
+} from './codex-exec';
 
 // The numbers below are a real codex-cli 0.144.1 thread: three trivial turns
 // reporting CUMULATIVE input_tokens 28,916 → 43,477 → 58,065, whose rollout
@@ -168,4 +170,54 @@ test('the machine env sits between the session and the fleet default', () => {
     if (prev === undefined) delete process.env.HERMIT_CODEX_MODEL;
     else process.env.HERMIT_CODEX_MODEL = prev;
   }
+});
+
+// ── effort clamping ──────────────────────────────────────────────────────────
+//
+// An unsupported model+effort pair is a HARD failure, not a downgrade —
+// measured: `gpt-5.4` with `ultra` dies "Codex Exec exited with code 1" before
+// the model sees the prompt. A session can pin its own model from the
+// dashboard, so the fleet default has to bend to it.
+
+test('the default model takes the top of the ladder unchanged', () => {
+  assert.equal(clampEffort('ultra', 'gpt-5.6-sol'), 'ultra');
+  assert.equal(clampEffort('ultra', 'gpt-5.6-terra'), 'ultra');
+});
+
+test('the one 5.6 model without ultra is lowered to its own ceiling', () => {
+  assert.equal(clampEffort('ultra', 'gpt-5.6-luna'), 'max');
+});
+
+test('older models are lowered to xhigh rather than failing every turn', () => {
+  assert.equal(clampEffort('ultra', 'gpt-5.5'), 'xhigh');
+  assert.equal(clampEffort('ultra', 'gpt-5.4'), 'xhigh');
+  assert.equal(clampEffort('ultra', 'gpt-5.4-mini'), 'xhigh');
+  assert.equal(clampEffort('max', 'gpt-5.4'), 'xhigh');
+});
+
+// Ordering: the longest prefix has to win, or the small model picks up the
+// family ceiling.
+test('the small model resolves to its own entry, not a shorter prefix', () => {
+  assert.equal(clampEffort('ultra', 'gpt-5.3-codex-spark'), 'xhigh');
+});
+
+test('an effort already within the ceiling is untouched', () => {
+  assert.equal(clampEffort('high', 'gpt-5.4'), 'high');
+  assert.equal(clampEffort('low', 'gpt-5.6-sol'), 'low');
+  assert.equal(clampEffort('max', 'gpt-5.6-luna'), 'max');
+});
+
+// A new frontier model is likelier to support more than less; capping it on a
+// guess would silently pin it low forever, while a wrong guess fails loudly
+// with codex's own message.
+test('an unknown model is passed through unclamped', () => {
+  assert.equal(clampEffort('ultra', 'gpt-6-unreleased'), 'ultra');
+});
+
+test('an effort codex knows and we do not is left for codex to judge', () => {
+  assert.equal(clampEffort('turbo', 'gpt-5.4'), 'turbo');
+});
+
+test('case and padding do not defeat the clamp', () => {
+  assert.equal(clampEffort('ultra', '  GPT-5.4  '), 'xhigh');
 });

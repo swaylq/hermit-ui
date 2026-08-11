@@ -153,7 +153,7 @@ console.log('\n── the config codex ACTUALLY ran with ──');
     : null;
   console.log('  turn_context:', JSON.stringify({ model: ctx?.model, effort: ctx?.effort }));
   check('it ran the fleet default model', ctx?.model === 'gpt-5.6-sol', `got ${ctx?.model}`);
-  check('it ran at max reasoning effort', ctx?.effort === 'max', `got ${ctx?.effort}`);
+  check('it ran at the top of the reasoning ladder', ctx?.effort === 'ultra', `got ${ctx?.effort}`);
   check('approvals are off (no TTY to answer them)', ctx?.approval_policy === 'never', `got ${ctx?.approval_policy}`);
 }
 
