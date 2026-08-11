@@ -20,7 +20,21 @@
 # misconfig never bricks the agent.
 
 set -u
-export PATH=/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin:$PATH
+
+# shellcheck source=./lib/json.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" && pwd)/json.sh"
+
+# This hook fails OPEN by design — exit 2 means "deny", so a hook that errors
+# would block every tool the agent has. That makes a missing parser dangerous
+# in a different way from the image hook: not a wedged session, but a gate that
+# is simply not there while looking exactly like one that ran and approved.
+# Ubuntu has no jq by default, so say it out loud, once per invocation, and
+# defer.
+if ! have_json_parser; then
+  echo "hook-web-permission: no JSON parser (need jq or node) — the web permission gate is INACTIVE on this machine." >&2
+  echo "  install one with: $(install_hint jq)" >&2
+  exit 0
+fi
 
 input=$(cat)
 
@@ -29,15 +43,15 @@ input=$(cat)
 # This is how the dashboard-chat web-permission gate is turned off fleet-wide
 # without a hang risk: default / plan / acceptEdits sessions still gate normally,
 # and a session reverts to gating the moment it stops running --dangerously-skip-permissions.
-if [ "$(printf '%s' "$input" | jq -r '.permission_mode // empty' 2>/dev/null)" = "bypassPermissions" ]; then
+if [ "$(json_get '.permission_mode' "$input")" = "bypassPermissions" ]; then
   exit 0
 fi
 
 # Subagent (Task tool) events: gating them would deadlock the parent — defer.
-parent_sid=$(printf '%s' "$input" | jq -r '.parent_session_id // empty' 2>/dev/null)
+parent_sid=$(json_get '.parent_session_id' "$input")
 [ -n "$parent_sid" ] && exit 0
 
-tool=$(printf '%s' "$input" | jq -r '.tool_name // empty' 2>/dev/null)
+tool=$(json_get '.tool_name' "$input")
 [ -z "$tool" ] && exit 0
 
 # AskUserQuestion is handled by hook-block-askuserquestion.sh (deny → use
@@ -47,7 +61,7 @@ case "$tool" in
   mcp__hermit__*) exit 0 ;;
 esac
 
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(printf '%s' "$input" | jq -r '.cwd // empty')}"
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(json_get '.cwd' "$input")}"
 
 # Covered = the tool's bare name is in permissions.allow (settings.json or the
 # gitignored .local). If covered, defer — the harness allows it silently and we
@@ -55,7 +69,7 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(printf '%s' "$input" | jq -r '.cwd // empty
 # over-escalate, which is safe; narrow deliberately if you want that.)
 covered() {
   [ -f "$1" ] || return 1
-  jq -e --arg t "$tool" '((.permissions.allow // []) | index($t)) != null' "$1" >/dev/null 2>&1
+  json_array_has '.permissions.allow' "$tool" "$(cat "$1")"
 }
 if covered "$PROJECT_DIR/.claude/settings.json" || covered "$PROJECT_DIR/.claude/settings.local.json"; then
   exit 0
@@ -67,17 +81,23 @@ if [ -z "$url" ] || [ -z "$key" ]; then
   exit 0 # can't reach the dashboard → defer rather than block
 fi
 
-session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
-cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
-tool_input=$(printf '%s' "$input" | jq -c '.tool_input // {}' 2>/dev/null)
+session_id=$(json_get '.session_id' "$input")
+cwd=$(json_get '.cwd' "$input")
+# json_get returns an object as compact JSON, which is what this needs to embed.
+tool_input=$(json_get '.tool_input' "$input")
 [ -z "$tool_input" ] && tool_input='{}'
 
-body=$(jq -nc --arg sid "$session_id" --arg tool "$tool" --argjson ti "$tool_input" --arg cwd "$cwd" \
-  '{claudeSessionId:$sid, kind:"permission", payload:{tool:$tool, input:$ti, cwd:$cwd, claudeSessionId:$sid}}')
+# Assembled with quoted literals rather than a `jq -n` template: the pieces are
+# already valid JSON (json_quote for the strings, compact JSON for tool_input),
+# so this needs no second parser and behaves identically under either backend.
+sid_json=$(json_quote "$session_id")
+tool_json=$(json_quote "$tool")
+cwd_json=$(json_quote "$cwd")
+body="{\"claudeSessionId\":$sid_json,\"kind\":\"permission\",\"payload\":{\"tool\":$tool_json,\"input\":$tool_input,\"cwd\":$cwd_json,\"claudeSessionId\":$sid_json}}"
 
 resp=$(curl -sS -m 15 -X POST "$url/api/sync/interaction" \
   -H 'content-type: application/json' -H "x-asst-key: $key" -d "$body" 2>/dev/null)
-id=$(printf '%s' "$resp" | jq -r '.id // empty' 2>/dev/null)
+id=$(json_get '.id' "$resp")
 if [ -z "$id" ]; then
   exit 0 # couldn't create the request → defer (don't hard-deny on an infra hiccup)
 fi
@@ -88,10 +108,10 @@ decision=""
 while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 2
   st=$(curl -sS -m 15 "$url/api/sync/interaction?id=$id" -H "x-asst-key: $key" 2>/dev/null)
-  status=$(printf '%s' "$st" | jq -r '.status // empty' 2>/dev/null)
+  status=$(json_get '.status' "$st")
   [ "$status" = "pending" ] && continue
   if [ -n "$status" ]; then
-    decision=$(printf '%s' "$st" | jq -r '.decision.behavior // empty' 2>/dev/null)
+    decision=$(json_get '.decision.behavior' "$st")
     break
   fi
 done
@@ -103,5 +123,5 @@ fi
 
 reason="Denied by the user in the dashboard."
 [ -z "$decision" ] && reason="No dashboard response within the approval window — denied for safety. Ask the user before retrying."
-jq -nc --arg r "$reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' "$(json_quote "$reason")"
 exit 0

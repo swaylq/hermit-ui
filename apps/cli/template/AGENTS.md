@@ -50,9 +50,9 @@ An image with long edge > 2000px crashes the session mid-turn — every API call
 
 **Layered defense:**
 
-**Layer 1 — mechanical (PreToolUse hook, always on):** `scripts/hooks/pre-read-image.sh` is wired into `.claude/settings.local.json` to fire before every `Read`. Skips non-images fast; runs `sips` on images; for >2000px it calls `scripts/safe-image.sh` to create a resized sidecar and blocks the Read with stderr telling the model to Read the sidecar instead. If `sips` can't parse the file at all, the hook blocks outright — fail-closed.
+**Layer 1 — mechanical (PreToolUse hook, always on):** `scripts/hooks/pre-read-image.sh` is wired into `.claude/settings.local.json` to fire before every `Read`. Skips non-images fast; measures images with whatever this machine has (`sips` on macOS, ImageMagick or Python PIL on Linux — see `scripts/lib/image.sh`); for >2000px it calls `scripts/safe-image.sh` to create a resized sidecar and blocks the Read with stderr telling the model to Read the sidecar instead. If the file can't be measured at all — unparseable, **or no image backend installed** — the hook blocks outright. Fail-closed, both ways.
 
-**Layer 2 — the rule:** if the hook is disabled or you're Reading outside its coverage, still run `scripts/safe-image.sh <path>` yourself before Reading any png/jpg/jpeg/gif/webp/bmp/tiff. **If `safe-image.sh` exits non-zero, STOP — do NOT Read the original as fallback.** A failed resize means `sips` can't parse it; Reading the original wedges the session.
+**Layer 2 — the rule:** if the hook is disabled or you're Reading outside its coverage, still run `scripts/safe-image.sh <path>` yourself before Reading any png/jpg/jpeg/gif/webp/bmp/tiff. **If `safe-image.sh` exits non-zero, STOP — do NOT Read the original as fallback.** A failed resize means the image can't be parsed (exit 1) or this machine has no image backend at all (exit 2); either way, Reading the original wedges the session. Exit 2 is a machine problem — say so and ask for `imagemagick` to be installed rather than working around it.
 
 ## MCP Registry Safety — HARD RULE
 

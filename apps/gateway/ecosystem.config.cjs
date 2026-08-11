@@ -21,7 +21,22 @@ module.exports = {
         // here, every NEW pane fails "claude: command not found" and dies
         // instantly ("tmux session not found" on send-keys; new-agent chats
         // never start). Prepend it. (2026-06-10)
-        PATH: `${require('os').homedir()}/.local/bin:${process.env.PATH || '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin'}`,
+        //
+        // Kept in step with src/platform.ts extraBinPaths() by hand: this file
+        // is CommonJS loaded by pm2 before any TypeScript exists, so it cannot
+        // import it. Same list, same order, same reason — on Linux claude is as
+        // likely to be under ~/.npm-global/bin or /snap/bin as anywhere else.
+        PATH: (() => {
+          const os = require('os');
+          const home = os.homedir();
+          const extras =
+            process.platform === 'darwin'
+              ? [`${home}/.local/bin`, '/opt/homebrew/bin', '/usr/local/bin']
+              : [`${home}/.local/bin`, '/usr/local/bin', `${home}/.npm-global/bin`, '/snap/bin'];
+          const base = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
+          const have = new Set(base.split(':'));
+          return [...extras.filter((p) => !have.has(p)), base].join(':');
+        })(),
       },
       autorestart: true,
       max_restarts: 50,

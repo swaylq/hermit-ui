@@ -57,7 +57,12 @@ LOG="$HUB_DIR/.claude/state/reap-dead-sessions.log"
 mkdir -p "$(dirname "$LOG")"
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 
-command -v jq >/dev/null 2>&1 || { echo "error: jq missing" | tee -a "$LOG" >&2; exit 1; }
+# shellcheck source=./lib/json.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" && pwd)/json.sh"
+# This one already refused to run without a parser rather than reaping blind,
+# which is right — it deletes transcripts. It just used to demand jq
+# specifically, which no default Ubuntu has.
+have_json_parser || { echo "error: need jq or node to read session state" | tee -a "$LOG" >&2; exit 1; }
 
 trash_backend=""
 if command -v trash >/dev/null 2>&1; then
@@ -111,13 +116,13 @@ for agent_dir in "$AGENTS_ROOT"/*/; do
   ss_file="$agent_dir/.claude/state/session-status.json"
   active_sid=""
   if [ -f "$ss_file" ]; then
-    active_sid=$(jq -r '.session_id // empty' "$ss_file" 2>/dev/null || true)
+    active_sid=$(json_get '.session_id' "$(cat "$ss_file")" || true)
     [ -n "$active_sid" ] && protected+=("$active_sid")
   fi
   paused_file="$agent_dir/.claude/state/paused.json"
   paused_sid=""
   if [ -f "$paused_file" ]; then
-    paused_sid=$(jq -r '.session_id // empty' "$paused_file" 2>/dev/null || true)
+    paused_sid=$(json_get '.session_id' "$(cat "$paused_file")" || true)
     [ -n "$paused_sid" ] && protected+=("$paused_sid")
   fi
 

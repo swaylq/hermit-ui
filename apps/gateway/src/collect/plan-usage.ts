@@ -17,10 +17,24 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { findClaudeBin } from '../platform';
 
 const PROBE_DIR = path.join(os.homedir(), '.hermit', 'usage-probe');
-const CLAUDE_BIN = path.join(os.homedir(), '.local', 'bin', 'claude');
 const SESSION = 'hermit-usage-probe';
+
+/**
+ * Resolved per call, not once at import: a machine can install claude while the
+ * gateway is running, and a module-level constant would keep reporting the
+ * absence until someone restarted it.
+ *
+ * Null means "claude is not on this machine" — see the caller, which skips the
+ * probe entirely rather than spending the full settle window driving a TUI that
+ * will never appear. That was measured on the Linux box: `[plan-usage] ok in
+ * 30215ms`, thirty seconds burned per poll to return nothing.
+ */
+function claudeBin(): string | null {
+  return findClaudeBin();
+}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -74,12 +88,13 @@ function parsePanel(text: string): PlanUsage | null {
 }
 
 export async function collectPlanUsage(): Promise<PlanUsage | null> {
-  if (!fs.existsSync(CLAUDE_BIN)) return null;
+  const claude = claudeBin();
+  if (!claude) return null;
   try { fs.mkdirSync(PROBE_DIR, { recursive: true }); } catch { /* ignore */ }
   killPane(); // clear any stale probe
 
   tmux(['new-session', '-d', '-s', SESSION, '-x', '200', '-y', '50']);
-  tmux(['send-keys', '-t', SESSION, `cd ${PROBE_DIR} && ${CLAUDE_BIN} --dangerously-skip-permissions`, 'Enter']);
+  tmux(['send-keys', '-t', SESSION, `cd ${PROBE_DIR} && ${claude} --dangerously-skip-permissions`, 'Enter']);
 
   // Wait for claude to be input-ready, accepting the first-run trust prompt.
   let ready = false;

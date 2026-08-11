@@ -1,6 +1,8 @@
 # Gateway 的 Unix / Linux 兼容性：实测报告 + 改造方案
 
-日期：2026-07-25 · 作者：asst · 状态：**方案待评审（未动代码）**
+日期：2026-07-25 · 作者：asst · 状态：**Phase A + B + doctor 已实现（2026-08-11）；C/D 未做**
+
+> 2026-08-11 落地记录见 §9。§1–§8 是当时的实测报告与方案，保持原样。
 
 ---
 
@@ -333,3 +335,86 @@ sudo apt install -y tmux zip unzip imagemagick age xvfb jq uuid-runtime
 把 B 放在 C 之后，是因为模板改动要在**真节点**上验（图片/Chrome 都得有真环境），
 而 A 加上 doctor 就足够先把一台 Linux 机器接进舰队跑「不读图、不开浏览器」的 agent——
 先拿到可用节点，再补齐能力。
+
+---
+
+## 9. 落地记录（2026-08-11）
+
+做了 **Phase A + Phase B + doctor**。C（部署运维）和 D（CI）没做。
+
+### 9.1 Phase A — gateway 本体
+
+| 计划项 | 落地 | 备注 |
+|---|---|---|
+| P0-1 `-Axo` → `-axo` | ✅ `collect/host-stat.ts` 改走 `psAll()` | 常量收在 platform.ts，字面量不再散落 |
+| P0-2 config 三个 Mac 默认值 | ✅ | `PROJECTS_ROOT` 走 `os.homedir()`；`AGENTS_ROOT` 必填；`LAUNCH_AGENTS_DIR` 删除（全仓零引用）；`keychainKey()` 加 darwin 前置判断 |
+| P0-3 硬编码 homebrew PATH | ✅ `control-channel.ts` 走 `pathWith()`；`ecosystem.config.cjs` 手抄同一份列表（CJS 进不来 TS） | Linux 补了 `~/.npm-global/bin`、`/snap/bin` |
+| P1-3 plan-usage claude 路径 | ✅ `findClaudeBin()` 三级回退，每次调用重新解析 | 装了 claude 不用重启 gateway |
+| 新增 `platform.ts` | ✅ | `isDarwin/isLinux`、`psAll()`、`extraBinPaths()`、`pathWith()`、`findClaudeBin()` |
+| probe 脚本收编 | ❌ 没做 | 见 §9.4 |
+
+**方案没预料到的一处**：`AGENTS_ROOT` 改必填后，**一半测试挂了**。
+原因是 `config.ts` 在**模块作用域**里 `process.exit(1)`，而半数测试会传递性 import 到它。
+（以前没暴露：ASST_KEY 那条同样的 exit 被 macOS keychain 兜住了，Linux 上其实早就会挂。）
+
+→ 校验抽成 `assertRequiredConfig()`，由 `index.ts` 在启动时调用。
+生产行为一字不变（同样的消息、同样的 exit 1、同样在干活之前，pm2 退避照旧），
+但 import 不再能杀进程。`src/config.test.ts` 把这条钉死。
+
+### 9.2 Phase B — agent 模板
+
+新增 `apps/cli/template/scripts/lib/`：
+
+- `platform.sh` — `os_kind` / `have` / `install_hint` / `die_missing`，并给 daemon 起的瘦 PATH 补路径
+- `image.sh` — `image_dims` / `image_format` / `image_to_png`，三级后端 sips → ImageMagick → PIL
+- `json.sh` — `json_get` / `json_array_has` / `json_quote` / `json_merge`，jq 优先、node 兜底
+- `lib.test.sh` — **每个后端都跑一遍**（把首选后端从 `have` 里藏掉再跑第二遍）。本机 50/50
+
+改造：`safe-image.sh` 变成薄封装；4 个 jq 使用者全部改走 `json.sh`；
+`chrome-launcher.sh` 在无 DISPLAY 的 Linux 上优先 `xvfb-run -a`（保住 headful，
+stealth 不失效），没有 xvfb 才降级 `--headless=new` **并在日志里明说 UA 会暴露**。
+
+**三个 hook 的失败方向是分开决定的，不是抄同一个默认值**：
+
+| hook | 没有 parser 时 | 为什么 |
+|---|---|---|
+| `hooks/pre-read-image.sh` | **exit 2 挡住** | 验证不了尺寸就不能放行，超大图会 wedge 会话 |
+| `hook-web-permission.sh` | **exit 0 放行 + 大声告警** | 这里 exit 2 是「拒绝」，会挡掉 agent 所有工具 |
+| `hook-session-state.sh` | **exit 0 不动文件** | 只是上报状态；状态陈旧不好，但状态被写坏更糟 |
+
+**写这段时踩到的真 bug**（值得记下来，因为它就是本次要消灭的那种失败）：
+第一版写了个 `json_get_or_die`，里面 `exit 2`。但调用点都是 `x=$(json_get_or_die …)` ——
+**命令替换里的 `exit` 只结束子 shell**。实测结果：hook 打印了
+「refusing to continue — a hook that cannot parse its input must not pass」，
+然后 **exit 0 放行**。一模一样的静默通过。
+→ 该 helper 整个删掉，改成在父 shell 里先 `have_json_parser ||` 一次。
+lib/json.sh 里留了注释说明为什么不该再把它加回来。
+
+**另一处**：`"${arr[@]}"` 在空数组 + `set -u` 下，macOS 自带的 bash 3.2 会报
+unbound variable。按显然的写法写，chrome-launcher 会在**它本来好好的 Mac 上**起不来。
+改用 `${arr[@]+"${arr[@]}"}`。所有改过的脚本都过了 `/bin/bash -n`。
+
+### 9.3 doctor
+
+`apps/gateway/scripts/doctor.mjs`（`npm run doctor`）：tmux ≥3.2（并解释为什么是 3.2）、
+`ps -axo`、node、claude（按 gateway 自己的解析顺序找）、codex + 是否登录、
+`.env` 三个必填项、AGENTS_ROOT 存在与 agent 数、**Linux 上扫文件名大小写**
+（ext4 敏感、APFS 不敏感，是存量 agent 迁过去后「消失」的最可能原因）、
+zip/unzip、图片后端、jq-or-node、chrome + xvfb、secret + age。
+
+缺什么就给**本平台**的安装原句，末尾给 Ubuntu 一行装齐。有 ✘ 就 exit 1，可以拿来卡部署。
+
+### 9.4 存量 agent
+
+模板改了，**存量 agent 不会自动更新**。`scripts/rollout-portable-scripts.sh` 幂等地推：
+只替换 agent 已经有的文件（lib/ 除外，那是新增的），首次保留 `.pre-portable` 备份，
+`--dry` 先看。本机 dry-run：39 个 agent、365 个文件、9 个非 agent 目录正确跳过。
+
+**尚未执行**——它会改 39 个真实 workspace，交给人决定什么时候推。
+
+### 9.5 没做的
+
+- **Phase C（部署运维）**：systemd/pm2 startup、`loginctl enable-linger`、迁移预检脚本
+- **Phase D（CI）**：GitHub Actions 双平台、grep 断言（禁止 `/Users/`、`sips`、`-Axo` 等字面量再进 `apps/gateway/src`）
+- **§1–§2 的 probe 脚本**没有收编进仓库（`npm run compat` 不存在）；doctor 覆盖了其中最有用的部分
+- **§6.6 端到端真活**：仍未做。卡在每台机器要自己 `claude login`，不是代码问题

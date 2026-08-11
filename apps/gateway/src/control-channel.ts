@@ -36,6 +36,7 @@
 import WebSocket from 'ws';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 import { DASHBOARD_URL, ASST_KEY } from './config';
+import { pathWith } from './platform';
 import { handleFsRequest } from './file-manager';
 import { handleSecretsReq } from './secrets';
 
@@ -159,9 +160,10 @@ function openPty(termId: string, paneName: string, cols: number, rows: number) {
         cwd: process.env.HOME ?? '/tmp',
         env: {
           ...process.env,
-          PATH: process.env.PATH
-            ? `${process.env.PATH}:/opt/homebrew/bin:/usr/local/bin`
-            : '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
+          // pathWith() adds what a daemon's PATH is missing, per platform —
+          // homebrew on a Mac, ~/.npm-global/bin and /snap/bin on Linux, where
+          // claude is just as likely to live. See platform.ts.
+          PATH: pathWith(),
           TERM: 'xterm-256color',
         },
       },

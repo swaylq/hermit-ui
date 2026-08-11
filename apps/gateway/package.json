@@ -7,6 +7,7 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
+    "doctor": "node scripts/doctor.mjs",
     "test": "tsx --test src/*.test.ts src/collect/*.test.ts src/runtime/*.test.ts"
   },
   "dependencies": {
@@ -14,6 +15,7 @@
     "@hermit-ui/tmux-driver": "*",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.12.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@openai/codex-sdk": "^0.147.0",
     "ccusage": "^20.0.2",
     "dotenv": "^17.4.2",
     "playwright-core": "^1.40.0",

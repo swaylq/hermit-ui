@@ -1,7 +1,15 @@
 import 'dotenv/config';
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+import { isDarwin } from './platform';
 
 function keychainKey(): string | null {
+  // Keychain is macOS-only. Elsewhere `security` does not exist and spawnSync
+  // returns an error object rather than throwing, so this used to "work" by
+  // failing — one pointless spawn on every Linux boot, and a misleading line in
+  // any strace of the startup path. Ask the question only where it has an answer.
+  if (!isDarwin) return null;
   const r = spawnSync(
     'security',
     ['find-generic-password', '-a', 'asst', '-s', 'asst-gateway-vps-key', '-w'],
@@ -13,24 +21,56 @@ function keychainKey(): string | null {
 export const DASHBOARD_URL = process.env.DASHBOARD_URL ?? 'http://127.0.0.1:4101';
 export const ASST_KEY: string = process.env.ASST_KEY ?? keychainKey() ?? '';
 
-if (!ASST_KEY) {
-  // .env is the reliable source: the keychain fallback (asst-gateway-vps-key) is
-  // UNREADABLE from a non-GUI/SSH session, so a box recovered over SSH after an
-  // OOM crash-loops here forever (2026-06-30 macmini1 incident). Make the fix
-  // obvious and let pm2's exponential backoff (ecosystem) throttle the retries.
-  console.error(
-    '[gateway] missing ASST_KEY — set it in apps/gateway/.env (ASST_KEY=…). ' +
-      'Keychain item asst-gateway-vps-key is only an optional fallback and cannot ' +
-      'be read from an SSH/headless session. Refusing to start.',
-  );
-  process.exit(1);
+// Where the agent workspaces are. REQUIRED — no default.
+//
+// It used to fall back to one developer's absolute path. On any other machine
+// that is a directory which does not exist, and the failure mode is the worst
+// kind: nothing crashes, every collector just finds no agents and the dashboard
+// shows an empty, healthy-looking fleet. Refusing to start is louder and takes
+// a minute to fix; a silently empty fleet has taken hours to notice.
+export const AGENTS_ROOT: string = process.env.AGENTS_ROOT ?? '';
+
+/**
+ * Refuse to run without the settings that have no safe default.
+ *
+ * Called from index.ts — the gateway's entry point — rather than at import
+ * time, which is where the ASST_KEY check used to live. Importing a module
+ * must not be able to kill the process: half the test suite imports something
+ * that transitively imports this file, so an import-time `process.exit(1)`
+ * takes down every one of those tests on any machine without a populated .env.
+ * (It went unnoticed on this fleet's Macs because the keychain fallback
+ * happened to satisfy ASST_KEY there and nothing else was required.)
+ *
+ * Production behaviour is unchanged: same messages, same exit code, still
+ * before any work starts, so pm2's exponential backoff throttles the retries
+ * exactly as before.
+ */
+export function assertRequiredConfig(): void {
+  if (!ASST_KEY) {
+    // .env is the reliable source: the keychain fallback (asst-gateway-vps-key) is
+    // UNREADABLE from a non-GUI/SSH session, so a box recovered over SSH after an
+    // OOM crash-loops here forever (2026-06-30 macmini1 incident). Make the fix
+    // obvious and let pm2's exponential backoff (ecosystem) throttle the retries.
+    console.error(
+      '[gateway] missing ASST_KEY — set it in apps/gateway/.env (ASST_KEY=…). ' +
+        'Keychain item asst-gateway-vps-key is only an optional fallback and cannot ' +
+        'be read from an SSH/headless session. Refusing to start.',
+    );
+    process.exit(1);
+  }
+
+  if (!AGENTS_ROOT) {
+    console.error(
+      '[gateway] missing AGENTS_ROOT — set it in apps/gateway/.env ' +
+        '(AGENTS_ROOT=/absolute/path/to/agents). It is the directory holding the ' +
+        'agent workspaces; there is no sensible default. Refusing to start.',
+    );
+    process.exit(1);
+  }
 }
 
-// In hermit-ui dev mode, AGENTS_ROOT points at the monorepo's test workspaces.
-// Production override via env when running on a user's machine.
-export const AGENTS_ROOT =
-  process.env.AGENTS_ROOT ?? '/Users/mac/claudeclaw/asst/hermit-ui/agents';
+// Claude Code's own project directory. `.env.example` has always documented
+// this as "defaults to a path under $HOME" — the code disagreed and hard-coded
+// /Users/mac. The docs were right.
 export const PROJECTS_ROOT =
-  process.env.PROJECTS_ROOT ?? '/Users/mac/.claude/projects';
-export const LAUNCH_AGENTS_DIR =
-  process.env.LAUNCH_AGENTS_DIR ?? '/Users/mac/Library/LaunchAgents';
+  process.env.PROJECTS_ROOT ?? path.join(os.homedir(), '.claude', 'projects');

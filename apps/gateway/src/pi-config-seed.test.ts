@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planPiConfigSeed as plan } from './pi-config';
+import { planPiConfigSeed as plan, type PiConfig } from './pi-config';
 
 const ENV = {
   provider: 'hyqubit',
@@ -41,7 +41,10 @@ test('an env with no endpoint has nothing to promote', () => {
 test('settings the env knows nothing about survive the seed', () => {
   // The vision block and the auth mode live only in the DB; a seed that dropped
   // them would silently turn image recognition off.
-  const remote = {
+  // Annotated, not inferred: an object literal widens 'openrouter' to string
+  // and 'cc-subscription' to string, neither of which is assignable to the
+  // union PiConfig declares.
+  const remote: PiConfig = {
     image: { enabled: true, provider: 'openrouter', apiKeySecret: 'OPENROUTER_API_KEY' },
     authMode: 'cc-subscription',
   };

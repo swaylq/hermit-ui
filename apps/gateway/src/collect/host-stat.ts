@@ -9,6 +9,7 @@
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { collectTranscriptUsage } from './transcript-usage';
+import { psAll } from '../platform';
 
 export interface HostStatSample {
   ramTotalMb: number | null;
@@ -88,7 +89,9 @@ async function linuxStat(): Promise<Partial<HostStatSample>> {
 // Chrome/Chromium process; count the MAIN browser processes (a CDP port and no
 // --type= → ≈ one per agent instance) so the host-health view can account for it.
 async function chromeCensus(): Promise<{ count: number; rssMb: number } | null> {
-  const out = await run('ps', ['-Axo', 'rss,command']);
+  // psAll, not a literal `-Axo`: that flag is BSD-only and procps exits 1 on
+  // it, which made this census silently null on every Linux node. See platform.ts.
+  const out = await run('ps', psAll('rss,command'));
   if (!out) return null;
   let rssKb = 0;
   let count = 0;

@@ -43,6 +43,7 @@ import { orphanPaneReaperTick } from './orphan-pane-reaper';
 import { sessionPurgeTick } from './session-purge';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 import { installDispatcher, dashboardBackedOff } from './dashboard-http';
+import { assertRequiredConfig } from './config';
 
 // This process DRIVES tmux; it is never inside it. Scrub any inherited TMUX vars
 // before anything can shell out.
@@ -69,6 +70,11 @@ delete process.env.TMUX_PANE;
 // does). Pins HTTP/1.1; see dashboard-http.ts for the two-day macmini003
 // outage that motivated it.
 installDispatcher();
+
+// Before any work: refuse to run without the settings that have no safe
+// default. This lives here rather than at config.ts import time because an
+// import must not be able to kill the process — see assertRequiredConfig.
+assertRequiredConfig();
 
 console.log('[gateway] starting');
 

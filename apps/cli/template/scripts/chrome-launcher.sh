@@ -22,7 +22,7 @@ CHROME_JSON="$BROWSER_DIR/chrome.json"
 USER_DATA_DIR="$BROWSER_DIR/user-data"
 CHROME_LOG="$BROWSER_DIR/chrome.log"
 
-# Chrome binary detection (macOS)
+# Chrome binary detection (macOS + Linux)
 CHROME_BIN="${CHROME_BIN:-}"
 if [ -z "$CHROME_BIN" ]; then
   if [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
@@ -31,11 +31,50 @@ if [ -z "$CHROME_BIN" ]; then
     CHROME_BIN="/Applications/Chromium.app/Contents/MacOS/Chromium"
   elif command -v google-chrome &>/dev/null; then
     CHROME_BIN="$(command -v google-chrome)"
+  elif command -v google-chrome-stable &>/dev/null; then
+    CHROME_BIN="$(command -v google-chrome-stable)"
   elif command -v chromium &>/dev/null; then
     CHROME_BIN="$(command -v chromium)"
+  elif command -v chromium-browser &>/dev/null; then
+    CHROME_BIN="$(command -v chromium-browser)"
+  # Debian/Ubuntu's own package and the snap both land outside PATH for a
+  # daemon-spawned shell.
+  elif [ -x "/opt/google/chrome/chrome" ]; then
+    CHROME_BIN="/opt/google/chrome/chrome"
+  elif [ -x "/snap/bin/chromium" ]; then
+    CHROME_BIN="/snap/bin/chromium"
   else
     echo "❌ Chrome not found. Set CHROME_BIN env var." >&2
     exit 1
+  fi
+fi
+
+# ── How to start it when there is no screen ─────────────────────────────────
+#
+# On a headless Linux box a plain launch dies immediately with
+# "Missing X server or $DISPLAY / The platform failed to initialize" — measured
+# on Ubuntu 24.04 with the exact argv below.
+#
+# Two ways out, and the order matters more than it looks. This whole script
+# exists to drive a browser that does NOT look automated (see
+# scripts/browser/utils/stealth-init.js and the chrome.debugger real-mouse
+# work), and `--headless=new` announces itself in the user agent —
+# "HeadlessChrome/147.0.0.0" — which is the single easiest bot signal there is.
+# So: a virtual display first, keeping a real headful Chrome; headless only as
+# a last resort, and never silently.
+CHROME_PREFIX=()
+HEADLESS_ARGS=()
+if [ "$(uname -s)" = "Linux" ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  if command -v xvfb-run &>/dev/null; then
+    # -a picks a free server number, so two agents launching at once do not
+    # fight over :99.
+    CHROME_PREFIX=(xvfb-run -a)
+  else
+    HEADLESS_ARGS=(--headless=new --disable-gpu)
+    echo "⚠️  No DISPLAY and no xvfb-run: falling back to --headless=new." >&2
+    echo "    Chrome will report itself as HeadlessChrome in the user agent, which" >&2
+    echo "    anti-bot checks can see. Install xvfb to keep a headful browser:" >&2
+    echo "      sudo apt install -y xvfb" >&2
   fi
 fi
 
@@ -200,7 +239,15 @@ PY
   # is taken, which corrupts ownership tracking — chrome.json says "we own port X"
   # but Chrome is actually listening on a different IP family. Forcing IPv4 makes
   # port conflicts hard-fail instead of silently rebinding.
-  nohup "$CHROME_BIN" \
+  # CHROME_PREFIX is `xvfb-run -a` on a headless Linux box and empty everywhere
+  # else; HEADLESS_ARGS is the announced fallback. Both are set above.
+  #
+  # `${arr[@]+"${arr[@]}"}` rather than plain `"${arr[@]}"`: this script runs
+  # under `set -u`, and macOS's /bin/bash is 3.2, where an EMPTY array expanded
+  # the plain way is an "unbound variable" error. Written the obvious way, this
+  # line stops Chrome from launching on the Mac — the platform it already
+  # worked on — while fixing Linux.
+  nohup ${CHROME_PREFIX[@]+"${CHROME_PREFIX[@]}"} "$CHROME_BIN" \
     --remote-debugging-port="$port" \
     --remote-debugging-address=127.0.0.1 \
     --user-data-dir="$USER_DATA_DIR" \
@@ -211,6 +258,7 @@ PY
     --disable-translate \
     --disable-sync \
     --window-size=1280,800 \
+    ${HEADLESS_ARGS[@]+"${HEADLESS_ARGS[@]}"} \
     > "$CHROME_LOG" 2>&1 &
 
   local chrome_pid=$!
