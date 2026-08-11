@@ -4,52 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  usageFromTurn, readRolloutTokens, findRolloutFile, resolveCodexModel, clampEffort,
-  hermitMcpConfigFor,
+  CodexExecRuntime, readRolloutTokens, findRolloutFile, resolveCodexModel,
+  clampEffort, hermitMcpConfigFor,
 } from './codex-exec';
-
-// The numbers below are a real codex-cli 0.144.1 thread: three trivial turns
-// reporting CUMULATIVE input_tokens 28,916 → 43,477 → 58,065, whose rollout
-// recorded last_token_usage.input_tokens = 14,588 for the third — exactly
-// 58,065 − 43,477. Feeding the cumulative straight through would render a
-// context bar that only ever fills up.
-test('per-turn context is the delta of the cumulative counters', () => {
-  const first = usageFromTurn(
-    { input_tokens: 28_916, cached_input_tokens: 25_088, cache_write_input_tokens: 0, output_tokens: 116, reasoning_output_tokens: 0 },
-    null,
-  );
-  assert.deepEqual(first?.lastTurn, { contextTokens: 28_916, outputTokens: 116 });
-
-  const second = usageFromTurn(
-    { input_tokens: 43_477, cached_input_tokens: 39_168, cache_write_input_tokens: 0, output_tokens: 125, reasoning_output_tokens: 0 },
-    first!.totals,
-  );
-  assert.deepEqual(second?.lastTurn, { contextTokens: 14_561, outputTokens: 9 });
-
-  const third = usageFromTurn(
-    { input_tokens: 58_065, cached_input_tokens: 53_248, cache_write_input_tokens: 0, output_tokens: 134, reasoning_output_tokens: 0 },
-    second!.totals,
-  );
-  // The exact last_token_usage codex wrote for that turn.
-  assert.deepEqual(third?.lastTurn, { contextTokens: 14_588, outputTokens: 9 });
-  assert.deepEqual(third?.totals, { input: 58_065, output: 134 });
-});
-
-// A compaction shrinks the thread, so the next cumulative can be SMALLER than
-// the last. A negative delta would render as a negative bar.
-test('a shrinking total falls back to the raw figure rather than going negative', () => {
-  const out = usageFromTurn(
-    { input_tokens: 9_000, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 50, reasoning_output_tokens: 0 },
-    { input: 58_065, output: 134 },
-  );
-  assert.equal(out?.lastTurn.contextTokens, 9_000);
-  assert.equal(out?.lastTurn.outputTokens, 50);
-});
-
-test('no usage reported means no figures', () => {
-  assert.equal(usageFromTurn(null, null), null);
-  assert.equal(usageFromTurn(undefined, { input: 1, output: 1 }), null);
-});
 
 // ── the rollout file, which is how a restarted gateway gets its baseline ──────
 
@@ -60,14 +17,18 @@ function fixtureHome(): string {
   return home;
 }
 
-const tokenLine = (total: [number, number], last: [number, number]) => JSON.stringify({
+const tokenLine = (
+  total: [number, number],
+  last: [number, number],
+  lastTotal = last[0] + last[1],
+) => JSON.stringify({
   timestamp: '2026-08-11T12:22:58.256Z',
   type: 'event_msg',
   payload: {
     type: 'token_count',
     info: {
       total_token_usage: { input_tokens: total[0], output_tokens: total[1], total_tokens: total[0] + total[1] },
-      last_token_usage: { input_tokens: last[0], output_tokens: last[1], total_tokens: last[0] + last[1] },
+      last_token_usage: { input_tokens: last[0], output_tokens: last[1], total_tokens: lastTotal },
       model_context_window: 258_400,
     },
   },
@@ -87,6 +48,115 @@ test('the last token_count in a rollout is the one that counts', () => {
   const out = readRolloutTokens(file);
   assert.deepEqual(out?.total, { input: 58_065, output: 134 });
   assert.deepEqual(out?.lastTurn, { contextTokens: 14_588, outputTokens: 9 });
+});
+
+test('runtime context follows the latest model call inside a tool-heavy turn', async (t) => {
+  const home = fixtureHome();
+  const threadId = 'thread-agentic-turn';
+  const file = path.join(home, 'sessions', '2026', '08', '11', `rollout-live-${threadId}.jsonl`);
+  fs.writeFileSync(file, [
+    '{"type":"session_meta"}',
+    tokenLine([11_308_234, 58_070], [215_073, 1_810]),
+    '',
+  ].join('\n'));
+
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  const runtime = new CodexExecRuntime();
+  let handle: { sessionId: string; externalSessionId: string } | null = null;
+  t.after(async () => {
+    if (handle) await runtime.stop(handle, 'kill');
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  handle = await runtime.ensure({
+    id: `usage-test-${Date.now()}`,
+    agentName: 'test',
+    agentDirectory: home,
+    externalSessionId: threadId,
+    model: 'gpt-5.6-sol',
+  }, () => {});
+
+  assert.equal((await runtime.usage(handle))?.contextTokens, 215_073);
+
+  // These are from the production incident: one user turn made several model
+  // calls, then compacted. The whole turn spent 803,673 input tokens, but its
+  // final prompt — the actual context occupancy — was only 26,630.
+  fs.appendFileSync(file, [
+    tokenLine([11_525_135, 58_576], [216_901, 506]),
+    tokenLine([11_743_668, 58_663], [218_533, 87]),
+    tokenLine([11_966_062, 58_731], [222_394, 68]),
+    tokenLine([11_966_062, 58_731], [0, 0], 15_956),
+    '',
+  ].join('\n'));
+  assert.equal((await runtime.usage(handle))?.contextTokens, 15_956);
+
+  fs.appendFileSync(file, [
+    tokenLine([11_988_679, 58_990], [22_617, 259]),
+    tokenLine([12_111_907, 61_219], [26_630, 512]),
+    '',
+  ].join('\n'));
+  const current = await runtime.usage(handle);
+  assert.equal(current?.contextTokens, 26_630);
+  assert.equal(current?.outputTokens, 512);
+  assert.equal(current?.totalTokens, 12_173_126);
+  assert.notEqual(current?.contextTokens, 12_111_907 - 11_308_234);
+
+  await runtime.stop(handle, 'hibernate');
+  const persistedHandle = { sessionId: handle.sessionId, externalSessionId: threadId };
+  assert.equal(await runtime.usage(persistedHandle), null);
+  assert.equal((await runtime.storedUsage(persistedHandle))?.contextTokens, 26_630);
+});
+
+test('a persisted thread repairs context immediately after a gateway restart', async (t) => {
+  const home = fixtureHome();
+  const threadId = 'thread-after-gateway-restart';
+  const file = path.join(home, 'sessions', '2026', '08', '11', `rollout-idle-${threadId}.jsonl`);
+  fs.writeFileSync(file, `${tokenLine([12_111_907, 61_219], [26_630, 512])}\n`);
+
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  // Deliberately do not call ensure(): this is the exact state after the
+  // gateway process restarts and its live handle map is empty.
+  const runtime = new CodexExecRuntime();
+  const offlineHandle = { sessionId: 'offline-session', externalSessionId: threadId };
+  assert.equal(await runtime.usage(offlineHandle), null);
+  const current = await runtime.storedUsage(offlineHandle);
+  assert.deepEqual(current, {
+    contextTokens: 26_630,
+    outputTokens: 512,
+    totalTokens: 12_173_126,
+    costUsd: null,
+  });
+});
+
+test('cumulative-only rollout data does not masquerade as current context', (t) => {
+  const home = fixtureHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, 'sessions', '2026', '08', '11', 'rollout-old-format.jsonl');
+  fs.writeFileSync(file, `${JSON.stringify({
+    type: 'event_msg',
+    payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 900_000, output_tokens: 2_000 } } },
+  })}\n`);
+  assert.deepEqual(readRolloutTokens(file), {
+    total: { input: 900_000, output: 2_000 },
+    lastTurn: null,
+  });
+});
+
+test('a partially-written final token record falls back to the prior complete one', (t) => {
+  const home = fixtureHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, 'sessions', '2026', '08', '11', 'rollout-mid-append.jsonl');
+  fs.writeFileSync(file, `${tokenLine([100, 10], [80, 4])}\n{"type":"event_msg","payload":{"type":"token_count"`);
+  assert.deepEqual(readRolloutTokens(file)?.lastTurn, { contextTokens: 80, outputTokens: 4 });
 });
 
 // Only the tail is read, so the first line in the window is usually a fragment.

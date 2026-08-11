@@ -52,19 +52,21 @@ type CodexHandle = RuntimeHandle & {
   /** Aborts the in-flight turn. Null between turns. */
   abort: AbortController | null;
   /**
-   * Cumulative usage as of the END of the last turn we saw.
-   *
-   * The subtrahend for the per-turn delta — see usageFromTurn for why a delta
-   * is needed at all.
+   * Codex's cumulative usage for the whole thread. This is only for the
+   * session-total statistic; it must never drive the context bar.
    */
   totals: Totals | null;
-  /** Per-turn figures, which is what the context bar wants. */
+  /** Latest model call from the rollout file — what the context bar wants. */
   lastTurn: { contextTokens: number; outputTokens: number } | null;
+  /** Cached after the first lookup; a resumed thread keeps appending here. */
+  rolloutFile: string | null;
   /** Monotonic per-session turn counter, for turn keys. */
   turnSeq: number;
 };
 
 const live = new Map<string, CodexHandle>();
+/** Rollout paths for persisted threads that have no in-memory handle. */
+const storedRolloutFiles = new Map<string, string>();
 
 function handleOf(h: RuntimeHandle): CodexHandle | null {
   return live.get(h.sessionId) ?? null;
@@ -318,17 +320,16 @@ const ROLLOUT_TAIL_BYTES = 256 * 1024;
 /**
  * The last token accounting codex wrote for a thread.
  *
- * Read only when the in-memory delta has no baseline — after a gateway
- * restart, a resumed thread's first `turn.completed` reports a cumulative total
- * with nothing to subtract from it, and reporting THAT as the context bar would
- * show a session at 58k the moment it woke up when its real occupancy was 14k.
+ * Read on every session-snapshot tick for a live handle, and as durable fallback
+ * after a gateway restart. The SDK's turn usage is cumulative spend across all
+ * model calls; only this file exposes the latest call's actual window occupancy.
  *
  * The file is a JSONL and only its tail is read: a long conversation's rollout
  * runs to megabytes and this is on the session-snapshot tick.
  */
 export function readRolloutTokens(
   file: string,
-): { total: Totals; lastTurn: { contextTokens: number; outputTokens: number } } | null {
+): { total: Totals; lastTurn: { contextTokens: number; outputTokens: number } | null } | null {
   let buf: Buffer;
   try {
     const { size } = fs.statSync(file);
@@ -361,52 +362,78 @@ export function readRolloutTokens(
     const total = info?.total_token_usage;
     const last = info?.last_token_usage;
     if (!total) continue;
+    const parsedTotal = {
+      input: Number(total.input_tokens ?? 0),
+      output: Number(total.output_tokens ?? 0),
+    };
+    // Older rollout formats may only have the cumulative total. That is still
+    // useful for session statistics, but it cannot truthfully answer how full
+    // the window is; null is safer than turning cumulative spend into context.
+    if (!last) return { total: parsedTotal, lastTurn: null };
+    const lastInput = Number(last?.input_tokens ?? 0);
+    const lastOutput = Number(last?.output_tokens ?? 0);
+    const lastTotal = Number(last?.total_tokens ?? 0);
     return {
-      total: { input: Number(total.input_tokens ?? 0), output: Number(total.output_tokens ?? 0) },
+      total: parsedTotal,
       lastTurn: {
-        contextTokens: Number(last?.input_tokens ?? 0),
-        outputTokens: Number(last?.output_tokens ?? 0),
+        // During automatic compaction codex briefly records input/output as 0
+        // while total_tokens carries the compacted context size. Preserve that
+        // useful reading instead of flashing the dashboard down to zero.
+        contextTokens: lastInput > 0 ? lastInput : Math.max(0, lastTotal - lastOutput),
+        outputTokens: lastOutput,
       },
     };
   }
   return null;
 }
 
-/**
- * Per-turn figures out of codex's CUMULATIVE counters.
- *
- * `TurnCompletedEvent.usage` is the thread's running total, not this turn's —
- * measured against codex-cli 0.144.1, where three trivial turns reported
- * input_tokens 28,916 → 43,477 → 58,065 and the rollout's own `last_token_usage`
- * for that third turn was 14,588, exactly 58,065 − 43,477.
- *
- * That distinction is the whole point of RuntimeUsage.contextTokens: it means
- * "how full is the window right now", and feeding it a cumulative total gives a
- * context bar that only ever fills up and then pins at 100% on a session whose
- * actual occupancy never moved.
- */
-export function usageFromTurn(
-  usage: Usage | null | undefined,
-  previous: Totals | null,
-): { totals: Totals; lastTurn: { contextTokens: number; outputTokens: number } } | null {
+/** Read a persisted thread without constructing a live SDK handle. */
+function readStoredRollout(threadId: string) {
+  const cacheKey = `${codexHome()}\0${threadId}`;
+  let file = storedRolloutFiles.get(cacheKey) ?? null;
+  let current = file ? readRolloutTokens(file) : null;
+  if (!current) {
+    file = findRolloutFile(threadId);
+    if (!file) return null;
+    storedRolloutFiles.set(cacheKey, file);
+    current = readRolloutTokens(file);
+  }
+  return current;
+}
+
+/** Cumulative thread totals reported by the SDK at turn completion. */
+function totalsFromTurn(usage: Usage | null | undefined): Totals | null {
   if (!usage) return null;
-  const totals: Totals = {
+  return {
     input: Number(usage.input_tokens ?? 0),
     output: Number(usage.output_tokens ?? 0),
   };
-  // No baseline: the whole cumulative IS this turn's, which is true for the
-  // first turn of a fresh thread and the best available guess otherwise.
-  // Negative deltas (a compaction shrank the thread, or codex reset its
-  // counters) clamp to the raw total rather than rendering as a negative bar.
-  const dIn = previous ? totals.input - previous.input : totals.input;
-  const dOut = previous ? totals.output - previous.output : totals.output;
-  return {
-    totals,
-    lastTurn: {
-      contextTokens: dIn > 0 ? dIn : totals.input,
-      outputTokens: dOut > 0 ? dOut : totals.output,
-    },
+}
+
+/**
+ * Refresh the current-window reading from codex's own rollout.
+ *
+ * One dashboard "turn" can contain dozens of model calls around tools. The
+ * SDK's turn-completed input delta is the SUM of all those calls (803,673 in a
+ * measured turn whose final prompt was 26,630), so it is spend, not context
+ * occupancy. `last_token_usage` is the authoritative latest model call and is
+ * also available while the turn is still running.
+ */
+function refreshRolloutUsage(h: CodexHandle): boolean {
+  const threadId = h.stampedThreadId?.trim() || h.externalSessionId.trim();
+  if (!threadId) return false;
+  if (!h.rolloutFile) h.rolloutFile = findRolloutFile(threadId);
+  const current = h.rolloutFile ? readRolloutTokens(h.rolloutFile) : null;
+  if (!current) return false;
+  // Both sources are cumulative, but the rollout append and SDK completion
+  // event are observed on different clocks. Never let a slightly older file
+  // tail move the session total backwards for one snapshot.
+  h.totals = {
+    input: Math.max(h.totals?.input ?? 0, current.total.input),
+    output: Math.max(h.totals?.output ?? 0, current.total.output),
   };
+  h.lastTurn = current.lastTurn;
+  return true;
 }
 
 export class CodexExecRuntime implements AgentRuntime {
@@ -429,13 +456,13 @@ export class CodexExecRuntime implements AgentRuntime {
     const opts = threadOptions(session);
     const thread = threadId ? codex.resumeThread(threadId, opts) : codex.startThread(opts);
 
-    // Seed the token baseline from codex's own file so the first turn after a
-    // gateway restart reports a delta rather than the thread's whole history.
+    // Seed both cumulative statistics and current-window occupancy from codex's
+    // own file so a gateway restart does not blank or inflate the context bar.
     let totals: Totals | null = null;
     let lastTurn: { contextTokens: number; outputTokens: number } | null = null;
-    if (threadId) {
-      const file = findRolloutFile(threadId);
-      const seeded = file ? readRolloutTokens(file) : null;
+    const rolloutFile = threadId ? findRolloutFile(threadId) : null;
+    if (rolloutFile) {
+      const seeded = readRolloutTokens(rolloutFile);
       if (seeded) {
         totals = seeded.total;
         lastTurn = seeded.lastTurn;
@@ -453,6 +480,7 @@ export class CodexExecRuntime implements AgentRuntime {
       abort: null,
       totals,
       lastTurn,
+      rolloutFile,
       turnSeq: 0,
     };
     live.set(session.id, handle);
@@ -507,6 +535,9 @@ export class CodexExecRuntime implements AgentRuntime {
             // idempotent and also self-heals a session whose id drifted.
             if (ev.thread_id !== h.stampedThreadId) {
               h.stampedThreadId = ev.thread_id;
+              h.rolloutFile = null;
+              h.totals = null;
+              h.lastTurn = null;
               h.emit({
                 sessionId: h.sessionId,
                 role: 'system',
@@ -518,11 +549,10 @@ export class CodexExecRuntime implements AgentRuntime {
             continue;
           }
           if (ev.type === 'turn.completed') {
-            const next = usageFromTurn(ev.usage, h.totals);
-            if (next) {
-              h.totals = next.totals;
-              h.lastTurn = next.lastTurn;
-            }
+            // The SDK value is cumulative spend. Keep it for totalTokens, then
+            // replace it with the rollout's authoritative latest-call reading.
+            h.totals = totalsFromTurn(ev.usage) ?? h.totals;
+            refreshRolloutUsage(h);
             continue;
           }
           for (const item of translateCodexEvent(ev, turnKey)) {
@@ -583,6 +613,10 @@ export class CodexExecRuntime implements AgentRuntime {
   async usage(handle: RuntimeHandle): Promise<RuntimeUsage | null> {
     const h = handleOf(handle);
     if (!h) return null;
+    // Session snapshots call this every 8s, including while a tool-heavy turn
+    // is running. Reading the bounded tail keeps the context bar live instead
+    // of showing the previous completed turn until this one finishes.
+    refreshRolloutUsage(h);
     if (!h.totals && !h.lastTurn) return null;
     return {
       contextTokens: h.lastTurn?.contextTokens ?? null,
@@ -591,6 +625,19 @@ export class CodexExecRuntime implements AgentRuntime {
       // No per-token price to apply: these turns bill against the ChatGPT plan
       // behind `codex login`, and reporting a computed dollar figure would put
       // a number in the cost column that nobody is charged.
+      costUsd: null,
+    };
+  }
+
+  async storedUsage(handle: RuntimeHandle): Promise<RuntimeUsage | null> {
+    const threadId = handle.externalSessionId.trim();
+    if (!threadId) return null;
+    const stored = readStoredRollout(threadId);
+    if (!stored) return null;
+    return {
+      contextTokens: stored.lastTurn?.contextTokens ?? null,
+      outputTokens: stored.lastTurn?.outputTokens ?? null,
+      totalTokens: stored.total.input + stored.total.output,
       costUsd: null,
     };
   }

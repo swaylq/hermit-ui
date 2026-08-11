@@ -48,17 +48,25 @@ dashboard 按 `(sessionId, externalId)` upsert，所以直接拿 `item.id` 当 e
 
 `tool_use.id` 也一样要挂——不然两轮的 `item_1` 会让 tool_result 连到别人的命令上。
 
-### 2.2 `TurnCompletedEvent.usage` 是**整个线程的累计值**，不是这一轮的
+### 2.2 `TurnCompletedEvent.usage` 的差分是**整轮消耗**，不是窗口占用
 
-实测三轮 `input_tokens`：28,916 → 43,477 → 58,065，
-而 rollout 文件里同一轮的 `last_token_usage.input_tokens` = **14,588 = 58,065 − 43,477**。
+简单对话里一轮通常只调用模型一次，所以累计差分会偶然等于窗口占用；一旦工具调用变多，
+同一轮会反复把上下文送进模型，差分就是这些输入的总和。真实故障轮次中，累计输入从
+11,308,234 增到 12,111,907，差值是 **803,673**；但该轮最后一次模型调用的输入只有
+**26,630**。把前者写进 `contextTokens`，Dashboard 就会显示一个超过窗口三倍的假值。
 
-`RuntimeUsage.contextTokens` 的语义是「窗口现在多满」，喂累计值进去，
-context bar 只会一路涨满然后钉在 100%——正是 types.ts 里那段注释警告的事。
+→ `total_token_usage` 只用于会话累计统计；窗口占用唯一读取 rollout 最新一条
+`token_count.info.last_token_usage`。`usage()` 在每次约 8 秒的会话快照采样时读取文件尾，
+所以工具密集的长轮次进行中也会更新，而不是一直显示上一轮。文件路径在首次找到后缓存；
+gateway 重启时 `ensure()` 从同一个文件种回累计统计和最新窗口值。
+即使空闲会话尚未重新 `ensure()`，快照采集也会通过 `storedUsage()` 按持久化的线程编号
+直接只读该文件，因此重启后的第一个快照就能纠正数据库旧值，不需要用户先发一条消息。
+这条只读恢复路径保持 `alive=false`，不会把休眠会话误唤醒。
 
-→ `usageFromTurn()` 做差分。差分需要基线，而 gateway 重启会丢基线，
-所以 `ensure()` 在续接线程时从 codex 自己的 rollout JSONL 尾部读最后一条 `token_count`
-把基线（和上一轮的真实值）种回去。实测种回来的数和重启前内存里的一模一样。
+自动压缩还有一个边界形态：`last_token_usage.input_tokens/output_tokens` 会短暂写成 0，
+但 `total_tokens` 携带压缩后的上下文大小。这个瞬间用 `total_tokens - output_tokens`，避免
+进度条先闪成 0，下一次模型调用再跳回正常值。老格式若完全没有 `last_token_usage`，上下文
+返回空值；累计消耗不能冒充窗口占用。
 
 ### 2.3 续接**不会重放**历史
 

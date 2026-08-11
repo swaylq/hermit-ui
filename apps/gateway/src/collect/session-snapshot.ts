@@ -208,7 +208,7 @@ function readLoopState(agentDir: string): unknown | null {
  * instead, and `contextTokens` is deliberately last-turn so the dashboard's
  * context bar means the same thing for both backends.
  */
-async function probeRuntime(
+export async function probeRuntime(
   runtime: NonNullable<ReturnType<typeof runtimeFor>>,
   sessionId: string,
   agentName: string,
@@ -230,7 +230,18 @@ async function probeRuntime(
   try {
     const working = await runtime.isWorking(handle);
     const usage = await runtime.usage(handle);
-    if (usage === null && !working) return base;
+    if (usage === null && !working) {
+      // Some runtimes can recover durable token accounting without creating a
+      // live process/handle. Preserve alive=false here: usage recovery must not
+      // wake a hibernated session or claim an idle process exists.
+      const stored = await runtime.storedUsage?.(handle) ?? null;
+      if (!stored) return base;
+      return {
+        ...base,
+        contextTokens: stored.contextTokens,
+        outputTokens: stored.outputTokens,
+      };
+    }
     return {
       ...base,
       alive: true,

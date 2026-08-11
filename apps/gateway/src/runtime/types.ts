@@ -38,7 +38,9 @@ export type RuntimeImage = { path: string; mediaType: string };
 
 export type RuntimeUsage = {
   /**
-   * Context occupancy of the LAST turn, not a session total.
+   * Context occupancy of the latest model call, not a runtime turn or session
+   * total. One agentic runtime turn may contain many model calls around tools;
+   * summing those calls measures spend, not how full the window is.
    *
    * This exists to mean the same thing as the claude path's `contextTokens`,
    * which is `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`
@@ -47,7 +49,7 @@ export type RuntimeUsage = {
    * context bar that only ever fills up.
    */
   contextTokens: number | null;
-  /** Output tokens of the last turn, same basis as contextTokens. */
+  /** Output tokens of the latest model call, same basis as contextTokens. */
   outputTokens: number | null;
   /** Cumulative for the whole session — cost reporting, not the context bar. */
   totalTokens: number;
@@ -82,6 +84,13 @@ export interface AgentRuntime {
 
   /** Token/cost for the collectors. */
   usage(handle: RuntimeHandle): Promise<RuntimeUsage | null>;
+
+  /**
+   * Optional durable usage when no live handle exists (for example, a Codex
+   * rollout after a gateway restart). Collectors may use this to repair token
+   * fields, but it does not make the session alive or wake a hibernated one.
+   */
+  storedUsage?(handle: RuntimeHandle): Promise<RuntimeUsage | null>;
 
   /** Stop the session; `hibernate` keeps durable state for later resume. */
   stop(handle: RuntimeHandle, mode: 'hibernate' | 'kill'): Promise<void>;

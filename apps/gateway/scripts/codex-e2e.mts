@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CodexExecRuntime, findRolloutFile } from '../src/runtime/codex-exec.ts';
+import { CodexExecRuntime, findRolloutFile, readRolloutTokens } from '../src/runtime/codex-exec.ts';
 import type { SyncItem } from '../src/runtime/types.ts';
 
 let pass = 0, fail = 0;
@@ -74,10 +74,16 @@ const stamp = emitted.find((e) => e.claudeSessionId);
 check('the thread id was stamped for the DB', !!stamp?.claudeSessionId);
 const threadId = stamp?.claudeSessionId ?? '';
 console.log('  thread id:', threadId);
+const currentRolloutUsage = () => {
+  const file = findRolloutFile(threadId);
+  return file ? readRolloutTokens(file) : null;
+};
 
 const u1 = await rt.usage(handle);
 console.log('  usage turn 1:', JSON.stringify(u1));
 check('turn 1 reports a context figure', typeof u1?.contextTokens === 'number' && u1!.contextTokens! > 0);
+check('turn 1 context equals codex\'s latest model call',
+  u1?.contextTokens === currentRolloutUsage()?.lastTurn?.contextTokens);
 check('cost is null (subscription, no per-token price)', u1?.costUsd === null);
 
 console.log('\n── turn 2: same handle, context must carry ──');
@@ -90,8 +96,10 @@ check('turn 2 remembered the marker', answer.includes('hermit-e2e-marker'), `got
 
 const u2 = await rt.usage(handle);
 console.log('  usage turn 2:', JSON.stringify(u2));
-check('turn 2 context is a PER-TURN figure, not the cumulative total',
+check('turn 2 context is a current-window figure, not the cumulative total',
   u2!.contextTokens! < u2!.totalTokens!, `ctx=${u2?.contextTokens} total=${u2?.totalTokens}`);
+check('turn 2 context equals codex\'s latest model call',
+  u2?.contextTokens === currentRolloutUsage()?.lastTurn?.contextTokens);
 check('cumulative total grew across turns', u2!.totalTokens > u1!.totalTokens);
 
 // The id trap: codex ids restart at item_0 every turn, so two DIFFERENT logical
@@ -128,6 +136,8 @@ console.log('  usage seeded from the rollout file:', JSON.stringify(seeded));
 check('the baseline was seeded from codex\'s own rollout, not left blank', seeded !== null);
 check('the seeded context is per-turn sized, not the whole history',
   !!seeded && seeded.contextTokens! < seeded.totalTokens!, JSON.stringify(seeded));
+check('the seeded context equals codex\'s latest model call',
+  seeded?.contextTokens === currentRolloutUsage()?.lastTurn?.contextTokens);
 
 const before3 = emitted.length;
 await rt.submit(handle, 'One more time: just that exact string, nothing else.', []);
