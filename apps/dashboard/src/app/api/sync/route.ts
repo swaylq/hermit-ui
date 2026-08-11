@@ -88,6 +88,20 @@ const PlanUsageInput = z.object({
   capturedAt: z.string().optional(),
 });
 
+const CodexUsageInput = z.object({
+  usedPercent: z.number().nullable().optional(),
+  windowMinutes: z.number().int().nullable().optional(),
+  resetsAt: z.string().nullable().optional(),
+  planType: z.string().max(64).nullable().optional(),
+  daily: z.array(z.object({
+    day: z.string().max(10),
+    inputTokens: z.number().int(),
+    outputTokens: z.number().int(),
+    sessions: z.number().int(),
+  })).max(60).optional(),
+  capturedAt: z.string().optional(),
+});
+
 const UsageInput = z.object({
   agentName: z.string(),
   hourBucket: z.string().datetime(),
@@ -107,4 +121,4 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ slu
   return NextResponse.json({ error: 'use /api/sync/<thing>' }, { status: 404 });
 }
 
-export { resolveMachine, deepStripNul, AgentInput, GlobalSkillInput, PlanUsageInput, UsageInput };
+export { resolveMachine, deepStripNul, AgentInput, GlobalSkillInput, PlanUsageInput, CodexUsageInput, UsageInput };

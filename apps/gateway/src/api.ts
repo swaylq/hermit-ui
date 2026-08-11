@@ -75,6 +75,7 @@ export const api = {
   // Real Claude Max plan consumption scraped from `claude /usage` (the only
   // source for the true 5h/weekly window %; ccusage is a cost estimate).
   syncPlanUsage: (planUsage: any) => post('/api/sync/plan-usage', { planUsage }),
+  syncCodexUsage: (codexUsage: any) => post('/api/sync/codex-usage', { codexUsage }),
 
   // ── Cron jobs (gateway cron-runner) ───────────────────────────────────────
   // Enabled crons joined with their agent's on-disk directory; the runner fires

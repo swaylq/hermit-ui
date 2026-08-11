@@ -27,6 +27,7 @@ import { collectHostStat } from './collect/host-stat';
 import { collectUsage, usageWindowStart } from './collect/usage';
 import { collectUsageWindows } from './collect/window';
 import { collectPlanUsage } from './collect/plan-usage';
+import { collectCodexUsage } from './collect/codex-usage';
 import { api } from './api';
 import { tick as cronTick } from './cron-runner';
 import { chatTick, chatCancelTick, chatRestartTick, chatHibernateTick, shutdownChatRunner } from './chat-runner';
@@ -126,6 +127,20 @@ async function pushPlanUsage() {
   await safe('plan-usage', async () => {
     const pu = await collectPlanUsage();
     if (pu) await api.syncPlanUsage(pu);
+  });
+}
+
+// Codex plan consumption + per-day tokens, read straight out of codex's own
+// rollout files. Cheap (~70ms over two weeks of them, tail reads only) and
+// touches no process, so unlike pushPlanUsage it does not need to be rare — but
+// nothing about it changes fast either, so it rides the same slow schedule.
+async function pushCodexUsage() {
+  await safe('codex-usage', async () => {
+    const cu = collectCodexUsage();
+    // null = codex has never run on this machine. Skipping leaves the row
+    // absent, which is what makes the dashboard hide the section rather than
+    // render an empty one.
+    if (cu) await api.syncCodexUsage(cu);
   });
 }
 
@@ -248,6 +263,7 @@ function loop(fn: () => Promise<void>, ms: number) {
   await pushUsage();
   await pushUsageWindows();
   await pushCronTick();
+  await pushCodexUsage();
   await pushPlanUsage(); // last — runs after the blocking ccusage scans, not starved by them
 })();
 
@@ -290,6 +306,7 @@ loop(() => safe('global-memory', globalMemoryTick), 30_000);
 // Real plan % via `claude /usage` scrape — every 12 min (initial run is the last
 // step of the startup IIFE above, so it isn't starved by the ccusage block).
 loop(pushPlanUsage, 12 * 60_000);
+loop(pushCodexUsage, 12 * 60_000); // reads codex's own rollout files; no process, no API call
 // Usage is the dashboard's only source for spend numbers (the live ccusage
 // shell-out was removed). 30 min keeps ccusage's stdin scan light while still
 // showing fresh-enough data for human-paced quota watching.

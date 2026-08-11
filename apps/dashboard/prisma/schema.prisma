@@ -54,6 +54,19 @@ model Machine {
   lastCleanupAt      DateTime?
   lastCleanupSummary Json?
 
+  // Which backends this machine offers, edited from Settings → Backends.
+  // Shape: `{ disabled: string[] }` naming BACKEND_OPTIONS values.
+  //
+  // Stored as the DISABLED set, not the enabled one, so "nothing configured"
+  // means "everything this build knows about is available" — and so a backend
+  // added in a later release shows up rather than being invisible until someone
+  // discovers a toggle they were never told about.
+  //
+  // Per machine because availability genuinely is: codex needs `codex login` on
+  // that host, pi needs its endpoint configured. A fleet-wide switch would
+  // offer backends that cannot run.
+  backendsConfig Json?
+
   // Pi-runtime machine config, edited from the dashboard Settings → Pi Runtime
   // page and consumed by the machine's gateway when it spawns pi children.
   // { provider, baseUrl, api, models[], secretKey, image: { enabled, provider,
@@ -63,6 +76,7 @@ model Machine {
   agents              Agent[]
   crons               Cron[]
   usageHourly         UsageHourly[]
+  codexUsage          CodexUsage?
   usageWindows        UsageWindow[]
   chatSessions        ChatSession[]
   agentRequests       AgentRequest[]
@@ -177,6 +191,26 @@ model PlanUsage {
 // can't touch the gateway host's filesystem, so it queues a request here; the
 // Mac-side gateway polls, scaffolds-from-template / rm -rf's the agent dir,
 // then acks. Mirrors the ChatSession.restartRequestedAt round-trip.
+// Codex plan consumption, read from codex's own rollout files by the gateway.
+//
+// Deliberately NOT merged into PlanUsage: that row is Claude's two-window
+// (5-hour + weekly) shape scraped from `claude /usage`, and codex reports one
+// window with a different meaning and its own reset clock. Sharing a row would
+// mean nullable columns whose meaning depends on which vendor last wrote them.
+model CodexUsage {
+  machineId     String   @id
+  machine       Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  // The primary rate-limit window as codex reports it. `windowMinutes` is what
+  // makes usedPercent readable — 10080 means the number is a WEEKLY figure.
+  usedPercent   Float?
+  windowMinutes Int?
+  resetsAt      DateTime?
+  planType      String?
+  // Per-day token totals for the sparkline: `[{ day: "2026-08-11", input, output, sessions }]`.
+  daily         Json?
+  capturedAt    DateTime @default(now())
+}
+
 model AgentRequest {
   id          String    @id @default(cuid())
   machineId   String

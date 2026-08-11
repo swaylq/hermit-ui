@@ -3,6 +3,7 @@ import { router, gatewayProcedure, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { invalidateMachineCache } from '../auth';
 import { Prisma } from '@/generated/prisma/client';
+import { BACKEND_OPTIONS } from '@/lib/runtime-labels';
 
 export const PI_CONFIG_SCHEMA = z.object({
   // 'api-key' (default): provider + secretKey as below; 'cc-subscription': reuse
@@ -84,6 +85,30 @@ export const machinesRouter = router({
       await prisma.machine.update({
         where: { id: ctx.machine.id },
         data: { piConfig: (input.config ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue },
+      });
+      return { ok: true };
+    }),
+
+  // Settings → Backends. Shape and defaulting rules live in
+  // lib/backend-availability; this only stores and returns them.
+  getBackendsConfig: machineProcedure.query(async ({ ctx }) => {
+    const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
+    return (m?.backendsConfig as unknown as { disabled: string[] } | null) ?? null;
+  }),
+
+  setBackendsConfig: machineProcedure
+    .input(z.object({ config: z.object({ disabled: z.array(z.string().max(64)).max(20) }).nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      // The "never disable everything" rule is enforced in the UI against the
+      // option list it renders, but it is re-checked here because this is a
+      // public procedure: a machine with every backend off would have a picker
+      // with nothing in it and no way to fix itself from the app.
+      if (input.config && input.config.disabled.length >= BACKEND_OPTIONS.length) {
+        throw new Error('At least one backend has to stay enabled.');
+      }
+      await prisma.machine.update({
+        where: { id: ctx.machine.id },
+        data: { backendsConfig: (input.config ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue },
       });
       return { ok: true };
     }),

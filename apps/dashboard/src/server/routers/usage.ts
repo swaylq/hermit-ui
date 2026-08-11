@@ -42,4 +42,10 @@ export const usageRouter = router({
   planUsage: machineProcedure.query(async ({ ctx }) => {
     return prisma.planUsage.findUnique({ where: { machineId: ctx.machine.id } });
   }),
+
+  // Null when codex has never run on this machine, which is what lets the
+  // Usage page hide the section entirely rather than render an empty one.
+  codexUsage: machineProcedure.query(async ({ ctx }) => {
+    return prisma.codexUsage.findUnique({ where: { machineId: ctx.machine.id } });
+  }),
 });

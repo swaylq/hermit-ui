@@ -3,15 +3,17 @@
 // JSX) so both can import it without a cycle — app-sidebar ↔ settings-tabs already
 // depend on each other. This is also the source the future Settings sidebar reads.
 
-import { Boxes, BarChart3, Wrench, HardDriveUpload, Brain, SunMoon, Activity, HelpCircle, Cpu, BellRing, type LucideIcon } from 'lucide-react';
+import { Boxes, BarChart3, Wrench, HardDriveUpload, Brain, SunMoon, Activity, HelpCircle, Cpu, BellRing, Layers, type LucideIcon } from 'lucide-react';
 
 export type SettingsTabKey =
-  | 'skills' | 'memory' | 'usage' | 'ops' | 'system' | 'files' | 'appearance' | 'help' | 'pi' | 'push';
+  | 'skills' | 'memory' | 'usage' | 'ops' | 'system' | 'files' | 'appearance' | 'help' | 'pi' | 'push'
+  | 'backends';
 
 export const SETTINGS_TABS: { key: SettingsTabKey; label: string; href: string; Icon: LucideIcon }[] = [
   { key: 'usage', label: 'Usage', href: '/usage', Icon: BarChart3 },
   { key: 'skills', label: 'Global Skills', href: '/skills', Icon: Boxes },
   { key: 'memory', label: 'Global Memory', href: '/global-memory', Icon: Brain },
+  { key: 'backends', label: 'Backends', href: '/backends', Icon: Layers },
   { key: 'pi', label: 'Pi Runtime', href: '/pi', Icon: Cpu },
   { key: 'ops', label: 'Operations', href: '/ops', Icon: Wrench },
   { key: 'system', label: 'System', href: '/system', Icon: Activity },
