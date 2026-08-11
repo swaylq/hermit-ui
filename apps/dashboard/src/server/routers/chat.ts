@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { router, gatewayProcedure, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 import { QUEUE_LIMIT } from '../../lib/chat-queue';
+import { sessionRecencyMs } from '../../lib/session-recency';
 import { stripNulDeep } from '../sanitize';
 import { capMessageContent } from '../message-cap';
 import { extractSearchText, extractInteractionBlocks } from '../chat-text';
@@ -57,6 +58,12 @@ const ContentBlock = z.union([
 // gateway's pollPending would all scoop up the agent's OWN attachments. Shared by
 // all four so they can never drift apart.
 const USER_QUEUE_FILTER = { role: 'user', deliveredAt: null, externalId: null } as const;
+
+// Growth ceiling on the recents payload (S4): without a bound listSessions returns
+// every session ever, unbounded, polled every 5s on every page. 200 is well above
+// the current per-machine count (~90) so it never truncates today — it just caps
+// future growth to what the sidebar / agent-detail recents actually show.
+const SESSION_LIST_CAP = 200;
 
 /**
  * Archive the sessions a sweep picked: out of the sidebar AND asleep.
@@ -188,69 +195,96 @@ export const chatRouter = router({
       // A scoped share key can only ever see its own agent's sessions, no matter
       // what (or whether) agentName was passed.
       const agentName = ctx.scopedAgent ?? input.agentName;
-      const rows = await prisma.chatSession.findMany({
-        where: {
-          machineId: ctx.machine.id,
-          ...(agentName ? { agentName } : {}),
-          ...LIVE_SESSION,
-        },
-        // STRICTLY most-recent-first. The previous order led with `closedAt: 'asc'`,
-        // which reads as "open ones first" and does the opposite: Postgres sorts ASC
-        // NULLS LAST, so every ARCHIVED session (non-null closedAt) came before every
-        // open one, ordered by when it was archived rather than by when it was last
-        // spoken to. The sidebar's top was archived conversations and the live ones
-        // were pushed below them.
-        //
-        // `nulls: 'last'` matters for the same class of reason: DESC defaults to NULLS
-        // FIRST, which would float never-messaged sessions to the top.
-        orderBy: [{ lastMessageAt: { sort: 'desc', nulls: 'last' } }, { startedAt: 'desc' }],
-        // Growth ceiling on the recents payload (S4): without a bound this returns
-        // every session ever, unbounded, polled every 5s on every page. 200 is well
-        // above the current fleet count (~61) so it never truncates today — it just
-        // caps future growth to what the sidebar/agent-detail recents actually show.
-        // Pure recency order means the cap keeps the freshest sessions.
-        take: 200,
-        select: {
-          id: true,
-          agentName: true,
-          title: true,
-          origin: true,
-          startedAt: true,
-          lastMessageAt: true,
-          lastReadAt: true,
-          closedAt: true,
-          hiddenAt: true,
-          // Which sidebar drawer this session is filed in; null = it stays in the
-          // flat recents list.
-          groupId: true,
-          restartRequestedAt: true,
-          alive: true,
-          state: true,
-          contextTokens: true,
-          runtime: true,
-          runtimeProvider: true,
-          runtimeModel: true,
-          runtimeMode: true,
-          snapshotAt: true,
-          // loopState is deliberately NOT selected here (P1-2): it's the entire
-          // .loop-state.json blob and measured at 38% of this 5s-polled payload
-          // (21KB across the machine's sessions), yet the only client reader is
-          // the *current* session's LoopBar, which now sources loopState from
-          // chat.getSession (page.tsx). Don't re-add it to this list query.
-          // Resource governance: per-session memory + hibernation state, read by
-          // the sidebar rows (rss + 💤) and the Host-health panel.
-          rssMb: true,
-          hibernatedAt: true,
-          // Dropped claudeSessionId / pid / outputTokens / lastActivity: no UI
-          // consumer reads them, and this payload (~900B × every session) polls
-          // every 5s on every page. The gateway still gets them via its own routes.
-          // Sidebar preview is now a denormalized column (set by chat.send + a
-          // one-time backfill) instead of a per-session first-user-message
-          // subquery — that subquery (40 sessions × pulling each first message's
-          // full content to slice 120 chars) was the ~0.5–0.9s listSessions cost.
-          preview: true,
-        },
-      });
+      const where = {
+        machineId: ctx.machine.id,
+        ...(agentName ? { agentName } : {}),
+        ...LIVE_SESSION,
+      };
+      const select = {
+        id: true,
+        agentName: true,
+        title: true,
+        origin: true,
+        startedAt: true,
+        lastMessageAt: true,
+        lastReadAt: true,
+        closedAt: true,
+        hiddenAt: true,
+        // Which sidebar drawer this session is filed in; null = it stays in the
+        // flat recents list.
+        groupId: true,
+        restartRequestedAt: true,
+        alive: true,
+        state: true,
+        contextTokens: true,
+        runtime: true,
+        runtimeProvider: true,
+        runtimeModel: true,
+        runtimeMode: true,
+        snapshotAt: true,
+        // loopState is deliberately NOT selected here (P1-2): it's the entire
+        // .loop-state.json blob and measured at 38% of this 5s-polled payload
+        // (21KB across the machine's sessions), yet the only client reader is
+        // the *current* session's LoopBar, which now sources loopState from
+        // chat.getSession (page.tsx). Don't re-add it to this list query.
+        // Resource governance: per-session memory + hibernation state, read by
+        // the sidebar rows (rss + 💤) and the Host-health panel.
+        rssMb: true,
+        hibernatedAt: true,
+        // Dropped claudeSessionId / pid / outputTokens / lastActivity: no UI
+        // consumer reads them, and this payload (~900B × every session) polls
+        // every 5s on every page. The gateway still gets them via its own routes.
+        // Sidebar preview is now a denormalized column (set by chat.send + a
+        // one-time backfill) instead of a per-session first-user-message
+        // subquery — that subquery (40 sessions × pulling each first message's
+        // full content to slice 120 chars) was the ~0.5–0.9s listSessions cost.
+        preview: true,
+      } as const;
+
+      // STRICTLY most-recent-first, by `sessionRecencyMs` — the same key the row
+      // displays, which is the point of it. Getting that key right has failed twice:
+      //
+      //  1. An early order led with `closedAt: 'asc'`, which reads as "open ones
+      //     first" and does the opposite — Postgres sorts ASC NULLS LAST, so every
+      //     ARCHIVED session came before every open one and the sidebar's top was
+      //     archived conversations.
+      //  2. Then `lastMessageAt DESC NULLS LAST`, which fixed that but stranded the
+      //     OTHER null: a session created and not yet spoken to has no lastMessageAt,
+      //     so it sank below conversations from months ago while its own row read
+      //     "1d ago" (the sidebar prints the startedAt fallback). Every brand-new
+      //     chat appeared at the very bottom of the list.
+      //
+      // SQL has no such fallback in `orderBy`, so the key is applied in JS — and the
+      // split into two capped queries is what keeps `take` honest. Capping a single
+      // query can only cap by ONE of the columns, which on a machine past the cap
+      // would drop never-messaged sessions from the list entirely rather than merely
+      // misplace them. Capping each side separately cannot: the true freshest N is a
+      // subset of (freshest N messaged ∪ freshest N unmessaged).
+      //
+      // Cost: the two run in parallel, so it stays one round trip, and the second one
+      // is nearly free — (machineId, lastMessageAt) serves its NULL slice directly and
+      // that slice is a handful of rows, since a session leaves it for good on its
+      // first message. Measured on the fleet's busiest machine (89 live sessions):
+      // 0.14ms for the null branch, 0.35ms for the messaged one.
+      const [messaged, unmessaged] = await Promise.all([
+        prisma.chatSession.findMany({
+          where: { ...where, lastMessageAt: { not: null } },
+          // startedAt breaks exact lastMessageAt ties, so the poll can't hand back
+          // two orderings of the same data and shuffle rows under the cursor.
+          orderBy: [{ lastMessageAt: 'desc' }, { startedAt: 'desc' }],
+          take: SESSION_LIST_CAP,
+          select,
+        }),
+        prisma.chatSession.findMany({
+          where: { ...where, lastMessageAt: null },
+          orderBy: { startedAt: 'desc' },
+          take: SESSION_LIST_CAP,
+          select,
+        }),
+      ]);
+      const rows = [...messaged, ...unmessaged]
+        .sort((a, b) => sessionRecencyMs(b) - sessionRecencyMs(a))
+        .slice(0, SESSION_LIST_CAP);
 
       // Resolve each row's backend against its agent's default. The column holds
       // only the session's OWN choice, and null means "inherit" — returning it

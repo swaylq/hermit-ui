@@ -11,6 +11,7 @@ import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
+import { sessionRecencyAt, sessionRecencyMs } from '@/lib/session-recency';
 import { SquarePen } from 'lucide-react';
 
 // ── Brain mode: the orchestrator's own chat system in the sidebar ─────────────
@@ -65,7 +66,7 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
     { enabled: !!brainName, refetchInterval: 5_000 },
   );
   const rows = [...(sessions.data ?? [])].sort(
-    (a, b) => new Date(b.lastMessageAt ?? b.startedAt).getTime() - new Date(a.lastMessageAt ?? a.startedAt).getTime(),
+    (a, b) => sessionRecencyMs(b) - sessionRecencyMs(a),
   );
   return (
     <div className="flex-1 min-h-0 flex flex-col mt-3">
@@ -109,7 +110,7 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
                             {s.title || s.preview || 'Brain chat'}
                           </span>
                           <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
-                            {relTime(s.lastMessageAt ?? s.startedAt)}
+                            {relTime(sessionRecencyAt(s))}
                           </span>
                         </div>
                       </div>
@@ -136,7 +137,7 @@ export function RecentDispatchSessions() {
     () =>
       (sessions.data ?? [])
         .filter((s) => s.origin === 'dispatch' || (s.title ?? '').startsWith('Brain →'))
-        .sort((a, b) => new Date(b.lastMessageAt ?? b.startedAt).getTime() - new Date(a.lastMessageAt ?? a.startedAt).getTime()),
+        .sort((a, b) => sessionRecencyMs(b) - sessionRecencyMs(a)),
     [sessions.data],
   );
   return (
@@ -180,7 +181,7 @@ export function RecentDispatchSessions() {
                             {label}
                           </span>
                           <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
-                            {relTime(s.lastMessageAt ?? s.startedAt)}
+                            {relTime(sessionRecencyAt(s))}
                           </span>
                         </div>
                         <div className="mt-0.5 truncate text-[10px] font-mono text-muted-foreground/70 tabular-nums">

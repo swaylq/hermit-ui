@@ -58,6 +58,13 @@ function firstText(content: unknown): string | null {
 // in the recycle bin must not ring a stall alert.
 const PENDING_UNANSWERED = { unansweredMsgId: { not: null }, unansweredAckedMsgId: null, ...LIVE_SESSION } as const;
 
+// What the unread scan looks at. `lastMessageAt: { not: null }` is not a shortcut for
+// isUnread's null check below — it is what keeps the `take: SESSION_SCAN` window
+// spent on candidates: a never-messaged session can never be unread, yet Postgres
+// sorts DESC NULLS FIRST, so those rows led the scan and each one displaced a real
+// candidate off the end of it.
+const UNREAD_SCAN = { ...LIVE_SESSION, lastMessageAt: { not: null } } as const;
+
 type UnreadSession = { id: string; lastMessageAt: Date | null; lastReadAt: Date | null };
 function isUnread(s: UnreadSession): boolean {
   if (!s.lastMessageAt) return false;
@@ -67,7 +74,7 @@ function isUnread(s: UnreadSession): boolean {
 // Lightweight scan (no message bodies) → unread session ids, for counts + markAllRead.
 async function scanUnreadSessionIds(machineId: string): Promise<string[]> {
   const rows = await prisma.chatSession.findMany({
-    where: { machineId, ...LIVE_SESSION },
+    where: { machineId, ...UNREAD_SCAN },
     orderBy: { lastMessageAt: 'desc' },
     take: SESSION_SCAN,
     select: { id: true, lastMessageAt: true, lastReadAt: true },
@@ -97,7 +104,7 @@ export const notificationsRouter = router({
         before
           ? Promise.resolve([])
           : prisma.chatSession.findMany({
-              where: { machineId, ...LIVE_SESSION },
+              where: { machineId, ...UNREAD_SCAN },
               orderBy: { lastMessageAt: 'desc' },
               take: SESSION_SCAN,
               select: { id: true, agentName: true, title: true, lastMessageAt: true, lastReadAt: true },
@@ -235,7 +242,7 @@ export const notificationsRouter = router({
     const machineId = ctx.machine.id;
     const [sessionRows, cron, hostStat, stall] = await Promise.all([
       prisma.chatSession.findMany({
-        where: { machineId, ...LIVE_SESSION },
+        where: { machineId, ...UNREAD_SCAN },
         orderBy: { lastMessageAt: 'desc' },
         take: SESSION_SCAN,
         select: { id: true, lastMessageAt: true, lastReadAt: true },

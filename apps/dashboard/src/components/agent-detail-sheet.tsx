@@ -13,6 +13,7 @@ import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
+import { sessionRecencyAt } from '@/lib/session-recency';
 import { Markdown } from './markdown';
 import { CtxBar } from './ctx-bar';
 import { PublishToMarketButton } from './publish-to-market-button';
@@ -469,7 +470,7 @@ function SessionsSection({
                         )}
                       </div>
                       <div className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground tabular-nums mt-0.5">
-                        <span>last {relTime(s.lastMessageAt ?? s.startedAt)}</span>
+                        <span>last {relTime(sessionRecencyAt(s))}</span>
                         <span className="text-muted-foreground/40">·</span>
                         <CtxBar tokens={s.contextTokens} />
                       </div>

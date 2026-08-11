@@ -23,6 +23,7 @@ import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
+import { sessionRecencyAt } from '@/lib/session-recency';
 import { sessionStatusView } from '@/lib/session-status';
 import { isSessionUnread } from '@/lib/session-read';
 import { useLiveWorking } from '@/lib/session-live';
@@ -380,7 +381,7 @@ const SessionRow = memo(function SessionRow({
                 <Moon className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="asleep — wakes on send" />
               )}
               <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
-                {relTime(s.lastMessageAt ?? s.startedAt)}
+                {relTime(sessionRecencyAt(s))}
               </span>
             </div>
             <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 tabular-nums truncate">
