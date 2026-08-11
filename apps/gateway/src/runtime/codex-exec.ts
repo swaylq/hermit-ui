@@ -20,11 +20,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Codex, type Thread, type ThreadOptions, type Usage } from '@openai/codex-sdk';
+import { fileURLToPath } from 'node:url';
+import { Codex, type CodexOptions, type Thread, type ThreadOptions, type Usage } from '@openai/codex-sdk';
 import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
 import { translateCodexEvent } from './codex-events';
+import { DASHBOARD_URL, ASST_KEY } from '../config';
 
 /** Cumulative token counters, as codex reports them. */
 type Totals = { input: number; output: number };
@@ -212,9 +214,61 @@ function threadOptions(session: RuntimeSession): ThreadOptions {
   };
 }
 
-function client(): Codex {
+/**
+ * The hermit MCP stub — the same stdio server the claude path wires in with
+ * `--mcp-config`. Resolved here rather than imported from chat-runner, which
+ * imports this module transitively (runtime/index) and would make a cycle.
+ */
+const MCP_STUB_PATH = fileURLToPath(new URL('../mcp-stub.cjs', import.meta.url));
+
+/**
+ * Give a codex session hermit's own tools: attach_file, attach_image, ask,
+ * set_session_title, log_status, the cron family.
+ *
+ * Without this a codex session has ONLY the shell and apply_patch, and the
+ * failure is not "the tool is missing" — it is the model doing its best without
+ * one. Observed on a real session: asked to send a file back, the agent grepped
+ * the repo for `attach_file`, read mcp-stub.cjs, checked whether HERMIT_* were
+ * in its environment, tried to hand-drive the stub over raw JSON-RPC on stdin,
+ * and then told the user "已发你 yubai-preview.html". Nothing was ever sent. A
+ * capability the surrounding product assumes, missing from one backend, gets
+ * reported to the user as done.
+ *
+ * codex reads MCP servers from config, so this rides `-c mcp_servers.…` rather
+ * than needing anything codex-specific in the stub — verified against
+ * codex-cli 0.147.0: the tool shows up as `hermit/attach_file` and its result
+ * (including its errors) comes back through the normal item stream, which
+ * codex-events already renders as `mcp__hermit__attach_file`.
+ */
+export function hermitMcpConfigFor(session: RuntimeSession): NonNullable<CodexOptions['config']> {
+  return {
+    mcp_servers: {
+      hermit: {
+        command: 'node',
+        args: [MCP_STUB_PATH],
+        env: {
+          HERMIT_SESSION_ID: session.id,
+          HERMIT_DASHBOARD_URL: DASHBOARD_URL,
+          HERMIT_KEY: ASST_KEY,
+        },
+        // Seconds. `ask` blocks until a human clicks a button in the dashboard,
+        // for up to the stub's own 4h ceiling — a default tool timeout would
+        // kill it long before, and the user's answer would land on a call that
+        // no longer exists. Sits just above that ceiling, same reasoning as the
+        // claude path's 14,700,000ms.
+        tool_timeout_sec: 14_700,
+        startup_timeout_sec: 30,
+      },
+    },
+  };
+}
+
+function client(session: RuntimeSession): Codex {
   const override = process.env.HERMIT_CODEX_BIN?.trim();
-  return new Codex(override ? { codexPathOverride: override } : {});
+  return new Codex({
+    ...(override ? { codexPathOverride: override } : {}),
+    config: hermitMcpConfigFor(session),
+  });
 }
 
 /**
@@ -370,7 +424,7 @@ export class CodexExecRuntime implements AgentRuntime {
       live.delete(session.id);
     }
 
-    const codex = client();
+    const codex = client(session);
     const threadId = session.externalSessionId?.trim() || null;
     const opts = threadOptions(session);
     const thread = threadId ? codex.resumeThread(threadId, opts) : codex.startThread(opts);

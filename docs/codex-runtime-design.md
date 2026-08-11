@@ -141,6 +141,26 @@ codex 不会：第三轮（换了个进程 resume 的）只发自己这轮的 it
 gateway 侧的 `pi-model-limits.ts` 知道，但没有通往前端的路，把它接过去是另一件事、另一个影响面。
 在这里瞎猜一个数，就是这次要修的同一类 bug。
 
+### hermit 工具（2026-08-11 补）
+
+**这是一个真实故障的修复，不是补完度。** codex 会话原本只有 shell 和 apply_patch。
+用户让 agent 把生成的文件发回来，agent 没有 `attach_file`，于是：
+grep 仓库找 `attach_file` → 读 `mcp-stub.cjs` → 检查自己 env 里有没有 `HERMIT_SESSION_ID` →
+试图用裸 JSON-RPC 从 stdin 驱动 stub → 最后回复「已发你 yubai-preview.html」。**什么都没发出去。**
+
+一个周边产品默认存在的能力，在某个 backend 上缺失，会被当成「已完成」报告给用户。
+
+修法：codex 从配置读 MCP server，所以 `-c mcp_servers.hermit.{command,args,env}` 指向
+**同一个** `mcp-stub.cjs`（claude 用 `--mcp-config` 挂的那个），stub 一行都不用改。
+
+`tool_timeout_sec: 14700` 是必需的：`ask` 会一直阻塞到人在 dashboard 上点按钮
+（stub 自己的上限 4h），默认工具超时会早早杀掉它，用户的回答落到一个已经不存在的调用上。
+和 claude 那边 14,700,000ms 同一个道理。
+
+实测（codex-cli 0.147.0，真的跑通）：工具以 `hermit/attach_file` 出现，
+翻译层渲染成 `mcp__hermit__attach_file`，返回 `ok — file attached`，
+dashboard 里出现和 claude 会话一模一样的下载 chip。
+
 ### sandbox / approval
 
 `approvalPolicy: 'never'` + `sandboxMode: 'danger-full-access'`，
@@ -187,8 +207,8 @@ E2E 对**真 codex** 跑完整生命周期，25/25：
 
 ## 6. 明确没做
 
-- **codex 的 MCP / 工具扩展**：hermit 的工具（`mcp__hermit__ask` 等）没有注入 codex 会话。
-  翻译层已经认 `mcp_tool_call` 并按 `mcp__server__tool` 命名，接上去是加配置不是改结构。
+- **codex 的 orchestrator（义脑）工具**：`HERMIT_BRAIN=1` 那组跨 agent 工具没接。
+  义脑跑在 claude 上，需要时把 `isOrchestrator` 透传进 `RuntimeSession` 即可。
 - **图片**：`submit()` 按 `local_image` 实现了，但 chat-runner 现在给 runtime 传的是空数组
   （它走 vision 描述那条路），所以实际没走通。
 - **cost**：`costUsd: null`。订阅制没有 per-token 价格，编一个数出来只会让成本列骗人。

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   usageFromTurn, readRolloutTokens, findRolloutFile, resolveCodexModel, clampEffort,
+  hermitMcpConfigFor,
 } from './codex-exec';
 
 // The numbers below are a real codex-cli 0.144.1 thread: three trivial turns
@@ -220,4 +221,40 @@ test('an effort codex knows and we do not is left for codex to judge', () => {
 
 test('case and padding do not defeat the clamp', () => {
   assert.equal(clampEffort('ultra', '  GPT-5.4  '), 'xhigh');
+});
+
+// ── hermit tools ─────────────────────────────────────────────────────────────
+//
+// Without these a codex session has only the shell and apply_patch, and the
+// failure is not a missing-tool error — it is the model improvising. Observed
+// on a real session: asked to send a file back, it grepped the repo for
+// attach_file, read mcp-stub.cjs, tried to hand-drive the stub over raw
+// JSON-RPC, then told the user the file had been sent. Nothing was.
+
+test('a codex session is given the hermit MCP server', () => {
+  const cfg = hermitMcpConfigFor({
+    id: 'sess-1', agentName: 'a', agentDirectory: '/tmp', externalSessionId: null, model: null, mode: null,
+  });
+  const hermit = (cfg.mcp_servers as any).hermit;
+  assert.equal(hermit.command, 'node');
+  assert.match(String(hermit.args[0]), /mcp-stub\.cjs$/);
+});
+
+// The stub reads its identity from the env; without the session id it cannot
+// post an attachment anywhere, and the tool would fail at the last step.
+test('the stub is told which session it is serving', () => {
+  const cfg = hermitMcpConfigFor({
+    id: 'sess-42', agentName: 'a', agentDirectory: '/tmp', externalSessionId: null, model: null, mode: null,
+  });
+  assert.equal((cfg.mcp_servers as any).hermit.env.HERMIT_SESSION_ID, 'sess-42');
+});
+
+// `ask` blocks until a human clicks a button, up to the stub's 4h ceiling. A
+// default tool timeout would kill it long before, and the answer would land on
+// a call that no longer exists.
+test('the tool timeout clears the ask tool ceiling', () => {
+  const cfg = hermitMcpConfigFor({
+    id: 's', agentName: 'a', agentDirectory: '/tmp', externalSessionId: null, model: null, mode: null,
+  });
+  assert.ok((cfg.mcp_servers as any).hermit.tool_timeout_sec >= 4 * 3600);
 });
