@@ -15,6 +15,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { CtxBar } from '@/components/ctx-bar';
+import { contextWindowFor } from '@/lib/context-window';
 import { sessionStatusView } from '@/lib/session-status';
 import { useMarkSessionRead } from '@/lib/session-read';
 import { lastSessionId, rememberSession } from '@/lib/last-session';
@@ -1522,10 +1523,17 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                       390px header; mobile gets `mini` — same token count, shorter
                       track, no percent. */}
                   <span className="sm:hidden shrink-0">
-                    <CtxBar tokens={session.contextTokens} variant="mini" />
+                    <CtxBar
+                      tokens={session.contextTokens}
+                      total={contextWindowFor(session.runtime, session.runtimeModel)}
+                      variant="mini"
+                    />
                   </span>
                   <span className="hidden sm:inline-flex shrink-0">
-                    <CtxBar tokens={session.contextTokens} />
+                    <CtxBar
+                      tokens={session.contextTokens}
+                      total={contextWindowFor(session.runtime, session.runtimeModel)}
+                    />
                   </span>
                 </>
               )}

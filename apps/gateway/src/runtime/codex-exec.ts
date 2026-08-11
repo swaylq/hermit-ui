@@ -39,8 +39,11 @@ type CodexHandle = RuntimeHandle & {
    * turn, and this is what says whether that has been stamped back yet.
    */
   stampedThreadId: string | null;
-  /** Model this thread object was built for; a change rebuilds it. */
-  model: string | null;
+  /**
+   * The RESOLVED model this thread object was built for (never null now that a
+   * fleet default exists); a change rebuilds it.
+   */
+  model: string;
   emit: (item: SyncItem) => void;
   /** Set for the duration of a turn; the message queue's gate. */
   working: boolean;
@@ -92,16 +95,59 @@ function codexHome(): string {
  * tighter posture; the values are passed through untouched so codex validates
  * them rather than this file keeping a copy of its enum.
  */
+/**
+ * The model a session runs on when it pins none.
+ *
+ * codex's own default is whatever its config says, which on a fresh machine is
+ * the newest model at its default effort — but "whatever the CLI felt like" is
+ * not a fleet decision, and a machine with a stale ~/.codex/config.toml would
+ * quietly run an older model than the one this was tuned for.
+ *
+ * gpt-5.6-sol is codex's own priority-1 entry, described in its model catalog
+ * as "Latest frontier agentic coding model."
+ */
+const DEFAULT_MODEL = 'gpt-5.6-sol';
+
+/**
+ * Reasoning effort when the machine names none.
+ *
+ * The ladder is low → medium → high → xhigh → max → ultra, and the model's own
+ * default is **low** — so a session left alone was running at the bottom of it.
+ * `max` is "Maximum reasoning depth for the hardest problems"; `ultra` sits
+ * above it but changes behaviour rather than just depth ("maximum reasoning
+ * with automatic task delegation"), which is a different decision from turning
+ * the dial up.
+ *
+ * Note this value is NOT in the SDK's ModelReasoningEffort union, which stops
+ * at 'xhigh' — the published types lag the server's catalog. Verified against
+ * codex-cli 0.147.0: a turn spawned with 'max' is accepted and its rollout
+ * records `"effort": "max"` in the turn context. The cast below is therefore
+ * load-bearing, not cosmetic; do not "fix" it by dropping back to xhigh.
+ */
+const DEFAULT_EFFORT = 'max';
+
+/**
+ * Session first (the dashboard's per-session model), then the machine's env,
+ * then the fleet default.
+ *
+ * Shared with ensure(), which compares it against the model a live thread was
+ * built for — resolving it in two places could disagree and either rebuild a
+ * thread every tick or never rebuild one at all.
+ */
+export function resolveCodexModel(session: RuntimeSession): string {
+  return session.model?.trim() || process.env.HERMIT_CODEX_MODEL?.trim() || DEFAULT_MODEL;
+}
+
 function threadOptions(session: RuntimeSession): ThreadOptions {
-  const model = session.model?.trim();
-  const effort = process.env.HERMIT_CODEX_EFFORT?.trim();
+  const model = resolveCodexModel(session);
+  const effort = process.env.HERMIT_CODEX_EFFORT?.trim() || DEFAULT_EFFORT;
   return {
     workingDirectory: session.agentDirectory,
     skipGitRepoCheck: true,
     sandboxMode: (process.env.HERMIT_CODEX_SANDBOX?.trim() || 'danger-full-access') as ThreadOptions['sandboxMode'],
     approvalPolicy: (process.env.HERMIT_CODEX_APPROVAL?.trim() || 'never') as ThreadOptions['approvalPolicy'],
-    ...(model ? { model } : {}),
-    ...(effort ? { modelReasoningEffort: effort as ThreadOptions['modelReasoningEffort'] } : {}),
+    model,
+    modelReasoningEffort: effort as ThreadOptions['modelReasoningEffort'],
   };
 }
 
@@ -253,7 +299,7 @@ export class CodexExecRuntime implements AgentRuntime {
 
   async ensure(session: RuntimeSession, emit: (item: SyncItem) => void): Promise<RuntimeHandle> {
     const existing = live.get(session.id);
-    const model = session.model?.trim() || null;
+    const model = resolveCodexModel(session);
     if (existing) {
       // The model is baked into the Thread's options, so a switch needs a new
       // Thread object — but NOT a new conversation: it is rebuilt below with

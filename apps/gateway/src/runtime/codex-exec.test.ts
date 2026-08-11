@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { usageFromTurn, readRolloutTokens, findRolloutFile } from './codex-exec';
+import { usageFromTurn, readRolloutTokens, findRolloutFile, resolveCodexModel } from './codex-exec';
 
 // The numbers below are a real codex-cli 0.144.1 thread: three trivial turns
 // reporting CUMULATIVE input_tokens 28,916 → 43,477 → 58,065, whose rollout
@@ -130,4 +130,42 @@ test('the newest day is searched first', () => {
 
 test('a codex home that does not exist is not an error', () => {
   assert.equal(findRolloutFile('x', '/nope/no/codex/home'), null);
+});
+
+// ── model + effort defaults ──────────────────────────────────────────────────
+
+const sessionFor = (model: string | null) => ({
+  id: 's', agentName: 'a', agentDirectory: '/tmp', externalSessionId: null, model,
+} as Parameters<typeof resolveCodexModel>[0]);
+
+// codex's own default effort for this model is LOW, so a session left alone was
+// running at the bottom of the ladder. The fleet default is the top of the
+// depth dial instead.
+test('a session that pins no model runs the fleet default', () => {
+  const prev = process.env.HERMIT_CODEX_MODEL;
+  delete process.env.HERMIT_CODEX_MODEL;
+  try {
+    assert.equal(resolveCodexModel(sessionFor(null)), 'gpt-5.6-sol');
+    assert.equal(resolveCodexModel(sessionFor('   ')), 'gpt-5.6-sol');
+  } finally {
+    if (prev === undefined) delete process.env.HERMIT_CODEX_MODEL;
+    else process.env.HERMIT_CODEX_MODEL = prev;
+  }
+});
+
+test('a session that pins a model wins over the default', () => {
+  assert.equal(resolveCodexModel(sessionFor('gpt-5.4-mini')), 'gpt-5.4-mini');
+});
+
+test('the machine env sits between the session and the fleet default', () => {
+  const prev = process.env.HERMIT_CODEX_MODEL;
+  process.env.HERMIT_CODEX_MODEL = 'gpt-5.5';
+  try {
+    assert.equal(resolveCodexModel(sessionFor(null)), 'gpt-5.5');
+    // ...but never over an explicit per-session choice.
+    assert.equal(resolveCodexModel(sessionFor('gpt-5.6-terra')), 'gpt-5.6-terra');
+  } finally {
+    if (prev === undefined) delete process.env.HERMIT_CODEX_MODEL;
+    else process.env.HERMIT_CODEX_MODEL = prev;
+  }
 });

@@ -1,6 +1,6 @@
 # Codex 作为第三个 backend
 
-日期：2026-08-11 · 作者：asst · 状态：**已实现**（gateway + dashboard 全链路，E2E 25/25 对真 codex 通过）
+日期：2026-08-11 · 作者：asst · 状态：**已实现**（gateway + dashboard 全链路，E2E 29/29 对真 codex 通过）
 
 ---
 
@@ -90,6 +90,42 @@ codex 不会：第三轮（换了个进程 resume 的）只发自己这轮的 it
 **切回 claude 会不会炸**：不会。chat-runner:1105 在 `--resume` 前会检查
 `<uuid>.jsonl` 在不在，codex 的 thread uuid 没有对应 transcript → 走 fresh 分支，
 打一行 warn 起一个新 claude 会话。已经处理过的降级路径，不用额外加代码。
+
+### 模型与推理档位
+
+默认 `gpt-5.6-sol` + effort `max`，两者都可被覆盖（session 的 `runtimeModel` > `HERMIT_CODEX_MODEL` > 内置默认）。
+
+数据来自 codex 自己的 `~/.codex/models_cache.json`（client_version 0.147.0）：
+
+| model | 有效上下文 | 档位阶梯 | 自带默认 |
+|---|---|---|---|
+| `gpt-5.6-sol` ← 用这个 | 258,400 | low·medium·high·xhigh·**max**·ultra | **low** |
+| `gpt-5.6-terra` / `luna` | 258,400 | 同上（luna 无 ultra） | medium |
+| `gpt-5.5` / `5.4` / `5.4-mini` | 258,400 | 到 xhigh 为止 | medium |
+| `gpt-5.3-codex-spark` | 121,600 | 到 xhigh 为止 | high |
+
+两个容易搞错的点：
+
+1. **模型自带默认是 `low`**，不是 medium。也就是说改之前每个 codex 会话都跑在阶梯最底下。
+2. **`max` 不在 SDK 的 `ModelReasoningEffort` 联合类型里**（那个类型停在 `xhigh`，比服务端目录旧）。
+   所以那个 `as` 断言是**必需的**，不是图省事——实测 codex-cli 0.147.0 接受 `max`，
+   rollout 的 turn_context 里记着 `"effort": "max"`。别"顺手修掉"改回 xhigh。
+
+阶梯上还有一个 `ultra`（"maximum reasoning with automatic task delegation"），
+比 max 更高，但它改的是行为（自动派发子任务）而不只是深度，属于另一个决定，没用。
+
+### 上下文大小
+
+`CtxBar` 一直写死除以 1,000,000（Claude Opus 5 的窗口）。codex 的窗口是 258,400，
+于是一个真实占用 60% 的会话在界面上显示成轻松的 15%——**数字没错，分数错了**。
+
+新增 `apps/dashboard/src/lib/context-window.ts`，按 backend + model 给分母。
+258,400 不是估的：codex 报 `context_window` 272,000、`effective_context_window_percent` 95，
+272000×0.95 = 258400，和它 rollout 里记的 `model_context_window` 逐位相同。
+
+**只修了 codex**。claude 保持 1M（本来就对）；pi 也保持——pi 的真实窗口随机器配置的 model 变，
+gateway 侧的 `pi-model-limits.ts` 知道，但没有通往前端的路，把它接过去是另一件事、另一个影响面。
+在这里瞎猜一个数，就是这次要修的同一类 bug。
 
 ### sandbox / approval
 

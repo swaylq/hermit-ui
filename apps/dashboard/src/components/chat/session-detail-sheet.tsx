@@ -24,6 +24,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { CtxBar } from '@/components/ctx-bar';
+import { contextWindowFor } from '@/lib/context-window';
 import { BackendPicker } from './backend-picker';
 import { useScope } from '@/lib/use-scope';
 import {
@@ -298,7 +299,7 @@ export function SessionDetailSheet({
                 <span className="font-mono text-xs">{d.state ?? 'idle'}</span>
                 {d.hibernatedAt && <span className="ml-2 text-xs text-muted-foreground">💤 asleep since {relTime(d.hibernatedAt)}</span>}
               </Row>
-              <Row label="context"><CtxBar tokens={d.contextTokens} /></Row>
+              <Row label="context"><CtxBar tokens={d.contextTokens} total={contextWindowFor(d.backend.runtime, d.backend.runtimeModel)} /></Row>
               <Row label="process" mono>
                 {d.alive ? `alive${d.pid ? ` · pid ${d.pid}` : ''}${d.rssMb ? ` · ${d.rssMb} MB` : ''}` : 'not running'}
               </Row>

@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CodexExecRuntime } from '../src/runtime/codex-exec.ts';
+import { CodexExecRuntime, findRolloutFile } from '../src/runtime/codex-exec.ts';
 import type { SyncItem } from '../src/runtime/types.ts';
 
 let pass = 0, fail = 0;
@@ -134,6 +134,28 @@ await rt.submit(handle, 'One more time: just that exact string, nothing else.', 
 await settle(handle, 'turn 3');
 const turn3 = emitted.slice(before3).filter((e) => e.role === 'assistant').map((e) => (e.content as any)[0]?.text ?? '').join(' ');
 check('the resumed thread still had the conversation', turn3.includes('hermit-e2e-marker'), `got: ${turn3.slice(0, 80)}`);
+
+console.log('\n── the config codex ACTUALLY ran with ──');
+// Asserted from codex's own rollout, not from what we passed in: the SDK's
+// ModelReasoningEffort union stops at 'xhigh', so 'max' goes through a cast and
+// a silent rejection would otherwise look exactly like success.
+{
+  const file = findRolloutFile(threadId);
+  check('the rollout file was found', !!file, String(file));
+  // The fields live under `payload`, while `type` sits on the envelope — so
+  // take the payload whenever there is one and match on the fields themselves.
+  const ctx = file
+    ? fs.readFileSync(file, 'utf8').split('\n')
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .filter(Boolean)
+        .map((d: any) => d.payload ?? d)
+        .find((p: any) => p && typeof p === 'object' && 'model' in p && 'effort' in p)
+    : null;
+  console.log('  turn_context:', JSON.stringify({ model: ctx?.model, effort: ctx?.effort }));
+  check('it ran the fleet default model', ctx?.model === 'gpt-5.6-sol', `got ${ctx?.model}`);
+  check('it ran at max reasoning effort', ctx?.effort === 'max', `got ${ctx?.effort}`);
+  check('approvals are off (no TTY to answer them)', ctx?.approval_policy === 'never', `got ${ctx?.approval_policy}`);
+}
 
 console.log('\n── interrupt ──');
 const before4 = emitted.length;
