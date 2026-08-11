@@ -34,6 +34,8 @@ const PI_TOOLS: Record<string, string[]> = {
   shell: ['bash', 'read'],
   scout: ['read', 'grep', 'find', 'ls'],
   patch: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash'],
+  // Same list as patch — office is separated by its SYSTEM.md, not its tools.
+  office: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash'],
 };
 
 /**

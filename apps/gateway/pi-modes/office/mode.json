@@ -1,0 +1,16 @@
+{
+  "label": "Office",
+  "blurb": "Excel, Word and PowerPoint files. Inspect, edit in place, verify, hand back.",
+  "engine": "pi",
+  "tools": ["read", "grep", "find", "ls", "edit", "write", "bash"],
+  "skills": ["office-files"],
+  "extensions": [],
+  "model": null,
+  "_note": [
+    "Same seven built-ins as `patch`, on purpose — an .xlsx is edited by writing a Python script and running it, which is read/write/edit plus bash. The harness is not defined by its tools here but by its SYSTEM.md, and that is the point: the destructive moves (edit the binary directly, convert to csv and back, save a data_only workbook) all happen on the FIRST turn, before a model would think to load a skill. Discipline that has to be resident is what a mode is for.",
+    "The API recipes are NOT resident: they live in skills/office-files/, so the standing cost is the skill's name and description, and the 6 KB of openpyxl/python-docx detail loads only when an edit actually starts.",
+    "No library is installed on the machine and none needs to be — `uv run --with openpyxl --with python-docx --with python-pptx` fetches into a cached throwaway env (verified 2026-08-11: openpyxl 3.1.5 under Python 3.14). LibreOffice 26.2 (`soffice`) and pandoc 3.10 are present for legacy .xls/.doc and for PDF export.",
+    "Traps in SYSTEM.md are measured, not folklore (2026-08-11): loading with data_only=True and saving turned `=SUM(B2:B4)` into None with no error; a csv-shaped round-trip lost 5 archive parts (chart, drawings, sheet rels) and the second sheet; python-docx split `项目预算为 1,200 万元` into three runs, so a per-run search for the number misses it.",
+    "engine is pi, not omp. Nothing in this work needs a browser or LSP, and omp's 8.1k-token floor with --no-tools is above this whole harness's price."
+  ]
+}

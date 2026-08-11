@@ -217,7 +217,7 @@ test('writer mode stays on pi and unions hermit tools', () => {
 
 test('every task harness is discoverable on disk', () => {
   const names = listModeNames();
-  for (const n of ['answer', 'scout', 'patch', 'shell', 'web', 'triage']) {
+  for (const n of ['answer', 'scout', 'patch', 'shell', 'web', 'office', 'triage']) {
     assert.ok(names.includes(n), `${n} missing from [${names.join(', ')}]`);
   }
 });
@@ -258,6 +258,31 @@ test('triage lists `delegate` in its allowlist, not just in its extension', () =
   const args = buildModeArgs(m, { agentDirectory: '/tmp' });
   const tools = args[args.indexOf('--tools') + 1].split(',');
   assert.ok(tools.includes('delegate'), 'triage must allowlist its own delegate tool');
+});
+
+test('office keeps its API recipes in a skill, not in the resident prompt', () => {
+  const m = loadMode('office');
+  assert.ok(m, 'office should load');
+  assert.equal(m.engine, 'pi');
+  assert.ok(m.systemPrompt.length > 0, 'office needs a SYSTEM.md');
+
+  const args = buildModeArgs(m, { agentDirectory: '/tmp' });
+  const tools = args[args.indexOf('--tools') + 1].split(',');
+  for (const h of HERMIT_TOOL_NAMES) assert.ok(tools.includes(h), `office must keep hermit tool ${h}`);
+  // attach_file is the delivery path — the edited workbook lives on a disk the
+  // person cannot see, so a harness that lost this tool could not hand it over.
+  assert.ok(tools.includes('attach_file'), 'office must be able to attach the result');
+
+  // The openpyxl / python-docx detail is ~6 KB and belongs behind a --skill, so
+  // only its name and description are resident. A mode that inlined it into
+  // SYSTEM.md would pay for the whole thing on every turn of every session.
+  const skillIdx = args.indexOf('--skill');
+  assert.ok(skillIdx >= 0, 'office resolves its office-files skill');
+  assert.ok(args[skillIdx + 1].endsWith('/office/skills/office-files'));
+  assert.ok(
+    fs.existsSync(path.join(args[skillIdx + 1], 'SKILL.md')),
+    'the office-files skill must ship a SKILL.md',
+  );
 });
 
 test('triage ships the extension that does the routing', () => {

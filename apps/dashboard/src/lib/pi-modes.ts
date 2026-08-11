@@ -21,7 +21,7 @@ export const PI_MODES = [
   'coding', 'ops', 'omp', 'frontend', 'consultant', 'writer',
   // Task-shaped harnesses: split by which tools the work needs rather than by
   // role, which is what makes them routable. See apps/gateway/pi-modes/.
-  'answer', 'scout', 'patch', 'shell', 'web',
+  'answer', 'scout', 'patch', 'shell', 'web', 'office',
   // The router. Offered as a card on the backend picker, not as a row below —
   // see PI_MODE_CHOICES.
   'triage',
@@ -92,6 +92,10 @@ export const PI_MODE_META: Record<PiMode, { label: string; blurb: string }> = {
   web: {
     label: 'Web',
     blurb: 'Anything that needs the internet. Search, read the page, cite it.',
+  },
+  office: {
+    label: 'Office',
+    blurb: 'Excel, Word and PowerPoint files. Inspect, edit in place, verify, hand back.',
   },
   triage: {
     label: 'Triage',

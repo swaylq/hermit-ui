@@ -25,16 +25,23 @@
  *
  * `cost` is the MEASURED standing tax in tokens, as each one is actually
  * spawned — hermit's six tools unioned in, SYSTEM.md appended, the extension
- * loaded (bench/harness-tax.sh, 2026-08-10). Not estimates: an estimate here
- * would quietly mis-rank the escalation.
+ * loaded (bench/harness-tax.sh). Not estimates: an estimate here would quietly
+ * mis-rank the escalation.
+ *
+ * Re-measured 2026-08-11 when `office` was added. Every pi harness came back
+ * exactly 278 tokens above its 2026-08-10 figure and omp 621 above — a shared
+ * preamble grew, not a regression in any one recipe. Numbers on two different
+ * scales in one table would make office look 515 dearer than patch when the
+ * real gap is 237, so the whole column was retaken rather than one row added.
  */
 export const HARNESSES = {
-  answer: { cost: 4476, needs: 'nothing — reasoning and prose only' },
-  shell: { cost: 4666, needs: 'bash on this machine' },
-  scout: { cost: 5106, needs: 'read/grep/find over files, read-only' },
-  patch: { cost: 5607, needs: 'edit/write plus bash to verify' },
-  web: { cost: 11125, needs: 'web_search (omp-only)' },
-  omp: { cost: 22099, needs: 'browser / lsp / ast_edit / open-ended multi-file work' },
+  answer: { cost: 4754, needs: 'nothing — reasoning and prose only' },
+  shell: { cost: 4944, needs: 'bash on this machine' },
+  scout: { cost: 5384, needs: 'read/grep/find over files, read-only' },
+  patch: { cost: 5885, needs: 'edit/write plus bash to verify' },
+  office: { cost: 6122, needs: 'an .xlsx/.docx/.pptx edited as a binary archive, not as text' },
+  web: { cost: 11403, needs: 'web_search (omp-only)' },
+  omp: { cost: 22720, needs: 'browser / lsp / ast_edit / open-ended multi-file work' },
 };
 
 /**
@@ -43,7 +50,13 @@ export const HARNESSES = {
  * Being wrong toward expensive is a cost bug; being wrong toward cheap is a
  * failed task and a wasted round trip. So an even score resolves upward.
  */
-const BY_CAPABILITY = ['omp', 'patch', 'web', 'shell', 'scout', 'answer'];
+// `office` sits below web and omp, not above patch, and both halves of that are
+// deliberate. This order resolves the HARD set, whose only members can be omp,
+// web and office — patch has no hard signal — so office beating patch is
+// already guaranteed by the short-circuit above and does not need rank. What
+// rank decides is office against a real exclusive capability: "搜一下 openpyxl
+// 最新版本" fires both, and the internet is the part no other harness can fake.
+const BY_CAPABILITY = ['omp', 'patch', 'web', 'office', 'shell', 'scout', 'answer'];
 const rank = (h) => BY_CAPABILITY.indexOf(h);
 
 // Signals. Latin terms are word-bounded; CJK is matched raw because it has no
@@ -92,6 +105,24 @@ const SIGNALS = [
   { h: 'scout', w: 2, re: /(怎么实现的|是怎么工作的|读一下|看一下代码|梳理一下|捋一遍)/ },
   { h: 'scout', w: 1, re: /\b(grep|search the (repo|codebase|code))\b/i },
   { h: 'scout', w: 1, re: /(代码库|这个仓库|项目里)/ },
+
+  // ---- office: Excel / Word / PowerPoint files ----------------------------
+  // `hard` here for a different reason than the browser and the internet above.
+  // office and patch have IDENTICAL tool lists, so no amount of scoring can
+  // separate them — and patch, handed an .xlsx, reaches for `edit` and corrupts
+  // it, because a ZIP of XML looks like a file the editor should be able to
+  // open. What is exclusive is the discipline in office/SYSTEM.md, not a tool.
+  // Being wrong toward office is cheap in a way the usual rule does not cover:
+  // it has patch's whole tool set, so a misrouted code task still finishes.
+  { h: 'office', w: 3, hard: true, re: /\.(xlsx|xlsm|xls|docx|doc|pptx|ppt)\b/i },
+  { h: 'office', w: 3, hard: true, re: /\b(excel|powerpoint|openpyxl|python-docx|python-pptx)\b/i },
+  { h: 'office', w: 3, hard: true, re: /(电子表格|工作簿|工作表|幻灯片|演示文稿)/ },
+  // `word` alone is a common English noun, so it counts only when a document
+  // follows it. `ppt` needs no qualifier — nothing else in this fleet is called that.
+  { h: 'office', w: 3, hard: true, re: /\bword\b\s*(文档|文件|表格|里|中|的|doc|document|file)/i },
+  { h: 'office', w: 3, hard: true, re: /\bppt\b/i },
+  { h: 'office', w: 2, re: /\b(spreadsheet|workbook|worksheet|pivot table)\b/i },
+  { h: 'office', w: 2, re: /(单元格|合并单元格|数据透视|透视表|表头|sheet 页)/ },
 
   // ---- omp: the escalation ------------------------------------------------
   { h: 'omp', w: 3, hard: true, re: /\b(screenshot|browser|viewport|responsive|dark mode|focus ring)\b/i },
@@ -217,6 +248,8 @@ export async function routeSmol(task, opts = {}) {
     'patch  — edit/write plus bash to verify. Anything that changes a file: fix, refactor, add, remove, rename, add a test.',
     'shell  — bash only, on THIS machine. Services, ports, logs, processes, disk, running a build or a test',
     '         suite, checking whether something that already ran succeeded.',
+    'office — an Excel workbook, a Word document or a PowerPoint deck, named by extension or by name. Reading',
+    '         one counts too: they are ZIP archives, so no other harness can even open them.',
     'web    — needs the internet. Search, open a URL, current facts, prices, a third party\'s docs, finding an',
     '         article or paper — anything that is not on this machine.',
     'omp    — a real browser is required, i.e. how something LOOKS or BEHAVES on screen: a control that will not',
@@ -229,7 +262,7 @@ export async function routeSmol(task, opts = {}) {
     '- When two fit, pick the MORE capable one. Sending work to a harness that cannot finish it is the only real',
     '  error; an over-powered harness merely costs more.',
     '',
-    'Reply with exactly one word: answer, scout, patch, shell, web, or omp.',
+    'Reply with exactly one word: answer, scout, patch, shell, office, web, or omp.',
   ].join('\n');
 
   const body = {
