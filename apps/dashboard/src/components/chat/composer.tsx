@@ -127,8 +127,6 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   /** What the Brain is composing right now, while it drives this conversation. */
   brainDraft?: string | null;
   queueFull: boolean;
-  stopping: boolean;
-  onStop: () => void;
   attachments: Attachment[];
   setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
   notice: string | null;
@@ -148,8 +146,6 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   inFlight,
   brainDraft,
   queueFull,
-  stopping,
-  onStop,
   attachments,
   setAttachments,
   notice,
@@ -414,8 +410,14 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     if (m) appendSystemNote.mutate({ sessionId, text: `↳ sent /${m[1]}` });
   }, [appendSystemNote, sessionId]);
 
-  // While the assistant is producing output, swap the send button for a stop.
-  const showStop = inFlight && !disabled;
+  // The composer NEVER carries the stop control. It used to swap the send button
+  // for an identically-styled dark circle whenever a turn was in flight, which
+  // made two different gestures land on the same pixels: "tap the round button"
+  // meant send at rest and KILL THE RUNNING TURN while it worked — and with a
+  // draft typed, stop and send sat side by side as two indistinguishable circles.
+  // Stop now lives above the composer as a labelled pill (SessionPane's StopPill);
+  // `inFlight` only tints the placeholder here. See docs/composer-stop-misfire.md.
+  const working = inFlight && !disabled;
   // The Brain's in-progress sentence shows only while the box is otherwise empty —
   // the moment you start typing, the composer is yours and the ghost gets out.
   const showBrainGhost = !!brainDraft && draft.length === 0 && !disabled;
@@ -469,8 +471,6 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             'relative flex items-end gap-1.5 rounded-[26px] border bg-background px-2 py-2 shadow-sm transition-all duration-100 ease-out',
             disabled || awaitingInput
               ? 'border-border opacity-60'
-              : showStop
-              ? 'border-rose-500/40'
               : dragHover
               ? 'border-foreground/40'
               : 'border-border focus-within:border-foreground/40 focus-within:shadow-md',
@@ -534,11 +534,25 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             onChange={onChange}
             onPaste={onPaste}
             onKeyDown={(e) => {
+              // Escape belongs to the box you're typing in, never to the turn.
+              // SessionPane listens for Esc on `window` to cancel the running
+              // turn; without this stopPropagation, clearing a draft — or an IME
+              // dismissing a half-typed composition, which is the same keystroke
+              // for anyone typing Chinese — also killed the agent mid-sentence.
+              if (e.key === 'Escape') {
+                e.stopPropagation();
+                // Mid-composition (拼音 candidates open) that Esc belongs to the
+                // IME — it cancels the candidate, and the draft underneath must
+                // survive. Only a plain Esc clears the box.
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                e.preventDefault();
+                setDraft('');
+                return;
+              }
               if (slashOpen) {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => Math.min(slashFiltered.length - 1, i + 1)); return; }
                 if (e.key === 'ArrowUp')   { e.preventDefault(); setSlashIdx((i) => Math.max(0, i - 1)); return; }
                 if (e.key === 'Tab')       { e.preventDefault(); pickCommand(slashFiltered[slashIdx]); return; }
-                if (e.key === 'Escape')    { e.preventDefault(); setDraft(''); return; }
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229 && !isTouchPrimary()) {
                   e.preventDefault();
                   const cmd = slashFiltered[slashIdx];
@@ -587,7 +601,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
                 ? '↑ respond above to continue'
                 : queueFull
                 ? `queue full (${QUEUE_LIMIT}) · waiting for current turn`
-                : showStop
+                : working
                 ? 'working… ↵ to queue next'
                 : uploadingCount > 0
                 ? `uploading ${uploadingCount}…`
@@ -611,34 +625,22 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             </button>
           )}
 
-          {showStop && (
-            <button
-              type="button"
-              onClick={onStop}
-              disabled={stopping}
-              className="h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full cursor-pointer bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50 disabled:cursor-wait transition-colors"
-              aria-label={stopping ? 'stopping' : 'stop assistant turn'}
-              title={stopping ? 'stopping…' : 'stop assistant turn'}
-            >
-              <span className="h-3 w-3 rounded-[3px] bg-current" aria-hidden="true" />
-            </button>
-          )}
-          {(!showStop || canSend) && (
-            <button
-              type="submit"
-              disabled={!canSend}
-              className={cn(
-                'h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full transition-all',
-                canSend
-                  ? 'bg-foreground text-background hover:bg-foreground/90 cursor-pointer shadow-sm'
-                  : 'bg-muted text-muted-foreground/40 cursor-not-allowed',
-              )}
-              aria-label={inFlight ? 'queue message' : 'send'}
-              title={inFlight ? 'queue (↵)' : canSend ? 'send (↵)' : uploadingCount > 0 ? 'uploading…' : 'type a message'}
-            >
-              {sending ? <span className="text-sm">…</span> : <ArrowUp className="h-5 w-5" />}
-            </button>
-          )}
+          {/* One button, one meaning, always in the same place: this circle sends.
+              Nothing ever takes its slot (see the `working` note above). */}
+          <button
+            type="submit"
+            disabled={!canSend}
+            className={cn(
+              'h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full transition-all',
+              canSend
+                ? 'bg-foreground text-background hover:bg-foreground/90 cursor-pointer shadow-sm'
+                : 'bg-muted text-muted-foreground/40 cursor-not-allowed',
+            )}
+            aria-label={working ? 'queue message' : 'send'}
+            title={working ? 'queue (↵)' : canSend ? 'send (↵)' : uploadingCount > 0 ? 'uploading…' : 'type a message'}
+          >
+            {sending ? <span className="text-sm">…</span> : <ArrowUp className="h-5 w-5" />}
+          </button>
         </div>
         <p className="mt-1.5 text-center text-[10px] text-muted-foreground/50 hidden sm:block">
           messages go to the agent&apos;s terminal · ↵ send · ⇧↵ newline · paste or drop images

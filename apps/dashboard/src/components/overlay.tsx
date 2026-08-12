@@ -58,6 +58,10 @@ export function Overlay({
 
   return createPortal(
     <div
+      // data-esc-layer: while this is mounted, Escape belongs to it. The chat
+      // page's "Esc cancels the running turn" shortcut checks for the attribute
+      // and stands down, so closing a sheet can't also kill the agent's turn.
+      data-esc-layer=""
       className={cn('fixed inset-0 flex items-center justify-center p-4 bg-black/60 transition-opacity duration-150 ease-out', show ? 'opacity-100' : 'opacity-0')}
       style={{ zIndex: z }}
       onClick={softClose}

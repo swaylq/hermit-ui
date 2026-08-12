@@ -1231,6 +1231,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const showThinkingDots =
     status.key === 'working' || status.key === 'starting' || status.key === 'restarting';
 
+  // Stop is a control of its own, above the composer — never a circle inside it.
+  const showStopPill = isInFlight && !session?.closedAt;
+
   // Viewing a session = reading it. Stamp it read on open and on every new
   // message that lands while open, so it never shows the red "unread" dot to the
   // sidebar / agent-detail views (on any device) once we've seen the latest.
@@ -1239,10 +1242,21 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     markRead(sessionId);
   }, [markRead, sessionId, messages.data?.length, isInFlight]);
 
+  // Esc cancels the running turn — but only when that Esc isn't already doing
+  // something else. This used to be a bare `window` listener that took every
+  // Escape on the page, so killing the agent was a side effect of: dismissing an
+  // IME composition while typing (the same keystroke for anyone writing Chinese),
+  // closing the image lightbox, closing in-chat find, closing the mobile sidebar.
+  // Three guards, cheapest first: someone already handled it; you're in a text
+  // field (the composer also stops propagation itself); or a layer that owns Esc
+  // is open — those mark themselves with data-esc-layer.
   useEffect(() => {
     if (!isInFlight || session?.closedAt) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName))) return;
+      if (document.querySelector('[data-esc-layer]')) return;
       if (cancelTurn.isPending) return;
       e.preventDefault();
       cancelTurn.mutate({ sessionId });
@@ -1690,24 +1704,31 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           {showThinkingDots && !streamingTailId && <TypingIndicator dot={status.dot} />}
         </div>
       </ScrollArea>
-      {/* Scroll-to-bottom pill: floats above the ComposeBar, only when the
-          user has scrolled up and the conversation has content. Pointer-events
-          gated so the pill doesn't catch clicks when hidden. */}
-      {!pinnedToBottom && (messages.data?.length ?? 0) > 0 && (
+      {/* Floating controls, in one zero-height strip above the ComposeBar so they
+          stack instead of overlapping: Stop while a turn runs, scroll-to-latest
+          when you've scrolled up. Pointer-events gated so the strip never catches
+          clicks meant for the conversation behind it. */}
+      {(showStopPill || (!pinnedToBottom && (messages.data?.length ?? 0) > 0)) && (
         <div className="relative h-0 z-10 pointer-events-none">
-          <button
-            type="button"
-            onClick={() => scrollToBottom('smooth')}
-            aria-label="scroll to latest"
-            className={cn(
-              'pointer-events-auto absolute left-1/2 -translate-x-1/2 bottom-3',
-              'inline-flex items-center gap-1 rounded-full border border-border bg-background/95',
-              'px-3 py-1 text-xs font-medium text-foreground shadow-sm backdrop-blur',
-              'hover:bg-accent hover:text-foreground transition-colors cursor-pointer',
-            )}
-          >
-            <span aria-hidden="true">↓</span> latest
-          </button>
+          {!pinnedToBottom && (messages.data?.length ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={() => scrollToBottom('smooth')}
+              aria-label="scroll to latest"
+              className={cn(
+                'pointer-events-auto absolute left-1/2 -translate-x-1/2',
+                showStopPill ? 'bottom-12' : 'bottom-3',
+                'inline-flex items-center gap-1 rounded-full border border-border bg-background/95',
+                'px-3 py-1 text-xs font-medium text-foreground shadow-sm backdrop-blur',
+                'hover:bg-accent hover:text-foreground transition-colors cursor-pointer',
+              )}
+            >
+              <span aria-hidden="true">↓</span> latest
+            </button>
+          )}
+          {showStopPill && (
+            <StopPill onStop={() => cancelTurn.mutate({ sessionId })} stopping={cancelTurn.isPending} />
+          )}
         </div>
       )}
 
@@ -1777,8 +1798,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             inFlight={isInFlight}
             queueFull={queueLen >= QUEUE_LIMIT}
             brainDraft={takenOver ? takeover?.takeoverDraft : null}
-            stopping={cancelTurn.isPending}
-            onStop={() => cancelTurn.mutate({ sessionId })}
             onSend={(text, images, files) => {
               // Sending always re-pins to the bottom (even if the user had
               // scrolled up) so their message + the reply scroll into view.
@@ -1847,6 +1866,49 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           />
         </div>
     </>
+  );
+}
+
+// Stop, as its own labelled control floating above the composer.
+//
+// It used to be an unlabelled dark circle INSIDE the composer, in the send
+// button's slot — so while a turn ran, the most-tapped pixels in the app stopped
+// meaning "send" and started meaning "kill the turn", and with a draft typed the
+// two sat side by side as identical circles. Every accidental interrupt we have
+// logs for looks like that mis-tap: a turn killed mid-sentence, then a short
+// "继续" a minute later. Three things keep this one honest:
+//
+//   · it is somewhere else entirely — nothing lands in the send column;
+//   · it says "Stop", in destructive colours, instead of being a shape;
+//   · ARM_MS: a turn can begin under a finger already travelling toward this
+//     spot (tapping "↓ latest", dismissing the keyboard), so clicks that arrive
+//     within a moment of the pill appearing are ignored. You can only stop a
+//     turn by aiming at a pill that was already there.
+function StopPill({ onStop, stopping }: { onStop: () => void; stopping: boolean }) {
+  const ARM_MS = 400;
+  const shownAt = useRef(0);
+  useEffect(() => { shownAt.current = Date.now(); }, []);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (Date.now() - shownAt.current < ARM_MS) return;
+        onStop();
+      }}
+      disabled={stopping}
+      aria-label={stopping ? 'stopping' : 'stop this turn'}
+      title={stopping ? 'stopping…' : 'stop this turn (Esc)'}
+      className={cn(
+        'pointer-events-auto absolute left-1/2 -translate-x-1/2 bottom-3',
+        'inline-flex items-center gap-1.5 rounded-full border border-rose-500/40',
+        'bg-background/95 px-3 py-1 text-xs font-medium shadow-sm backdrop-blur',
+        'text-rose-600 dark:text-rose-400 transition-colors cursor-pointer',
+        'hover:bg-rose-500/10 disabled:cursor-wait disabled:opacity-60',
+      )}
+    >
+      <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden="true" />
+      {stopping ? 'stopping…' : 'Stop'}
+    </button>
   );
 }
 

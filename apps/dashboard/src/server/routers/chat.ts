@@ -1169,9 +1169,11 @@ export const chatRouter = router({
       return msg;
     }),
 
-  // User clicks Stop on the compose bar. Flips a flag the gateway polls; the
-  // gateway then SIGTERMs the in-flight `claude --print` child and writes a
-  // "[stopped by user]" system row before clearing the flag via ackCancel.
+  // User clicks Stop (the pill above the composer) or presses Esc. Flips a flag
+  // the gateway polls; the gateway sends Escape into the pane — claude's own
+  // mid-turn interrupt — and clears the flag via ackCancel. The visible trace in
+  // the conversation is claude's "[Request interrupted by user]" transcript row,
+  // synced like any other; the gateway writes no row of its own.
   cancelTurn: agentProcedure
     .input(z.object({ sessionId: z.string() }))
     .mutation(async ({ ctx, input }) => {

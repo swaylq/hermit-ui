@@ -438,6 +438,8 @@ export function ImageLightbox({
       role="dialog"
       aria-modal="true"
       aria-label="Image viewer"
+      // Escape closes the viewer and nothing else — see overlay.tsx's note.
+      data-esc-layer=""
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

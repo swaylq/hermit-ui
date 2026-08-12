@@ -218,6 +218,10 @@ export function AppSidebar() {
       <aside
         ref={asideRef}
         aria-label="navigation"
+        // Only while the mobile drawer is open: Escape closes the drawer, and
+        // must not also cancel the chat's running turn — see overlay.tsx's note.
+        // Undefined (not false) so the attribute is absent the rest of the time.
+        data-esc-layer={mobileOpen ? '' : undefined}
         className={cn(
           'bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col shrink-0',
           // mobile: fixed off-canvas drawer. pwa-safe-* keeps the drawer's header

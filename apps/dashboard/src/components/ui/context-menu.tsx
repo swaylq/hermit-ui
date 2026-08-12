@@ -70,6 +70,8 @@ export function ContextMenu({
     <div
       ref={ref}
       role="menu"
+      // Escape closes this menu and nothing else — see overlay.tsx's note.
+      data-esc-layer=""
       style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: 100 }}
       className="min-w-[150px] origin-top-left animate-in fade-in-0 zoom-in-95 duration-150 overflow-hidden rounded-lg border border-border bg-popover py-1 text-[13px] text-popover-foreground shadow-lg"
     >

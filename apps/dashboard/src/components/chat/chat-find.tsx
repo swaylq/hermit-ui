@@ -209,8 +209,10 @@ export function ChatFind({
   useEffect(() => () => clearHl(), [clearHl]); // clear highlights on close
 
   const navBtn = 'inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:cursor-default cursor-pointer';
+  // data-esc-layer: while find is open Escape closes it, and must not also
+  // cancel the running turn — see overlay.tsx's note.
   return (
-    <div className="border-b border-border bg-background px-3 h-11 flex items-center gap-2 shrink-0">
+    <div data-esc-layer="" className="border-b border-border bg-background px-3 h-11 flex items-center gap-2 shrink-0">
       <Search className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden="true" />
       <input
         ref={inputRef}

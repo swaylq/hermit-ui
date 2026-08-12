@@ -256,6 +256,8 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
         createPortal(
           <div
             ref={menuRef}
+            // Escape closes this menu and nothing else — see overlay.tsx's note.
+            data-esc-layer=""
             className={cn(
               'fixed z-[60] max-h-[70vh] overflow-y-auto rounded-lg border border-sidebar-border bg-sidebar shadow-lg p-1',
               // subtle open transition, matching the base-ui Select popup; anchor the
