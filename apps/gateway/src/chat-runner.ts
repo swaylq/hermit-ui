@@ -28,7 +28,6 @@ import {
   sendInterrupt,
   kill as killTmuxSession,
   acceptResumePromptAsFull,
-  awaitTranscript,
   watchTranscript,
   encodedProjectDir,
   tmuxSessionExists,
@@ -1211,13 +1210,19 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
       exclude: () => uuidsOwnedByOtherSessions(session.id),
     });
     reservedUuids.set(session.id, claudeUuid);
-  } else if (created) {
-    // Pre-assigned uuid; just wait for claude to materialize the file.
-    await awaitTranscript(path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`)).catch((e) => {
-      // Non-fatal — the watcher will keep retrying as the file appears.
-      console.warn(`[chat] ${session.id.slice(0, 8)}: ${e.message}`);
-    });
   }
+  // A fresh spawn does NOT wait for its transcript. Claude Code creates
+  // <uuid>.jsonl only when the FIRST prompt is submitted — never at startup — so
+  // waiting for it here is a deadlock against the very message we are holding, and
+  // it always ran to the full timeout: measured on a real agent dir, the REPL is
+  // ready at 1.3s and the file still does not exist at 75s. That put a flat ~30s
+  // on the first message of EVERY new chat (mac-local: one `awaitTranscript`
+  // timeout per fresh spawn, 7-9 a day, each matching a 30-32s delivery lag).
+  // Nothing downstream needs the file to exist yet: watchTranscript tails it with
+  // `tail -n +1 -F`, which waits for a missing path and replays from line 1 when it
+  // appears, and sendPrompt's cold-start path does its own waitForReplReady before
+  // typing. (The --resume branch above is different and still waits: there the
+  // transcript is what tells us WHICH uuid claude resumed into.)
 
   const jsonlPath = path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`);
 
