@@ -9,6 +9,12 @@
 //   · −/＋/percentage buttons → zoom out / in / reset (thumb-reachable on phones)
 //   · click the backdrop     → close · Escape → close
 //
+// Motion (open · close · ← / →) lives in globals.css as .lb-root / .lb-stage /
+// .lb-slide — see the block there for why each animated property gets its own
+// element. The only piece that has to be here is the unmount delay: the portal
+// stays mounted for EXIT_MS after `open` goes false so the close can actually
+// play, which is why what we render is `mounted`, not `open`.
+//
 // Built on a bare `createPortal` overlay rather than the base-ui Dialog: in this
 // build the Dialog's Popup/Backdrop layer broke partial-alpha painting (a
 // semi-transparent dim composited to fully transparent over the image's
@@ -27,6 +33,10 @@ const MIN_SCALE = 1;
 const MAX_SCALE = 6;
 const SWIPE_MIN = 45;       // px of horizontal travel that counts as a navigation swipe
 const LONG_PRESS_MS = 500;  // touch-hold that summons the save menu
+// Nominal close duration — must match the `leaving` transition-duration in
+// globals.css. The unmount waits on transitionend rather than this clock; it is
+// only the basis for the safety net if that event never arrives.
+const EXIT_MS = 150;
 
 type View = { scale: number; tx: number; ty: number };
 
@@ -49,7 +59,20 @@ export function ImageLightbox({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const slideRef = useRef<HTMLDivElement>(null);
   const view = useRef<View>({ scale: 1, tx: 0, ty: 0 });
+
+  // What we actually render (`mounted`) lags `open` by EXIT_MS so the close
+  // animation has something to animate; `phase` is mirrored to data-state and is
+  // what the CSS keys off. Starts at 'entering' so the portal's very first paint
+  // is already at the hidden start values — otherwise it flashes in at full size.
+  const [mounted, setMounted] = useState(false);
+  const [phase, setPhase] = useState<'entering' | 'open' | 'leaving'>('entering');
+
+  // Direction of the pending ← / → step (+1 next, -1 previous, 0 = not a
+  // navigation). Set by navigate() just before the url changes, consumed by the
+  // effect that re-fits the new image. A ref, not state: it must not re-render.
+  const slideDir = useRef<1 | -1 | 0>(0);
   // Mirror of `view.scale` used only for UI (cursor + percentage label). The
   // live transform is driven by the ref, not this, so pans don't re-render.
   const [scale, setScale] = useState(1);
@@ -153,7 +176,7 @@ export function ImageLightbox({
       if (urls.length < 2) return;
       const i = urls.indexOf(currentUrl);
       const next = i < 0 ? 0 : (i + dir + urls.length) % urls.length;
-      if (urls[next]) { setCurrentUrl(urls[next]); setMenu(null); }
+      if (urls[next]) { slideDir.current = dir; setCurrentUrl(urls[next]); setMenu(null); }
     },
     [siblingSelector, currentUrl],
   );
@@ -176,17 +199,108 @@ export function ImageLightbox({
     if (!open) { clearLongPress(); setMenu(null); return; }
     setCurrentUrl(url);
     setMenu(null);
+    // A fresh open is never a ← / → step. Belt-and-braces: if the timeline holds
+    // two copies of the same image, navigate() sets a direction but setCurrentUrl
+    // bails on the identical value, so the slide effect never runs to consume it.
+    // Clearing here stops that stale direction leaking into the next open.
+    slideDir.current = 0;
     setGalleryCount(siblingSelector ? document.querySelectorAll(siblingSelector).length : 0);
   }, [open, url, siblingSelector, clearLongPress]);
 
-  // Fresh image (fresh open OR ← / → navigation) → start fit-to-screen, centered.
+  // Mount/unmount around the open + close animations. `open` is intent; `mounted`
+  // is what's in the DOM, and it outlives `open` until the fade below reports it
+  // has finished, so the close has something to animate.
   useEffect(() => {
+    // The extra render this triggers is the whole point, not an oversight: the
+    // portal has to exist and be painted in its hidden phase before anything can
+    // transition to the open one. That ordering is what the rule warns about and
+    // exactly what an enter animation requires.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (open) { setMounted(true); return; }
+    setPhase('leaving');
+  }, [open]);
+
+  // Unmount when the fade REPORTS it finished — not on a clock started when we
+  // asked for it. React can flush this effect in the same synchronous batch as
+  // the click that closed the viewer, i.e. before the browser has painted
+  // `leaving` at all; a plain setTimeout(EXIT_MS) then expires during that paint
+  // and the close visibly snaps instead of fading. Measured: on a busy frame
+  // `leaving` landed 317ms after the click and teardown followed 26ms later.
+  // transitionend cannot fire before the transition actually ran, so it can't
+  // race the paint. Note transitionend bubbles — .lb-stage's transform lands
+  // here too — hence the target + propertyName filter.
+  //
+  // The `open` guard is load-bearing, not defensive noise: `phase` stays
+  // 'leaving' after a close, so the NEXT open mounts the portal still labelled
+  // 'leaving'. Without the guard that re-armed the teardown and killed the
+  // viewer ~150ms after it appeared — and since `open` was still true, the mount
+  // effect never re-fired, leaving it dead until the next click.
+  // Cleanup doubles as the reopen guard: flipping back to 'open' cancels a
+  // pending teardown, which is what lets an interrupted close reverse cleanly.
+  useEffect(() => {
+    if (open || !mounted || phase !== 'leaving') return;
+    const el = containerRef.current;
+    let settled = false;
+    const finish = () => { if (!settled) { settled = true; setMounted(false); } };
+    const onEnd = (e: TransitionEvent) => {
+      if (e.target === el && e.propertyName === 'opacity') finish();
+    };
+    el?.addEventListener('transitionend', onEnd);
+    // Safety net: if the transition never starts or its event is lost, the
+    // viewer must still come down rather than sit there stranded.
+    const t = window.setTimeout(finish, EXIT_MS + 250);
+    return () => { el?.removeEventListener('transitionend', onEnd); clearTimeout(t); };
+  }, [open, mounted, phase]);
+
+  // Once the portal is actually in the DOM, flip to the open state to run the
+  // enter transition. Two frames, not one: the browser has to paint the hidden
+  // `entering` styles before the change to `open` counts as a transition — a
+  // single rAF gets coalesced into the same paint and nothing animates.
+  const inDom = useRef(false);
+  useEffect(() => {
+    if (!mounted) { inDom.current = false; return; }
     if (!open) return;
+    if (inDom.current) {
+      // Reopened while the close was still playing. Don't restart from hidden —
+      // the element is mid-fade, and resetting to `entering` would drag it the
+      // rest of the way down before coming back up, reading as a blink. Going
+      // straight to `open` lets the transition reverse from wherever it is.
+      setPhase('open');
+      return;
+    }
+    inDom.current = true;
+    // No setPhase('entering') here on purpose: a fresh mount is already in a
+    // hidden phase — 'entering' the first time, 'leaving' left over from the
+    // previous close — and the CSS paints those two identically. So the portal's
+    // first paint is correct as-is, and we only need the flip to 'open'.
+    let inner = 0;
+    const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setPhase('open')); });
+    return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+  }, [mounted, open]);
+
+  // Fresh image (fresh open OR ← / → navigation) → start fit-to-screen, centered,
+  // and — when this was a navigation — play the directional slide.
+  // Keyed on `mounted`, not `open`: the portal (and so imgRef) only exists on the
+  // render AFTER open flips, so an `open`-keyed effect would run with a null ref.
+  useEffect(() => {
+    if (!mounted) return;
     view.current = { scale: 1, tx: 0, ty: 0 };
     setScale(1);
+    const el = slideRef.current;
+    const dir = slideDir.current;
+    slideDir.current = 0;
+    if (el && dir) {
+      // Restart the keyframe by hand: remove, force a reflow, re-add. Without the
+      // reflow the browser collapses remove+add into "no change" and the
+      // animation never replays on a second step in the same direction.
+      el.classList.remove('lb-slide-in');
+      el.style.setProperty('--lb-dir', String(dir));
+      void el.offsetWidth;
+      el.classList.add('lb-slide-in');
+    }
     const id = requestAnimationFrame(apply);
     return () => cancelAnimationFrame(id);
-  }, [open, currentUrl, apply]);
+  }, [mounted, currentUrl, apply]);
 
   // Keyboard: Escape closes; ← / → walk the gallery. Kept separate from the
   // scroll-lock effect so re-subscribing on each navigation (navigate changes
@@ -202,26 +316,30 @@ export function ImageLightbox({
     return () => document.removeEventListener('keydown', onKey);
   }, [open, onOpenChange, navigate]);
 
-  // Scroll-lock the page underneath while open.
+  // Scroll-lock the page underneath while open. Held for the whole mounted life,
+  // including the close animation — releasing it early lets the page jump behind
+  // the still-visible viewer.
   useEffect(() => {
-    if (!open) return;
+    if (!mounted) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prevOverflow; };
-  }, [open]);
+  }, [mounted]);
 
   // Wheel zoom. Attached natively (not via React's onWheel, which is passive and
   // would swallow preventDefault) so the trackpad can't bounce the page.
   useEffect(() => {
     const cont = containerRef.current;
-    if (!open || !cont) return;
+    // `mounted`, not `open` — containerRef is only populated on the render after
+    // the portal goes in, which an `open`-keyed effect would run too early for.
+    if (!mounted || !cont) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       zoomAround(view.current.scale * Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
     };
     cont.addEventListener('wheel', onWheel, { passive: false });
     return () => cont.removeEventListener('wheel', onWheel);
-  }, [open, zoomAround]);
+  }, [mounted, zoomAround]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     // Pointers that start on a control (close · arrows · zoom bar · save menu) are
@@ -310,7 +428,7 @@ export function ImageLightbox({
     [onOpenChange, reset, zoomAround, navigate, menu, clearLongPress],
   );
 
-  if (!open || typeof document === 'undefined') return null;
+  if (!mounted || typeof document === 'undefined') return null;
 
   const zoomed = scale > 1.01;
 
@@ -329,21 +447,37 @@ export function ImageLightbox({
       // as a weak ~40% wash. A solid backdrop is the standard lightbox look anyway
       // — full focus on the image — and paints at full strength reliably.
       style={{ backgroundColor: 'rgb(9,9,11)' }}
+      data-state={phase}
+      // On the way out the viewer is still painted but must stop being a target.
+      // `inert` is the one that actually finishes the job: pointer-events-none
+      // alone is opt-out-able, and every control below re-enables itself with
+      // pointer-events-auto, so the arrows would still take taps mid-fade. The
+      // class stays as the fallback for browsers without inert.
+      inert={phase === 'leaving'}
       className={cn(
-        'fixed inset-0 z-[100] flex touch-none select-none items-center justify-center overflow-hidden',
+        'lb-root fixed inset-0 z-[100] flex touch-none select-none items-center justify-center overflow-hidden',
         zoomed ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in',
+        phase === 'leaving' && 'pointer-events-none',
       )}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        ref={imgRef}
-        src={currentUrl}
-        alt={alt ?? 'image'}
-        draggable={false}
-        onLoad={() => set(view.current)}
-        style={{ transformOrigin: 'center' }}
-        className="max-h-[92dvh] max-w-[92vw] object-contain"
-      />
+      {/* Two wrappers, one animated property each (see globals.css): .lb-stage
+          pops on open/close, .lb-slide carries the ← / → travel. Both shrink-wrap
+          the image, so the "did the tap land on the image?" hit tests below —
+          which ask imgRef, not these — keep working unchanged. */}
+      <div className="lb-stage flex items-center justify-center">
+        <div ref={slideRef} className="lb-slide flex items-center justify-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            ref={imgRef}
+            src={currentUrl}
+            alt={alt ?? 'image'}
+            draggable={false}
+            onLoad={() => set(view.current)}
+            style={{ transformOrigin: 'center' }}
+            className="max-h-[92dvh] max-w-[92vw] object-contain"
+          />
+        </div>
+      </div>
 
       {/* Controls float above the image; the layer is click-through
           (pointer-events-none) so taps between buttons still close. */}

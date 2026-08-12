@@ -302,3 +302,48 @@
 @media (prefers-reduced-motion: reduce) {
   .chat-anchor-flash { animation-duration: 0.01ms; box-shadow: 0 0 0 3px transparent; }
 }
+
+/* Image lightbox motion (open · close · ← / →). Four nested elements each own
+   exactly ONE animated property, so they can never fight:
+     .lb-root   opacity — the backdrop fade
+     .lb-stage  transform: scale — the open/close pop
+     .lb-slide  transform: translate — the ← / → travel
+     <img>      transform — pan/zoom, written imperatively at 60fps
+   That separation is the point: putting any of this on the <img> would mean a
+   transition sitting on the same property the pan writes every frame, and every
+   drag would rubber-band. Nested transforms just compose, and the pan's clamp
+   math is layout-based (offsetWidth/clientWidth), so it is unaffected by them.
+
+   `entering` and `leaving` deliberately share one hidden state — on a reopen the
+   portal's first paint may still carry `leaving`, and identical styles make that
+   race invisible. The unmount is driven by this fade's transitionend, so the
+   150ms `leaving` duration below is what actually times the close; EXIT_MS in
+   image-lightbox.tsx mirrors it only to size the safety-net timeout. */
+.lb-root { transition: opacity 200ms ease-out; }
+.lb-root[data-state='entering'],
+.lb-root[data-state='leaving'] { opacity: 0; }
+.lb-root[data-state='open'] { opacity: 1; }
+
+.lb-stage { transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1); }
+.lb-root[data-state='entering'] .lb-stage,
+.lb-root[data-state='leaving'] .lb-stage { transform: scale(0.92); }
+.lb-root[data-state='open'] .lb-stage { transform: scale(1); }
+
+/* Closing is quicker than opening — a slow dismiss feels like lag, not polish. */
+.lb-root[data-state='leaving'],
+.lb-root[data-state='leaving'] .lb-stage { transition-duration: 150ms; }
+
+/* ← / → travel: the incoming image is pushed in from the side it came from.
+   --lb-dir is +1 for "next" (enters from the right) and -1 for "previous". */
+@keyframes lb-slide-in {
+  from { opacity: 0; transform: translate3d(calc(var(--lb-dir, 1) * 2rem), 0, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+.lb-slide-in { animation: lb-slide-in 260ms cubic-bezier(0.22, 0.61, 0.36, 1); }
+
+/* !important, not a plain value: the `leaving` rules above are more specific
+   (0,2,0) than a bare .lb-root, so an unflagged override would silently lose. */
+@media (prefers-reduced-motion: reduce) {
+  .lb-root, .lb-root .lb-stage { transition-duration: 0.01ms !important; }
+  .lb-slide-in { animation-duration: 0.01ms !important; }
+}
