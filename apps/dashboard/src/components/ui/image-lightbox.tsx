@@ -348,12 +348,17 @@ export function ImageLightbox({
       {/* Controls float above the image; the layer is click-through
           (pointer-events-none) so taps between buttons still close. */}
       <div className="pointer-events-none absolute inset-0">
+        {/* pwa-sheet-safe-top: the portal sits outside the pwa-safe-* app shell, so
+            in an installed PWA `top-3` puts this button under the iOS status bar —
+            where the system eats the tap and the ✕ reads as broken. Pushed below
+            the inset there; unchanged in a normal browser tab. h-10 matches the
+            gallery arrows and gives the thumb a bigger target. */}
         <button
           type="button"
           data-lightbox-control
           aria-label="close"
           onClick={() => onOpenChange(false)}
-          className="pointer-events-auto absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70 hover:text-white"
+          className="pointer-events-auto absolute right-3 top-3 pwa-sheet-safe-top flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70 hover:text-white"
         >
           <X className="h-5 w-5" />
         </button>
