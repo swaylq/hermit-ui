@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { TimeAgo } from '@/components/time-ago';
 import { isSameDay, isHarnessTerminator, type Block } from '@/components/chat/lib';
+import { sinkDeliverables, isAskToolUse } from '@/components/chat/sink-deliverables';
 import { StreamingDots, TypedText, DateDivider } from '@/components/chat/message-bits';
 import { ToolChip, ToolBatchChip, InlineToolResult, InlineToolResultBatch } from '@/components/chat/tool-chips';
 import { InteractionCard } from '@/components/chat/interaction-card';
@@ -35,22 +36,26 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
   // Insert date dividers when day rolls over. Also coalesce consecutive
   // tool-result-only messages into a single row so a parallel-fanout batch
   // (e.g. 6 Read calls → 6 result rows) collapses to one expandable chip.
-  // mcp__hermit__ask renders its InteractionCard at the tool_use call site (see
+  // The `ask` tool renders its InteractionCard at the tool_use call site (see
   // groupConsecutiveTools). Build a question→interaction-block map from the
   // separately-synced system messages, and suppress those standalone system
   // cards when a matching ask tool_use is in the window — the system row is
   // created (by the MCP stub) BEFORE the assistant turn's blocks finish syncing,
   // so it gets an earlier id and would otherwise sort ABOVE the question text
-  // instead of beside it.
+  // instead of beside it. `pendingQuestions` then tells sinkDeliverables which
+  // of those call sites is still waiting on a human, so it can sink that row to
+  // the end of the turn; an answered card stays where it was asked.
   const askCardByQuestion = new Map<string, any>();
   const askedQuestions = new Set<string>();
+  const pendingQuestions = new Set<string>();
   for (const m of messages) {
     const blocks = Array.isArray(m.content) ? (m.content as any[]) : [];
     for (const b of blocks) {
-      if (b?.type === 'tool_use' && b?.name === 'mcp__hermit__ask' && typeof b?.input?.question === 'string') {
+      if (isAskToolUse(b)) {
         askedQuestions.add(b.input.question);
       } else if (b?.type === 'interaction' && (b?.kind ?? 'question') === 'question' && typeof b?.payload?.question === 'string') {
         askCardByQuestion.set(b.payload.question, b);
+        if ((b?.status ?? 'pending') === 'pending') pendingQuestions.add(b.payload.question);
       }
     }
   }
@@ -63,6 +68,15 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
     return !blocks.every((b) => (b?.kind ?? 'question') === 'question' && askedQuestions.has(b?.payload?.question));
   });
 
+  // Deliverables sink to the end of their turn — a download chip below the prose
+  // that describes it, an unanswered question card below that. See
+  // sink-deliverables.ts for why createdAt can't express this on its own.
+  const orderedMessages = sinkDeliverables(visibleMessages, (q) => pendingQuestions.has(q));
+  // Typewriter is a property of the row that JUST ARRIVED, so it's decided
+  // against arrival order — not against the order we're about to render in,
+  // where a sunk attachment can sit below the text that was actually last.
+  const newestId = visibleMessages.length ? visibleMessages[visibleMessages.length - 1].id : null;
+
   // Items rather than a flat node list: a long timeline renders only the slice
   // near the viewport (see use-timeline-window.ts), which means the list has to
   // be sliceable and every item has to carry a stable key to remember its
@@ -70,8 +84,8 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
   const out: Array<{ key: string; node: React.ReactNode }> = [];
   let prevDay: Date | string | null = null;
   let i = 0;
-  while (i < visibleMessages.length) {
-    const m = visibleMessages[i];
+  while (i < orderedMessages.length) {
+    const m = orderedMessages[i];
     if (!prevDay || !isSameDay(prevDay, m.createdAt)) {
       out.push({ key: `d-${m.id}`, node: <DateDivider key={`d-${m.id}`} day={m.createdAt} /> });
       prevDay = m.createdAt;
@@ -89,13 +103,13 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
       const combined: Block[] = [...blocks];
       let lastId = m.id;
       let j = i + 1;
-      while (j < visibleMessages.length) {
-        const nb = visibleMessages[j].content as Block[];
+      while (j < orderedMessages.length) {
+        const nb = orderedMessages[j].content as Block[];
         const nIsToolResultOnly = nb.length > 0 && nb.every((b) => b.type === 'tool_result');
         if (!nIsToolResultOnly) break;
-        if (!isSameDay(prevDay!, visibleMessages[j].createdAt)) break;
+        if (!isSameDay(prevDay!, orderedMessages[j].createdAt)) break;
         combined.push(...nb);
-        lastId = visibleMessages[j].id;
+        lastId = orderedMessages[j].id;
         j++;
       }
       // `data-msg-id` carries EVERY id folded into this row (consecutive
@@ -105,7 +119,7 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
       out.push({
         key: `g-${m.id}-${lastId}`,
         node: (
-          <div key={`g-${m.id}-${lastId}`} data-msg-id={visibleMessages.slice(i, j).map((x) => x.id).join(' ')} {...{ [WINDOW_ROW_ATTR]: `g-${m.id}-${lastId}` }}>
+          <div key={`g-${m.id}-${lastId}`} data-msg-id={orderedMessages.slice(i, j).map((x) => x.id).join(' ')} {...{ [WINDOW_ROW_ATTR]: `g-${m.id}-${lastId}` }}>
             <MessageRow role={m.role} content={combined} ts={m.createdAt} />
           </div>
         ),
@@ -115,18 +129,18 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
       const streamingTail = !!streamingTailId && m.id === streamingTailId;
       // Typewriter is decided at render time, NOT from streamingTailId — that's
       // set by a post-render effect (one render late), which would mount the
-      // text already-complete and skip the animation. The last assistant row,
+      // text already-complete and skip the animation. The newest assistant row,
       // if it landed in the last few seconds, types out.
-      const isLast = i === visibleMessages.length - 1;
+      const isLast = m.id === newestId;
       const typing = isLast && m.role === 'assistant' && Date.now() - new Date(m.createdAt).getTime() < 8_000;
       // askCardByQuestion is rebuilt as a fresh Map every render, and `view`
       // hands us a new array on every streaming tick — so passing the Map to
       // every row would break MessageRow's memo shallow-compare each tick and
       // re-render the whole visible timeline, not just the growing tail. Only
-      // mcp__hermit__ask tool_use rows actually read the map (groupConsecutiveTools);
+      // ask tool_use rows actually read the map (groupConsecutiveTools);
       // every other row gets a stable `undefined` and its memo bails. Identical
       // output either way — non-ask rows never touch the map.
-      const rowHasAsk = blocks.some((b) => b.type === 'tool_use' && (b as any).name === 'mcp__hermit__ask');
+      const rowHasAsk = blocks.some((b) => isAskToolUse(b));
       out.push({
         key: m.id,
         node: (
@@ -422,7 +436,7 @@ function groupConsecutiveTools(blocks: Block[], askCardByQuestion?: Map<string, 
       // loaded window. (The standalone system card is suppressed in
       // MessageTimeline so the card shows once, anchored beside the question —
       // it otherwise sorts ABOVE the question text, see the suppression note.)
-      const askQ = (b as any).name === 'mcp__hermit__ask' ? (b as any).input?.question : undefined;
+      const askQ = isAskToolUse(b) ? (b as any).input.question : undefined;
       const askCard = typeof askQ === 'string' ? askCardByQuestion?.get(askQ) : undefined;
       if (askCard) { out.push({ kind: 'interaction', block: askCard }); continue; }
       const prev = out[out.length - 1];

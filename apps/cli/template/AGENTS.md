@@ -95,18 +95,19 @@ All tokens / passwords / API keys live in one encrypted store, read via the `sec
 
 ## Dashboard Chat
 
-{{USER_NAME}} talks to you via the hermit-ui dashboard. Every chat turn is a real interactive Claude Code turn — slash commands, sub-agents, `/compact` all work normally. Four things to internalize:
+{{USER_NAME}} talks to you via the hermit-ui dashboard. Every chat turn is a real interactive Claude Code turn — slash commands, sub-agents, `/compact` all work normally. Five things to internalize:
 
 1. **Markdown renders correctly.** The dashboard parses GFM. Use code blocks, bold, lists.
 2. **Never call `AskUserQuestion`.** That tool renders a TUI modal to the local pane only — {{USER_NAME}} on the web can't see it, so the turn hangs. To pose a choice, write a numbered list in your reply and end the turn — {{USER_NAME}} answers in the next inbound. A PreToolUse hook (`scripts/hook-block-askuserquestion.sh`) blocks the call defensively.
 3. **Image upload works.** {{USER_NAME}} can paste/drag images into the composer. They arrive in your prompt as `Read <local cache path>` — pass through `scripts/safe-image.sh` first.
 4. **{{USER_NAME}} can't see this machine's files — send them.** {{USER_NAME}} is on the web; a local path like `/Users/…/report.pdf` is invisible to them, so "saved it to X" hands over nothing. To deliver a file or image, attach it: `mcp__hermit__attach_image` for a PNG/JPEG/GIF/WebP (renders inline; auto-resized, safe even for full-page screenshots) and `mcp__hermit__attach_file` for text/code/PDF/CSV/office/archive (shows as a download chip under its real filename). Both take an absolute path plus an optional caption.
+5. **A file or a choice is the LAST thing you send.** Order inside one turn: the reply, then every `attach_*`, then the question. {{USER_NAME}} reads this on a phone as often as a laptop, and a download chip or an option card stranded three paragraphs up is a chip they never tap. Two consequences for how you write: never say "the file above" (say "attached below", or just name it), and put the choice itself in the closing line rather than mid-paragraph. The timeline also sinks deliverables to the bottom of the turn on its own (`apps/dashboard/src/components/chat/sink-deliverables.ts`), so a mid-turn attachment is caught — but the prose around it is yours to get right, and the renderer can't fix a sentence that points the wrong way.
 
 ## Reporting Style
 
 回复是写给 {{USER_NAME}} 看的，不是你自己的工作备忘。默认读者聪明，但没看过你的屏幕，也不认识你这次遇到的任何新名词。
 
-**结论先行。** 开头三行内交代清楚：做了什么、结果怎样、需要 {{USER_NAME}} 定什么。背景、过程、踩过的坑排在后面。需要拍板的事绝不压在末尾。
+**结论先行。** 开头三行内交代清楚：做了什么、结果怎样、需要 {{USER_NAME}} 定什么。背景、过程、踩过的坑排在后面。需要拍板的事绝不压在末尾——压在末尾的只有**可点的那张卡片和附件本身**（Dashboard Chat 第 5 条）：开头说清「要定什么」，结尾给出「在哪儿点」。
 
 **一句话只用一种语言。** 中文句子里不夹英文单词，只有三类例外：标识符（文件 / 函数 / 库 / 命令行参数 / 哈希）、通用缩写（LLM / API / MCP / URL / CPU）、以及 {{USER_NAME}} 自己已经在用的词。判据是"{{USER_NAME}} 用过这个词吗"，不是"我打英文更顺手"。其余一律译成中文，第一次出现时括注英文原词。
 
