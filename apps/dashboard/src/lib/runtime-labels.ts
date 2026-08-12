@@ -49,6 +49,33 @@ export function runtimeDetail(
   return ['pi', provider, model].filter(Boolean).join(' · ');
 }
 
+/**
+ * Is there a tmux pane behind a session on this backend?
+ *
+ * The mirror of the gateway's `runtimeFor()`: every backend it hands a session
+ * to runs as a child process, and what is left over — claude-tmux — is the one
+ * that lives in a pane. Listed as the paneless set rather than
+ * `=== 'claude-tmux'` so an unrecognised value keeps the pane answer, which is
+ * the fallback the gateway itself makes.
+ *
+ * A predicate rather than an inline comparison because getting it wrong is
+ * invisible until someone clicks: the chat header's terminal link tested
+ * `!== 'pi-rpc'`, so codex — added later, and just as paneless, one `codex exec`
+ * per turn — kept a terminal button that attached to a pane that does not exist
+ * (`tmux attach` exits 1 and the xterm dies on open).
+ */
+const PANELESS_RUNTIMES: ReadonlySet<string> = new Set([
+  'pi-rpc',
+  // the retired third backend, now an engine under pi — a session row created
+  // in that window can still hold it, and it was never a pane either.
+  'omp-rpc',
+  'codex-exec',
+]);
+
+export function hasTmuxPane(runtime: string | null | undefined): boolean {
+  return !PANELESS_RUNTIMES.has(runtime ?? '');
+}
+
 /** What each backend actually is — shown under the picker so the choice is informed. */
 export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
   'claude-tmux': 'Claude Code in a tmux pane. Slash commands, subagents, terminal access.',

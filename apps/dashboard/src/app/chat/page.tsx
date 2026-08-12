@@ -39,7 +39,7 @@ import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/com
 import { VoiceMic } from '@/components/chat/voice-mic';
 import { FabDock } from '@/components/chat/fab-dock';
 import { SessionDetailSheet } from '@/components/chat/session-detail-sheet';
-import { runtimeShortLabel, runtimeDetail } from '@/lib/runtime-labels';
+import { runtimeShortLabel, runtimeDetail, hasTmuxPane } from '@/lib/runtime-labels';
 
 // isTouchPrimary (phone/tablet vs desktop) lives in @/lib/save-file — the
 // soft-keyboard return key inserts a newline there (a dedicated send button
@@ -1604,9 +1604,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           >
             {moreOpen ? <ChevronRight className="h-4 w-4" /> : <MoreHorizontal className="h-4 w-4" />}
           </button>
-          {/* pi sessions run as an RPC child process with no tmux pane — the
-              terminal link would attach to a pane that does not exist. */}
-          {!scope.scoped && session?.runtime !== 'pi-rpc' && (
+          {/* pi and codex sessions run as child processes with no tmux pane —
+              the terminal link would attach to a pane that does not exist.
+              `session.runtime` is the RESOLVED backend (getSession/listSessions
+              spread it over the row), so an inherited default counts too. */}
+          {!scope.scoped && hasTmuxPane(session?.runtime) && (
             <Link
               href={`/chat/terminal?session=${encodeURIComponent(sessionId)}`}
               title="attach to this session's tmux pane"

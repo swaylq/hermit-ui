@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BACKEND_OPTIONS, BACKEND_BLURB, RUNTIME_KINDS, TRIAGE_MODE,
-  backendLabel, toBackendOption, fromBackendOption,
+  backendLabel, toBackendOption, fromBackendOption, hasTmuxPane,
 } from './runtime-labels';
 
 // The picker's list and the stored backends are different sets, and keeping
@@ -42,6 +42,35 @@ test('the triage mode on a claude session does not light the triage card', () =>
 test('an unknown or absent runtime falls back to claude, not to a blank card', () => {
   assert.equal(toBackendOption(null, null), 'claude-tmux');
   assert.equal(toBackendOption('omp-rpc', null), 'claude-tmux');
+});
+
+// ── which backends have a pane to attach to ─────────────────────────────────
+
+// codex is one `codex exec` per turn — no pane, exactly like pi. It was missed
+// when the terminal link was written against pi alone, so the button was there
+// and attached to nothing.
+test('only the tmux backend has a pane', () => {
+  assert.equal(hasTmuxPane('claude-tmux'), true);
+  assert.equal(hasTmuxPane('pi-rpc'), false);
+  assert.equal(hasTmuxPane('codex-exec'), false);
+  assert.equal(hasTmuxPane('omp-rpc'), false);
+});
+
+// Absent/unknown is the tmux path in the gateway (runtimeFor returns null for
+// anything it does not recognise), so it has to be the pane answer here too.
+test('an unknown or absent runtime keeps the pane answer, as the gateway does', () => {
+  assert.equal(hasTmuxPane(null), true);
+  assert.equal(hasTmuxPane(undefined), true);
+  assert.equal(hasTmuxPane('something-else'), true);
+});
+
+// Every stored kind is either paneless or the tmux one — a new backend that is
+// neither would slip through this predicate unnoticed.
+test('every runtime kind is accounted for', () => {
+  for (const k of RUNTIME_KINDS) {
+    assert.equal(typeof hasTmuxPane(k), 'boolean');
+  }
+  assert.equal(RUNTIME_KINDS.filter((k) => hasTmuxPane(k)).length, 1);
 });
 
 test('the two real backends carry no mode of their own out of the picker', () => {
