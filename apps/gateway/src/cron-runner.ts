@@ -27,6 +27,7 @@ import { api } from './api';
 import { paneIsWorking } from './pane';
 import { extractText, CcEvent, CcBlock } from './claude-code';
 import { buildMcpConfigArg, chatOwnedUuids } from './chat-runner';
+import { holdCronUuid, releaseCronUuid, cronOwnedUuids } from './cron-uuids';
 import { tryAcquire, release, isLocked } from './op-locks';
 
 const RUN_TIMEOUT_MS = 120 * 60_000; // hard cap per run (2h)
@@ -64,7 +65,8 @@ type Cron = {
 // interval and skips a cron already running).
 // claude-session uuids pinned by an in-flight fire — so the uuid-drift self-heal
 // never adopts a SIBLING cron's live transcript (agents share one project dir).
-const pinnedUuids = new Set<string>();
+// The registry lives in ./cron-uuids because the CHAT runner has to read it too;
+// see the note there for why both directions are needed.
 
 // Which transcript should a fire adopt when its pinned one never appeared? The newest
 // transcript written at/after the fire started that NOBODY ELSE owns:
@@ -78,7 +80,7 @@ const pinnedUuids = new Set<string>();
 // Exported for cron-runner.test.ts.
 export function adoptDriftTranscript(
   cwd: string,
-  opts: { pinned: Set<string>; chatOwned: Set<string>; minMtimeMs: number },
+  opts: { pinned: ReadonlySet<string>; chatOwned: ReadonlySet<string>; minMtimeMs: number },
 ): TranscriptInfo | null {
   return resolveLiveTranscript(cwd, {
     exclude: new Set([...opts.pinned, ...opts.chatOwned]),
@@ -205,7 +207,10 @@ async function fireInner(c: Cron): Promise<void> {
   // Pinned transcript uuid. Hoisted out of the try so `finally` can unpin it
   // however we exit.
   const claudeUuid = randomUUID();
-  pinnedUuids.add(claudeUuid);
+  holdCronUuid(claudeUuid);
+  // A drift-adopted transcript is just as much this fire's as the pinned one —
+  // hoisted so `finally` releases whichever we ended up holding.
+  let adoptedUuid: string | null = null;
   // The transcript we ended up tailing (the pinned one, or a drift-adopted one).
   // Hoisted for the same reason: a truncation notice has to name the file that still
   // holds the full text, and that is decided inside the try.
@@ -252,7 +257,7 @@ async function fireInner(c: Cron): Promise<void> {
       // Adopt the newest transcript created around/after this run started (mtime lower
       // bound) that no sibling cron and no chat session owns — see adoptDriftTranscript.
       const live = adoptDriftTranscript(cwd, {
-        pinned: pinnedUuids,
+        pinned: cronOwnedUuids(),
         chatOwned: chatOwnedUuids(),
         minMtimeMs: startedAt - 2_000,
       });
@@ -262,6 +267,8 @@ async function fireInner(c: Cron): Promise<void> {
             `has no transcript; adopting live ${live.uuid.slice(0, 8)}`,
         );
         jsonlPath = path.join(encodedProjectDir(cwd), `${live.uuid}.jsonl`);
+        adoptedUuid = live.uuid;
+        holdCronUuid(adoptedUuid);
       }
     }
 
@@ -340,7 +347,8 @@ async function fireInner(c: Cron): Promise<void> {
     output = `[cron-runner] ${String(e)}`;
     status = 'error';
   } finally {
-    pinnedUuids.delete(claudeUuid);
+    releaseCronUuid(claudeUuid);
+    if (adoptedUuid) releaseCronUuid(adoptedUuid);
     try { stop(); } catch {}
     await killSession(runSessionId).catch(() => {});
   }

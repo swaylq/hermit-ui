@@ -50,6 +50,7 @@ import { api } from './api';
 import { relayImages } from './image-relay';
 import { describeImage, formatVision } from './vision';
 import { tryAcquire, release, isLocked } from './op-locks';
+import { cronOwnedUuids } from './cron-uuids';
 
 // MCP stub gives the in-pane claude these tools: set_session_title, log_status,
 // attach_image, attach_file. Spawned as a stdio child of `claude --mcp-config <json>`.
@@ -147,11 +148,13 @@ let recordedUuids = new Map<string, string>();
 // same un-acked row.
 const inFlightDeliveries = new Map<string, Promise<void>>();
 
-// Every claude uuid currently spoken for by ANOTHER session — live (sessionStates),
-// still starting (reservedUuids), or recorded in the DB (recordedUuids). Every
-// transcript-picking path (resume sniff, drift adoption, orphan recovery) excludes
-// these so two chats can never land on one transcript. `sessionId = null` ⇒ no session
-// counts as self, so the result is every chat-owned uuid — see chatOwnedUuids.
+// Every claude uuid currently spoken for by ANOTHER CHAT session — live
+// (sessionStates), still starting (reservedUuids), or recorded in the DB
+// (recordedUuids), so two chats can never land on one transcript. `sessionId = null`
+// ⇒ no session counts as self, so the result is every chat-owned uuid — see
+// chatOwnedUuids. Chats are only half of what shares the project dir; the
+// transcript-picking paths (resume sniff, drift adoption, orphan recovery) go
+// through uuidsUnavailableTo, which adds the crons.
 function uuidsOwnedByOtherSessions(sessionId: string | null): Set<string> {
   const owned = new Set<string>();
   for (const [sid, st] of sessionStates) if (sid !== sessionId) owned.add(st.claudeUuid);
@@ -168,6 +171,25 @@ function uuidsOwnedByOtherSessions(sessionId: string | null): Set<string> {
 // cron's result; the reports themselves had run fine).
 export function chatOwnedUuids(): Set<string> {
   return uuidsOwnedByOtherSessions(null);
+}
+
+// Everything this session must NOT adopt: the uuids other chats hold, plus every
+// uuid a cron fire is holding. Crons spawn into the same cwd, so their throwaway
+// transcripts sit in the same project dir and look exactly like "a transcript
+// that just appeared" to the resume sniff below.
+//
+// 2026-08-12, agent `ceo` on macmini002: a 27.2 MB `--resume` took ~10 minutes,
+// a 2h cron fired inside that window, and resolveResumedUuid took the cron's
+// brand-new transcript for the one claude had resumed into. The session bound
+// itself to a throwaway pane — the user's message came back answered with the
+// cron's "SKIP 非凌晨", and their real answer, written into the transcript this
+// session had just stopped owning, surfaced two hours later as that cron's
+// result. cron-runner has excluded chat-owned uuids since 2026-08-09; this is
+// the other half of that.
+function uuidsUnavailableTo(sessionId: string): Set<string> {
+  const owned = uuidsOwnedByOtherSessions(sessionId);
+  for (const uuid of cronOwnedUuids()) owned.add(uuid);
+  return owned;
 }
 
 // ── Cancellation tick ────────────────────────────────────────────────────────
@@ -1043,7 +1065,7 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
       // Exclude the recorded uuid itself + uuids owned by OTHER sessions, live or still
       // starting (an agent's chat sessions all share one project dir) so we never
       // cross-wire two chats onto the same transcript.
-      const exclude = uuidsOwnedByOtherSessions(session.id);
+      const exclude = uuidsUnavailableTo(session.id);
       exclude.add(claudeUuid);
       // Require a RECENTLY-written transcript — the live pane's claude is actively
       // writing, whereas a stale OLD session's transcript is not. This also stops us
@@ -1084,7 +1106,7 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     // argv is ground truth — take the uuid from there, and let the next sync stamp it
     // back to the DB (uuidStamped stays false below).
     const fromPane = paneClaudeSessionId(session.id);
-    if (fromPane && uuidsOwnedByOtherSessions(session.id).has(fromPane)) {
+    if (fromPane && uuidsUnavailableTo(session.id).has(fromPane)) {
       // Another session already owns it — adopting would cross-wire two chats onto one
       // transcript. Better to stay unstamped and let the next respawn sort it out.
       console.warn(
@@ -1207,7 +1229,7 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
       // Sampled per poll, not once up front: this wait can run for MINUTES on a big
       // resume, and the sibling that must be excluded is typically one that spawns
       // partway through it.
-      exclude: () => uuidsOwnedByOtherSessions(session.id),
+      exclude: () => uuidsUnavailableTo(session.id),
     });
     reservedUuids.set(session.id, claudeUuid);
   }
