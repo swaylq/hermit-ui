@@ -49,6 +49,50 @@ export function availableBackends(
 }
 
 /**
+ * The default a machine can actually run.
+ *
+ * A stored default (an agent's, or the fleet's claude-tmux floor) is a
+ * PREFERENCE, not the answer: Settings → Backends can switch that backend off
+ * afterwards, and then the default names something the machine no longer
+ * offers. That showed up as "Claude Code · default · off" drawn as the selected
+ * card on a machine with only codex enabled — an unclickable card, and a New
+ * chat that would open on a backend nobody there can run.
+ *
+ * When the stored one is off, the answer is the first backend this machine does
+ * offer — BACKEND_OPTIONS order, i.e. the leftmost card the picker draws.
+ *
+ * Nothing is rewritten in the database. Switching the backend back on restores
+ * the agent's own default, which is what makes this safe to apply on every read
+ * rather than as a migration.
+ */
+export function effectiveDefaultBackend(
+  stored: BackendOption,
+  config: BackendsConfig | null | undefined,
+): BackendOption {
+  if (isBackendEnabled(stored, config)) return stored;
+  // availableBackends never returns [], so this is always a real option.
+  return availableBackends(config)[0];
+}
+
+/**
+ * Read the stored set off a Machine row's JSON column.
+ *
+ * Prisma types it as unknown-ish JSON and nothing validates what an older
+ * release wrote, so this tolerates any shape and returns null ("nothing
+ * configured", i.e. everything enabled) for anything it cannot read. Server
+ * callers need it because they hold a Machine row rather than the tRPC output.
+ */
+export function backendsConfigOf(
+  row: { backendsConfig?: unknown } | null | undefined,
+): BackendsConfig | null {
+  const raw = row?.backendsConfig;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const disabled = (raw as { disabled?: unknown }).disabled;
+  if (!Array.isArray(disabled)) return null;
+  return { disabled: disabled.filter((d): d is string => typeof d === 'string') };
+}
+
+/**
  * Apply a toggle, refusing the one that leaves nothing.
  *
  * Returns null when the change is not allowed, so the caller can say why rather

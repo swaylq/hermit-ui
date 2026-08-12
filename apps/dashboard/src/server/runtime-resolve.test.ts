@@ -113,6 +113,66 @@ test('a legacy omp-rpc session keeps whatever mode it had', () => {
   );
 });
 
+// ── what the machine actually offers (Settings → Backends) ──────────────────
+
+// The reported case: a machine with Claude Code switched off and codex on. Every
+// agent there defaults to claude-tmux (stored, or the fleet floor), so without
+// this every inherited session resolved to a backend that machine does not run.
+test('an inherited default the machine has switched off falls through to one it runs', () => {
+  const codexOnly = { disabled: ['claude-tmux', 'pi-rpc', 'triage'] };
+  assert.deepEqual(resolveRuntime(null, null, codexOnly), {
+    runtime: 'codex-exec', runtimeProvider: null, runtimeModel: null, runtimeMode: null,
+  });
+  assert.equal(resolveRuntime({ runtime: null }, { runtime: 'claude-tmux' }, codexOnly).runtime, 'codex-exec');
+});
+
+// Off hides a backend from new work; it does not stop what is already on it, and
+// reporting a running claude session as codex would make every header chip lie.
+test("a session's own backend is never re-pointed, even when switched off", () => {
+  const codexOnly = { disabled: ['claude-tmux', 'pi-rpc', 'triage'] };
+  assert.equal(resolveRuntime({ runtime: 'claude-tmux' }, null, codexOnly).runtime, 'claude-tmux');
+  assert.equal(
+    resolveRuntime({ runtime: 'pi-rpc', runtimeMode: 'ops' }, null, codexOnly).runtimeMode,
+    'ops',
+  );
+});
+
+test('a substituted default inherits nothing from the agent it replaced', () => {
+  // The agent's provider/model describe pi; the machine only runs claude here.
+  const out = resolveRuntime(
+    null,
+    { runtime: 'pi-rpc', runtimeProvider: 'openrouter', runtimeModel: 'deepseek/x', runtimeMode: 'ops' },
+    { disabled: ['pi-rpc', 'codex-exec', 'triage'] },
+  );
+  assert.deepEqual(out, {
+    runtime: 'claude-tmux', runtimeProvider: null, runtimeModel: null, runtimeMode: null,
+  });
+});
+
+test('substituting TO pi lands on the default mode, not the agent’s', () => {
+  const out = resolveRuntime(
+    null,
+    { runtime: 'claude-tmux', runtimeMode: 'ops' },
+    { disabled: ['claude-tmux', 'codex-exec', 'triage'] },
+  );
+  assert.equal(out.runtime, 'pi-rpc');
+  assert.equal(out.runtimeMode, 'omp');
+});
+
+// triage is a card, not a backend: substituting to it has to carry the mode that
+// IS the choice, or it would silently resolve to plain pi.
+test('substituting TO triage carries its mode', () => {
+  const out = resolveRuntime(null, null, { disabled: ['claude-tmux', 'pi-rpc', 'codex-exec'] });
+  assert.equal(out.runtime, 'pi-rpc');
+  assert.equal(out.runtimeMode, 'triage');
+});
+
+test('an agent defaulting to triage on a machine that offers it is left alone', () => {
+  const out = resolveRuntime(null, { runtime: 'pi-rpc', runtimeMode: 'triage' }, { disabled: ['codex-exec'] });
+  assert.equal(out.runtime, 'pi-rpc');
+  assert.equal(out.runtimeMode, 'triage');
+});
+
 test('switching TO pi from a claude agent does not inherit a stale mode', () => {
   // Agent is claude with a leftover mode column; the session picks pi. The
   // levels disagree on backend, so the agent's mode is not inheritable and the

@@ -3,6 +3,9 @@
 // Resolved on the dashboard so the gateway receives one already-decided answer
 // and never has to know the fallback chain. See docs/pi-runtime-design.md.
 
+import { toBackendOption, fromBackendOption } from '@/lib/runtime-labels';
+import { effectiveDefaultBackend, type BackendsConfig } from '@/lib/backend-availability';
+
 export type RuntimeChoice = {
   runtime: string;
   runtimeProvider: string | null;
@@ -36,7 +39,7 @@ function normalizeRuntime(runtime: string): string {
 }
 
 /**
- * session's own choice > agent's default > claude-tmux.
+ * session's own choice > agent's default (as this machine can run it) > claude-tmux.
  *
  * provider/model follow the level that actually chose the runtime. A session
  * that switches to a different backend than its agent must NOT inherit the
@@ -50,10 +53,37 @@ function normalizeRuntime(runtime: string): string {
  * allowlist, skills, extensions) and claude-tmux has no way to honour one, so
  * returning a mode there would be a value the gateway must remember to ignore.
  * Resolving it to null here means it cannot be misread downstream.
+ *
+ * `backends` is the machine's Settings → Backends set, and it applies to the
+ * INHERITED end of the chain only: an agent defaulting to a backend the machine
+ * has switched off (or to the claude-tmux floor on a machine that runs only
+ * codex) inherits the first backend that machine does offer instead. A session's
+ * OWN choice is never re-pointed — switching a backend off hides it from new
+ * work, it does not stop what is already running on it, and reporting a running
+ * claude session as codex would make every header chip a lie. Omitted = "this
+ * caller has no machine in hand", which behaves exactly as before.
  */
-export function resolveRuntime(session: Level, agent: Level): RuntimeChoice {
-  const runtime = normalizeRuntime(session?.runtime ?? agent?.runtime ?? DEFAULT_RUNTIME);
-  const inheritable = !session?.runtime || session.runtime === agent?.runtime;
+export function resolveRuntime(
+  session: Level,
+  agent: Level,
+  backends?: BackendsConfig | null,
+): RuntimeChoice {
+  // The agent's default read as a CARD (pi + triage is one choice, not two), so
+  // an agent defaulting to triage falls back — and is fallen back TO — whole.
+  const storedDefault = toBackendOption(
+    normalizeRuntime(agent?.runtime ?? DEFAULT_RUNTIME),
+    agent?.runtimeMode,
+  );
+  const usableDefault = effectiveDefaultBackend(storedDefault, backends);
+  const substituted = usableDefault !== storedDefault;
+  const fallback = fromBackendOption(usableDefault);
+
+  const runtime = session?.runtime ? normalizeRuntime(session.runtime) : fallback.runtime;
+  // Whether the agent's provider/model/mode describe the backend we resolved to.
+  // A substitution lands on a different backend than the agent's columns were
+  // written for, so it inherits nothing from them — same rule as a session that
+  // picks its own backend, for the same reason.
+  const inheritable = session?.runtime ? session.runtime === agent?.runtime : !substituted;
 
   return {
     runtime,
@@ -61,6 +91,8 @@ export function resolveRuntime(session: Level, agent: Level): RuntimeChoice {
     runtimeModel: session?.runtimeModel ?? (inheritable ? agent?.runtimeModel ?? null : null),
     runtimeMode: runtime !== 'pi-rpc'
       ? null
-      : session?.runtimeMode ?? (inheritable ? agent?.runtimeMode ?? null : null) ?? DEFAULT_PI_MODE,
+      // fallback.runtimeMode carries the mode a substituted CARD pins (only
+      // triage does); everything else lands on the default mode.
+      : session?.runtimeMode ?? (inheritable ? agent?.runtimeMode ?? null : fallback.runtimeMode) ?? DEFAULT_PI_MODE,
   };
 }

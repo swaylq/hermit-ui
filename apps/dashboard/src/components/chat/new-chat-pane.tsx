@@ -12,6 +12,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { BackendPicker } from './backend-picker';
 import { toBackendOption, fromBackendOption, type BackendOption } from '@/lib/runtime-labels';
+import { effectiveDefaultBackend } from '@/lib/backend-availability';
 import { PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
 
 export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }: { agents: string[]; preset?: string; lockedAgent?: string; onCreated: (id: string) => void; onCancel: () => void }) {
@@ -52,10 +53,25 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
     setMode(null);
   }
 
+  // Which backends this machine offers, so the agent's default can be read
+  // against them. Same query and staleTime as the picker's own — react-query
+  // serves both from one request.
+  const backends = trpc.machines.getBackendsConfig.useQuery(undefined, { staleTime: 60_000 });
+
   // The card, not the stored backend: `triage` is pi with its mode already
   // decided, so the agent's default has to be read as the PAIR to open on the
   // right card for an agent that defaults to it.
-  const chosen: BackendOption = runtime ?? toBackendOption(agentRuntime, agentMode);
+  //
+  // …and as this machine can run it. An agent defaulting to a backend switched
+  // off under Settings → Backends opens on the first one the machine does offer
+  // — the same substitution the server applies to an inherited default — rather
+  // than on an unclickable "off" card above a Start button that would create a
+  // session nothing here can run.
+  const agentBackend: BackendOption = effectiveDefaultBackend(
+    toBackendOption(agentRuntime, agentMode),
+    backends.data,
+  );
+  const chosen: BackendOption = runtime ?? agentBackend;
   const chosenMode: PiMode = mode ?? (isPiMode(agentMode) ? agentMode : DEFAULT_PI_MODE);
 
   const create = trpc.chat.createSession.useMutation({ onSuccess: (s) => onCreated(s.id) });
@@ -110,7 +126,7 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
           <div className="block">
             <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Backend</span>
             <div className="mt-1.5">
-              <BackendPicker value={chosen} onChange={setRuntime} agentDefault={toBackendOption(agentRuntime, agentMode)} />
+              <BackendPicker value={chosen} onChange={setRuntime} agentDefault={agentBackend} />
             </div>
           </div>
           {chosen === 'pi-rpc' && (

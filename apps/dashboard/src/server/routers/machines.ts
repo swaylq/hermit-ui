@@ -110,6 +110,11 @@ export const machinesRouter = router({
         where: { id: ctx.machine.id },
         data: { backendsConfig: (input.config ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue },
       });
+      // The runtime resolver reads this set off the CACHED machine row (it runs
+      // on the gateway's 2s poll, so it cannot afford its own query). Without
+      // this, switching a backend off left inherited sessions resolving to it
+      // for up to the 5-minute auth TTL.
+      invalidateMachineCache(ctx.machine.id);
       return { ok: true };
     }),
 

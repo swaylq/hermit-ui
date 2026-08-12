@@ -20,6 +20,7 @@ import {
 } from '../../lib/takeover';
 import { HUMAN_MESSAGES_MAX, humanMessages } from '../user-profile';
 import { resolveRuntime } from '../runtime-resolve';
+import { backendsConfigOf } from '../../lib/backend-availability';
 import { planRuntimeSwitch } from '../runtime-switch';
 import {
   LIVE_SESSION,
@@ -296,7 +297,10 @@ export const chatRouter = router({
         select: { name: true, runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true },
       });
       const byName = new Map(agentRuntimes.map((a) => [a.name, a]));
-      return rows.map((r) => ({ ...r, ...resolveRuntime(r, byName.get(r.agentName)) }));
+      // …and against what this machine offers, so an inherited default the
+      // machine has switched off resolves to one it can actually run.
+      const backends = backendsConfigOf(ctx.machine);
+      return rows.map((r) => ({ ...r, ...resolveRuntime(r, byName.get(r.agentName), backends) }));
     }),
 
   // Single-session meta for the chat HEADER (title / agentName / state / preview /
@@ -357,7 +361,7 @@ export const chatRouter = router({
           where: { machineId_name: { machineId: ctx.machine.id, name: s.agentName } },
           select: { runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true },
         });
-        backend = resolveRuntime(s, agent);
+        backend = resolveRuntime(s, agent, backendsConfigOf(ctx.machine));
       }
 
       // While a takeover is live, also report whether the BRAIN itself is mid-turn.
@@ -414,6 +418,7 @@ export const chatRouter = router({
           ? prisma.sessionGroup.findUnique({ where: { id: s.groupId }, select: { name: true } })
           : Promise.resolve(null),
       ]);
+      const machineBackends = backendsConfigOf(ctx.machine);
 
       return {
         ...s,
@@ -421,11 +426,14 @@ export const chatRouter = router({
         groupName: group?.name ?? null,
         agentDirectory: agent?.directory ?? null,
         // The answer the gateway acts on…
-        backend: resolveRuntime(s, agent),
+        backend: resolveRuntime(s, agent, machineBackends),
         // …and where it came from, so the sheet can say "inherited from the
         // agent" instead of presenting an inherited value as a session setting.
         inherited: s.runtime == null,
-        agentBackend: resolveRuntime(null, agent),
+        // The agent default AS THIS MACHINE RUNS IT, for the same reason the
+        // picker only offers enabled backends: the sheet's "inherited from
+        // <agent>" line has to name what the next turn would actually start on.
+        agentBackend: resolveRuntime(null, agent, machineBackends),
       };
     }),
 
@@ -459,7 +467,11 @@ export const chatRouter = router({
         where: { machineId_name: { machineId: ctx.machine.id, name: s.agentName } },
         select: { runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true },
       });
-      const before = resolveRuntime(s, agent);
+      // Same machine set on both sides: `before` has to be the backend the
+      // gateway was actually told to run (pollPending resolves it that way), or
+      // planRuntimeSwitch would compare against a backend that never started.
+      const backends = backendsConfigOf(ctx.machine);
+      const before = resolveRuntime(s, agent, backends);
       const after = resolveRuntime(
         {
           runtime: input.runtime,
@@ -472,6 +484,7 @@ export const chatRouter = router({
           runtimeMode: input.runtimeMode === undefined ? s.runtimeMode : input.runtimeMode,
         },
         agent,
+        backends,
       );
 
       const plan = planRuntimeSwitch(s, before, after);
@@ -1258,9 +1271,10 @@ export const chatRouter = router({
       isOrchestrator: orchByName.get(s.agentName) ?? false,
       // Which backend runs this session, resolved here so the gateway never has
       // to know the fallback chain: session's own choice, else the agent's
-      // default, else claude-tmux. Provider/model follow whichever level won —
-      // a session that picked pi must not inherit the agent's claude settings.
-      ...resolveRuntime(s, runtimeByName.get(s.agentName)),
+      // default as this machine can run it, else claude-tmux. Provider/model
+      // follow whichever level won — a session that picked pi must not inherit
+      // the agent's claude settings.
+      ...resolveRuntime(s, runtimeByName.get(s.agentName), backendsConfigOf(ctx.machine)),
     }));
 
     const sessionIds = sessions.map((s) => s.id);

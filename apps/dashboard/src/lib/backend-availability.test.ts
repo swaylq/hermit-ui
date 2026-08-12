@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   availableBackends, isBackendEnabled, toggleBackend, ALL_ENABLED,
+  effectiveDefaultBackend, backendsConfigOf,
 } from './backend-availability';
 import { BACKEND_OPTIONS } from './runtime-labels';
 
@@ -63,4 +64,72 @@ test('an unknown value in the stored set is harmless', () => {
   const cfg = { disabled: ['omp-rpc-retired', 'codex-exec'] };
   assert.equal(availableBackends(cfg).includes('codex-exec'), false);
   assert.equal(availableBackends(cfg).length, BACKEND_OPTIONS.length - 1);
+});
+
+// ── the effective default ───────────────────────────────────────────────────
+
+test('a default the machine offers is left alone', () => {
+  assert.equal(effectiveDefaultBackend('claude-tmux', null), 'claude-tmux');
+  assert.equal(effectiveDefaultBackend('codex-exec', { disabled: ['pi-rpc'] }), 'codex-exec');
+});
+
+// The reported case: a machine with Claude Code off and codex on used to draw
+// "Claude Code · default · off" as the selected card, and New chat opened on it.
+test('a machine that runs only codex defaults to codex', () => {
+  const cfg = { disabled: ['claude-tmux', 'pi-rpc', 'triage'] };
+  assert.equal(effectiveDefaultBackend('claude-tmux', cfg), 'codex-exec');
+  // Including for an agent that explicitly pinned the switched-off backend.
+  assert.equal(effectiveDefaultBackend('pi-rpc', cfg), 'codex-exec');
+});
+
+// BACKEND_OPTIONS order, i.e. the leftmost card the picker draws — there is no
+// other signal for "which of the ones that work", and an arbitrary-but-stable
+// answer beats one that changes with the shape of the stored set.
+test('with several left, the substitute is the first the picker would show', () => {
+  assert.equal(effectiveDefaultBackend('claude-tmux', { disabled: ['claude-tmux'] }), 'pi-rpc');
+  assert.equal(
+    effectiveDefaultBackend('claude-tmux', { disabled: ['claude-tmux', 'pi-rpc'] }),
+    'codex-exec',
+  );
+});
+
+// Same floor as the picker's: a machine with everything off still has to name
+// something, and claude-tmux is the one backend that needs no per-machine setup.
+test('everything off falls back to the same floor the picker uses', () => {
+  const cfg = { disabled: [...BACKEND_OPTIONS] };
+  assert.equal(effectiveDefaultBackend('codex-exec', cfg), 'claude-tmux');
+});
+
+test('triage is substituted for, and substituted to, as a whole card', () => {
+  assert.equal(effectiveDefaultBackend('triage', { disabled: ['triage'] }), 'claude-tmux');
+  assert.equal(
+    effectiveDefaultBackend('claude-tmux', { disabled: ['claude-tmux', 'pi-rpc', 'codex-exec'] }),
+    'triage',
+  );
+});
+
+// ── reading the Machine row ─────────────────────────────────────────────────
+
+test('a machine row with no config reads as nothing configured', () => {
+  assert.equal(backendsConfigOf(null), null);
+  assert.equal(backendsConfigOf({}), null);
+  assert.equal(backendsConfigOf({ backendsConfig: null }), null);
+});
+
+test('a stored config is read back as itself', () => {
+  assert.deepEqual(backendsConfigOf({ backendsConfig: { disabled: ['codex-exec'] } }), {
+    disabled: ['codex-exec'],
+  });
+});
+
+// Nothing validates what an older release wrote into the JSON column, so a shape
+// this build cannot read has to mean "everything enabled" rather than throw on
+// the gateway's 2s poll.
+test('a config of the wrong shape reads as nothing configured', () => {
+  assert.equal(backendsConfigOf({ backendsConfig: 'codex-exec' }), null);
+  assert.equal(backendsConfigOf({ backendsConfig: ['codex-exec'] }), null);
+  assert.equal(backendsConfigOf({ backendsConfig: { disabled: 'codex-exec' } }), null);
+  assert.deepEqual(backendsConfigOf({ backendsConfig: { disabled: [1, 'pi-rpc'] } }), {
+    disabled: ['pi-rpc'],
+  });
 });

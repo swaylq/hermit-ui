@@ -29,8 +29,9 @@ import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
 import { BackendPicker } from './chat/backend-picker';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import {
-  isRuntimeKind, toBackendOption, TRIAGE_MODE, type RuntimeKind, type BackendOption,
+  backendLabel, toBackendOption, TRIAGE_MODE, type RuntimeKind, type BackendOption,
 } from '@/lib/runtime-labels';
+import { effectiveDefaultBackend } from '@/lib/backend-availability';
 import { PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
 
 // ── Deferred sub-trees ───────────────────────────────────────────────────────
@@ -327,25 +328,40 @@ export function AgentDetailSheet({
 // so the stored value only pins a mode that differs from it.
 function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput['agent']; agentName: string }) {
   const utils = trpc.useUtils();
-  const storedRuntime: RuntimeKind = isRuntimeKind(agent.runtime) ? agent.runtime : 'claude-tmux';
+  // The same query (and staleTime) the picker inside this section runs, so
+  // react-query serves both from one request. Read here as well because the
+  // section has to know whether the STORED default is one this machine offers.
+  const cfg = trpc.machines.getBackendsConfig.useQuery(undefined, { staleTime: 60_000 });
   // triage is excluded here on purpose: it is shown as its own card, so leaving
   // it out means flipping triage → pi opens the Mode select on the fleet default
   // instead of on a mode the select does not even offer.
   const storedMode: PiMode | null =
     isPiMode(agent.runtimeMode) && agent.runtimeMode !== TRIAGE_MODE ? agent.runtimeMode : null;
   const storedBackend: BackendOption = toBackendOption(agent.runtime, agent.runtimeMode);
+  // What the default resolves to ON THIS MACHINE. An agent whose stored default
+  // has been switched off under Settings → Backends falls through to one the
+  // machine runs — the same substitution the server applies when a session
+  // inherits — so this section opens on the answer, not on a card marked "off".
+  const baseBackend: BackendOption = effectiveDefaultBackend(storedBackend, cfg.data);
+  const baseRuntime: RuntimeKind = baseBackend === TRIAGE_MODE ? 'pi-rpc' : baseBackend;
+  const substituted = baseBackend !== storedBackend;
   const [draftRuntime, setDraftRuntime] = useState<BackendOption | null>(null);
   const [draftMode, setDraftMode] = useState<PiMode | null>(null);
-  const shownBackend: BackendOption = draftRuntime ?? storedBackend;
+  const shownBackend: BackendOption = draftRuntime ?? baseBackend;
   const shownRuntime: RuntimeKind = shownBackend === TRIAGE_MODE ? 'pi-rpc' : shownBackend;
   const shownMode: PiMode = draftMode ?? storedMode ?? DEFAULT_PI_MODE;
-  // The stored value's shape: DEFAULT_PI_MODE is stored as null (fleet default).
-  const storeMode = (m: PiMode) => (m === DEFAULT_PI_MODE ? null : m);
-  // What Save would write. Triage pins its own mode — the card IS the mode —
-  // so it is never subject to the DEFAULT_PI_MODE-as-null rule.
-  const nextMode: string | null =
-    shownBackend === TRIAGE_MODE ? TRIAGE_MODE : shownRuntime === 'pi-rpc' ? storeMode(shownMode) : null;
-  const dirty = shownRuntime !== storedRuntime || nextMode !== (agent.runtimeMode ?? null);
+  // What Save would write for a card + mode. Triage pins its own mode — the card
+  // IS the mode — so it is never subject to the DEFAULT_PI_MODE-as-null rule;
+  // pi stores only a mode that differs from the fleet default; the rest have no
+  // mode at all.
+  const modeToStore = (b: BackendOption, m: PiMode): string | null =>
+    b === TRIAGE_MODE ? TRIAGE_MODE : b === 'pi-rpc' ? (m === DEFAULT_PI_MODE ? null : m) : null;
+  const nextMode: string | null = modeToStore(shownBackend, shownMode);
+  // Measured against what the sheet OPENED on, and through the same
+  // normalization, so neither a machine-level substitution nor a stored mode
+  // that spells out the fleet default makes an untouched sheet look edited.
+  const dirty =
+    shownRuntime !== baseRuntime || nextMode !== modeToStore(baseBackend, storedMode ?? DEFAULT_PI_MODE);
   const save = trpc.agents.setDefaultRuntime.useMutation({
     onSuccess: () => {
       // byName is cached at 30s (detail) / 60s (new-chat); invalidate so the
@@ -363,7 +379,19 @@ function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput[
     <section>
       <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">default backend</h3>
       <div className="rounded-lg border border-border bg-card p-3 space-y-3">
-        <BackendPicker value={shownBackend} onChange={setDraftRuntime} agentDefault={storedBackend} />
+        {/* The badge marks the EFFECTIVE default, not the stored one: it is
+            there to say "this is what your chats open on", and on a machine that
+            has the stored backend switched off that is a different card. */}
+        <BackendPicker value={shownBackend} onChange={setDraftRuntime} agentDefault={baseBackend} />
+        {substituted && (
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {backendLabel(storedBackend)} is this agent&apos;s stored default, but it is switched off
+            on this machine — so new chats and sessions open on {backendLabel(baseBackend)} instead.
+            Turning it back on under{' '}
+            <Link href="/backends" className="underline hover:text-foreground">Settings → Backends</Link>{' '}
+            restores it; nothing here has to be re-saved.
+          </p>
+        )}
         {shownBackend === 'pi-rpc' && (
           <label className="block">
             <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Mode</span>
