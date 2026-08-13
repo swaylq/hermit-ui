@@ -452,15 +452,35 @@ export class CodexExecRuntime implements AgentRuntime {
     }
 
     const codex = client(session);
-    const threadId = session.externalSessionId?.trim() || null;
     const opts = threadOptions(session);
+
+    // `externalSessionId` (the DB's `claudeSessionId`) is ONE slot shared by
+    // every backend, so a session switched here from claude or pi arrives still
+    // holding THAT backend's id. Handing it to resumeThread makes codex answer
+    // `thread/resume: no rollout found` — and because a foreign id never
+    // becomes valid, every retry fails identically and the session is bricked
+    // (measured: a claude uuid survived the switch and the chat went dead).
+    // The rollout lookup was already happening two lines down to seed the token
+    // counters; doing it FIRST makes it the resume guard too, at no extra cost.
+    // No rollout means no thread to resume — start a fresh one, the same
+    // self-healing the tmux path does when a recorded transcript is gone.
+    const recordedId = session.externalSessionId?.trim() || null;
+    const rolloutFile = recordedId ? findRolloutFile(recordedId) : null;
+    const threadId = rolloutFile ? recordedId : null;
+    if (recordedId && !threadId) {
+      // Loud, because the other way to get here is a codex thread whose rollout
+      // was deleted — same recovery, but real history was just dropped.
+      console.warn(
+        `[codex] session=${session.id.slice(0, 8)}: no rollout for recorded thread ` +
+        `${recordedId.slice(0, 8)} — starting a fresh thread`,
+      );
+    }
     const thread = threadId ? codex.resumeThread(threadId, opts) : codex.startThread(opts);
 
     // Seed both cumulative statistics and current-window occupancy from codex's
     // own file so a gateway restart does not blank or inflate the context bar.
     let totals: Totals | null = null;
     let lastTurn: { contextTokens: number; outputTokens: number } | null = null;
-    const rolloutFile = threadId ? findRolloutFile(threadId) : null;
     if (rolloutFile) {
       const seeded = readRolloutTokens(rolloutFile);
       if (seeded) {

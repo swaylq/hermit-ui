@@ -504,6 +504,13 @@ export const chatRouter = router({
           // and each is a no-op for a session that never had one, so it does not
           // need to know which direction the switch went.
           ...(plan.restart ? { hibernateRequestedAt: new Date() } : {}),
+          // Drop the outgoing backend's session id. The incoming one reads this
+          // same column as "the conversation to resume", and a foreign id is at
+          // best meaningless to it — for codex it is fatal and permanent
+          // (`thread/resume: no rollout found`, identically on every retry).
+          // The gateway stamps the new backend's own id back here on its first
+          // turn, so clearing it is all the handover needs.
+          ...(plan.resetExternalId ? { claudeSessionId: null } : {}),
         },
       });
 

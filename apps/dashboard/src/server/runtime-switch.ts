@@ -19,7 +19,19 @@ import type { RuntimeChoice } from './runtime-resolve';
 
 export type SwitchPlan =
   | { ok: false; reason: string }
-  | { ok: true; restart: boolean };
+  | {
+      ok: true;
+      restart: boolean;
+      /**
+       * Whether `claudeSessionId` must be dropped on the way through.
+       *
+       * That column is ONE slot holding whichever backend last ran the session
+       * — a claude transcript uuid, a codex thread id, a pi session id — and
+       * the incoming backend cannot resume the outgoing one's. Deliberately
+       * NOT the same condition as `restart`: see below.
+       */
+      resetExternalId: boolean;
+    };
 
 /**
  * @param session   the row's live state (only `state` is consulted)
@@ -39,14 +51,18 @@ export function planRuntimeSwitch(
     return { ok: false, reason: 'This session is mid-turn. Wait for it to finish, or stop the turn, then switch.' };
   }
 
-  if (before.runtime !== after.runtime) return { ok: true, restart: true };
+  // A real backend change is the one case that invalidates the external id. Note
+  // this is NOT interchangeable with `restart`: pi restarts on a bare model or
+  // mode change, and clearing the id there would silently discard the very
+  // conversation the restart is meant to carry over.
+  if (before.runtime !== after.runtime) return { ok: true, restart: true, resetExternalId: true };
 
   // codex reads the model off these columns like pi does, but it has no
   // long-lived process to tear down — each turn is its own `codex exec`, and
   // the gateway rebuilds the thread object (resuming the same thread id, so the
   // conversation survives) the moment it sees a different model. Restarting
   // would hibernate a session to achieve something the next turn does anyway.
-  if (after.runtime === 'codex-exec') return { ok: true, restart: false };
+  if (after.runtime === 'codex-exec') return { ok: true, restart: false, resetExternalId: false };
 
   // Same backend. Only the child-process backends read provider/model/mode off
   // these columns; claude takes its model from the machine's settings.json.
@@ -55,8 +71,8 @@ export function planRuntimeSwitch(
       (before.runtimeProvider ?? null) !== (after.runtimeProvider ?? null) ||
       (before.runtimeModel ?? null) !== (after.runtimeModel ?? null) ||
       (before.runtimeMode ?? null) !== (after.runtimeMode ?? null);
-    return { ok: true, restart: moved };
+    return { ok: true, restart: moved, resetExternalId: false };
   }
 
-  return { ok: true, restart: false };
+  return { ok: true, restart: false, resetExternalId: false };
 }

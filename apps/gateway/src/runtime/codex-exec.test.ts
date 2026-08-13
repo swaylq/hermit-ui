@@ -137,6 +137,67 @@ test('a persisted thread repairs context immediately after a gateway restart', a
   });
 });
 
+// The production incident: a session ran on claude-tmux, was switched to codex,
+// and arrived here still carrying the CLAUDE transcript uuid in the one
+// externalSessionId slot the backends share. codex answered
+// `thread/resume: no rollout found ... (code -32600)` and — because a foreign id
+// never becomes resumable — did so on every retry after it. The chat was dead.
+test('an id no rollout backs starts a fresh thread instead of failing forever', async (t) => {
+  const home = fixtureHome();
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  const runtime = new CodexExecRuntime();
+  let handle: { sessionId: string; externalSessionId: string } | null = null;
+  t.after(async () => {
+    if (handle) await runtime.stop(handle, 'kill');
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  handle = await runtime.ensure({
+    id: `foreign-id-${Date.now()}`,
+    agentName: 'test',
+    agentDirectory: home,
+    externalSessionId: 'dcc075e8-4b58-4d9e-82b3-df400a8a797e', // a claude uuid
+    model: 'gpt-5.6-sol',
+  }, () => {});
+
+  // Empty, not the foreign id: nothing was resumed, so there is no thread id yet
+  // — codex reports its own on the first turn and that is what gets stamped.
+  assert.equal(handle.externalSessionId, '');
+});
+
+test('a thread whose rollout is on disk still resumes', async (t) => {
+  const home = fixtureHome();
+  const threadId = '019ff0c6-45a0-7c03-ae54-7d8b99451e89';
+  fs.writeFileSync(
+    path.join(home, 'sessions', '2026', '08', '11', `rollout-2026-08-11T20-22-33-${threadId}.jsonl`),
+    `${tokenLine([12_111_907, 61_219], [26_630, 512])}\n`,
+  );
+
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  const runtime = new CodexExecRuntime();
+  let handle: { sessionId: string; externalSessionId: string } | null = null;
+  t.after(async () => {
+    if (handle) await runtime.stop(handle, 'kill');
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  handle = await runtime.ensure({
+    id: `own-id-${Date.now()}`,
+    agentName: 'test',
+    agentDirectory: home,
+    externalSessionId: threadId,
+    model: 'gpt-5.6-sol',
+  }, () => {});
+
+  assert.equal(handle.externalSessionId, threadId);
+});
+
 test('cumulative-only rollout data does not masquerade as current context', (t) => {
   const home = fixtureHome();
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

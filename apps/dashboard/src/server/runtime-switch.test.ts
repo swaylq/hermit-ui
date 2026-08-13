@@ -14,25 +14,59 @@ test('a mid-turn session refuses the switch', () => {
 });
 
 test('an idle session switches backends and needs the old process torn down', () => {
-  assert.deepEqual(planRuntimeSwitch({ state: 'idle' }, claude, pi()), { ok: true, restart: true });
-  assert.deepEqual(planRuntimeSwitch({ state: null }, pi(), claude), { ok: true, restart: true });
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, claude, pi()),
+    { ok: true, restart: true, resetExternalId: true },
+  );
+  assert.deepEqual(
+    planRuntimeSwitch({ state: null }, pi(), claude),
+    { ok: true, restart: true, resetExternalId: true },
+  );
+});
+
+// claudeSessionId is one slot per session, whatever backend last held it. A
+// claude uuid handed to codex is not merely useless — codex fails the turn with
+// `thread/resume: no rollout found`, forever, and the chat goes silent. It has
+// to be cleared on the way across.
+test('crossing to another backend clears the external session id', () => {
+  const codex = { runtime: 'codex-exec', runtimeProvider: null, runtimeModel: null, runtimeMode: null };
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, claude, codex),
+    { ok: true, restart: true, resetExternalId: true },
+  );
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, codex, claude),
+    { ok: true, restart: true, resetExternalId: true },
+  );
+});
+
+// The trap this guards: `restart` and `resetExternalId` look interchangeable and
+// are not. pi restarts to adopt a new model, and the whole point of that restart
+// is that the SAME conversation continues on it.
+test('restarting pi for a new model keeps its session id', () => {
+  const plan = planRuntimeSwitch(
+    { state: 'idle' },
+    pi('hyqubit', 'claude-opus-5'),
+    pi('hyqubit', 'claude-sonnet-5'),
+  );
+  assert.deepEqual(plan, { ok: true, restart: true, resetExternalId: false });
 });
 
 // pi passes provider+model to RpcClient when it spawns the child, so a session
 // already talking to one model cannot be re-pointed without a fresh child.
 test('re-pointing a pi session at a different model restarts it', () => {
   const plan = planRuntimeSwitch({ state: 'idle' }, pi('hyqubit', 'claude-opus-5'), pi('hyqubit', 'claude-sonnet-5'));
-  assert.deepEqual(plan, { ok: true, restart: true });
+  assert.deepEqual(plan, { ok: true, restart: true, resetExternalId: false });
 });
 
 test('a different pi provider restarts it too', () => {
   const plan = planRuntimeSwitch({ state: 'idle' }, pi('openrouter', 'x'), pi('hyqubit', 'x'));
-  assert.deepEqual(plan, { ok: true, restart: true });
+  assert.deepEqual(plan, { ok: true, restart: true, resetExternalId: false });
 });
 
 test('re-saving a pi session unchanged does not restart it', () => {
   const plan = planRuntimeSwitch({ state: 'idle' }, pi('hyqubit', 'claude-opus-5'), pi('hyqubit', 'claude-opus-5'));
-  assert.deepEqual(plan, { ok: true, restart: false });
+  assert.deepEqual(plan, { ok: true, restart: false, resetExternalId: false });
 });
 
 // Claude Code reads its model from the machine's ~/.claude/settings.json; these
@@ -43,7 +77,7 @@ test('provider/model churn on a claude session is inert', () => {
     { runtime: 'claude-tmux', runtimeProvider: 'anthropic', runtimeModel: 'opus', runtimeMode: null },
     { runtime: 'claude-tmux', runtimeProvider: null, runtimeModel: null, runtimeMode: null },
   );
-  assert.deepEqual(plan, { ok: true, restart: false });
+  assert.deepEqual(plan, { ok: true, restart: false, resetExternalId: false });
 });
 
 test('null and undefined provider/model are the same absence', () => {
@@ -57,7 +91,7 @@ test('null and undefined provider/model are the same absence', () => {
       runtimeMode: undefined as unknown as null,
     },
   );
-  assert.deepEqual(plan, { ok: true, restart: false });
+  assert.deepEqual(plan, { ok: true, restart: false, resetExternalId: false });
 });
 
 // A mode is nothing but spawn arguments — system prompt, tool allowlist, skills,
@@ -69,7 +103,7 @@ test('changing the pi mode restarts the child', () => {
     pi('hyqubit', 'claude-opus-5', 'coding'),
     pi('hyqubit', 'claude-opus-5', 'ops'),
   );
-  assert.deepEqual(plan, { ok: true, restart: true });
+  assert.deepEqual(plan, { ok: true, restart: true, resetExternalId: false });
 });
 
 test('same mode does not restart', () => {
@@ -78,7 +112,7 @@ test('same mode does not restart', () => {
     pi('hyqubit', 'claude-opus-5', 'ops'),
     pi('hyqubit', 'claude-opus-5', 'ops'),
   );
-  assert.deepEqual(plan, { ok: true, restart: false });
+  assert.deepEqual(plan, { ok: true, restart: false, resetExternalId: false });
 });
 
 test('mode churn on a claude session is inert', () => {
@@ -87,5 +121,5 @@ test('mode churn on a claude session is inert', () => {
     { runtime: 'claude-tmux', runtimeProvider: null, runtimeModel: null, runtimeMode: 'ops' },
     { runtime: 'claude-tmux', runtimeProvider: null, runtimeModel: null, runtimeMode: 'coding' },
   );
-  assert.deepEqual(plan, { ok: true, restart: false });
+  assert.deepEqual(plan, { ok: true, restart: false, resetExternalId: false });
 });
