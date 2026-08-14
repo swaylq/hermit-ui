@@ -1399,20 +1399,34 @@ function transcriptSize(p: string): number {
 }
 
 /**
- * Robust first-turn / cold-start delivery (issue #2). On a fresh or just-respawned
- * pane the Ink TUI may not be ready when we type, silently dropping the prompt AND
- * its submit Enter — leaving the composer EMPTY. An empty composer otherwise reads
- * as "submitted", so the lost message would never retry and the chat sticks on
- * "starting" forever. Three defenses:
- *   1. wait for the `❯` composer to render before the first keystroke (+ a short
- *      settle — Ink can still drop the very first keys right after `❯` appears);
- *   2. confirm a turn actually STARTED (the transcript grew) before trusting it — a
- *      cleared composer is ambiguous (submitted vs never-landed look identical);
+ * Robust delivery. The Ink TUI can swallow a prompt AND its submit Enter, leaving
+ * the composer EMPTY — which is indistinguishable, by looking at the composer, from
+ * a message that submitted cleanly. So the composer is never the proof; the proof is
+ * that a turn actually STARTED, i.e. the transcript grew. Three defenses:
+ *   1. on a cold start, wait for the `❯` composer to render before the first
+ *      keystroke (+ a short settle — Ink can still drop the very first keys right
+ *      after `❯` appears);
+ *   2. confirm a turn started before trusting the send, on EVERY path;
  *   3. if no turn started and the composer is empty, the text was dropped → re-send
- *      once (cold start only). If the composer still HOLDS text, only re-press Enter
- *      (never re-type → never a duplicate turn).
+ *      once. If the composer still HOLDS text, only re-press Enter (never re-type →
+ *      never a duplicate turn).
  * Happy path is unchanged: a clean send grows the transcript within a second and it
  * returns 'delivered' immediately.
+ *
+ * Defense 2 used to be cold-start-only, and that hole is what 2026-08-14 found: TEN
+ * sessions on one machine were each holding a message that had been typed into the
+ * pane and then vanished — no turn, no reply, no warning. The warm path sent, saw a
+ * cleared composer, and returned 'delivered'; the drop it cannot see happens exactly
+ * where these sessions live — a big, long-running chat still rendering the previous
+ * turn's output reads as idle to the deliver gate and eats the keystrokes anyway. The
+ * user was told nothing, because 'delivered' is what suppresses the warning, and the
+ * text existed nowhere but a pane's placeholder — recoverable only by hand, days later.
+ * A warm pane is not a safer pane; it is the same pane one turn later.
+ *
+ * Re-typing cannot duplicate a turn: growth from ANY source — including a turn already
+ * in flight that our message merely queued behind — counts as started and returns
+ * before the re-send. The only way to reach the second send is a transcript that did
+ * not move at all, and a transcript that did not move ran nothing to duplicate.
  *
  * On failure it says WHICH failure, because the two need opposite responses:
  *   'deaf-pane' — the pane is not reading stdin at all (see diagnoseFailedSubmit).
@@ -1422,39 +1436,64 @@ function transcriptSize(p: string): number {
  */
 type SubmitOutcome = 'delivered' | 'deaf-pane' | 'unsent';
 
-async function robustSubmit(session: PendingSession, state: SessionState, promptText: string, freshSpawn: boolean): Promise<SubmitOutcome> {
-  const nap = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+// Everything robustSubmit does to the world outside the transcript file, injectable
+// so the unit test can drive the sequence without a tmux pane (and without its naps).
+export type SubmitDeps = {
+  sendKeys: (sessionId: string, text: string) => void;
+  confirmSubmitted: (sessionId: string, tries?: number) => Promise<boolean>;
+  readComposer: (sessionId: string) => 'text' | 'clear' | 'unknown';
+  waitForReplReady: (sessionId: string, timeoutMs: number) => Promise<unknown>;
+  diagnoseFailedSubmit: (sessionId: string, text: string, started: () => boolean) => Promise<SubmitOutcome>;
+  nap: (ms: number) => Promise<void>;
+};
 
-  // Warm pane: the composer is already up, so the cold-start drop can't happen here.
-  // Send + confirm submission exactly as before (a cleared composer reliably means
-  // submitted) — no transcript poll, no re-type — so the common path is unchanged.
-  // The transcript baseline is taken on BOTH paths now, not just the cold one: growth
-  // is proof a turn ran, and its absence is the corroboration diagnoseFailedSubmit
-  // needs before it is allowed to condemn a pane.
+const REAL_SUBMIT_DEPS: SubmitDeps = {
+  sendKeys,
+  confirmSubmitted,
+  readComposer,
+  waitForReplReady,
+  diagnoseFailedSubmit,
+  nap: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
+};
+
+export async function robustSubmit(
+  session: Pick<PendingSession, 'id'>,
+  state: Pick<SessionState, 'jsonlPath'>,
+  promptText: string,
+  freshSpawn: boolean,
+  deps: SubmitDeps = REAL_SUBMIT_DEPS,
+): Promise<SubmitOutcome> {
+  const { sendKeys, confirmSubmitted, readComposer, waitForReplReady, diagnoseFailedSubmit, nap } = deps;
+
+  // Growth is proof a turn ran, and its absence is the corroboration
+  // diagnoseFailedSubmit needs before it is allowed to condemn a pane.
   const base = transcriptSize(state.jsonlPath);
   const started = () => transcriptSize(state.jsonlPath) > base;
+  const awaitTurn = async (ticks: number) => {
+    for (let i = 0; i < ticks && !started(); i++) await nap(500);
+    return started();
+  };
 
-  if (!freshSpawn) {
-    sendKeys(session.id, promptText);
-    if (await confirmSubmitted(session.id, 40)) return 'delivered';
-    return diagnoseFailedSubmit(session.id, promptText, started);
+  if (freshSpawn) {
+    // The Ink TUI may not be up yet at all.
+    await waitForReplReady(session.id, 45_000);
+    await nap(800); // settle: Ink can drop the very first keys right after `❯` renders
   }
-
-  // Cold / fresh spawn: the Ink TUI may not be ready, so use the robust path.
-  await waitForReplReady(session.id, 45_000);
-  await nap(800); // settle: Ink can drop the very first keys right after `❯` renders
+  // A cold pane gets the longer budgets: a --resume reloading full history can take
+  // minutes to become interactive, while a warm one either moves in a second or is
+  // not going to. Both are ceilings on a failing send, not on a working one.
+  const enterTries = freshSpawn ? 120 : 40; // re-press Enter until the composer clears
+  const turnTicks = freshSpawn ? 30 : 20;   // ≤15s / ≤10s for the turn's first line
 
   for (let send = 0; send < 2; send++) {
     sendKeys(session.id, promptText);            // type + submit
-    await confirmSubmitted(session.id, 120);      // re-press Enter until the composer clears
-    for (let i = 0; i < 30 && !started(); i++) await nap(500); // ≤15s for the turn's first line
-    if (started()) return 'delivered';
+    await confirmSubmitted(session.id, enterTries);
+    if (await awaitTurn(turnTicks)) return 'delivered';
     // No turn ran. If text is still buffered it only needs more Enter (hammer it,
     // never re-type → no duplicate). If the composer is empty, it was dropped → re-send.
     if (readComposer(session.id) === 'text') {
       await confirmSubmitted(session.id, 120);
-      for (let i = 0; i < 30 && !started(); i++) await nap(500);
-      if (started()) return 'delivered';
+      if (await awaitTurn(turnTicks)) return 'delivered';
       return diagnoseFailedSubmit(session.id, promptText, started);
     }
     // composer empty + nothing started → dropped → loop re-sends once

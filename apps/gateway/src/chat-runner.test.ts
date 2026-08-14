@@ -13,7 +13,8 @@ import path from 'node:path';
 
 // config.ts exits the process without a key; nothing here talks to the dashboard.
 process.env.ASST_KEY ||= 'test-key-unused';
-const { resolveResumedUuid } = await import('./chat-runner');
+const { resolveResumedUuid, robustSubmit } = await import('./chat-runner');
+type SubmitDeps = Parameters<typeof robustSubmit>[4];
 
 const CWD = '/Users/test/agent';
 const RECORDED = '11111111-1111-4111-8111-111111111111';
@@ -122,5 +123,96 @@ describe('resolveResumedUuid', () => {
       }),
       /Timed out waiting for resumed claude transcript/,
     );
+  });
+});
+
+// robustSubmit — the "did this message actually run?" gate.
+//
+// 2026-08-14: ten sessions on one machine were each sitting on a message that had
+// been typed into the pane and then vanished — no turn, no reply, and no warning,
+// because the warm path called a cleared composer proof of submission. The proof is
+// the transcript growing; these tests are the two halves of that rule — a send that
+// grew nothing is retried and then reported, and growth from ANY source (including a
+// turn our message merely queued behind) stops us re-typing into a duplicate.
+describe('robustSubmit', () => {
+  const SID = 'cmtestsession0001';
+  const UUID = '33333333-3333-4333-8333-333333333333';
+  const jsonlPath = () => path.join(projectDir, `${UUID}.jsonl`);
+
+  // A pane that takes the keys, clears its composer, and runs nothing — the drop.
+  function deps(over: Partial<SubmitDeps> = {}): SubmitDeps & { sends: string[] } {
+    const sends: string[] = [];
+    return {
+      sends,
+      sendKeys: (_id: string, text: string) => { sends.push(text); },
+      confirmSubmitted: async () => true,          // composer cleared
+      readComposer: () => 'clear' as const,
+      waitForReplReady: async () => true,
+      diagnoseFailedSubmit: async () => 'deaf-pane' as const,
+      nap: async () => {},                          // no real waiting in tests
+      ...over,
+    };
+  }
+  const session = { id: SID };
+
+  it('a cleared composer is not proof: no transcript growth → re-send once, then unsent', async () => {
+    clean();
+    jsonl(UUID, 2);
+    const d = deps();
+    assert.equal(await robustSubmit(session, { jsonlPath: jsonlPath() }, 'hello', false, d), 'unsent');
+    assert.deepEqual(d.sends, ['hello', 'hello']); // dropped text is safe to re-type
+  });
+
+  it('growth right after the send is delivered, with exactly one send', async () => {
+    clean();
+    jsonl(UUID, 2);
+    const d = deps();
+    d.sendKeys = (_id: string, text: string) => { d.sends.push(text); append(UUID, 'turn-started'); };
+    assert.equal(await robustSubmit(session, { jsonlPath: jsonlPath() }, 'hi', false, d), 'delivered');
+    assert.deepEqual(d.sends, ['hi']);
+  });
+
+  it('a first send that drops and a second that lands is delivered', async () => {
+    clean();
+    jsonl(UUID, 2);
+    const d = deps();
+    let n = 0;
+    d.sendKeys = (_id: string, text: string) => { d.sends.push(text); if (++n === 2) append(UUID, 'turn-started'); };
+    assert.equal(await robustSubmit(session, { jsonlPath: jsonlPath() }, 'hi', false, d), 'delivered');
+    assert.equal(d.sends.length, 2);
+  });
+
+  it('never re-types into a turn already in flight — growth is growth', async () => {
+    clean();
+    jsonl(UUID, 2);
+    // The transcript is moving because a turn we queued behind is writing to it.
+    const d = deps({ nap: async () => { append(UUID, 'someone-elses-line'); } });
+    assert.equal(await robustSubmit(session, { jsonlPath: jsonlPath() }, 'hi', false, d), 'delivered');
+    assert.equal(d.sends.length, 1);
+  });
+
+  it('text still buffered is hammered with Enter, never re-typed, then diagnosed', async () => {
+    clean();
+    jsonl(UUID, 2);
+    let enters = 0;
+    const d = deps({
+      confirmSubmitted: async () => { enters++; return false; },
+      readComposer: () => 'text' as const,
+    });
+    assert.equal(await robustSubmit(session, { jsonlPath: jsonlPath() }, 'hi', false, d), 'deaf-pane');
+    assert.equal(d.sends.length, 1);  // re-typing on top of buffered text would duplicate
+    assert.equal(enters, 2);          // the send's own confirm, then the hammer round
+  });
+
+  it('a cold start waits for the REPL before typing', async () => {
+    clean();
+    jsonl(UUID, 2);
+    const order: string[] = [];
+    const d = deps({
+      waitForReplReady: async () => { order.push('wait'); return true; },
+      sendKeys: (_id: string, text: string) => { order.push(`send:${text}`); append(UUID, 'turn-started'); },
+    });
+    assert.equal(await robustSubmit(session, { jsonlPath: jsonlPath() }, 'hi', true, d), 'delivered');
+    assert.deepEqual(order, ['wait', 'send:hi']);
   });
 });
