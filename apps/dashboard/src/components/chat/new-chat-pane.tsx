@@ -9,6 +9,7 @@ import { Plus } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { SearchSelect } from '@/components/ui/search-select';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { BackendPicker } from './backend-picker';
 import { toBackendOption, fromBackendOption, type BackendOption } from '@/lib/runtime-labels';
@@ -113,14 +114,20 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
           {!lockedAgent && (
             <label className="block">
               <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Agent</span>
-              <Select value={agent} onValueChange={(v) => setPicked(v ?? '')} modal={false}>
-                <SelectTrigger aria-label="select agent" className="mt-1.5 w-full py-2 text-sm font-mono">
-                  <SelectValue>{(v: string | null) => (v ? v : (agents.length ? 'Pick an agent' : 'no agents found'))}</SelectValue>
-                </SelectTrigger>
-                <SelectContent className="font-mono">
-                  {agents.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              {/* Searchable: a fleet outgrows the length of list you can scan, and
+                  by the time it does you already know the name you want. */}
+              <SearchSelect
+                value={agent}
+                onValueChange={setPicked}
+                items={agents}
+                placeholder="Pick an agent"
+                emptyPlaceholder="no agents found"
+                searchPlaceholder="search agents"
+                noMatchLabel="no agent matches"
+                aria-label="select agent"
+                className="mt-1.5 w-full py-2 text-sm font-mono"
+                popupClassName="font-mono"
+              />
             </label>
           )}
           <div className="block">
