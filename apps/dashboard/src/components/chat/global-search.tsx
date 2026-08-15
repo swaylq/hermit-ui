@@ -91,15 +91,13 @@ function SearchPanel({ close }: { close: () => void }) {
   const status = useChatCacheSyncStatus();
   const coverage = coverageLabel(status);
 
+  // The unfiltered answer drives the filter options: the dropdown must keep
+  // listing every agent that matched the query, even while one is selected.
+  const unfiltered = useChatSearch(query);
+
   // The filter is resolved to a session allow-list here, where the session meta
   // (agent name) is already in hand. search-core only knows message rows, which
   // carry no agent, so the agent → sessions join must happen before the search.
-  const agentNames = useMemo(() => {
-    const names = new Set<string>();
-    for (const s of meta.values()) if (s.agentName) names.add(s.agentName);
-    return Array.from(names).sort();
-  }, [meta]);
-
   const sessionIds = useMemo(() => {
     if (!agentFilter) return undefined;
     const ids: string[] = [];
@@ -108,6 +106,22 @@ function SearchPanel({ close }: { close: () => void }) {
   }, [meta, agentFilter]);
 
   const { result, searching } = useChatSearch(query, sessionIds ? { sessionIds } : {});
+
+  // With a query, offer only the agents that actually matched (taken from the
+  // unfiltered answer so the list doesn't collapse to the one selected). With no
+  // query, offer every cached agent so the filter can pre-scope the search.
+  const agentNames = useMemo(() => {
+    const names = new Set<string>();
+    if (query.trim()) {
+      for (const h of unfiltered.result?.hits ?? []) {
+        const a = meta.get(h.sessionId)?.agentName;
+        if (a) names.add(a);
+      }
+    } else {
+      for (const s of meta.values()) if (s.agentName) names.add(s.agentName);
+    }
+    return Array.from(names).sort();
+  }, [query, unfiltered.result, meta]);
 
   useEffect(() => inputRef.current?.focus(), []);
 
