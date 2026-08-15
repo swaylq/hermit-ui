@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   CodexExecRuntime, readRolloutTokens, findRolloutFile, resolveCodexModel,
-  clampEffort, hermitMcpConfigFor,
+  clampEffort, hermitMcpConfigFor, httpsTransportConfig,
 } from './codex-exec';
 
 // ── the rollout file, which is how a restarted gateway gets its baseline ──────
@@ -388,4 +388,54 @@ test('the tool timeout clears the ask tool ceiling', () => {
     id: 's', agentName: 'a', agentDirectory: '/tmp', externalSessionId: null, model: null, mode: null,
   });
   assert.ok((cfg.mcp_servers as any).hermit.tool_timeout_sec >= 4 * 3600);
+});
+
+// ── transport ────────────────────────────────────────────────────────────────
+//
+// codex prefers a WebSockets transport that some fleet networks cut mid-turn;
+// each hit costs 5 reconnects before the HTTPS fallback, every turn, because
+// exec-per-turn never remembers the fallback. The custom provider forces HTTPS
+// from the start. See httpsTransportConfig's own comment for the measurements.
+
+test('the https provider turns websockets off and keeps web search on', () => {
+  const previous = process.env.HERMIT_CODEX_WEBSOCKETS;
+  delete process.env.HERMIT_CODEX_WEBSOCKETS;
+  try {
+    const cfg = httpsTransportConfig();
+    assert.equal(cfg.model_provider, 'openai_https');
+    const provider = (cfg.model_providers as any).openai_https;
+    assert.equal(provider.supports_websockets, false);
+    // A custom provider defaults this to false; losing it would silently strip
+    // WebSearch from every codex session.
+    assert.equal(provider.supports_standalone_web_search, true);
+    // ChatGPT-plan routing, not the API-key endpoint — billing must not move.
+    assert.equal(provider.requires_openai_auth, true);
+    assert.match(String(provider.base_url), /^https:\/\/chatgpt\.com\//);
+  } finally {
+    if (previous === undefined) delete process.env.HERMIT_CODEX_WEBSOCKETS;
+    else process.env.HERMIT_CODEX_WEBSOCKETS = previous;
+  }
+});
+
+test('the version header rides along, matching the vendored CLI', () => {
+  const previous = process.env.HERMIT_CODEX_WEBSOCKETS;
+  delete process.env.HERMIT_CODEX_WEBSOCKETS;
+  try {
+    const provider = (httpsTransportConfig().model_providers as any).openai_https;
+    assert.match(String(provider.http_headers?.version), /^\d+\.\d+\.\d+/);
+  } finally {
+    if (previous === undefined) delete process.env.HERMIT_CODEX_WEBSOCKETS;
+    else process.env.HERMIT_CODEX_WEBSOCKETS = previous;
+  }
+});
+
+test('HERMIT_CODEX_WEBSOCKETS=1 restores the default transport', () => {
+  const previous = process.env.HERMIT_CODEX_WEBSOCKETS;
+  process.env.HERMIT_CODEX_WEBSOCKETS = '1';
+  try {
+    assert.deepEqual(httpsTransportConfig(), {});
+  } finally {
+    if (previous === undefined) delete process.env.HERMIT_CODEX_WEBSOCKETS;
+    else process.env.HERMIT_CODEX_WEBSOCKETS = previous;
+  }
 });

@@ -265,11 +265,87 @@ export function hermitMcpConfigFor(session: RuntimeSession): NonNullable<CodexOp
   };
 }
 
+/**
+ * The version of the codex CLI the SDK vendors, for the provider's `version`
+ * header below. Read from the SDK's package.json (same release train as the
+ * bundled binary); a machine that points HERMIT_CODEX_BIN elsewhere may drift
+ * from this, which is tolerable — the header is client identity, not protocol.
+ */
+function codexSdkVersion(): string | null {
+  // Not require.resolve: the SDK's exports map carries only an `import`
+  // condition, so a CJS resolve throws ERR_PACKAGE_PATH_NOT_EXPORTED. Walking
+  // up to the hoisted node_modules is the boring way that works everywhere.
+  try {
+    let dir = path.dirname(fileURLToPath(import.meta.url));
+    for (;;) {
+      const candidate = path.join(dir, 'node_modules', '@openai', 'codex-sdk', 'package.json');
+      if (fs.existsSync(candidate)) {
+        const pkg = JSON.parse(fs.readFileSync(candidate, 'utf8')) as { version?: string };
+        return pkg.version?.trim() || null;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) return null;
+      dir = parent;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Force the Responses API onto HTTPS/SSE instead of codex's preferred
+ * WebSockets transport.
+ *
+ * The gpt-5.6 model presets ship `prefer_websockets: true` baked into the
+ * binary, and upstream offers no plain off switch: the `responses_websockets`
+ * feature flag is removed, and overriding the built-in `openai` provider is
+ * rejected outright ("Built-in providers cannot be overridden"). On a network
+ * where a long-lived wss to chatgpt.com dies mid-turn — macmini003 and
+ * dgx-spark, per the dashboard's `[codex stream error]` rows — codex burns 5
+ * reconnect attempts before falling back to HTTPS, stalling the turn for
+ * minutes. And because this runtime is one `codex exec` per turn, the fallback
+ * is never remembered: every turn pays again (measured: 8 turns in one
+ * afternoon session, ~6–10 min each).
+ *
+ * So: a custom provider identical to the built-in ChatGPT one except
+ * `supports_websockets = false`. HTTPS/SSE succeeded on every observed
+ * fallback, on every machine. Verified against codex-cli 0.147.0:
+ * - no websocket is attempted (RUST_LOG=codex_api=debug shows no connect),
+ * - ChatGPT auth still applies (auth_mode stays Chatgpt, same plan),
+ * - a thread created under the built-in provider resumes cleanly here — the
+ *   provider id is per-invocation config, not thread state,
+ * - `supports_standalone_web_search` must be restated: a custom provider
+ *   defaults it to false, and these sessions lean on WebSearch.
+ *
+ * A machine whose network handles wss fine can take the default transport
+ * back with HERMIT_CODEX_WEBSOCKETS=1.
+ */
+export function httpsTransportConfig(): NonNullable<CodexOptions['config']> {
+  if (process.env.HERMIT_CODEX_WEBSOCKETS?.trim() === '1') return {};
+  const version = codexSdkVersion();
+  return {
+    model_provider: 'openai_https',
+    model_providers: {
+      openai_https: {
+        name: 'OpenAI (HTTPS only)',
+        base_url: 'https://chatgpt.com/backend-api/codex',
+        wire_api: 'responses',
+        requires_openai_auth: true,
+        supports_websockets: false,
+        supports_standalone_web_search: true,
+        // The built-in provider stamps the CLI version header; keep parity so
+        // the backend sees the same client identity on either transport.
+        ...(version ? { http_headers: { version } } : {}),
+      },
+    },
+  };
+}
+
 function client(session: RuntimeSession): Codex {
   const override = process.env.HERMIT_CODEX_BIN?.trim();
   return new Codex({
     ...(override ? { codexPathOverride: override } : {}),
-    config: hermitMcpConfigFor(session),
+    config: { ...hermitMcpConfigFor(session), ...httpsTransportConfig() },
   });
 }
 
