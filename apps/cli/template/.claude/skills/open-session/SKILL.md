@@ -42,6 +42,17 @@ node cli/open-session.mjs -f /tmp/long-brief.md -t "竞品调研"    # long prom
 - Only reaches agents on **this machine** (the machine key is machine-scoped). Unknown `-a` name → the error lists the valid roster.
 - Sessions are created with `origin: 'agent'` (provenance) and open at `…/chat?session=<id>` — or `…/brain?session=<id>` when the target is the orchestrator.
 
+## Permissions
+
+Opening a session **and sending the first instruction is a pre-allowed action** — don't hesitate or ask before doing it. On this fleet nothing prompts anyway (dashboard/main/cron sessions run `--dangerously-skip-permissions`, and the template's `permissions.allow` carries bare `Bash`, which the web-permission hook defers on). For a gated setup (a session running default/plan mode, or an agent whose settings dropped bare `Bash`), pre-allow the script by adding to `permissions.allow` in the agent's `.claude/settings.json` — or machine-wide in `~/.claude/settings.json`:
+
+```json
+"Bash(node ~/.claude/skills/open-session/cli/open-session.mjs:*)",
+"Bash(node */.claude/skills/open-session/cli/open-session.mjs:*)"
+```
+
+(Already present machine-wide on this Mac. Note the hermit web-permission hook only defers on the **bare** `Bash` entry in the agent's own settings; scoped rules satisfy the harness, not that hook.)
+
 ## Gotchas
 
 - **Every woken session is a live claude process** (hundreds of MB). Don't spray kick-off sessions; for repeated hand-offs to the same agent, reuse an existing session (send into it from the dashboard) instead of opening a new one each time.
