@@ -87,6 +87,10 @@ export type SearchOptions = {
   // report "3 / 47" and to know where the 47th is.
   limit?: number;
   sessionId?: string; // restrict to one session (drives the in-session find)
+  // Restrict to these sessions (drives the global overlay's agent filter). A
+  // session is allowed iff its id is in the set, so the caller pre-resolves the
+  // agent → sessions mapping — the corpus rows carry no agent name.
+  sessionIds?: readonly string[];
   // 'newest' for the global overlay (recency is the only ranking a chat log
   // supports); 'chronological' for the in-session find, so ↑/↓ walk the
   // conversation in the same direction the timeline scrolls.
@@ -105,11 +109,13 @@ export function searchCorpus(corpus: CorpusEntry[], query: string, opts: SearchO
 
   const fold = needsCaseFold(q);
   const needle = fold ? q.toLowerCase() : q;
+  const allowed = opts.sessionIds ? new Set(opts.sessionIds) : null;
 
   const matched: Array<{ entry: CorpusEntry; offsets: number[] }> = [];
   let totalHits = 0;
   let scanned = 0;
   for (const entry of corpus) {
+    if (allowed && !allowed.has(entry.row.sessionId)) continue;
     if (opts.sessionId && entry.row.sessionId !== opts.sessionId) continue;
     scanned++;
     let hay = entry.row.text;

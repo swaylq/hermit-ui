@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Search, CornerDownLeft } from 'lucide-react';
 import { Overlay } from '@/components/overlay';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { onOpenGlobalSearch } from '@/lib/chat-cache/search-bus';
@@ -82,13 +83,31 @@ function HitRow({
 
 function SearchPanel({ close }: { close: () => void }) {
   const [query, setQuery] = useState('');
+  const [agentFilter, setAgentFilter] = useState('');
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const { result, searching } = useChatSearch(query);
   const meta = useCachedSessionMeta();
   const status = useChatCacheSyncStatus();
   const coverage = coverageLabel(status);
+
+  // The filter is resolved to a session allow-list here, where the session meta
+  // (agent name) is already in hand. search-core only knows message rows, which
+  // carry no agent, so the agent → sessions join must happen before the search.
+  const agentNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const s of meta.values()) if (s.agentName) names.add(s.agentName);
+    return Array.from(names).sort();
+  }, [meta]);
+
+  const sessionIds = useMemo(() => {
+    if (!agentFilter) return undefined;
+    const ids: string[] = [];
+    for (const s of meta.values()) if (s.agentName === agentFilter) ids.push(s.sessionId);
+    return ids.sort();
+  }, [meta, agentFilter]);
+
+  const { result, searching } = useChatSearch(query, sessionIds ? { sessionIds } : {});
 
   useEffect(() => inputRef.current?.focus(), []);
 
@@ -135,10 +154,28 @@ function SearchPanel({ close }: { close: () => void }) {
           ref={inputRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="搜索全部会话…"
+          placeholder={agentFilter ? `搜索 ${agentFilter}…` : '搜索全部会话…'}
           aria-label="search all conversations"
           className="flex-1 min-w-0 bg-transparent outline-none text-sm placeholder:text-muted-foreground/60"
         />
+        {agentNames.length > 1 && (
+          <div onKeyDown={(e) => e.stopPropagation()}>
+            <Select value={agentFilter} onValueChange={(v) => setAgentFilter(v ?? '')} modal={false}>
+              <SelectTrigger
+                aria-label="按 agent 筛选搜索结果"
+                className="w-auto shrink-0 h-7 px-2 text-xs font-mono text-muted-foreground"
+              >
+                <SelectValue>{(v: string | null) => (v ? v : '全部')}</SelectValue>
+              </SelectTrigger>
+              <SelectContent className="font-mono">
+                <SelectItem value="">全部</SelectItem>
+                {agentNames.map((n) => (
+                  <SelectItem key={n} value={n}>{n}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         {result && (
           <span className="shrink-0 text-xs font-mono tabular-nums text-muted-foreground">
             {result.totalMessages} 条
@@ -149,7 +186,9 @@ function SearchPanel({ close }: { close: () => void }) {
       <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto p-1.5">
         {!query.trim() ? (
           <p className="px-3 py-6 text-sm text-muted-foreground">
-            搜索这台机器上全部 {status.totalSessions || '—'} 个会话的对话正文。结果按时间倒序，↑↓ 选择，回车打开。
+            {agentFilter
+              ? `搜索 ${agentFilter} 的 ${sessionIds?.length ?? 0} 个会话。结果按时间倒序，↑↓ 选择，回车打开。`
+              : `搜索这台机器上全部 ${status.totalSessions || '—'} 个会话的对话正文。结果按时间倒序，↑↓ 选择，回车打开。`}
           </p>
         ) : searching && !result ? (
           <p className="px-3 py-6 text-sm text-muted-foreground">搜索中…</p>

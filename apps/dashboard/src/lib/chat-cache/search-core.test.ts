@@ -97,6 +97,28 @@ test('sessionId restricts the scan and the reported scan size', () => {
   assert.equal(r.scanned, 1);
 });
 
+test('sessionIds allow-list filters whole sessions, counts and all', () => {
+  const c = corpus([
+    row('a', 'hit', { sessionId: 's1' }),
+    row('b', 'hit hit', { sessionId: 's2' }),
+    row('c', 'hit', { sessionId: 's3' }),
+  ]);
+  const r = searchCorpus(c, 'hit', { sessionIds: ['s1', 's3'] });
+  // Membership is the point, not recency order — sort so the assertion reads as
+  // "s1 and s3, and not s2".
+  assert.deepEqual(r.hits.map((h) => h.id).sort(), ['a', 'c']);
+  assert.equal(r.totalMessages, 2);
+  assert.equal(r.totalHits, 2); // the s2 double-hit is not counted
+  assert.equal(r.scanned, 2);
+});
+
+test('an empty sessionIds allow-list matches nothing rather than everything', () => {
+  const c = corpus([row('a', 'hit', { sessionId: 's1' })]);
+  const r = searchCorpus(c, 'hit', { sessionIds: [] });
+  assert.equal(r.totalMessages, 0);
+  assert.equal(r.hits.length, 0);
+});
+
 test('empty query returns nothing rather than everything', () => {
   const r = searchCorpus(corpus([row('a', 'anything')]), '   ');
   assert.equal(r.hits.length, 0);
