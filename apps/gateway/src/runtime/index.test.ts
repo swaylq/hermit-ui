@@ -44,6 +44,12 @@ test('codex is its own backend and takes no mode', () => {
   assert.equal(runtimeFor('codex-exec', null), runtimeFor('codex-exec', null));
 });
 
+test('dsh is its own backend and takes no mode', () => {
+  assert.equal(runtimeFor('dsh-exec', null)?.kind, 'dsh-exec');
+  assert.equal(runtimeFor('dsh-exec', 'omp')?.kind, 'dsh-exec');
+  assert.equal(runtimeFor('dsh-exec', null), runtimeFor('dsh-exec', null));
+});
+
 test('teardown paths see every engine', () => {
-  assert.deepEqual(allRuntimes().map((r) => r.kind).sort(), ['codex-exec', 'omp-rpc', 'pi-rpc']);
+  assert.deepEqual(allRuntimes().map((r) => r.kind).sort(), ['codex-exec', 'dsh-exec', 'omp-rpc', 'pi-rpc']);
 });

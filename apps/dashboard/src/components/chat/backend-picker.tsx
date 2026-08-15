@@ -7,9 +7,9 @@
 // inside an overlay have bitten this app before (see docs, and the lightbox's
 // bare-createPortal workaround).
 //
-// Driven by BACKEND_OPTIONS, so a new card appears here by adding it there.
-// That list is not RUNTIME_KINDS: `triage` is a pi session whose mode picks
-// itself, so it is a card without being a backend (see runtime-labels.ts).
+// Driven by BACKEND_OPTIONS, so a new card appears here by adding it there
+// (today that list is RUNTIME_KINDS — see runtime-labels.ts for why the
+// vocabulary stays separate).
 //
 // It then filters that list by Settings → Backends. The query lives HERE rather
 // than in each of the three callers: they all want the same answer, react-query

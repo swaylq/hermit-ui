@@ -20,11 +20,9 @@
 export const PI_MODES = [
   'coding', 'ops', 'omp', 'frontend', 'consultant', 'writer',
   // Task-shaped harnesses: split by which tools the work needs rather than by
-  // role, which is what makes them routable. See apps/gateway/pi-modes/.
+  // role. See apps/gateway/pi-modes/. (Their router, `triage`, was removed
+  // 2026-08-15 — see docs/pi-harness-design.md.)
   'answer', 'scout', 'patch', 'shell', 'web', 'office',
-  // The router. Offered as a card on the backend picker, not as a row below —
-  // see PI_MODE_CHOICES.
-  'triage',
 ] as const;
 export type PiMode = (typeof PI_MODES)[number];
 
@@ -37,15 +35,11 @@ export function isPiMode(v: string | null | undefined): v is PiMode {
 }
 
 /**
- * What a Mode dropdown offers — every mode except `triage`.
- *
- * triage is picked as a BACKEND card (runtime-labels.ts), and the new-chat
- * screen shows both controls at once: the same choice appearing as a card and
- * as a row on one screen reads as two different settings. It stays in PI_MODES
- * so `piModeLabel('triage')` still renders "Triage" wherever a session reports
- * running it.
+ * What a Mode dropdown offers. Same set as PI_MODES today; it stayed a separate
+ * name because it was once PI_MODES minus the triage router, and a future mode
+ * that is stored but not offered would filter here again.
  */
-export const PI_MODE_CHOICES = PI_MODES.filter((m) => m !== 'triage');
+export const PI_MODE_CHOICES: readonly PiMode[] = PI_MODES;
 
 /** Full name plus what the mode actually is, shown under the picker. */
 export const PI_MODE_META: Record<PiMode, { label: string; blurb: string }> = {
@@ -96,10 +90,6 @@ export const PI_MODE_META: Record<PiMode, { label: string; blurb: string }> = {
   office: {
     label: 'Office',
     blurb: 'Excel, Word and PowerPoint files. Inspect, edit in place, verify, hand back.',
-  },
-  triage: {
-    label: 'Triage',
-    blurb: 'Reads the task, then becomes the leanest harness that can finish it.',
   },
 };
 export function piModeLabel(v: string | null | undefined): string {

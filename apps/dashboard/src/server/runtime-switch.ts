@@ -57,12 +57,15 @@ export function planRuntimeSwitch(
   // conversation the restart is meant to carry over.
   if (before.runtime !== after.runtime) return { ok: true, restart: true, resetExternalId: true };
 
-  // codex reads the model off these columns like pi does, but it has no
-  // long-lived process to tear down — each turn is its own `codex exec`, and
-  // the gateway rebuilds the thread object (resuming the same thread id, so the
-  // conversation survives) the moment it sees a different model. Restarting
-  // would hibernate a session to achieve something the next turn does anyway.
-  if (after.runtime === 'codex-exec') return { ok: true, restart: false, resetExternalId: false };
+  // codex and dsh read the model off these columns like pi does, but neither
+  // has a long-lived process to tear down — each turn is its own subprocess,
+  // and the gateway resolves the model at spawn time (codex rebuilds its thread
+  // object; dsh passes it per run, resuming the same session id either way).
+  // Restarting would hibernate a session to achieve something the next turn
+  // does anyway.
+  if (after.runtime === 'codex-exec' || after.runtime === 'dsh-exec') {
+    return { ok: true, restart: false, resetExternalId: false };
+  }
 
   // Same backend. Only the child-process backends read provider/model/mode off
   // these columns; claude takes its model from the machine's settings.json.

@@ -119,7 +119,7 @@ test('a legacy omp-rpc session keeps whatever mode it had', () => {
 // agent there defaults to claude-tmux (stored, or the fleet floor), so without
 // this every inherited session resolved to a backend that machine does not run.
 test('an inherited default the machine has switched off falls through to one it runs', () => {
-  const codexOnly = { disabled: ['claude-tmux', 'pi-rpc', 'triage'] };
+  const codexOnly = { disabled: ['claude-tmux', 'pi-rpc', 'dsh-exec'] };
   assert.deepEqual(resolveRuntime(null, null, codexOnly), {
     runtime: 'codex-exec', runtimeProvider: null, runtimeModel: null, runtimeMode: null,
   });
@@ -129,7 +129,7 @@ test('an inherited default the machine has switched off falls through to one it 
 // Off hides a backend from new work; it does not stop what is already on it, and
 // reporting a running claude session as codex would make every header chip lie.
 test("a session's own backend is never re-pointed, even when switched off", () => {
-  const codexOnly = { disabled: ['claude-tmux', 'pi-rpc', 'triage'] };
+  const codexOnly = { disabled: ['claude-tmux', 'pi-rpc', 'dsh-exec'] };
   assert.equal(resolveRuntime({ runtime: 'claude-tmux' }, null, codexOnly).runtime, 'claude-tmux');
   assert.equal(
     resolveRuntime({ runtime: 'pi-rpc', runtimeMode: 'ops' }, null, codexOnly).runtimeMode,
@@ -142,7 +142,7 @@ test('a substituted default inherits nothing from the agent it replaced', () => 
   const out = resolveRuntime(
     null,
     { runtime: 'pi-rpc', runtimeProvider: 'openrouter', runtimeModel: 'deepseek/x', runtimeMode: 'ops' },
-    { disabled: ['pi-rpc', 'codex-exec', 'triage'] },
+    { disabled: ['pi-rpc', 'codex-exec', 'dsh-exec'] },
   );
   assert.deepEqual(out, {
     runtime: 'claude-tmux', runtimeProvider: null, runtimeModel: null, runtimeMode: null,
@@ -153,22 +153,24 @@ test('substituting TO pi lands on the default mode, not the agent’s', () => {
   const out = resolveRuntime(
     null,
     { runtime: 'claude-tmux', runtimeMode: 'ops' },
-    { disabled: ['claude-tmux', 'codex-exec', 'triage'] },
+    { disabled: ['claude-tmux', 'codex-exec', 'dsh-exec'] },
   );
   assert.equal(out.runtime, 'pi-rpc');
   assert.equal(out.runtimeMode, 'omp');
 });
 
-// triage is a card, not a backend: substituting to it has to carry the mode that
-// IS the choice, or it would silently resolve to plain pi.
-test('substituting TO triage carries its mode', () => {
+test('a machine that runs only dsh defaults to dsh, and dsh carries no mode', () => {
   const out = resolveRuntime(null, null, { disabled: ['claude-tmux', 'pi-rpc', 'codex-exec'] });
-  assert.equal(out.runtime, 'pi-rpc');
-  assert.equal(out.runtimeMode, 'triage');
+  assert.deepEqual(out, {
+    runtime: 'dsh-exec', runtimeProvider: null, runtimeModel: null, runtimeMode: null,
+  });
 });
 
-test('an agent defaulting to triage on a machine that offers it is left alone', () => {
-  const out = resolveRuntime(null, { runtime: 'pi-rpc', runtimeMode: 'triage' }, { disabled: ['codex-exec'] });
+// An agent that defaulted to the removed triage card still holds
+// {runtime: 'pi-rpc', runtimeMode: 'triage'}. It must resolve to a pi session —
+// the gateway's resolveMode falls back from the unknown mode name on its own.
+test('a stale triage default still resolves to pi', () => {
+  const out = resolveRuntime(null, { runtime: 'pi-rpc', runtimeMode: 'triage' });
   assert.equal(out.runtime, 'pi-rpc');
   assert.equal(out.runtimeMode, 'triage');
 });

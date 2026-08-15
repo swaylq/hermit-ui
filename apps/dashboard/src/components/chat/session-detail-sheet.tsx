@@ -28,7 +28,7 @@ import { contextWindowFor } from '@/lib/context-window';
 import { BackendPicker } from './backend-picker';
 import { useScope } from '@/lib/use-scope';
 import {
-  isRuntimeKind, runtimeLabel, toBackendOption, backendLabel, TRIAGE_MODE,
+  isRuntimeKind, runtimeLabel, toBackendOption, backendLabel,
   type RuntimeKind, type BackendOption,
 } from '@/lib/runtime-labels';
 import { isPiMode, piModeLabel, PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, type PiMode } from '@/lib/pi-modes';
@@ -99,23 +99,18 @@ export function SessionDetailSheet({
 
   // Both pickers show the RESOLVED value — they must say what is actually
   // running, not what this session happens to have written in its own columns.
-  // Which CARD is lit. `triage` is pi with its mode already decided, so the
-  // resolved pair has to be read together or an agent defaulting to triage
-  // would open on the plain pi card.
   const shownBackend: BackendOption =
     runtime ?? toBackendOption(d?.backend.runtime, d?.backend.runtimeMode);
-  const shownRuntime: RuntimeKind =
-    shownBackend === TRIAGE_MODE ? 'pi-rpc' : (isRuntimeKind(shownBackend) ? shownBackend : 'claude-tmux');
+  const shownRuntime: RuntimeKind = isRuntimeKind(shownBackend) ? shownBackend : 'claude-tmux';
   // A claude session resolves to no mode at all, so when the picker is flipped
   // to pi the mode select opens on what the AGENT would start pi in — the same
   // answer "New chat" would give — rather than snapping to the fleet default.
-  // triage filtered out for the same reason as in the agent sheet: it is a card,
-  // not a row, so flipping triage → pi must open the select on something it offers.
+  // The removed triage router opens on the fleet default instead of on a row
+  // the select does not offer. Other unknown names pass through: a machine-local
+  // mode this build does not list must keep reading as itself.
   const resolvedMode = d?.backend.runtimeMode ?? d?.agentBackend.runtimeMode ?? DEFAULT_PI_MODE;
-  const currentMode = resolvedMode === TRIAGE_MODE ? DEFAULT_PI_MODE : resolvedMode;
-  // Picking Triage IS picking the mode, so the Mode select is hidden below and
-  // any half-made choice in it is discarded rather than saved alongside.
-  const shownMode = shownBackend === TRIAGE_MODE ? TRIAGE_MODE : (mode ?? currentMode);
+  const currentMode = resolvedMode === 'triage' ? DEFAULT_PI_MODE : resolvedMode;
+  const shownMode = mode ?? currentMode;
 
   const save = trpc.chat.setSessionRuntime.useMutation({
     onSuccess: () => {

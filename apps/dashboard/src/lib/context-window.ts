@@ -49,7 +49,12 @@ export function codexContextWindow(model: string | null | undefined): number {
   return CODEX_WINDOWS.find((m) => id.startsWith(m.prefix))?.window ?? CODEX_DEFAULT_WINDOW;
 }
 
-/** The denominator for a session's context bar. */
+/**
+ * The denominator for a session's context bar.
+ *
+ * dsh deliberately takes the default: its catalog (dsh-llm-deepseek) declares
+ * 1M for both deepseek-v4 models, which is exactly DEFAULT_CONTEXT_WINDOW.
+ */
 export function contextWindowFor(
   runtime: string | null | undefined,
   model?: string | null,

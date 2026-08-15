@@ -46,15 +46,15 @@ test('toggling off records it and toggling back on clears it', () => {
 });
 
 test('the stored order follows BACKEND_OPTIONS, so equivalent sets do not churn', () => {
-  const a = toggleBackend(toggleBackend(null, 'triage', false), 'pi-rpc', false);
-  const b = toggleBackend(toggleBackend(null, 'pi-rpc', false), 'triage', false);
+  const a = toggleBackend(toggleBackend(null, 'dsh-exec', false), 'pi-rpc', false);
+  const b = toggleBackend(toggleBackend(null, 'pi-rpc', false), 'dsh-exec', false);
   assert.deepEqual(a, b);
 });
 
 // Refused rather than silently ignored, so the UI can explain itself.
 test('disabling the last backend is refused', () => {
   let cfg = toggleBackend(null, 'codex-exec', false)!;
-  cfg = toggleBackend(cfg, 'triage', false)!;
+  cfg = toggleBackend(cfg, 'dsh-exec', false)!;
   cfg = toggleBackend(cfg, 'pi-rpc', false)!;
   assert.notEqual(cfg, null);
   assert.equal(toggleBackend(cfg, 'claude-tmux', false), null);
@@ -76,7 +76,7 @@ test('a default the machine offers is left alone', () => {
 // The reported case: a machine with Claude Code off and codex on used to draw
 // "Claude Code · default · off" as the selected card, and New chat opened on it.
 test('a machine that runs only codex defaults to codex', () => {
-  const cfg = { disabled: ['claude-tmux', 'pi-rpc', 'triage'] };
+  const cfg = { disabled: ['claude-tmux', 'pi-rpc', 'dsh-exec'] };
   assert.equal(effectiveDefaultBackend('claude-tmux', cfg), 'codex-exec');
   // Including for an agent that explicitly pinned the switched-off backend.
   assert.equal(effectiveDefaultBackend('pi-rpc', cfg), 'codex-exec');
@@ -100,11 +100,12 @@ test('everything off falls back to the same floor the picker uses', () => {
   assert.equal(effectiveDefaultBackend('codex-exec', cfg), 'claude-tmux');
 });
 
-test('triage is substituted for, and substituted to, as a whole card', () => {
-  assert.equal(effectiveDefaultBackend('triage', { disabled: ['triage'] }), 'claude-tmux');
+// A disabled set written before the triage card was removed can still name it;
+// the unknown entry is inert and the arithmetic ignores it.
+test('a stored triage toggle from before its removal is harmless', () => {
   assert.equal(
-    effectiveDefaultBackend('claude-tmux', { disabled: ['claude-tmux', 'pi-rpc', 'codex-exec'] }),
-    'triage',
+    effectiveDefaultBackend('claude-tmux', { disabled: ['claude-tmux', 'pi-rpc', 'codex-exec', 'triage'] }),
+    'dsh-exec',
   );
 });
 

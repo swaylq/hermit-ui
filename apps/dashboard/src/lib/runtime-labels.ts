@@ -6,7 +6,7 @@
 //
 // See docs/pi-runtime-design.md.
 
-// Three backends. omp (oh-my-pi) is NOT one of them: it is a second ENGINE
+// Four backends. omp (oh-my-pi) is NOT one of them: it is a second ENGINE
 // inside the pi backend, selected by the mode — see lib/pi-modes.ts. Which
 // engine runs and which recipe it runs are one decision from the user's side,
 // and keeping them one also keeps a single auth configuration serving both.
@@ -14,7 +14,12 @@
 // codex IS its own backend rather than an engine under something else: it is a
 // different vendor on a different subscription, with its own login, its own
 // thread store and no mode vocabulary to share.
-export const RUNTIME_KINDS = ['claude-tmux', 'pi-rpc', 'codex-exec'] as const;
+//
+// dsh (DeepSeek Harness) is a backend for the same reason codex is: a different
+// vendor's harness with its own session store (~/.dsh/sessions), its own
+// credential (DEEPSEEK_API_KEY) and no pi mode vocabulary. One `dsh` run per
+// turn, resumed by session id — see docs/dsh-runtime-design.md.
+export const RUNTIME_KINDS = ['claude-tmux', 'pi-rpc', 'codex-exec', 'dsh-exec'] as const;
 export type RuntimeKind = (typeof RUNTIME_KINDS)[number];
 
 export function isRuntimeKind(v: string | null | undefined): v is RuntimeKind {
@@ -25,6 +30,7 @@ export function isRuntimeKind(v: string | null | undefined): v is RuntimeKind {
 export function runtimeLabel(kind: string | null | undefined): string {
   if (kind === 'pi-rpc') return 'pi';
   if (kind === 'codex-exec') return 'Codex';
+  if (kind === 'dsh-exec') return 'DeepSeek';
   return 'Claude Code';
 }
 
@@ -32,6 +38,7 @@ export function runtimeLabel(kind: string | null | undefined): string {
 export function runtimeShortLabel(kind: string | null | undefined): string {
   if (kind === 'pi-rpc') return 'pi';
   if (kind === 'codex-exec') return 'Codex';
+  if (kind === 'dsh-exec') return 'dsh';
   return 'Claude';
 }
 
@@ -45,6 +52,9 @@ export function runtimeDetail(
   // no equivalent of pi's machine-configured endpoint, so naming one would be
   // a field the user cannot set and the backend does not read.
   if (kind === 'codex-exec') return ['Codex', model].filter(Boolean).join(' · ');
+  // dsh reads its provider/model from its own profile config; a session pin
+  // overrides the model only, so that is the one qualifier worth naming.
+  if (kind === 'dsh-exec') return ['DeepSeek Harness', model].filter(Boolean).join(' · ');
   if (kind !== 'pi-rpc') return 'Claude Code (interactive, tmux pane)';
   return ['pi', provider, model].filter(Boolean).join(' · ');
 }
@@ -70,6 +80,8 @@ const PANELESS_RUNTIMES: ReadonlySet<string> = new Set([
   // in that window can still hold it, and it was never a pane either.
   'omp-rpc',
   'codex-exec',
+  // one `dsh` subprocess per turn, exactly codex's shape — no pane.
+  'dsh-exec',
 ]);
 
 export function hasTmuxPane(runtime: string | null | undefined): boolean {
@@ -81,57 +93,48 @@ export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
   'claude-tmux': 'Claude Code in a tmux pane. Slash commands, subagents, terminal access.',
   'pi-rpc': 'pi or omp as an RPC child process. Pick the engine and recipe under Mode.',
   'codex-exec': 'OpenAI Codex, one run per turn. Uses this machine’s own codex login.',
+  'dsh-exec': 'DeepSeek Harness (dsh), one run per turn. Uses this machine’s DEEPSEEK_API_KEY.',
 };
 
 // ── the picker's own vocabulary ─────────────────────────────────────────────
 //
-// The card list is NOT the same set as RUNTIME_KINDS, and that is deliberate.
-// `triage` is not a third backend: it is an ordinary pi session whose MODE
-// decides, on its first turn, which harness it becomes. Nothing downstream
-// knows about it — runtimeFor() sees pi-rpc, resolveMode() finds triage on
-// disk, buildModeArgs() expands it like any other mode.
-//
-// It gets a card rather than a row in the Mode dropdown because from the user's
-// side the question this picker asks is "who runs this", and the honest answer
-// for triage is "it decides" — which is a peer of "Claude" and "pi", not a
-// variant of one. Picking it also has to hide the Mode select, since choosing a
-// mode by hand is exactly what it exists to avoid.
+// The card list IS RUNTIME_KINDS today. It was not always: `triage` (removed
+// 2026-08-15, see docs/pi-harness-design.md) was a card that stored an ordinary
+// pi session with its mode pre-decided, which is why the picker speaks in
+// BackendOption and maps through to/fromBackendOption rather than using
+// RuntimeKind directly. The seam stays: a future card that is not 1:1 with a
+// stored runtime lands here without touching the pickers again.
 
-/** The mode value that means "the harness picks itself". */
-export const TRIAGE_MODE = 'triage';
-
-export const BACKEND_OPTIONS = ['claude-tmux', 'pi-rpc', 'codex-exec', TRIAGE_MODE] as const;
+export const BACKEND_OPTIONS = RUNTIME_KINDS;
 export type BackendOption = (typeof BACKEND_OPTIONS)[number];
 
 export function backendLabel(v: BackendOption): string {
-  return v === TRIAGE_MODE ? 'Triage' : runtimeLabel(v);
+  return runtimeLabel(v);
 }
 
-export const BACKEND_BLURB: Record<BackendOption, string> = {
-  'claude-tmux': RUNTIME_BLURB['claude-tmux'],
-  'pi-rpc': RUNTIME_BLURB['pi-rpc'],
-  'codex-exec': RUNTIME_BLURB['codex-exec'],
-  [TRIAGE_MODE]: 'A pi session that reads the task and becomes the leanest harness that can finish it.',
-};
+export const BACKEND_BLURB: Record<BackendOption, string> = RUNTIME_BLURB;
 
-/** The stored columns → which card is selected. */
+/**
+ * The stored columns → which card is selected.
+ *
+ * `runtimeMode` no longer influences the card (only the retired triage card
+ * read it), but every caller holds the pair and the next mode-pinning card
+ * would need it back, so the signature keeps both.
+ */
 export function toBackendOption(
   runtime: string | null | undefined,
   runtimeMode: string | null | undefined,
 ): BackendOption {
-  if (runtime === 'pi-rpc' && runtimeMode === TRIAGE_MODE) return TRIAGE_MODE;
+  void runtimeMode;
   return isRuntimeKind(runtime) ? runtime : 'claude-tmux';
 }
 
 /**
  * Which card is selected → what to store.
  *
- * `runtimeMode: null` for the two real backends means "this card says nothing
- * about the mode" — the caller keeps whatever the Mode select holds. Only
- * triage pins one, because for triage the mode IS the choice.
+ * `runtimeMode: null` means "this card says nothing about the mode" — the
+ * caller keeps whatever the Mode select holds.
  */
 export function fromBackendOption(v: BackendOption): { runtime: RuntimeKind; runtimeMode: string | null } {
-  return v === TRIAGE_MODE
-    ? { runtime: 'pi-rpc', runtimeMode: TRIAGE_MODE }
-    : { runtime: v, runtimeMode: null };
+  return { runtime: v, runtimeMode: null };
 }

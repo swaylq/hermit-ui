@@ -68,8 +68,9 @@ export function resolveRuntime(
   agent: Level,
   backends?: BackendsConfig | null,
 ): RuntimeChoice {
-  // The agent's default read as a CARD (pi + triage is one choice, not two), so
-  // an agent defaulting to triage falls back — and is fallen back TO — whole.
+  // The agent's default read as a CARD, which today is 1:1 with the runtime —
+  // toBackendOption keeps the mode in the signature for the next card that
+  // pins one (the removed triage card did).
   const storedDefault = toBackendOption(
     normalizeRuntime(agent?.runtime ?? DEFAULT_RUNTIME),
     agent?.runtimeMode,
@@ -91,8 +92,8 @@ export function resolveRuntime(
     runtimeModel: session?.runtimeModel ?? (inheritable ? agent?.runtimeModel ?? null : null),
     runtimeMode: runtime !== 'pi-rpc'
       ? null
-      // fallback.runtimeMode carries the mode a substituted CARD pins (only
-      // triage does); everything else lands on the default mode.
+      // fallback.runtimeMode would carry a mode a substituted CARD pins; no
+      // current card does, so a non-inheritable chain lands on the default.
       : session?.runtimeMode ?? (inheritable ? agent?.runtimeMode ?? null : fallback.runtimeMode) ?? DEFAULT_PI_MODE,
   };
 }

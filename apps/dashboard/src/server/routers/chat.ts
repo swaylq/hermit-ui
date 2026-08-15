@@ -452,7 +452,7 @@ export const chatRouter = router({
     .input(
       z.object({
         id: z.string(),
-        runtime: z.enum(['claude-tmux', 'pi-rpc', 'codex-exec']),
+        runtime: z.enum(['claude-tmux', 'pi-rpc', 'codex-exec', 'dsh-exec']),
         runtimeProvider: z.string().max(64).nullish(),
         runtimeModel: z.string().max(128).nullish(),
         runtimeMode: z.string().max(64).nullish(),
@@ -557,7 +557,7 @@ export const chatRouter = router({
         dispatchedBySessionId: z.string().max(64).optional(),
         // Which backend runs this session. Omitted = inherit the agent's
         // default, which is what every caller that predates the picker does.
-        runtime: z.enum(['claude-tmux', 'pi-rpc', 'codex-exec']).optional(),
+        runtime: z.enum(['claude-tmux', 'pi-rpc', 'codex-exec', 'dsh-exec']).optional(),
         runtimeProvider: z.string().max(64).optional(),
         runtimeModel: z.string().max(128).optional(),
         // Which pi mode to spawn under. Omitted = inherit the agent's, then the

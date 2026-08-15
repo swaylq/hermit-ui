@@ -59,11 +59,8 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
   // serves both from one request.
   const backends = trpc.machines.getBackendsConfig.useQuery(undefined, { staleTime: 60_000 });
 
-  // The card, not the stored backend: `triage` is pi with its mode already
-  // decided, so the agent's default has to be read as the PAIR to open on the
-  // right card for an agent that defaults to it.
-  //
-  // …and as this machine can run it. An agent defaulting to a backend switched
+  // The card, read from the stored pair (the card list once held entries that
+  // pinned a mode), and as this machine can run it. An agent defaulting to a backend switched
   // off under Settings → Backends opens on the first one the machine does offer
   // — the same substitution the server applies to an inherited default — rather
   // than on an unclickable "off" card above a Start button that would create a
@@ -94,8 +91,8 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
               runtime: backend.runtime,
               // Written explicitly, for the same reason the backend is: a
               // session that states its mode keeps the one you started it in
-              // when the agent's default is later edited. Triage pins its own
-              // (the card IS the mode); pi takes whatever the Mode select holds.
+              // when the agent's default is later edited. pi takes whatever
+              // the Mode select holds; no current card pins one itself.
               ...(backend.runtimeMode
                 ? { runtimeMode: backend.runtimeMode }
                 : chosen === 'pi-rpc' ? { runtimeMode: chosenMode } : {}),

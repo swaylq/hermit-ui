@@ -3,6 +3,15 @@
 Status: implemented, 2026-08-10. Follows [pi-modes-design.md](pi-modes-design.md)
 and [pi-modes-more-design.md](pi-modes-more-design.md).
 
+**Update 2026-08-15: `triage` removed.** The five task harnesses (`answer`,
+`scout`, `patch`, `shell`, `web`) stay as ordinary Mode rows; the router mode,
+its picker card, its `delegate` tool and `route.mjs` are gone. Sessions and
+agents that still store `runtimeMode: 'triage'` keep working: the card maps to
+plain pi, and the gateway's `resolveMode()` falls back from the unknown name to
+the default mode with a log line. The picker slot it occupied is now the dsh
+backend card — see [dsh-runtime-design.md](dsh-runtime-design.md). Everything
+below is the historical record of how it worked.
+
 ## Goal
 
 The modes that existed were **role-shaped** — Writer, Consultant, Ops. A human

@@ -210,14 +210,14 @@ test('writer mode stays on pi and unions hermit tools', () => {
   assert.ok(toolsIdx < args.indexOf('--append-system-prompt'));
 });
 
-// ── task harnesses + triage ─────────────────────────────────────────────────
+// ── task harnesses ──────────────────────────────────────────────────────────
 // The modes above are role-shaped (Writer, Consultant). These are task-shaped:
-// the split is by which tools the work needs, which is what makes them
-// routable. See docs/pi-harness-design.md.
+// the split is by which tools the work needs. See docs/pi-harness-design.md
+// (their triage router was removed 2026-08-15; the harnesses stay).
 
 test('every task harness is discoverable on disk', () => {
   const names = listModeNames();
-  for (const n of ['answer', 'scout', 'patch', 'shell', 'web', 'office', 'triage']) {
+  for (const n of ['answer', 'scout', 'patch', 'shell', 'web', 'office']) {
     assert.ok(names.includes(n), `${n} missing from [${names.join(', ')}]`);
   }
 });
@@ -247,19 +247,6 @@ test('web is the only omp task harness, and gets no hermit-tool union', () => {
   assert.ok(tools.includes('web_search'), 'web exists for web_search');
 });
 
-test('triage lists `delegate` in its allowlist, not just in its extension', () => {
-  // pi's --tools allowlists EXTENSION tools too. delegate is registered by
-  // triage's extension, and leaving it out of mode.json made setActiveTools()
-  // accept the name while the model got "Tool delegate not found", fell back to
-  // bash, and — with bash narrowed away — blocked on `ask`'s 4h timeout.
-  const m = loadMode('triage');
-  assert.ok(m, 'triage should load');
-  assert.equal(m.engine ?? 'pi', 'pi');
-  const args = buildModeArgs(m, { agentDirectory: '/tmp' });
-  const tools = args[args.indexOf('--tools') + 1].split(',');
-  assert.ok(tools.includes('delegate'), 'triage must allowlist its own delegate tool');
-});
-
 test('office keeps its API recipes in a skill, not in the resident prompt', () => {
   const m = loadMode('office');
   assert.ok(m, 'office should load');
@@ -285,18 +272,3 @@ test('office keeps its API recipes in a skill, not in the resident prompt', () =
   );
 });
 
-test('triage ships the extension that does the routing', () => {
-  const m = loadMode('triage');
-  assert.ok(m, 'triage should load');
-  const args = buildModeArgs(m, { agentDirectory: '/tmp' });
-  const exts = args.filter((_, i) => args[i - 1] === '--extension');
-  assert.equal(exts.length, 1, 'triage loads exactly its own extension');
-  assert.ok(exts[0].endsWith('/triage/extensions/triage.ts'));
-  // The router module has to travel with it: the extension imports ./route.mjs
-  // beside itself, and a mode directory that reaches back into a dev checkout
-  // at runtime would break on the machine that never had one.
-  assert.ok(
-    fs.existsSync(path.join(path.dirname(exts[0]), 'route.mjs')),
-    'triage/extensions/route.mjs must ship alongside the extension',
-  );
-});

@@ -23,7 +23,7 @@ const NEEDS: Record<BackendOption, string> = {
   'claude-tmux': 'Always available — needs no per-machine setup beyond Claude Code itself.',
   'pi-rpc': 'Needs pi or omp installed, and an endpoint configured under Pi Runtime.',
   'codex-exec': 'Needs the codex CLI installed and `codex login` completed as the gateway’s user.',
-  triage: 'A pi session that picks its own harness, so it needs whatever pi needs.',
+  'dsh-exec': 'Needs DeepSeek Harness (dsh) installed and DEEPSEEK_API_KEY in the secret store.',
 };
 
 export default function BackendsPage() {

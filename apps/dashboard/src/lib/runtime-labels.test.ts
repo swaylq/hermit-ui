@@ -1,18 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BACKEND_OPTIONS, BACKEND_BLURB, RUNTIME_KINDS, TRIAGE_MODE,
+  BACKEND_OPTIONS, BACKEND_BLURB, RUNTIME_KINDS,
   backendLabel, toBackendOption, fromBackendOption, hasTmuxPane,
 } from './runtime-labels';
-
-// The picker's list and the stored backends are different sets, and keeping
-// them apart is the whole trick: `triage` is a card, not a backend. If it ever
-// leaks into RUNTIME_KINDS, `isRuntimeKind('triage')` starts returning true and
-// a session gets written with runtime: 'triage', which no gateway understands.
-test('triage is a picker option, never a stored runtime kind', () => {
-  assert.ok(BACKEND_OPTIONS.includes(TRIAGE_MODE));
-  assert.ok(!(RUNTIME_KINDS as readonly string[]).includes(TRIAGE_MODE));
-});
 
 test('every backend option has a label and a blurb', () => {
   for (const o of BACKEND_OPTIONS) {
@@ -21,38 +12,40 @@ test('every backend option has a label and a blurb', () => {
   }
 });
 
-test('the triage card round-trips to pi-rpc plus the triage mode', () => {
-  assert.deepEqual(fromBackendOption(TRIAGE_MODE), { runtime: 'pi-rpc', runtimeMode: TRIAGE_MODE });
-  assert.equal(toBackendOption('pi-rpc', TRIAGE_MODE), TRIAGE_MODE);
-});
-
-test('a plain pi session is the pi card whatever its mode', () => {
-  for (const m of [null, 'omp', 'scout', 'writer']) {
-    assert.equal(toBackendOption('pi-rpc', m), 'pi-rpc');
+test('every stored kind gets a card, and every card stores a kind', () => {
+  for (const k of RUNTIME_KINDS) {
+    assert.equal(toBackendOption(k, null), k);
+    assert.deepEqual(fromBackendOption(k), { runtime: k, runtimeMode: null });
   }
 });
 
-// triage is a PI mode, so the pair only means triage when the backend is pi.
-// A claude session carrying a stale runtimeMode must still read as claude —
-// resolveRuntime already returns null for a mode on anything that is not pi.
-test('the triage mode on a claude session does not light the triage card', () => {
-  assert.equal(toBackendOption('claude-tmux', TRIAGE_MODE), 'claude-tmux');
+test('a pi session is the pi card whatever its mode', () => {
+  // Including 'triage', which sessions created before the triage card was
+  // removed (2026-08-15) still hold in runtimeMode. They must light the pi
+  // card, not fall through to claude.
+  for (const m of [null, 'omp', 'scout', 'writer', 'triage']) {
+    assert.equal(toBackendOption('pi-rpc', m), 'pi-rpc');
+  }
 });
 
 test('an unknown or absent runtime falls back to claude, not to a blank card', () => {
   assert.equal(toBackendOption(null, null), 'claude-tmux');
   assert.equal(toBackendOption('omp-rpc', null), 'claude-tmux');
+  // The retired triage card stored runtime 'pi-rpc', never 'triage' — but a
+  // value that never existed must still land somewhere real.
+  assert.equal(toBackendOption('triage', null), 'claude-tmux');
 });
 
 // ── which backends have a pane to attach to ─────────────────────────────────
 
-// codex is one `codex exec` per turn — no pane, exactly like pi. It was missed
-// when the terminal link was written against pi alone, so the button was there
-// and attached to nothing.
+// codex and dsh are one subprocess per turn — no pane, exactly like pi. codex
+// was missed when the terminal link was written against pi alone, so the button
+// was there and attached to nothing.
 test('only the tmux backend has a pane', () => {
   assert.equal(hasTmuxPane('claude-tmux'), true);
   assert.equal(hasTmuxPane('pi-rpc'), false);
   assert.equal(hasTmuxPane('codex-exec'), false);
+  assert.equal(hasTmuxPane('dsh-exec'), false);
   assert.equal(hasTmuxPane('omp-rpc'), false);
 });
 
@@ -73,9 +66,10 @@ test('every runtime kind is accounted for', () => {
   assert.equal(RUNTIME_KINDS.filter((k) => hasTmuxPane(k)).length, 1);
 });
 
-test('the two real backends carry no mode of their own out of the picker', () => {
+test('no card carries a mode of its own out of the picker', () => {
   // null means "this card says nothing about the mode" — the caller keeps
-  // whatever the Mode select holds. Only triage pins one.
+  // whatever the Mode select holds.
   assert.deepEqual(fromBackendOption('pi-rpc'), { runtime: 'pi-rpc', runtimeMode: null });
   assert.deepEqual(fromBackendOption('claude-tmux'), { runtime: 'claude-tmux', runtimeMode: null });
+  assert.deepEqual(fromBackendOption('dsh-exec'), { runtime: 'dsh-exec', runtimeMode: null });
 });

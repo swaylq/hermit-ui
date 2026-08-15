@@ -16,7 +16,7 @@ export type SyncItem = {
   claudeSessionId: string | null;
 };
 
-export type RuntimeKind = 'claude-tmux' | 'pi-rpc' | 'omp-rpc' | 'codex-exec';
+export type RuntimeKind = 'claude-tmux' | 'pi-rpc' | 'omp-rpc' | 'codex-exec' | 'dsh-exec';
 
 export type RuntimeSession = {
   id: string;
@@ -28,8 +28,8 @@ export type RuntimeSession = {
   model?: string | null;
   /**
    * Which pi mode to spawn under (already resolved by the dashboard against the
-   * agent's default). null for the backends with no such concept — claude-tmux
-   * and codex-exec.
+   * agent's default). null for the backends with no such concept — claude-tmux,
+   * codex-exec and dsh-exec.
    */
   mode?: string | null;
 };

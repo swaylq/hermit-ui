@@ -29,7 +29,7 @@ import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
 import { BackendPicker } from './chat/backend-picker';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import {
-  backendLabel, toBackendOption, TRIAGE_MODE, type RuntimeKind, type BackendOption,
+  backendLabel, toBackendOption, type RuntimeKind, type BackendOption,
 } from '@/lib/runtime-labels';
 import { effectiveDefaultBackend } from '@/lib/backend-availability';
 import { PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
@@ -332,30 +332,26 @@ function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput[
   // react-query serves both from one request. Read here as well because the
   // section has to know whether the STORED default is one this machine offers.
   const cfg = trpc.machines.getBackendsConfig.useQuery(undefined, { staleTime: 60_000 });
-  // triage is excluded here on purpose: it is shown as its own card, so leaving
-  // it out means flipping triage → pi opens the Mode select on the fleet default
-  // instead of on a mode the select does not even offer.
-  const storedMode: PiMode | null =
-    isPiMode(agent.runtimeMode) && agent.runtimeMode !== TRIAGE_MODE ? agent.runtimeMode : null;
+  // A stored mode the select does not offer (the removed triage router, a
+  // machine-local mode) opens on the fleet default rather than on a missing row.
+  const storedMode: PiMode | null = isPiMode(agent.runtimeMode) ? agent.runtimeMode : null;
   const storedBackend: BackendOption = toBackendOption(agent.runtime, agent.runtimeMode);
   // What the default resolves to ON THIS MACHINE. An agent whose stored default
   // has been switched off under Settings → Backends falls through to one the
   // machine runs — the same substitution the server applies when a session
   // inherits — so this section opens on the answer, not on a card marked "off".
   const baseBackend: BackendOption = effectiveDefaultBackend(storedBackend, cfg.data);
-  const baseRuntime: RuntimeKind = baseBackend === TRIAGE_MODE ? 'pi-rpc' : baseBackend;
+  const baseRuntime: RuntimeKind = baseBackend;
   const substituted = baseBackend !== storedBackend;
   const [draftRuntime, setDraftRuntime] = useState<BackendOption | null>(null);
   const [draftMode, setDraftMode] = useState<PiMode | null>(null);
   const shownBackend: BackendOption = draftRuntime ?? baseBackend;
-  const shownRuntime: RuntimeKind = shownBackend === TRIAGE_MODE ? 'pi-rpc' : shownBackend;
+  const shownRuntime: RuntimeKind = shownBackend;
   const shownMode: PiMode = draftMode ?? storedMode ?? DEFAULT_PI_MODE;
-  // What Save would write for a card + mode. Triage pins its own mode — the card
-  // IS the mode — so it is never subject to the DEFAULT_PI_MODE-as-null rule;
-  // pi stores only a mode that differs from the fleet default; the rest have no
-  // mode at all.
+  // What Save would write for a card + mode: pi stores only a mode that differs
+  // from the fleet default; the other backends have no mode at all.
   const modeToStore = (b: BackendOption, m: PiMode): string | null =>
-    b === TRIAGE_MODE ? TRIAGE_MODE : b === 'pi-rpc' ? (m === DEFAULT_PI_MODE ? null : m) : null;
+    b === 'pi-rpc' ? (m === DEFAULT_PI_MODE ? null : m) : null;
   const nextMode: string | null = modeToStore(shownBackend, shownMode);
   // Measured against what the sheet OPENED on, and through the same
   // normalization, so neither a machine-level substitution nor a stored mode
