@@ -325,6 +325,9 @@ export const cronRouter = router({
         enabled: true,
         lastFire: true,
         nextFire: true,
+        // Which session this cron reports into — the first source of its runtime
+        // (see resolveCronRuntime below).
+        reportSessionId: true,
       },
     });
     const names = [...new Set(crons.map((c) => c.agentName))];
@@ -336,6 +339,45 @@ export const cronRouter = router({
       : [];
     const dirByName = new Map(agents.map((a) => [a.name, a.directory]));
     const orchByName = new Map(agents.map((a) => [a.name, a.isOrchestrator]));
+
+    // ── Which backend runs each cron ────────────────────────────────────────
+    //
+    // The gateway used to receive no runtime signal at all, and cron-runner
+    // hard-coded the claude-tmux path. On a machine where claude is not logged
+    // in that is not a degraded cron — it is a SILENT one: claude prints
+    // "Not logged in" and exits 0, so every fire lands as
+    // "no final text", which reads like the task timed out. (dgx-spark,
+    // 2026-08-14/15: five consecutive "巡检 timeout" reports, none of them real.)
+    //
+    // Resolved here rather than in the gateway because both inputs (the report
+    // session's runtime, the machine's enabled backends) are DB state the
+    // gateway does not otherwise hold.
+    const reportIds = [...new Set(crons.map((c) => c.reportSessionId).filter((x): x is string => !!x))];
+    const reportSessions = reportIds.length
+      ? await prisma.chatSession.findMany({
+          where: { id: { in: reportIds } },
+          select: { id: true, runtime: true },
+        })
+      : [];
+    const runtimeBySession = new Map(reportSessions.map((s) => [s.id, s.runtime]));
+
+    const machine = await prisma.machine.findUnique({
+      where: { id: ctx.machine.id },
+      select: { backendsConfig: true },
+    });
+    const disabled = new Set(
+      ((machine?.backendsConfig as { disabled?: string[] } | null)?.disabled ?? []),
+    );
+    // Fallback is deliberately conservative: unless claude-tmux has been turned
+    // OFF for this machine, keep the historical behaviour exactly. Only a machine
+    // that opted out of claude changes what it gets.
+    const machineDefault = !disabled.has('claude-tmux')
+      ? 'claude-tmux'
+      : !disabled.has('codex-exec')
+        ? 'codex-exec'
+        : 'claude-tmux';
+    const resolveCronRuntime = (reportSessionId: string | null): string =>
+      (reportSessionId ? runtimeBySession.get(reportSessionId) : null) || machineDefault;
     return crons.map((c) => ({
       id: c.id,
       agentName: c.agentName,
@@ -349,6 +391,8 @@ export const cronRouter = router({
       enabled: c.enabled,
       lastFire: c.lastFire?.toISOString() ?? null,
       nextFire: c.nextFire?.toISOString() ?? null,
+      // Two-layer: the report session's own backend wins; otherwise the machine's.
+      runtime: resolveCronRuntime(c.reportSessionId),
     }));
   }),
 });

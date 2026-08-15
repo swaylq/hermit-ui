@@ -673,3 +673,49 @@ export class CodexExecRuntime implements AgentRuntime {
     void mode;
   }
 }
+
+/**
+ * Run ONE self-contained codex turn and return its final text — the cron path.
+ *
+ * Why this lives here and not in cron-runner: `threadOptions()` and `client()`
+ * are where model / effort / sandbox / approval / the hermit MCP wiring get
+ * decided. Rebuilding that in the caller would work today and drift the first
+ * time any of it changes, and the drift would be invisible — a cron quietly
+ * running under different settings than the chat sessions it reports into.
+ *
+ * Always a FRESH thread: a cron fire is a scheduled task, not a conversation. It
+ * must not inherit — or grow — the report session's history.
+ *
+ * Returns the last `agent_message` seen. Empty string means the turn produced no
+ * final text, which the caller reports as `no_output` exactly like the claude
+ * path. Throws on transport/quota failure so the caller can mark `error` and
+ * surface the real message — a codex usage-limit rejection MUST NOT be flattened
+ * into "timeout", which is precisely what hid a 6-hour outage on 2026-08-15.
+ */
+export async function runCodexCronTurn(
+  opts: { agentName: string; cwd: string; prompt: string; signal?: AbortSignal },
+): Promise<string> {
+  const session: RuntimeSession = {
+    id: `cron:${opts.agentName}`,
+    agentName: opts.agentName,
+    agentDirectory: opts.cwd,
+    externalSessionId: null,
+  };
+  const codex = client(session);
+  const thread = codex.startThread(threadOptions(session));
+  const stream = await thread.runStreamed(opts.prompt, opts.signal ? { signal: opts.signal } : undefined);
+
+  let lastText = '';
+  // `.events` — a StreamedTurn is not itself async-iterable (the chat path at
+  // line ~550 iterates the same way).
+  for await (const ev of stream.events) {
+    const anyEv = ev as { type?: string; item?: { type?: string; text?: string }; error?: { message?: string } };
+    // codex reports a refused turn (quota, auth) as a completed turn carrying an
+    // error rather than by throwing — surface it instead of returning "".
+    if (anyEv.error?.message) throw new Error(anyEv.error.message);
+    if (anyEv.item?.type === 'agent_message' && typeof anyEv.item.text === 'string') {
+      lastText = anyEv.item.text;
+    }
+  }
+  return lastText.trim();
+}

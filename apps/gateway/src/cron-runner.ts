@@ -28,6 +28,7 @@ import { paneIsWorking } from './pane';
 import { extractText, CcEvent, CcBlock } from './claude-code';
 import { buildMcpConfigArg, chatOwnedUuids } from './chat-runner';
 import { holdCronUuid, releaseCronUuid, cronOwnedUuids } from './cron-uuids';
+import { runCodexCronTurn } from './runtime/codex-exec';
 import { tryAcquire, release, isLocked } from './op-locks';
 
 const RUN_TIMEOUT_MS = 120 * 60_000; // hard cap per run (2h)
@@ -57,6 +58,13 @@ type Cron = {
   enabled: boolean;
   lastFire: string | null;
   nextFire: string | null;
+  /**
+   * Which backend fires this cron, resolved by the dashboard
+   * (cron.listForGateway): the report session's runtime, else the machine's
+   * enabled backend. Absent on an older dashboard → the claude path, which is
+   * what every cron did before this field existed.
+   */
+  runtime?: string | null;
 };
 
 // The per-cron re-entrancy guard ('cron' lock, keyed by cronId) lives in the shared
@@ -192,7 +200,10 @@ async function fireInner(c: Cron): Promise<void> {
     console.error('[cron] runStart post failed', e);
   }
 
-  console.log('[cron] fire', c.id.slice(0, 8), c.agentName, 'in', cwd);
+  // Which backend runs this fire. Resolved by the dashboard; absent (older
+  // dashboard) means the claude path, i.e. exactly what every cron did before.
+  const runtimeKind = c.runtime ?? 'claude-tmux';
+  console.log('[cron] fire', c.id.slice(0, 8), c.agentName, 'in', cwd, `[${runtimeKind}]`);
 
   let output = '';
   // Status = what the gateway OBSERVED about the turn, not a guess at whether the
@@ -206,8 +217,12 @@ async function fireInner(c: Cron): Promise<void> {
   let stop: () => void = () => {};
   // Pinned transcript uuid. Hoisted out of the try so `finally` can unpin it
   // however we exit.
+  //
+  // Held ONLY on the claude path: the release lives in that branch's `finally`,
+  // so holding it unconditionally would leak one uuid per codex fire — forever,
+  // since nothing else ever unpins it.
   const claudeUuid = randomUUID();
-  holdCronUuid(claudeUuid);
+  if (runtimeKind !== 'codex-exec') holdCronUuid(claudeUuid);
   // A drift-adopted transcript is just as much this fire's as the pinned one —
   // hoisted so `finally` releases whichever we ended up holding.
   let adoptedUuid: string | null = null;
@@ -216,7 +231,37 @@ async function fireInner(c: Cron): Promise<void> {
   // holds the full text, and that is decided inside the try.
   let jsonlPath = '';
 
-  try {
+  // ── codex path ───────────────────────────────────────────────────────────
+  //
+  // A one-shot `codex exec`: no tmux pane, no pinned session uuid, no transcript
+  // to tail — codex hands the turn back directly, so none of the claude-side
+  // machinery below (or its drift self-heal) applies. Written as
+  // `if (codex) { … } else try { … }` so the claude branch keeps its original
+  // indentation and this stays a readable diff rather than a 130-line reflow.
+  //
+  // The error is reported VERBATIM. Flattening a codex rejection into a generic
+  // status is what made the 2026-08-15 outage invisible: the account had hit its
+  // usage limit and every fire reported "timeout", so the logs blamed the task
+  // for six hours while the real message sat in the rollout.
+  if (runtimeKind === 'codex-exec') {
+    try {
+      output = await runCodexCronTurn({
+        agentName: c.agentName,
+        cwd,
+        prompt: c.prompt,
+        signal: AbortSignal.timeout(RUN_TIMEOUT_MS),
+      });
+      status = output ? 'ok' : 'no_output';
+      if (!output) output = '[cron-runner] codex turn finished without a final message.';
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // A blown deadline is 'timeout' (un-observable ≠ failed), same vocabulary
+      // as the claude path; anything else is a real error worth reading.
+      const timedOut = /abort|timeout/i.test(msg);
+      status = timedOut ? 'timeout' : 'error';
+      output = `[cron-runner] codex: ${msg}`;
+    }
+  } else try {
     // The orchestrator (Brain) runs its crons (e.g. the daily dream) WITH the
     // brain MCP so they can roster()/agent_activity()/dispatch(). Other agents'
     // crons stay headless (no MCP). The stub keys on this run's id.
