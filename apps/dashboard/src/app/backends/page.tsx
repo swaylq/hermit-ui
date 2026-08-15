@@ -16,7 +16,7 @@ import { SettingsTabs } from '@/components/settings-tabs';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { BACKEND_OPTIONS, BACKEND_BLURB, backendLabel, type BackendOption } from '@/lib/runtime-labels';
-import { isBackendEnabled, toggleBackend } from '@/lib/backend-availability';
+import { isBackendEnabled, toggleBackend, dshSourceOf, type DshSource } from '@/lib/backend-availability';
 
 /** What each card is for, beyond the one-liner the picker already shows. */
 const NEEDS: Record<BackendOption, string> = {
@@ -46,6 +46,11 @@ export default function BackendsPage() {
     }
     setErr(null);
     save.mutate({ config: next });
+  }
+
+  function onDshSource(source: DshSource) {
+    setErr(null);
+    save.mutate({ config: { disabled: cfg.data?.disabled ?? [], ...cfg.data, dshSource: source } });
   }
 
   return (
@@ -78,6 +83,13 @@ export default function BackendsPage() {
                         {BACKEND_BLURB[option]}
                       </p>
                       <p className="mt-1 text-[11px] leading-snug text-muted-foreground/70">{NEEDS[option]}</p>
+                      {option === 'dsh-exec' && on && (
+                        <DshSourcePicker
+                          value={dshSourceOf(cfg.data)}
+                          disabled={save.isPending || cfg.isPending}
+                          onChange={onDshSource}
+                        />
+                      )}
                     </div>
                     {/* Same switch markup as Global Memory's — there is no
                         shared ui/switch in this app, and inventing a second
@@ -113,6 +125,63 @@ export default function BackendsPage() {
           {err && <p className="mt-3 text-xs text-rose-500">{err}</p>}
           {save.error && <p className="mt-3 text-xs text-rose-500">{save.error.message}</p>}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Where an unpinned dsh session gets its model. A session that pins a model
+ * (e.g. claude-opus-5) already implies its route and ignores this.
+ */
+function DshSourcePicker({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: DshSource;
+  disabled: boolean;
+  onChange: (v: DshSource) => void;
+}) {
+  const options: Array<{ v: DshSource; label: string; blurb: string }> = [
+    {
+      v: 'deepseek',
+      label: 'DeepSeek API key',
+      blurb: 'dsh’s own default model (deepseek-v4-flash), billed to DEEPSEEK_API_KEY from the secret store.',
+    },
+    {
+      v: 'pi-endpoint',
+      label: 'Pi Runtime 端点',
+      blurb: 'The endpoint and default model configured under Settings → Pi Runtime — no DeepSeek key needed.',
+    },
+  ];
+  return (
+    <div className="mt-2" role="radiogroup" aria-label="dsh model source">
+      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">模型来源 · model source</span>
+      <div className="mt-1 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+        {options.map((o) => {
+          const active = value === o.v;
+          return (
+            <button
+              key={o.v}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              disabled={disabled}
+              onClick={() => onChange(o.v)}
+              className={cn(
+                'rounded-md border px-2.5 py-1.5 text-left transition-colors',
+                disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+                active
+                  ? 'border-foreground/40 bg-accent'
+                  : 'border-border bg-card hover:border-foreground/25 hover:bg-accent/40',
+              )}
+            >
+              <span className="text-xs font-medium text-foreground">{o.label}</span>
+              <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">{o.blurb}</p>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   availableBackends, isBackendEnabled, toggleBackend, ALL_ENABLED,
-  effectiveDefaultBackend, backendsConfigOf,
+  effectiveDefaultBackend, backendsConfigOf, dshSourceOf,
 } from './backend-availability';
 import { BACKEND_OPTIONS } from './runtime-labels';
 
@@ -133,4 +133,27 @@ test('a config of the wrong shape reads as nothing configured', () => {
   assert.deepEqual(backendsConfigOf({ backendsConfig: { disabled: [1, 'pi-rpc'] } }), {
     disabled: ['pi-rpc'],
   });
+});
+
+// ── the dsh model source ────────────────────────────────────────────────────
+
+test('dshSource parses only its two known values', () => {
+  assert.equal(backendsConfigOf({ backendsConfig: { disabled: [], dshSource: 'pi-endpoint' } })?.dshSource, 'pi-endpoint');
+  assert.equal(backendsConfigOf({ backendsConfig: { disabled: [], dshSource: 'deepseek' } })?.dshSource, 'deepseek');
+  // A value a newer release might write must read as absent, not pass through.
+  assert.equal(backendsConfigOf({ backendsConfig: { disabled: [], dshSource: 'ollama' } })?.dshSource, undefined);
+  assert.equal(backendsConfigOf({ backendsConfig: { disabled: [], dshSource: 7 } })?.dshSource, undefined);
+});
+
+test('absent or unreadable source defaults to deepseek — the historical behaviour', () => {
+  assert.equal(dshSourceOf(null), 'deepseek');
+  assert.equal(dshSourceOf({ disabled: [] }), 'deepseek');
+  assert.equal(dshSourceOf({ disabled: [], dshSource: 'pi-endpoint' }), 'pi-endpoint');
+});
+
+test('toggling a backend does not drop the dsh source riding the same config', () => {
+  const cfg = { disabled: [], dshSource: 'pi-endpoint' as const };
+  const off = toggleBackend(cfg, 'codex-exec', false);
+  assert.equal(off?.dshSource, 'pi-endpoint');
+  assert.equal(toggleBackend(off, 'codex-exec', true)?.dshSource, 'pi-endpoint');
 });

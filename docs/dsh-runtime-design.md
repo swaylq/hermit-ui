@@ -102,6 +102,14 @@ serve. Everything else stays on dsh's own catalog; a machine-level default
 still works by exporting HERMIT_DSH_PROVIDER/HERMIT_DSH_MODEL in the
 gateway's env (the child inherits them and session pins override).
 
+**Settings → Backends → DeepSeek → 模型来源** is the UI for the machine-level
+default: 'DeepSeek API key' keeps dsh's own catalog, 'Pi Runtime 端点' points
+every UNPINNED dsh session at the pi endpoint's default model. Stored as
+`backendsConfig.dshSource`, polled by the gateway (machines.pollBackendsConfig,
+30s TTL), and applied as a provider default in front of inferDshSelection — so
+it behaves exactly like a hand-pinned provider, and a session that pins its own
+model is untouched either way.
+
 Guard that is load-bearing: an `api` value llm-pi-ai does not speak (or any
 config field with control characters) SKIPS the bridge instead of emitting it
 — an invalid route fails dsh's resolveProfiles at boot, which would kill every

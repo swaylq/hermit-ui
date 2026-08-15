@@ -97,7 +97,13 @@ export const machinesRouter = router({
   }),
 
   setBackendsConfig: machineProcedure
-    .input(z.object({ config: z.object({ disabled: z.array(z.string().max(64)).max(20) }).nullable() }))
+    .input(z.object({
+      config: z.object({
+        disabled: z.array(z.string().max(64)).max(20),
+        // Where an unpinned dsh session gets its model — see lib/backend-availability.
+        dshSource: z.enum(['deepseek', 'pi-endpoint']).optional(),
+      }).nullable(),
+    }))
     .mutation(async ({ ctx, input }) => {
       // The "never disable everything" rule is enforced in the UI against the
       // option list it renders, but it is re-checked here because this is a
@@ -117,6 +123,14 @@ export const machinesRouter = router({
       invalidateMachineCache(ctx.machine.id);
       return { ok: true };
     }),
+
+  // Gateway-side read of the backends config, same split as pollPiConfig below:
+  // a poll row whose shape is the gateway's contract, so the UI getter is free
+  // to change. The gateway wants it for the dsh model source (dshSource).
+  pollBackendsConfig: gatewayProcedure.query(async ({ ctx }) => {
+    const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
+    return (m?.backendsConfig as unknown as { disabled?: string[]; dshSource?: string } | null) ?? null;
+  }),
 
   // Gateway-side read: same shape as getPiConfig but behind gatewayProcedure,
   // so a gateway polls it with its machine key without going through the

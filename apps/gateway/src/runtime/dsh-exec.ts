@@ -32,6 +32,7 @@ import { DshEventTranslator, parseRunnerLine, type DshTotals, type DshUsage } fr
 import { readSecret } from './pi-credentials';
 import { getPiConfig, type PiConfig } from '../pi-config';
 import { modelLimitsFor } from '../pi-model-limits';
+import { api } from '../api';
 
 type DshHandle = RuntimeHandle & {
   /** The dsh session id as the DB knows it; learned from the first turn's hello. */
@@ -274,6 +275,27 @@ export function resetDeepseekKeyCache(): void {
 }
 
 /**
+ * Settings → Backends' dsh model source, polled with a short TTL (it sits on
+ * the message-delivery path). 'pi-endpoint' points an UNPINNED dsh session at
+ * the machine's pi endpoint and its default model instead of dsh's own
+ * deepseek catalog; pinned sessions are unaffected. Unreachable dashboard or
+ * unknown value = 'deepseek', the historical behaviour.
+ */
+let cachedSource: { at: number; value: 'deepseek' | 'pi-endpoint' } = { at: 0, value: 'deepseek' };
+async function dshSource(): Promise<'deepseek' | 'pi-endpoint'> {
+  if (Date.now() - cachedSource.at < 30_000) return cachedSource.value;
+  let value: 'deepseek' | 'pi-endpoint' = 'deepseek';
+  try {
+    const cfg = (await api.pollBackendsConfig()) as { dshSource?: unknown } | null;
+    if (cfg?.dshSource === 'pi-endpoint') value = 'pi-endpoint';
+  } catch {
+    // keep the default; a dashboard blip must not change where models come from
+  }
+  cachedSource = { at: Date.now(), value };
+  return value;
+}
+
+/**
  * A turn that produces no runner output for this long is wedged — the model
  * call inside dsh has its own retry/timeout machinery, so silence this length
  * means the process is stuck, not thinking.
@@ -364,7 +386,15 @@ export class DshExecRuntime implements AgentRuntime {
       console.warn('[dsh] pi endpoint bridge skipped:', e instanceof Error ? e.message : String(e));
     }
 
-    return this.spawnTurn(h, command, text, key, bridge);
+    // Settings → Backends can point unpinned dsh sessions at the pi endpoint.
+    // Expressed as a provider default so inferDshSelection fills the model in,
+    // exactly as if the session had pinned the provider by hand.
+    const sourceProvider =
+      bridge && !h.provider && !h.modelPin && (await dshSource()) === 'pi-endpoint'
+        ? bridge.route.provider
+        : null;
+
+    return this.spawnTurn(h, command, text, key, bridge, sourceProvider);
   }
 
   private spawnTurn(
@@ -373,6 +403,7 @@ export class DshExecRuntime implements AgentRuntime {
     text: string,
     key: string | null,
     bridge: { route: NonNullable<ReturnType<typeof piEndpointRoute>>; key: string | null } | null,
+    sourceProvider: string | null = null,
   ): boolean {
     // The task travels by file: argv is visible in `ps` and env is sized for
     // configuration, while a chat message can be a pasted document.
@@ -392,7 +423,7 @@ export class DshExecRuntime implements AgentRuntime {
       return false;
     }
 
-    const pin = inferDshSelection(bridge?.route ?? null, h.provider, h.modelPin);
+    const pin = inferDshSelection(bridge?.route ?? null, h.provider ?? sourceProvider, h.modelPin);
 
     const profile = process.env.HERMIT_DSH_PROFILE?.trim() || 'headless';
     const child = spawn(

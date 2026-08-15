@@ -12,7 +12,17 @@
 
 import { BACKEND_OPTIONS, type BackendOption } from './runtime-labels';
 
-export type BackendsConfig = { disabled: string[] };
+/**
+ * Where a dsh session with no provider/model pin gets its model from.
+ *
+ * 'deepseek' — dsh's own default catalog (deepseek-v4-flash), authenticated by
+ * DEEPSEEK_API_KEY. 'pi-endpoint' — the machine's Settings → Pi Runtime
+ * endpoint and ITS default model (the hyqubit claude catalog on this fleet),
+ * through the llm-pi-ai bridge. Pinned sessions are unaffected either way.
+ */
+export type DshSource = 'deepseek' | 'pi-endpoint';
+
+export type BackendsConfig = { disabled: string[]; dshSource?: DshSource };
 
 /** The default a machine that has never been configured behaves as. */
 export const ALL_ENABLED: BackendsConfig = { disabled: [] };
@@ -89,7 +99,18 @@ export function backendsConfigOf(
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const disabled = (raw as { disabled?: unknown }).disabled;
   if (!Array.isArray(disabled)) return null;
-  return { disabled: disabled.filter((d): d is string => typeof d === 'string') };
+  const source = (raw as { dshSource?: unknown }).dshSource;
+  return {
+    disabled: disabled.filter((d): d is string => typeof d === 'string'),
+    // Whitelisted, not passed through: an older release reading a value a newer
+    // one wrote must land on the default, never on an unknown string.
+    ...(source === 'deepseek' || source === 'pi-endpoint' ? { dshSource: source } : {}),
+  };
+}
+
+/** The dsh model source this config asks for; absent or unreadable = deepseek. */
+export function dshSourceOf(config: BackendsConfig | null | undefined): DshSource {
+  return config?.dshSource === 'pi-endpoint' ? 'pi-endpoint' : 'deepseek';
 }
 
 /**
@@ -111,6 +132,8 @@ export function toggleBackend(
   const left = BACKEND_OPTIONS.filter((o) => !disabled.has(o));
   if (left.length === 0) return null;
   // Ordered by BACKEND_OPTIONS rather than insertion, so the stored value does
-  // not churn between equivalent sets and produce pointless writes.
-  return { disabled: BACKEND_OPTIONS.filter((o) => disabled.has(o)) };
+  // not churn between equivalent sets and produce pointless writes. Spread
+  // first: a toggle must not drop the OTHER settings this config carries
+  // (dshSource), which rebuilding the object from scratch silently did.
+  return { ...(config ?? {}), disabled: BACKEND_OPTIONS.filter((o) => disabled.has(o)) };
 }
