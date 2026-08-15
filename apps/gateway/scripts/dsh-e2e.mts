@@ -127,6 +127,29 @@ if (stillRunning) {
   console.log('  (turn had already ended when the interrupt fired — row assertion skipped)');
 }
 
+// ── the pi endpoint bridge (claude models over the machine's relay) ─────────
+// Runs only where the pi endpoint is configured (HERMIT_PI_* env, or a live
+// dashboard behind getPiConfig) AND its secret exists — i.e. a real fleet
+// machine. Costs one real claude-haiku turn.
 await rt.stop(handle, 'kill');
+const piProvider = process.env.HERMIT_PI_PROVIDER?.trim();
+const piModels = (process.env.HERMIT_PI_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean);
+if (piProvider && piModels.length > 0) {
+  console.log(`\n── bridge: a ${piProvider} model through dsh ──`);
+  const model = piModels.find((m) => m.includes('haiku')) ?? piModels[0];
+  handle = await rt.ensure({ ...session, id: 'sess-dsh-e2e-04', externalSessionId: null, model }, emit);
+  const beforeBridge = emitted.length;
+  const okB = await rt.submit(handle, 'Reply with exactly the word bridged and nothing else. Do not use any tool.', []);
+  check('submit with a relay model pin returns true', okB);
+  await settle(handle, 'bridge turn');
+  const bridgeText = emitted.slice(beforeBridge).map((i) => JSON.stringify(i.content)).join('\n');
+  check(`the ${model} turn answered through ${piProvider}`, /bridged/i.test(bridgeText), bridgeText.slice(0, 400));
+  const uB = await rt.usage(handle);
+  check('usage is populated for the bridged turn', !!uB && uB.totalTokens > 0, JSON.stringify(uB));
+  await rt.stop(handle, 'kill');
+} else {
+  console.log('\n(no pi endpoint configured in this environment — bridge leg skipped)');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

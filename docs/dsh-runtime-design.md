@@ -79,6 +79,47 @@ quiet bug:
   gets a fresh dsh session whose low seqs would upsert over the old rows, so
   every externalId is scoped by a tag of the dsh session id: `dsh:<tag>:<seq>`.
 
+## The pi endpoint bridge (2026-08-15)
+
+The machine's pi endpoint (Settings → Pi Runtime — hyqubit's claude catalog on
+this fleet) is re-declared into every dsh turn as an llm-pi-ai route. This is
+nearly free because dsh's `llm-pi-ai` adapter wraps the SAME
+`@earendil-works/pi-ai` the pi engine runs on: the provider profile
+hermit-pi-extension registers for pi maps field-for-field onto llm-pi-ai's
+"hand-declared route" (`api` + `baseURL` + models), so one settings page
+serves both backends and the anthropic-messages client is literally the same
+code. `piEndpointRoute()` builds the rows from `getPiConfig()`, with real
+per-model limits from pi-model-limits (claude-opus-5 is 1M/128k; llm-pi-ai's
+declared-route default of 256k would silently shrink it — the same class of
+bug pi-model-limits exists for).
+
+Selection ergonomics (`inferDshSelection`): a session's `runtimeModel` naming
+one of the endpoint's models implies the route — "claude-opus-5" IS the
+choice, and demanding the relay's provider id as a second field would carry no
+new information. A provider pin without a model lands on the endpoint's
+default model, never on dsh's own deepseek default, which that route does not
+serve. Everything else stays on dsh's own catalog; a machine-level default
+still works by exporting HERMIT_DSH_PROVIDER/HERMIT_DSH_MODEL in the
+gateway's env (the child inherits them and session pins override).
+
+Guard that is load-bearing: an `api` value llm-pi-ai does not speak (or any
+config field with control characters) SKIPS the bridge instead of emitting it
+— an invalid route fails dsh's resolveProfiles at boot, which would kill every
+dsh turn on the machine, deepseek ones included. The legacy dropdown value
+`openai` maps to `openai-completions`, mirroring the pi path's fix.
+cc-subscription mode is not bridged: its Keychain OAuth path is pi-specific,
+and llm-pi-ai authenticates routes by API key only.
+
+The route's credential rides the same convention as pi: the secret's NAME is
+the env var (`apiKeyEnv: LITELLM_HYQUBIT_TOKEN`), read from the store per
+spawn and injected. The rows are emitted even when the secret is missing so a
+claude-pinned turn fails with llm-pi-ai's own MISSING_CREDENTIAL naming the
+secret to set, rather than with "unknown provider".
+
+Verified live (dsh-e2e.mts, bridge leg): a `claude-haiku-4-5` pin answered
+through hyqubit with thinking blocks and cache accounting intact
+(cacheReadTokens reported by the LiteLLM relay), and resume held across turns.
+
 ## Credentials
 
 `DEEPSEEK_API_KEY`, read from the machine's encrypted secret store per spawn
