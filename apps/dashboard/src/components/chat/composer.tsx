@@ -215,10 +215,16 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     });
   }, [setDraft, taRef]);
 
-  // Auto-resize textarea: clamp height between 1 and 12 rows.
+  // Auto-resize textarea: clamp height between 1 and 12 rows. While an IME is
+  // composing (中文输入法组字中) we skip the height work entirely: reading
+  // scrollHeight forces a synchronous reflow mid-composition, which on
+  // WebKit/Blink can commit or cancel the composition — leaving the field stuck
+  // typing raw English and the IME's Shift 中/英 toggle dead until refocus. The
+  // committing input event (isComposing === false) still resizes.
   const onChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
     setDraft(e.target.value);
     histIdxRef.current = -1; // typing detaches from history browsing
+    if ((e.nativeEvent as InputEvent).isComposing) return;
     const el = e.target;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
