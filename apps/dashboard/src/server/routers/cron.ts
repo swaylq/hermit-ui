@@ -237,6 +237,46 @@ export const cronRouter = router({
       });
     }),
 
+  // Crons that REPORT into one chat session — the schedule cards the chat pane
+  // shows above the composer next to the loop cards. A different cut from
+  // listForSession above: that lists every cron of the session's *agent* (the
+  // mcp cron_list tool); this is only the crons whose finished runs land in THIS
+  // conversation (reportSessionId), which is what makes them part of the chat.
+  // Polled while the pane is open, so: narrow select, preview-capped prompt, and
+  // the full prompt + run log come from cron.get once a card is expanded.
+  listForReportSession: agentProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const session = await prisma.chatSession.findUnique({
+        where: { id: input.sessionId },
+        select: { agentName: true, machineId: true },
+      });
+      if (!session || session.machineId !== ctx.machine.id) return [];
+      ctx.assertAgent(session.agentName);
+      const crons = await prisma.cron.findMany({
+        // agentName pinned to the session's agent: createFromSession keeps report
+        // targets within the agent anyway, and the pin means a scoped share key
+        // can never see a sibling agent's cron through one of these sessions.
+        where: {
+          machineId: ctx.machine.id,
+          agentName: session.agentName,
+          reportSessionId: input.sessionId,
+        },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true, title: true, prompt: true, intervalSec: true, jitterSec: true,
+          enabled: true, lastStatus: true, lastFire: true, nextFire: true,
+        },
+      });
+      const unread = await unreadCountByCron(crons.map((c) => c.id));
+      const PROMPT_PREVIEW = 100;
+      return crons.map((c) => ({
+        ...c,
+        prompt: c.prompt.length > PROMPT_PREVIEW ? c.prompt.slice(0, PROMPT_PREVIEW) : c.prompt,
+        unreadCount: unread.get(c.id) ?? 0,
+      }));
+    }),
+
   // Edit a cron in place. The point of "in place" is the PHASE: an agent that rewrites
   // its own prompt must not move its own fire time. delete + create — the only route an
   // agent had before this — resets nextFire to now, so a 09:00 daily report silently

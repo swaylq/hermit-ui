@@ -1,8 +1,8 @@
 'use client';
 
-import { Suspense, memo, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Clock, Play, Trash2, Pencil, Check, X, ChevronDown } from 'lucide-react';
+import { Clock, Play, Trash2, Pencil, Check, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -10,41 +10,10 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { relTime } from '@/lib/format';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
-import { Markdown } from '@/components/markdown';
-import { cronStatusTone, CRON_STATUS, type CronStatusTone } from '@/lib/cron-status';
-
-// ── format helpers ───────────────────────────────────────────────────────────
-function fmtDur(sec: number): string {
-  if (sec % 3600 === 0) return `${sec / 3600}h`;
-  if (sec % 60 === 0) return `${sec / 60}m`;
-  return `${sec}s`;
-}
-function fmtEvery(sec: number): string {
-  return `every ${fmtDur(sec)}`;
-}
-function fmtMs(ms: number): string {
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
-}
-
-// tone → badge classes (this site's own visual map; the status→tone grouping is shared).
-const CRON_BADGE_CLS: Record<CronStatusTone, string> = {
-  ok: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/25',
-  bad: 'text-rose-500 bg-rose-500/10 border-rose-500/25',
-  inconclusive: 'text-amber-500 bg-amber-500/10 border-amber-500/25',
-  neutral: 'text-zinc-400 bg-zinc-500/10 border-zinc-500/25',
-};
-
-function CronStatusBadge({ status, enabled }: { status?: string | null; enabled: boolean }) {
-  const text = enabled ? (status ?? 'idle') : 'off';
-  const cls = enabled ? CRON_BADGE_CLS[cronStatusTone(status)] : CRON_BADGE_CLS.neutral;
-  return (
-    <span className={cn('inline-flex items-center rounded border px-1.5 py-px text-[10px] font-mono uppercase tracking-wide', cls, status === CRON_STATUS.running && enabled && 'animate-pulse')}>
-      {text}
-    </span>
-  );
-}
+// Badge / run row / formatters live in cron-bits — shared with the chat pane's
+// schedule cards (loop-bar) so the two render sites can't drift.
+import { CronRunRow, CronStatusBadge, cronDue, fmtDur, fmtEvery } from '@/components/cron-bits';
 
 export default function CronPage() {
   return (
@@ -304,12 +273,9 @@ function CronDetail({ id }: { id: string }) {
   // Unread = a finished run (ok|fail) the user hasn't expanded yet. Running runs
   // are never "unread" — they're still amber.
   const unreadRuns = runs.filter((r) => !r.readAt && r.status !== 'running').length;
-  // A run is "due" when nextFire is at/just-before now — true for the ≤15s window
-  // after Run now (runNow sets nextFire=now) and for any overdue job. Drives the
-  // "下次" label + a queued hint so the UI never shows a stale/past timestamp or
-  // the old 1970 epoch sentinel there.
-  const nextMs = cron?.nextFire ? new Date(cron.nextFire).getTime() : null;
-  const queued = nextMs !== null && nextMs <= Date.now();
+  // "due" (see cronDue) drives the "下次" label + a queued hint so the UI never
+  // shows a stale/past timestamp or the old 1970 epoch sentinel there.
+  const queued = cronDue(cron?.nextFire);
 
   function startEdit() {
     if (!cron) return;
@@ -493,67 +459,3 @@ function CronDetail({ id }: { id: string }) {
   );
 }
 
-// memo'd so a 5s cron.get poll doesn't re-render every run row — React Query's
-// structural sharing keeps unchanged run objects referentially stable, `autoOpen`
-// is a primitive, and `onRead` is a stable useCallback (see `markRead`), so
-// untouched rows bail. `onRead` takes the runId (the row calls it with its own
-// run.id) so the parent can share one stable callback across all rows.
-const CronRunRow = memo(function CronRunRow({
-  run,
-  onRead,
-  autoOpen = false,
-}: {
-  run: { id: string; firedAt: Date | string; status: string; durationMs: number | null; readAt: Date | string | null };
-  onRead: (runId: string) => void;
-  autoOpen?: boolean;
-}) {
-  // Unread = finished run not yet expanded. A transparent dot keeps the row
-  // height/alignment identical whether read or unread.
-  const unread = !run.readAt && run.status !== 'running';
-  // Output is lazy — fetched only when this row is expanded (kept out of cron.get's
-  // 5s-polled payload). staleTime keeps it cached so re-expanding doesn't refetch.
-  const [open, setOpen] = useState(autoOpen);
-  const out = trpc.cron.runOutput.useQuery({ runId: run.id }, { enabled: open, staleTime: 60_000 });
-  const ref = useRef<HTMLDetailsElement>(null);
-  // Deep-linked from a notification (?run=…): open the row, mark it read, and
-  // scroll it into view. Fires once for the targeted row.
-  useEffect(() => {
-    if (!autoOpen) return;
-    if (unread) onRead(run.id);
-    ref.current?.scrollIntoView({ block: 'center' });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoOpen]);
-  return (
-    <li>
-      <details
-        ref={ref}
-        open={open}
-        className="group rounded-md border border-border"
-        onToggle={(e) => { const o = e.currentTarget.open; setOpen(o); if (o && unread) onRead(run.id); }}
-      >
-        <summary className="cursor-pointer list-none flex items-center gap-2 px-2.5 h-9 text-[12px]">
-          <span
-            className={cn('h-1.5 w-1.5 rounded-full shrink-0', unread ? 'bg-rose-500' : 'bg-transparent')}
-            aria-hidden="true"
-            title={unread ? 'unread' : undefined}
-          />
-          <CronStatusBadge status={run.status} enabled />
-          <span className="tabular-nums text-muted-foreground">{relTime(run.firedAt)}</span>
-          {run.durationMs != null && <span className="tabular-nums text-muted-foreground/60">{fmtMs(run.durationMs)}</span>}
-          <ChevronDown className="ml-auto h-3.5 w-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />
-        </summary>
-        <div className="border-t border-border px-3 py-2">
-          {!open ? null : out.isPending ? (
-            <p className="text-xs text-muted-foreground">loading…</p>
-          ) : out.data?.output ? (
-            <div className="max-h-72 overflow-auto text-[12px] text-foreground/85">
-              <Markdown>{out.data.output}</Markdown>
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">{run.status === 'running' ? 'running…' : 'no output captured'}</p>
-          )}
-        </div>
-      </details>
-    </li>
-  );
-});
