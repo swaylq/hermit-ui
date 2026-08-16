@@ -1428,7 +1428,17 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
   return (
     <>
-      <div className="border-b border-border px-4 h-12 flex items-center justify-between gap-3 shrink-0">
+      {/* The split row: chat column (its header INCLUDED, so the preview
+          panel's h-12 header sits on the same line and the divider runs the
+          full height) + the live-preview panel as the right sibling on lg+.
+          On phones the panel is a fixed full-screen layer, so this row is
+          free there. */}
+      <div className="flex-1 min-h-0 flex">
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+      {/* @container: with the split open the chat column is far narrower than
+          the viewport, so the action cluster folds by the COLUMN's real width
+          (container query), not the sm viewport breakpoint. */}
+      <div className="@container border-b border-border px-4 h-12 flex items-center justify-between gap-3 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <SidebarMobileToggle />
           <div className="min-w-0">
@@ -1584,15 +1594,17 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               <ArchiveRestore className="h-4 w-4" />
             </button>
           )}
-          {/* Secondary actions. Inline on ≥sm; on a phone they live in the tray
-              below, which is the same JSX rendered into a different container. */}
-          <div className="hidden sm:flex items-center gap-1">{secondaryActions}</div>
-          {/* Mobile tray: anchored to the LEFT of the persistent buttons and
-              floated over the title (right-full + its own opaque background), so
-              opening it costs no header width. */}
+          {/* Secondary actions. Inline while the header (container query — the
+              chat COLUMN, which the preview split narrows) is ≥40rem; below
+              that they live in the tray, same JSX in a different container. */}
+          <div className="hidden @min-[40rem]:flex items-center gap-1">{secondaryActions}</div>
+          {/* Narrow tray (phones AND a squeezed split column): anchored to the
+              LEFT of the persistent buttons and floated over the title
+              (right-full + its own opaque background), so opening it costs no
+              header width. */}
           <div
             className={cn(
-              'sm:hidden absolute right-full top-1/2 -translate-y-1/2 mr-1 z-20 flex items-center gap-1',
+              '@min-[40rem]:hidden absolute right-full top-1/2 -translate-y-1/2 mr-1 z-20 flex items-center gap-1',
               'rounded-lg border border-border bg-popover/95 px-1 py-0.5 shadow-lg backdrop-blur-sm',
               'origin-right transition-[opacity,transform] duration-200 ease-out',
               moreOpen
@@ -1610,7 +1622,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             aria-label={moreOpen ? 'hide more actions' : 'more actions'}
             title="More actions"
             className={cn(
-              'sm:hidden inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer',
+              '@min-[40rem]:hidden inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer',
               moreOpen ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
             )}
           >
@@ -1651,12 +1663,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         <SessionDetailSheet sessionId={sessionId} open={detailOpen} onOpenChange={setDetailOpen} />
       )}
 
-      {/* Below the header: the chat column (everything that was here before)
-          plus, when opened, the live-preview panel as its right-hand sibling on
-          lg+. On phones the panel renders as a fixed full-screen layer instead
-          (see LivePreviewPanel), so this row is free there. */}
-      <div className="flex-1 min-h-0 flex">
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
       {/* Anchored mode banner: you're parked on a search hit, not at the live
           tail. Without this the frozen timeline reads as a stuck session. */}
       {anchored.active && (

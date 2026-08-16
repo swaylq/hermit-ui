@@ -224,7 +224,9 @@ export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInf
             : 'after:bg-transparent hover:after:bg-foreground/15 focus-visible:after:bg-foreground/30',
         )}
       />
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+      {/* h-12 matches the chat header exactly — on lg+ the two sit on one line
+          and the border-b runs straight across the split. */}
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
         {/* live dot + mode, the house status idiom: a dot and a tracked label,
             never a colored pill. emerald = the registration is live. */}
         <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
