@@ -17,6 +17,9 @@ export interface Shortcut {
 export const SHORTCUTS: Shortcut[] = [
   { id: 'search', keys: ['⌘', 'K'], label: 'Search all messages', group: 'Actions' },
   { id: 'new-chat', keys: ['⌘', '⇧', 'N'], label: 'New chat', group: 'Actions' },
+  // Handled by the chat page itself (works outside standalone too, like ⌘/ and
+  // ⌘F); listed here so the Help table teaches it.
+  { id: 'toggle-preview', keys: ['⌘', '\\'], label: 'Toggle live-preview split (when mounted)', group: 'Actions' },
   { id: 'nav-chat', keys: ['⌘', '1'], label: 'Go to Chat', group: 'Navigation', href: '/chat' },
   { id: 'nav-agents', keys: ['⌘', '2'], label: 'Go to Agents', group: 'Navigation', href: '/agents' },
   { id: 'nav-cron', keys: ['⌘', '3'], label: 'Go to Cron', group: 'Navigation', href: '/cron' },

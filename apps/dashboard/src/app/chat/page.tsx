@@ -1359,6 +1359,20 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const showMicFab = !micHidden && !session?.closedAt;
   const hasLivePreview = !!livePreview && !session?.closedAt;
   const previewOpen = hasLivePreview && !!previewOpenUrl && previewOpenUrl === livePreview?.url;
+  // Cmd/Ctrl+\ toggles the live-preview split — VS Code's split-editor key,
+  // free in every browser. Same shape as the ⌘/ and ⌘F handlers above; a
+  // no-op unless the session has a registered preview (the FAB's condition).
+  const livePreviewUrl = hasLivePreview ? (livePreview?.url ?? null) : null;
+  useEffect(() => {
+    if (!livePreviewUrl) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '\\' || !(e.metaKey || e.ctrlKey)) return;
+      e.preventDefault();
+      setPreviewOpenUrl((cur) => (cur === livePreviewUrl ? null : livePreviewUrl));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [livePreviewUrl]);
 
   const secondaryActions = (
     <>
