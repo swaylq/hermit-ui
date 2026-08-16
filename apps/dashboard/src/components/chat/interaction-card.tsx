@@ -164,6 +164,9 @@ function QuestionCard({ question, options, multiSelect, busy, onResolve }: {
           placeholder="Other…"
           disabled={busy}
           onKeyDown={(e) => {
+            // IME composition: Enter confirms the candidate, not the answer —
+            // without this a mid-composition Enter submits raw pinyin.
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
             if (e.key === 'Enter' && !multiSelect && custom.trim()) { e.preventDefault(); onResolve([custom.trim()]); }
           }}
           className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-foreground/40 disabled:opacity-50"

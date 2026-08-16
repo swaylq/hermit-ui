@@ -11,6 +11,7 @@ import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { KeyboardShortcuts } from '@/components/keyboard-shortcuts';
 import { ChatCacheRoot } from '@/components/chat-cache-root';
 import { installNativeBridge } from '@/lib/native-bridge';
+import { installImeDebug } from '@/lib/ime-debug';
 
 // Key storage moved to lib/keyring (multi-machine browser keyring). Re-export
 // the active-key getter so any importer of `@/app/providers` keeps working.
@@ -44,6 +45,10 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   // Expose the native-shell API (APNs token intake + deep links). No-op in a
   // browser — it just parks an object the shell would have called.
   useEffect(() => installNativeBridge(), []);
+
+  // Opt-in IME probe for the "stuck typing English" bug class — zero cost
+  // unless localStorage['hermit:ime-debug']='1'. See lib/ime-debug.ts.
+  useEffect(() => installImeDebug(), []);
 
   // iOS Safari ignores `user-scalable=no` / `maximum-scale` in the viewport
   // meta, so block its pinch-zoom gestures directly. (Android & WKWebView honour

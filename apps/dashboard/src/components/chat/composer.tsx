@@ -555,7 +555,9 @@ export const ComposeBar = forwardRef<ComposerHandle, {
                 setDraft('');
                 return;
               }
-              if (slashOpen) {
+              if (slashOpen && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+                // (the composition guard: with the slash menu open, ↑/↓/Tab during
+                // 拼音组字 belong to the IME's candidate window, not the menu)
                 if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => Math.min(slashFiltered.length - 1, i + 1)); return; }
                 if (e.key === 'ArrowUp')   { e.preventDefault(); setSlashIdx((i) => Math.max(0, i - 1)); return; }
                 if (e.key === 'Tab')       { e.preventDefault(); pickCommand(slashFiltered[slashIdx]); return; }

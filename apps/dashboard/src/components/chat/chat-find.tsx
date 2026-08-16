@@ -219,6 +219,10 @@ export function ChatFind({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
+          // IME composition (中文输入法): Enter/Esc belong to the candidate
+          // window — same guard as the composer, or confirming a candidate
+          // "jumps to next match" and eats the keystroke.
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
           if (e.key === 'Enter') { e.preventDefault(); goTo(posRef.current + (e.shiftKey ? -1 : 1)); }
           else if (e.key === 'Escape') { e.preventDefault(); onClose(); }
         }}
