@@ -69,8 +69,58 @@ function textResponse(res: http.ServerResponse, status: number, body: string, ex
   res.end(body);
 }
 
+/**
+ * The status pages a user can meet inside the dashboard's preview iframe (404,
+ * dead upstream, server root). Styled to read as part of hermit: pure-neutral
+ * palette in both themes, a size-6px status dot + tracked uppercase label, mono
+ * body text, zero shadow. Self-contained (~1KB), no scripts.
+ */
+function statusPage(opts: {
+  title: string;
+  label: string;
+  message: string;
+  dot: 'muted' | 'amber';
+  /** meta-refresh seconds (the 502 page auto-retries). */
+  refresh?: number;
+}): string {
+  const refresh = opts.refresh ? `<meta http-equiv="refresh" content="${opts.refresh}">` : '';
+  const dot =
+    opts.dot === 'amber'
+      ? 'background:#d97706;animation:breathe 1.4s ease-in-out infinite'
+      : 'background:var(--muted)';
+  return (
+    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `${refresh}<title>${opts.title}</title><style>` +
+    `:root{--bg:#ffffff;--fg:#252525;--muted:#8f8f8f;--line:rgba(0,0,0,.08)}` +
+    `@media(prefers-color-scheme:dark){:root{--bg:#141414;--fg:#fafafa;--muted:#7d7d7d;--line:rgba(255,255,255,.1)}}` +
+    `*{box-sizing:border-box}html,body{height:100%}` +
+    `body{margin:0;display:grid;place-items:center;background:var(--bg);color:var(--fg);` +
+    `font:13px/1.6 -apple-system,"SF Pro Text",system-ui,"PingFang SC",sans-serif}` +
+    `main{display:flex;flex-direction:column;align-items:center;gap:10px;padding:32px;text-align:center}` +
+    `.row{display:flex;align-items:center;gap:8px}` +
+    `.dot{width:6px;height:6px;border-radius:999px;${dot}}` +
+    `.label{font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}` +
+    `.msg{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px;color:var(--muted);max-width:36em}` +
+    `@keyframes breathe{0%,100%{opacity:.25;transform:scale(.7)}50%{opacity:1;transform:scale(1)}}` +
+    `@media(prefers-reduced-motion:reduce){.dot{animation:none}}` +
+    `</style></head><body><main>` +
+    `<div class="row"><span class="dot"></span><span class="label">${opts.label}</span></div>` +
+    `<p class="msg">${opts.message}</p>` +
+    `</main></body></html>`
+  );
+}
+
 function notFound(res: http.ServerResponse) {
-  textResponse(res, 404, '<!doctype html><meta charset="utf-8"><title>404</title><p style="font:14px system-ui;color:#666;padding:2em">预览不存在或已过期（hermit live preview）</p>');
+  textResponse(
+    res,
+    404,
+    statusPage({
+      title: '404 · hermit live preview',
+      label: 'preview not found',
+      message: '预览不存在或已过期 —— 让 agent 重新执行 hermit-preview 即可换新链接。',
+      dot: 'muted',
+    }),
+  );
 }
 
 // ── request identity resolution ──────────────────────────────────────────────
@@ -273,8 +323,13 @@ function serveProxy(entry: PreviewEntry, rest: string, search: string, req: http
     textResponse(
       res,
       502,
-      '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="2"><title>502</title>' +
-        `<p style="font:14px system-ui;color:#666;padding:2em">目标服务 ${entry.target} 未响应 —— agent 可能正在重启它，本页每 2 秒自动重试。</p>`,
+      statusPage({
+        title: '502 · hermit live preview',
+        label: 'waiting for service',
+        message: `${entry.target} 未响应 —— agent 可能正在重启它，本页每 2 秒自动重试。`,
+        dot: 'amber',
+        refresh: 2,
+      }),
     );
   });
   req.pipe(upstream);
@@ -293,8 +348,23 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
   const pathname = qIdx === -1 ? rawUrl : rawUrl.slice(0, qIdx);
   const search = qIdx === -1 ? '' : rawUrl.slice(qIdx);
 
-  if (pathname === '/' || pathname === '/healthz') {
-    return textResponse(res, 200, 'hermit live preview server');
+  // /healthz stays machine-plain (curl/grep probes); the root gets the styled
+  // page a human sees when they open the bare domain.
+  if (pathname === '/healthz') {
+    res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end('hermit live preview server');
+  }
+  if (pathname === '/') {
+    return textResponse(
+      res,
+      200,
+      statusPage({
+        title: 'hermit live preview',
+        label: 'hermit live preview server',
+        message: '在会话里执行 hermit-preview <目录|端口> 即可把页面挂到这里。',
+        dot: 'muted',
+      }),
+    );
   }
 
   // Bare /p/<id> → /p/<id>/ so the document's relative URLs resolve inside the prefix.

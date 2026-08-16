@@ -29,14 +29,17 @@ export function PreviewFab({ open, onToggle }: { open: boolean; onToggle: () => 
       aria-label={open ? '关闭实时预览面板' : '打开实时预览面板（可拖动移位）'}
       title={open ? '关闭实时预览' : '打开实时预览（agent 挂载的页面；可拖动移位）'}
       className={cn(
+        // Same dark-glass family as the mic FAB. Open state is expressed with
+        // brightness (border + icon step up), not a color shift — the emerald
+        // dot is the only chroma here, and it means "registration live".
         'relative flex items-center justify-center rounded-full border backdrop-blur-xl cursor-pointer transition-colors',
-        open ? 'border-sky-400/60 bg-sky-950/85' : 'border-white/10 bg-[#111319]/85 hover:border-white/25',
+        open ? 'border-white/30 bg-[#161b22]/90' : 'border-white/10 bg-[#111319]/85 hover:border-white/25',
       )}
       style={{ width: FAB, height: FAB, boxShadow: '0 6px 20px -6px rgba(0,0,0,0.55)' }}
     >
-      <AppWindow className={cn('pointer-events-none h-5 w-5', open ? 'text-sky-300' : 'text-white/85')} />
+      <AppWindow className={cn('pointer-events-none h-5 w-5 transition-colors', open ? 'text-white' : 'text-white/85')} />
       {/* "live" dot — the preview is mounted and serving */}
-      <span className="pointer-events-none absolute right-[7px] top-[7px] h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)]" />
+      <span className="pointer-events-none absolute right-[7px] top-[7px] size-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.7)]" />
     </button>
   );
 }

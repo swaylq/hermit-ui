@@ -11,11 +11,16 @@
 //             fully usable, so the human can watch the page while telling the
 //             agent what to change. That co-existence is the whole feature.
 //
+// Chrome follows the house style (gallery/hermit.md): monochrome + hairline
+// borders, mono type for the target path, a size-1.5 status dot instead of a
+// colored pill, and the shared `breathe` dot while the iframe loads — the same
+// keyframe as the thinking indicator, so "loading" reads the same everywhere.
+//
 // Auto-refresh lives inside the iframe (the gateway injects an SSE client into
 // served HTML), so this component stays dumb: src + a manual reload key.
 
 import { useEffect, useMemo, useState } from 'react';
-import { Copy, ExternalLink, RotateCw, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, RotateCw, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface LivePreviewInfo {
@@ -38,9 +43,42 @@ export function parseLivePreview(v: unknown): LivePreviewInfo | null {
   };
 }
 
+/** Header icon button — mirrors file-preview's header controls exactly. */
+function HeaderButton({
+  onClick,
+  title,
+  children,
+  className,
+}: {
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className={cn(
+        'inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground',
+        'transition-colors cursor-pointer hover:bg-accent/40 hover:text-foreground',
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInfo; onClose: () => void }) {
   const [gen, setGen] = useState(0); // manual refresh = remount the iframe
   const [copied, setCopied] = useState(false);
+  // Covers the iframe with the panel's own background until the document fires
+  // onLoad — without it, opening the panel in dark mode flashes a white block
+  // before the preview paints. Reset on every remount (refresh).
+  const [loaded, setLoaded] = useState(false);
 
   // Esc closes the panel. data-esc-layer (below) makes the chat page's
   // "Esc cancels the running turn" shortcut stand down while we're mounted —
@@ -53,7 +91,7 @@ export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInf
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const shortTarget = useMemo(() => preview.target.replace(/^\/Users\/[^/]+\//, '~/'), [preview.target]);
+  const shortTarget = useMemo(() => preview.target.replace(/^\/(Users|home)\/[^/]+\//, '~/'), [preview.target]);
 
   return (
     <div
@@ -68,32 +106,29 @@ export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInf
         'lg:static lg:inset-auto lg:z-auto lg:w-[45%] lg:max-w-[720px] lg:shrink-0 lg:border-l lg:border-border',
       )}
     >
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
-        <span
-          className={cn(
-            'inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium',
-            preview.mode === 'static'
-              ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
-              : 'border-sky-500/40 text-sky-600 dark:text-sky-400',
-          )}
-        >
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+        {/* live dot + mode, the house status idiom: a dot and a tracked label,
+            never a colored pill. emerald = the registration is live. */}
+        <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+        <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
           {preview.mode === 'static' ? 'static' : 'service'}
         </span>
-        <span className="min-w-0 truncate text-xs text-muted-foreground" title={preview.target}>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" title={preview.target}>
           {shortTarget}
         </span>
-        <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          <button
-            type="button"
-            onClick={() => setGen((g) => g + 1)}
+        <div className="flex shrink-0 items-center gap-0.5">
+          <HeaderButton
             title="刷新预览"
-            aria-label="刷新预览"
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground"
+            onClick={() => {
+              setLoaded(false);
+              setGen((g) => g + 1);
+            }}
           >
             <RotateCw className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
+          </HeaderButton>
+          <HeaderButton
+            title={copied ? '已复制' : '复制预览链接'}
+            className={copied ? 'text-emerald-500 hover:text-emerald-500' : undefined}
             onClick={() => {
               navigator.clipboard?.writeText(preview.url).then(
                 () => {
@@ -103,46 +138,47 @@ export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInf
                 () => {},
               );
             }}
-            title={copied ? '已复制' : '复制预览链接'}
-            aria-label="复制预览链接"
-            className={cn(
-              'inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors cursor-pointer',
-              copied ? 'text-emerald-500' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-            )}
           >
-            <Copy className="h-3.5 w-3.5" />
-          </button>
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          </HeaderButton>
           <a
             href={preview.url}
             target="_blank"
             rel="noreferrer noopener"
             title="在新标签页打开"
             aria-label="在新标签页打开预览"
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent/40 hover:text-foreground"
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </a>
-          <button
-            type="button"
-            onClick={onClose}
-            title="关闭预览面板 (Esc)"
-            aria-label="关闭预览面板"
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground"
-          >
+          <HeaderButton title="关闭预览面板 (Esc)" onClick={onClose}>
             <X className="h-4 w-4" />
-          </button>
+          </HeaderButton>
         </div>
       </div>
-      {/* bg-white: preview pages overwhelmingly assume a light ground; a dark
-          flash between navigations reads as a broken page. The page's own CSS
-          takes over the instant it paints. */}
-      <iframe
-        key={gen}
-        src={preview.url}
-        title="live preview"
-        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
-        className="min-h-0 w-full flex-1 border-0 bg-white"
-      />
+      <div className="relative min-h-0 flex-1">
+        {/* bg-white on the iframe itself: preview pages overwhelmingly assume a
+            light ground. The overlay below (panel-colored) is what the user sees
+            until the document loads, so dark mode never flashes white. */}
+        <iframe
+          key={gen}
+          src={preview.url}
+          title="live preview"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
+          className="h-full w-full border-0 bg-white"
+          onLoad={() => setLoaded(true)}
+        />
+        <div
+          aria-hidden="true"
+          className={cn(
+            'pointer-events-none absolute inset-0 flex items-center justify-center bg-background',
+            'transition-opacity duration-300',
+            loaded ? 'opacity-0' : 'opacity-100',
+          )}
+        >
+          <span className="inline-block size-2 rounded-full bg-foreground/60 motion-safe:animate-[breathe_1.4s_ease-in-out_infinite]" />
+        </div>
+      </div>
     </div>
   );
 }
