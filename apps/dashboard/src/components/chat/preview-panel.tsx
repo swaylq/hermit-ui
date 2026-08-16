@@ -7,19 +7,23 @@
 //
 // One element, two shapes, CSS-only switch:
 //   phone     fixed inset-0 full-screen layer (a split of 390px helps nobody)
-//   lg+       a plain flex sibling right of the chat column — the chat stays
-//             fully usable, so the human can watch the page while telling the
-//             agent what to change. That co-existence is the whole feature.
+//   lg+       a plain flex sibling right of the chat column, with a draggable
+//             divider on its left edge — the chat stays fully usable, so the
+//             human can watch the page while telling the agent what to change.
+//
+// Divider mechanics: pointer capture keeps the gesture alive across the iframe
+// (which also goes pointer-events-none while dragging — an iframe otherwise
+// swallows the move events the moment the cursor crosses into it). During the
+// drag the width is written straight to a CSS variable via ref — React renders
+// once at pointer-up, when the value is persisted. Double-click resets to the
+// default 45% split; arrow keys nudge it for keyboard users.
 //
 // Chrome follows the house style (gallery/hermit.md): monochrome + hairline
 // borders, mono type for the target path, a size-1.5 status dot instead of a
-// colored pill, and the shared `breathe` dot while the iframe loads — the same
-// keyframe as the thinking indicator, so "loading" reads the same everywhere.
-//
-// Auto-refresh lives inside the iframe (the gateway injects an SSE client into
-// served HTML), so this component stays dumb: src + a manual reload key.
+// colored pill, and the shared `breathe` dot while the iframe loads.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Check, Copy, ExternalLink, RotateCw, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -41,6 +45,19 @@ export function parseLivePreview(v: unknown): LivePreviewInfo | null {
     target: typeof o.target === 'string' ? o.target : '',
     updatedAt: typeof o.updatedAt === 'string' ? o.updatedAt : undefined,
   };
+}
+
+// ── divider width persistence ────────────────────────────────────────────────
+
+const W_KEY = 'hermit:live-preview-w';
+const MIN_W = 320;
+const MAX_W = 1100;
+/** Keep this much room for the chat column (+ sidebar) no matter how far the divider goes. */
+const CHAT_MIN = 480;
+
+function clampW(w: number): number {
+  const ceiling = Math.max(MIN_W, Math.min(MAX_W, window.innerWidth - CHAT_MIN));
+  return Math.min(Math.max(MIN_W, Math.round(w)), ceiling);
 }
 
 /** Header icon button — mirrors file-preview's header controls exactly. */
@@ -80,6 +97,79 @@ export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInf
   // before the preview paints. Reset on every remount (refresh).
   const [loaded, setLoaded] = useState(false);
 
+  // Divider state. null = the default 45% split (no stored width). While a drag
+  // is live the width goes straight to the CSS var through panelRef; React sees
+  // one setWidth at pointer-up.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState<number | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const drag = useRef({ on: false, startX: 0, startW: 0, lastW: 0 });
+
+  useEffect(() => {
+    try {
+      const v = Number(localStorage.getItem(W_KEY));
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- mount gate reading window/localStorage
+      if (Number.isFinite(v) && v >= MIN_W) setWidth(clampW(v));
+    } catch {
+      /* private mode / bad value */
+    }
+  }, []);
+
+  // A window resize can leave a stored width overlapping the chat minimum —
+  // re-clamp (listener callback, not effect body, so no cascading render).
+  useEffect(() => {
+    const onResize = () => setWidth((w) => (w == null ? w : clampW(w)));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const persistWidth = useCallback((w: number | null) => {
+    setWidth(w);
+    try {
+      if (w == null) localStorage.removeItem(W_KEY);
+      else localStorage.setItem(W_KEY, String(w));
+    } catch {
+      /* private mode */
+    }
+  }, []);
+
+  const onDividerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const startW = panel.offsetWidth;
+    drag.current = { on: true, startX: e.clientX, startW, lastW: startW };
+    setDragging(true);
+  }, []);
+
+  const onDividerMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    const g = drag.current;
+    const panel = panelRef.current;
+    if (!g.on || !panel) return;
+    // The panel sits on the right, so dragging left grows it.
+    g.lastW = clampW(g.startW + (g.startX - e.clientX));
+    panel.style.setProperty('--pv-w', `${g.lastW}px`);
+  }, []);
+
+  const onDividerUp = useCallback(() => {
+    const g = drag.current;
+    if (!g.on) return;
+    g.on = false;
+    setDragging(false);
+    persistWidth(g.lastW);
+  }, [persistWidth]);
+
+  const onDividerKey = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const cur = panelRef.current?.offsetWidth ?? MIN_W;
+      // Panel on the right: ← widens the preview, → narrows it.
+      persistWidth(clampW(cur + (e.key === 'ArrowLeft' ? 24 : -24)));
+    },
+    [persistWidth],
+  );
+
   // Esc closes the panel. data-esc-layer (below) makes the chat page's
   // "Esc cancels the running turn" shortcut stand down while we're mounted —
   // same contract as Overlay.
@@ -95,17 +185,45 @@ export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInf
 
   return (
     <div
+      ref={panelRef}
       data-esc-layer=""
+      style={width != null ? ({ '--pv-w': `${width}px` } as React.CSSProperties) : undefined}
       className={cn(
         'flex flex-col bg-background',
         // Phone: full-screen layer above the composer (z-50) and the FabDock (70),
         // below dialogs (100+). pwa-safe-* because fixed layers pad the notch /
         // home bar themselves (Sheet does; Overlay's children do).
         'fixed inset-0 z-[90] pwa-safe-t pwa-safe-b',
-        // Desktop ≥lg: a static flex column beside the chat (parent supplies the row).
-        'lg:static lg:inset-auto lg:z-auto lg:w-[45%] lg:max-w-[720px] lg:shrink-0 lg:border-l lg:border-border',
+        // Desktop ≥lg: an in-flow flex column beside the chat (parent supplies
+        // the row). relative (not static) so the divider handle can anchor to
+        // its left edge; inset-auto neutralizes the phone layer's inset-0.
+        'lg:relative lg:inset-auto lg:z-auto lg:shrink-0 lg:border-l lg:border-border',
+        width == null ? 'lg:w-[45%] lg:max-w-[720px]' : 'lg:w-[var(--pv-w)] lg:max-w-none',
+        dragging && 'select-none',
       )}
     >
+      {/* Divider handle: an 8px hit area straddling the hairline border. The
+          visible line is the container's border-l; the ::after layer brightens
+          it on hover/drag, the house way of saying "interactive" without color. */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖动调整预览宽度；← → 微调，双击恢复默认"
+        tabIndex={0}
+        onPointerDown={onDividerDown}
+        onPointerMove={onDividerMove}
+        onPointerUp={onDividerUp}
+        onPointerCancel={onDividerUp}
+        onDoubleClick={() => persistWidth(null)}
+        onKeyDown={onDividerKey}
+        className={cn(
+          'absolute inset-y-0 left-0 z-20 hidden w-2 -translate-x-1/2 cursor-col-resize touch-none outline-none lg:block',
+          'after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:transition-colors',
+          dragging
+            ? 'after:bg-foreground/30'
+            : 'after:bg-transparent hover:after:bg-foreground/15 focus-visible:after:bg-foreground/30',
+        )}
+      />
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
         {/* live dot + mode, the house status idiom: a dot and a tracked label,
             never a colored pill. emerald = the registration is live. */}
@@ -159,13 +277,14 @@ export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInf
       <div className="relative min-h-0 flex-1">
         {/* bg-white on the iframe itself: preview pages overwhelmingly assume a
             light ground. The overlay below (panel-colored) is what the user sees
-            until the document loads, so dark mode never flashes white. */}
+            until the document loads, so dark mode never flashes white. While the
+            divider drags, the iframe goes inert so it can't swallow the gesture. */}
         <iframe
           key={gen}
           src={preview.url}
           title="live preview"
           sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
-          className="h-full w-full border-0 bg-white"
+          className={cn('h-full w-full border-0 bg-white', dragging && 'pointer-events-none')}
           onLoad={() => setLoaded(true)}
         />
         <div
