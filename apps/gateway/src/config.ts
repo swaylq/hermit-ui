@@ -74,3 +74,13 @@ export function assertRequiredConfig(): void {
 // /Users/mac. The docs were right.
 export const PROJECTS_ROOT =
   process.env.PROJECTS_ROOT ?? path.join(os.homedir(), '.claude', 'projects');
+
+// ── Live preview (src/preview/) ──────────────────────────────────────────────
+// Public base the dashboard iframes; the serve port below is what the rathole
+// `preview` service tunnels to it. Admin is the loopback-only registration API
+// for the hermit-preview CLI and must NEVER appear in a tunnel config.
+export const PREVIEW_PUBLIC_BASE = process.env.PREVIEW_PUBLIC_BASE ?? 'https://preview.swaylab.ai';
+export const PREVIEW_SERVE_PORT = Number(process.env.PREVIEW_SERVE_PORT ?? 4180);
+export const PREVIEW_ADMIN_PORT = Number(process.env.PREVIEW_ADMIN_PORT ?? 4181);
+// Extra allowed static roots beyond AGENTS_ROOT + ~/.hermit/worktrees, colon-separated.
+export const PREVIEW_ALLOW_ROOTS = (process.env.PREVIEW_ALLOW_ROOTS ?? '').split(':').filter(Boolean);

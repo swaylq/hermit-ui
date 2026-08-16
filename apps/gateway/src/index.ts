@@ -43,6 +43,7 @@ import { chromeReaperTick } from './chrome-reaper';
 import { orphanPaneReaperTick } from './orphan-pane-reaper';
 import { sessionPurgeTick } from './session-purge';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
+import { startPreviewServers, previewSweepTick } from './preview';
 import { installDispatcher, dashboardBackedOff } from './dashboard-http';
 import { assertRequiredConfig } from './config';
 
@@ -276,6 +277,10 @@ startControlChannel();
 // the extension connects. (The account auto-login feature was removed.)
 startLoginBridge();
 
+// Live preview: serve (:4180, tunneled to preview.swaylab.ai) + admin (:4181,
+// loopback-only, the hermit-preview CLI's endpoint). See src/preview/.
+startPreviewServers();
+
 loop(pushAgents, 5 * 60_000);
 loop(ensureBrainTick, 5 * 60_000); // fallback for brains created/updated between restarts
 loop(pushSessionSnapshots, 8_000);
@@ -312,6 +317,7 @@ loop(pushCodexUsage, 12 * 60_000); // reads codex's own rollout files; no proces
 // showing fresh-enough data for human-paced quota watching.
 loop(pushUsage, 30 * 60_000);
 loop(pushUsageWindows, 30 * 60_000);
+loop(() => safe('preview-sweep', previewSweepTick), 60 * 60_000); // retire live previews idle past their 24h TTL
 
 function shutdown(signal: string) {
   console.log(`[gateway] ${signal}, exiting`);

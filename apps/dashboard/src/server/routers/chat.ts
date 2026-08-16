@@ -340,6 +340,9 @@ export const chatRouter = router({
           runtimeMode: true,
           snapshotAt: true,
           loopState: true,
+          // Live preview registration — getSession only, same rule as loopState:
+          // per-session payload never rides the 5s listSessions poll.
+          livePreview: true,
           rssMb: true,
           hibernatedAt: true,
           preview: true,

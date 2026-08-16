@@ -91,6 +91,19 @@ export const api = {
   // nextFire and returns { runId }; phase:'finish' closes it with the result.
   cronRun: (body: any) => post('/api/sync/cron-run', body),
 
+  // Live preview (src/preview/): ChatSession.livePreview column — the chat
+  // page's getSession poll turns it into the preview FAB. null clears it.
+  syncLivePreview: (
+    sessionId: string,
+    livePreview: { url: string; mode: 'static' | 'proxy'; target: string; updatedAt: string } | null,
+  ) => post('/api/sync/live-preview', { sessionId, livePreview }),
+  // A system-role line in the session timeline (instant via the chat SSE bus) —
+  // same surface log_status uses from the MCP stub.
+  postChatSystemMessage: (sessionId: string, text: string, externalId: string) =>
+    post('/api/sync/chat-message', {
+      items: [{ sessionId, role: 'system', content: [{ type: 'text', text }], externalId }],
+    }),
+
   // Global memory — the single shared note the gateway mirrors into this host's
   // ~/.claude/CLAUDE.md so every agent session loads it.
   getGlobalMemory: async (): Promise<{ content: string; enabled: boolean; updatedAt: string | null }> => {

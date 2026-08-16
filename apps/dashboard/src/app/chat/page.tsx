@@ -38,6 +38,8 @@ import { MessageTimeline } from '@/components/chat/message-timeline';
 import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
 import { VoiceMic } from '@/components/chat/voice-mic';
 import { FabDock } from '@/components/chat/fab-dock';
+import { PreviewFab } from '@/components/chat/preview-fab';
+import { LivePreviewPanel, parseLivePreview } from '@/components/chat/preview-panel';
 import { SessionDetailSheet } from '@/components/chat/session-detail-sheet';
 import { runtimeShortLabel, runtimeDetail, hasTmuxPane } from '@/lib/runtime-labels';
 
@@ -416,6 +418,14 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const limit = INITIAL_WINDOW;
   const [summaryMode, toggleSummary] = useSummaryMode();
   const [findOpen, setFindOpen] = useState(false);
+  // Live preview (hermit-preview CLI → gateway preview module → livePreview
+  // column). Sourced from the single-row getSession poll — the merged `session`
+  // row may come from listSessions, which deliberately never carries it.
+  const livePreview = parseLivePreview(sessionOne.data?.livePreview);
+  // The URL the user opened the panel FOR. Open-ness is derived from identity
+  // rather than a boolean an effect has to reset: a withdrawn or replaced
+  // registration stops matching and the panel closes by construction.
+  const [previewOpenUrl, setPreviewOpenUrl] = useState<string | null>(null);
   const messages = trpc.chat.listMessages.useQuery(
     { sessionId, limit },
     {
@@ -1347,6 +1357,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // has gone false — it's the way to take the conversation back.
   const showTakeover = canTakeover || takenOver;
   const showMicFab = !micHidden && !session?.closedAt;
+  const hasLivePreview = !!livePreview && !session?.closedAt;
+  const previewOpen = hasLivePreview && !!previewOpenUrl && previewOpenUrl === livePreview?.url;
 
   const secondaryActions = (
     <>
@@ -1639,6 +1651,12 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         <SessionDetailSheet sessionId={sessionId} open={detailOpen} onOpenChange={setDetailOpen} />
       )}
 
+      {/* Below the header: the chat column (everything that was here before)
+          plus, when opened, the live-preview panel as its right-hand sibling on
+          lg+. On phones the panel renders as a fixed full-screen layer instead
+          (see LivePreviewPanel), so this row is free there. */}
+      <div className="flex-1 min-h-0 flex">
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
       {/* Anchored mode banner: you're parked on a search hit, not at the live
           tail. Without this the frozen timeline reads as a stuck session. */}
       {anchored.active && (
@@ -1737,9 +1755,14 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         {/* The mic floats alone. Takeover moved into the suggestion row above the
             composer — it's a decision you make instead of typing, not something you
             reach for mid-scroll. */}
-        {showMicFab && (
-          <FabDock count={1}>
-            <VoiceMic sessionId={sessionId} hidden={false} onTranscript={insertTranscript} />
+        {(showMicFab || hasLivePreview) && (
+          <FabDock count={(showMicFab ? 1 : 0) + (hasLivePreview ? 1 : 0)}>
+            {showMicFab && <VoiceMic sessionId={sessionId} hidden={false} onTranscript={insertTranscript} />}
+            {/* Below the mic so the mic keeps its stored spot; only exists while
+                the session has a registered preview — "hidden by default". */}
+            {hasLivePreview && (
+              <PreviewFab open={previewOpen} onToggle={() => setPreviewOpenUrl(previewOpen ? null : (livePreview?.url ?? null))} />
+            )}
           </FabDock>
         )}
         {/* Plain wrapper — it used to be measured to keep the mic above this stack.
@@ -1867,6 +1890,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             history={sentHistory}
           />
         </div>
+      </div>
+      {previewOpen && livePreview && (
+        <LivePreviewPanel preview={livePreview} onClose={() => setPreviewOpenUrl(null)} />
+      )}
+      </div>
     </>
   );
 }

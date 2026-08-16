@@ -468,6 +468,12 @@ model ChatSession {
   // a small chip in the chat header from it.
   loopState         Json?
   snapshotAt        DateTime?
+  // Live preview mounted by the agent (`hermit-preview` CLI → gateway preview
+  // module → /api/sync/live-preview). Shape: { url, mode: 'static'|'proxy',
+  // target, updatedAt }; null = none. Drives the chat pane's preview FAB +
+  // panel. Read by getSession ONLY — never listSessions (per-session payload
+  // rule, see chat.ts listSessions' loopState note).
+  livePreview       Json?
 
   // ── Resource governance (docs/resource-governance-design.md) ──
   // Process-tree RSS (claude + mcp-stub + any children) of this session's pane,
