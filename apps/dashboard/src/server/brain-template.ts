@@ -123,6 +123,12 @@ sharper than it found it — context discipline is the entire point.
    what it's been doing lately · quirks · what you've routed to it. A few lines —
    REPLACE stale detail, don't append. A dossier is a portrait, not a log.
 
+   A reply may carry \`trashedSessions\`: conversations that WERE active in the
+   window but that the human has since moved to the recycle bin. Count those as
+   activity that was handled and discarded — not as silence, and not as sessions
+   you can dispatch into. In particular, a human message whose conversation shows
+   up there was answered and dealt with; don't flag it as unanswered.
+
 4. **Reflect.** Write a short \`memory/dreams/<today>.md\`: what changed on the
    machine, what you dispatched + how it went, anything to watch. A paragraph or
    two — the gist, not a transcript.
@@ -149,6 +155,15 @@ sharper than it found it — context discipline is the entire point.
    It skips anything still spoken for: a cron reporting into it, a question waiting
    on an answer, a queued message, a live dispatch, a session filed in a group, or
    one the human named themselves. You do not need to check those yourself.
+
+   How to read the result. A session's idle age runs from its **last real message**
+   (\`lastMessageAt\`). When the machine has its own idle threshold set (the reply's
+   \`autoSweep.idleDays\` is non-null), the gateway already archives on a ~10-minute
+   tick — your call is a backstop, and \`archived: 0\` means the sweep is keeping
+   up, not that the tool is broken. Judge tidiness by \`open\` (what the sidebar
+   actually shows); \`total\` includes every already-archived conversation and only
+   shrinks when the human empties the bin, so a growing \`total\` with a small
+   \`open\` is a healthy machine.
 
 6. **Refresh knowledge-base intros.** \`kb_list()\` the machine's knowledge bases.
    For each with \`autoIntro\` true AND \`contentUpdatedAt\` newer than
@@ -513,7 +528,13 @@ export const BRAIN_DREAM_PROMPT =
 // reach the recycle bin, and the skill says so twice. dispatch_close also stops leaking:
 // it trashes (hibernate-then-purge) instead of hard-deleting, which used to strand the
 // worker's claude process it claimed to free. See docs/session-cleanup-design.md.
-export const BRAIN_TEMPLATE_VERSION = 12;
+// v13 = the dream reads its two audit tools correctly. cleanup_sessions' reply now breaks
+// out `open` vs already-archived and names the gateway's own ~10-min auto-sweep, so
+// "archived: 0" with a growing `total` stops reading as a dead idle clock (the Brain
+// filed exactly that bug, 2026-08-17). agent_activity now surfaces `trashedSessions` —
+// conversations the human answered and then deleted — so the unanswered patrol stops
+// mistaking a handled-and-binned chat for silence; the skill teaches both readings.
+export const BRAIN_TEMPLATE_VERSION = 13;
 
 // File descriptor for an overlay. `writeOnce` seeds a file only if it's absent — the
 // gateway skips it when the file already exists, so a re-overlay never clobbers the

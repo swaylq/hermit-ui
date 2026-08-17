@@ -1480,8 +1480,17 @@ export const chatRouter = router({
       const total = await prisma.chatSession.count({
         where: { machineId: ctx.machine.id, trashedAt: null, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
       });
+      // Already-archived count, following the trashed/trash naming pair (count vs
+      // verdict list). Without it, `total` — which includes every archived session
+      // until the human empties the bin — is the only aggregate, and a caller
+      // watching "total grows, archive count stays 0" reads a healthy machine as a
+      // broken one (the Brain did exactly that, 2026-08-14 → 08-17).
+      const archived = await prisma.chatSession.count({
+        where: { machineId: ctx.machine.id, trashedAt: null, closedAt: { not: null }, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+      });
       return {
         total,
+        archived,
         trashed,
         maxPerRun: MAX_PER_RUN,
         defaults: { archiveIdleDays: DEFAULT_ARCHIVE_IDLE_DAYS, trashIdleDays: DEFAULT_TRASH_IDLE_DAYS },

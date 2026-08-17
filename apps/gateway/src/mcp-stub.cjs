@@ -287,7 +287,7 @@ const BRAIN_TOOLS = [
   {
     name: 'agent_activity',
     description:
-      "Inspect ONE agent: its identity/role summary, skills, recent chat sessions (+ the latest turn's text) and crons. Use it to understand what an agent does and what it has been doing — before routing work to it, or when writing your digest. Optional `since` (ISO timestamp) limits sessions to those active after it (incremental digests).",
+      "Inspect ONE agent: its identity/role summary, skills, recent chat sessions (+ the latest turn's text) and crons. Use it to understand what an agent does and what it has been doing — before routing work to it, or when writing your digest. Optional `since` (ISO timestamp) limits sessions to those active after it (incremental digests). Sessions the human moved to the recycle bin inside the window are listed separately as `trashedSessions` (with trashReason) — activity that was handled and discarded, NOT silence; without them a conversation the human answered and then deleted would look like it never happened. A session's recency is its `lastMessageAt` — the time of its last real message.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -447,7 +447,7 @@ const BRAIN_TOOLS = [
   {
     name: 'cleanup_sessions',
     description:
-      "Tidy this machine's chat sessions: archive the ones nobody has touched in a long time. Archiving takes a conversation out of the human's sidebar AND puts its ~500MB claude to sleep. Run it in your daily dream. It CANNOT delete anything — archiving undoes in one click, and the recycle bin is only ever reachable from the human's own confirmation. A session is skipped when anything still points at it: a cron reporting in, a pending question, a queued message, a live dispatch, a group, a name the human typed. Pass `preview` to see what it WOULD do without doing it.",
+      "Tidy this machine's chat sessions: archive the ones nobody has touched in a long time. Archiving takes a conversation out of the human's sidebar AND puts its ~500MB claude to sleep. Run it in your daily dream. It CANNOT delete anything — archiving undoes in one click, and the recycle bin is only ever reachable from the human's own confirmation. A session is skipped when anything still points at it: a cron reporting in, a pending question, a queued message, a live dispatch, a group, a name the human typed. Pass `preview` to see what it WOULD do without doing it. How to read the numbers: a session's idle age runs from its last real message (`lastMessageAt`); `total` counts ALL non-binned sessions INCLUDING already-archived ones, so it grows until the human empties the bin — watch `open` instead; and when the machine has an idle threshold set (`autoSweep.idleDays`), the gateway itself archives on a ~10-minute tick, so `archived: 0` from YOUR call normally means the sweep beat you to it, not that nothing ages.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -528,6 +528,23 @@ async function dispatchBrainTool(name, args) {
     if (Number.isFinite(since)) {
       sessions = sessions.filter((s) => Date.parse(s.lastMessageAt || s.startedAt || 0) >= since);
     }
+    // Recycle-binned sessions are invisible to listSessions (LIVE_SESSION filter),
+    // but they still HAD activity inside the window — the human answered pdp-copy
+    // questions all morning, deleted the chat after lunch, and the digest read as
+    // "nobody spoke" (observed 2026-08-17). Surface them separately so a handled-
+    // and-discarded conversation is never mistaken for silence. The Brain's own
+    // dispatch reaps ('dispatch-done') are excluded — it already knows about those.
+    let binned = [];
+    try {
+      const bin = await trpcQuery('chat.listTrashed', null);
+      binned = (Array.isArray(bin?.rows) ? bin.rows : [])
+        .filter((s) => s.agentName === target && s.trashReason !== 'dispatch-done')
+        .filter((s) => !Number.isFinite(since) || Date.parse(s.lastMessageAt || s.trashedAt || 0) >= since)
+        .sort((a, b) => Date.parse(b.trashedAt || 0) - Date.parse(a.trashedAt || 0))
+        .slice(0, 20);
+    } catch {
+      // bin unreadable → report live sessions only, as before
+    }
     let crons = (await trpcQuery('cron.listForAgent', { agentName: target })) || [];
     if (!Array.isArray(crons)) crons = [];
     // Latest turn from the most-recent session.
@@ -551,6 +568,17 @@ async function dispatchBrainTool(name, args) {
       identity: (agent?.identityText || agent?.memorySummary || '').slice(0, 500) || null,
       skills: agent?.skillNames || [],
       sessions: sessions.map((s) => ({ id: s.id, title: s.title || s.preview || null, alive: s.alive, state: s.state, lastMessageAt: s.lastMessageAt })),
+      ...(binned.length > 0
+        ? {
+            trashedSessions: binned.map((s) => ({
+              id: s.id,
+              title: s.title || s.preview || null,
+              lastMessageAt: s.lastMessageAt,
+              trashedAt: s.trashedAt,
+              trashReason: s.trashReason,
+            })),
+          }
+        : {}),
       crons: crons.map((c) => ({ id: c.id, title: c.title || String(c.prompt || '').slice(0, 40), intervalSec: c.intervalSec, enabled: c.enabled, lastStatus: c.lastStatus, lastFire: c.lastFire })),
       latest,
     });
@@ -696,20 +724,42 @@ async function dispatchBrainTool(name, args) {
       ? Math.round(Number(args.archiveIdleDays))
       : undefined;
     const input = archiveIdleDays ? { archiveIdleDays } : {};
+    // The machine's own settings, so the reply can say WHO archives here. When
+    // cleanupIdleDays is set, the gateway's cleanup-sweep tick (~10 min) archives
+    // continuously — a daily Brain run then correctly finds nothing left, and
+    // without this context four straight `archived: 0`s read as a dead tool
+    // (observed 2026-08-14 → 08-17).
+    const cfg = await trpcQuery('chat.cleanupConfig', null).catch(() => null);
+    const sweepDays = cfg?.cleanupIdleDays ?? null;
+    const autoSweep = sweepDays != null
+      ? { idleDays: sweepDays, note: `the gateway auto-archives sessions idle ≥${sweepDays}d on a ~10-minute tick; this call is a backstop` }
+      : { idleDays: null, note: 'no machine threshold set — only manual or Brain-run cleanups archive here' };
     if (args?.preview) {
       const p = (await trpcQuery('chat.cleanupPreview', input)) || {};
+      // `archived` (already-archived count) needs a dashboard that returns it;
+      // omit the derived fields rather than guess when talking to an older one.
+      const open = p.total != null && p.archived != null ? p.total - p.archived : undefined;
       return JSON.stringify({
         preview: true,
+        // total counts every non-binned session INCLUDING archived ones — it only
+        // shrinks when the human empties the bin. `open` is what the sidebar shows.
         total: p.total,
+        ...(open != null ? { open, alreadyArchived: p.archived } : {}),
+        ...(p.trashed != null ? { inBin: p.trashed } : {}),
         wouldArchive: (p.archive || []).length,
         // Reported but NOT actionable from here: only the human's own confirmation
         // can move anything into the bin.
         proposedForBin: (p.trash || []).length,
         spared: (p.spared || []).length,
+        autoSweep,
       });
     }
-    const r = (await trpcMutate('chat.cleanupApply', input)) || {};
-    return JSON.stringify({ ok: true, archived: r.archived ?? 0 });
+    // trpcMutate returns the raw tRPC batch envelope — unwrap it. (The old
+    // `r.archived` read the envelope itself, so apply reported `archived: 0`
+    // no matter what it did.)
+    const res = await trpcMutate('chat.cleanupApply', input);
+    const applied = res?.[0]?.result?.data?.json || {};
+    return JSON.stringify({ ok: true, archived: applied.archived ?? 0, autoSweep });
   }
   if (name === 'dispatch_answer') {
     const sessionId = args?.sessionId;
