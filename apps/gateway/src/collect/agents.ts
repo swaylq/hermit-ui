@@ -6,9 +6,10 @@
 // to read each directory's markdowns. Anything not in the DB is invisible
 // to the dashboard — that's by design; users opt in via the Import UI.
 //
-// Reads CLAUDE.md presence as the "valid hermit agent" check; if the dir
-// has been moved away or is otherwise broken, probe returns null and the
-// agent's content is left untouched on the dashboard (last-known state).
+// Reads the CLAUDE.md/AGENTS.md marker (see isAgentDir) as the "valid hermit
+// agent" check; if the dir has been moved away or is otherwise broken, probe
+// returns null and the agent's content is left untouched on the dashboard
+// (last-known state).
 //
 // Cadence: pushed every ~5 min via index.ts. Markdown files barely churn.
 
@@ -21,6 +22,18 @@ const SKILL_MAX_BYTES = 64 * 1024;      // SKILL.md gets 64 KB — matches globa
                                         // requestEdit/publish ceiling, so a large skill isn't
                                         // truncated before it reaches the detail sheet or the market
 const MEMORY_TOPN = 6;                  // top N memory files to mention by name
+
+// The on-disk marker that a directory is a real agent workspace — the guard the
+// collectors AND agent-lifecycle's destructive/file-writing paths key on.
+// CLAUDE.md was the historical marker (the template still ships it), but agents
+// that run on the pi runtime, or that folded their bootstrap into AGENTS.md
+// (asst, 2026-08-06 — "两底座都只认 AGENTS.md"), carry AGENTS.md only. Either
+// file marks the dir; requiring specifically CLAUDE.md made such agents
+// invisible to probe() and bounced their file edits / market skill installs
+// ("not an agent dir").
+export function isAgentDir(agentDir: string): boolean {
+  return fs.existsSync(path.join(agentDir, 'CLAUDE.md')) || fs.existsSync(path.join(agentDir, 'AGENTS.md'));
+}
 
 function safeRead(p: string, maxBytes = MAX_TEXT_BYTES): string | null {
   try {
@@ -189,7 +202,7 @@ export interface AgentRow {
 }
 
 function probe(agentDir: string, name: string): AgentRow | null {
-  if (!fs.existsSync(path.join(agentDir, 'CLAUDE.md'))) return null;
+  if (!isAgentDir(agentDir)) return null;
   const skills = listSkillDocs(agentDir);
   return {
     name,

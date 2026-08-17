@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { AGENTS_ROOT, DASHBOARD_URL } from './config';
 import { api } from './api';
-import { readAgent } from './collect/agents';
+import { readAgent, isAgentDir } from './collect/agents';
 
 // Template lives at apps/cli/template, relative to this file (apps/gateway/src).
 const TEMPLATE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'cli', 'template');
@@ -131,7 +131,8 @@ function scaffold(name: string, persona: string, templateFiles?: unknown): strin
     DASHBOARD_URL,
   };
   // Build in a sidecar dir then atomically rename, so a half-written scaffold
-  // never looks like a real agent to collectAgents (which keys on CLAUDE.md).
+  // never looks like a real agent to collectAgents (which keys on the
+  // CLAUDE.md/AGENTS.md marker — isAgentDir).
   const tmp = `${targetDir}.scaffolding`;
   fs.rmSync(tmp, { recursive: true, force: true });
   walkCopy(TEMPLATE_DIR, tmp, subs);
@@ -177,7 +178,7 @@ function deleteAgent(name: string, directory: string | null) {
   if (!isUnderAgentsRoot(directory)) return; // imported / no dir — nothing to move
   const home = path.resolve(directory);
   if (!fs.existsSync(home)) return;                          // already moved / gone
-  if (!fs.existsSync(path.join(home, 'CLAUDE.md'))) return;  // not an agent dir — don't touch
+  if (!isAgentDir(home)) return;  // not an agent dir — don't touch
   // Symlink guard (legacy v1 imports): unlink the link only, never its target.
   if (fs.lstatSync(home).isSymbolicLink()) { fs.unlinkSync(home); return; }
 
@@ -208,7 +209,7 @@ function purgeAgent(name: string, directory: string | null) {
   if (fs.existsSync(trash)) fs.rmSync(trash, { recursive: true, force: true });
   if (isUnderAgentsRoot(directory)) {
     const home = path.resolve(directory);
-    if (fs.existsSync(path.join(home, 'CLAUDE.md'))) {
+    if (isAgentDir(home)) {
       if (fs.lstatSync(home).isSymbolicLink()) fs.unlinkSync(home);
       else fs.rmSync(home, { recursive: true, force: true });
     }
@@ -242,7 +243,7 @@ function targetToRelPath(target: string): string {
 function editAgentFile(name: string, directory: string | null, target: string, content: string) {
   if (!directory) throw new Error('agent has no directory yet (still scaffolding?)');
   const agentDir = path.resolve(directory);
-  if (!fs.existsSync(path.join(agentDir, 'CLAUDE.md'))) throw new Error('not an agent dir (no CLAUDE.md)');
+  if (!isAgentDir(agentDir)) throw new Error('not an agent dir (no CLAUDE.md/AGENTS.md)');
   const rel = targetToRelPath(target);
   const dst = path.resolve(agentDir, rel);
   // Containment: the resolved path must be a descendant of agentDir (covers
@@ -279,7 +280,7 @@ function writeSkillRefs(skillDir: string, refs: Array<{ path: string; content: s
 function deleteAgentSkill(name: string, directory: string | null, target: string) {
   if (!directory) throw new Error('agent has no directory yet (still scaffolding?)');
   const agentDir = path.resolve(directory);
-  if (!fs.existsSync(path.join(agentDir, 'CLAUDE.md'))) throw new Error('not an agent dir (no CLAUDE.md)');
+  if (!isAgentDir(agentDir)) throw new Error('not an agent dir (no CLAUDE.md/AGENTS.md)');
   const m = target.match(/^skill:([a-z0-9][a-z0-9-]{0,30})$/);
   if (!m) throw new Error(`invalid delete-skill target: ${target}`);
   const skillsRoot = path.join(agentDir, '.claude', 'skills');
