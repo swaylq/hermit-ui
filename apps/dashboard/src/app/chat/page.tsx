@@ -37,6 +37,7 @@ import { TypingIndicator } from '@/components/chat/message-bits';
 import { MessageTimeline } from '@/components/chat/message-timeline';
 import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
 import { VoiceMic } from '@/components/chat/voice-mic';
+import { DictationDock, type DictationHandle } from '@/components/chat/dictation-dock';
 import { FabDock } from '@/components/chat/fab-dock';
 import { PreviewFab } from '@/components/chat/preview-fab';
 import { LivePreviewPanel, parseLivePreview } from '@/components/chat/preview-panel';
@@ -651,6 +652,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // out-of-band writes (empty-state chip, voice transcript, send clear/restore)
   // via this imperative handle — so typing never re-renders SessionPane.
   const composerRef = useRef<ComposerHandle>(null);
+  // Realtime dictation lives in its own dock (above the composer) so its ~4 Hz
+  // partial updates re-render one bar instead of this whole pane. All that
+  // reaches here is a ref to drive it and a boolean for the mic's face.
+  const dictationRef = useRef<DictationHandle>(null);
+  const [dictating, setDictating] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // Composer notice line: attachment-cap warnings (set in ComposeBar.addFiles) AND
   // send failures (set in onSend's onError) — so a rejected send explains itself
@@ -1318,6 +1324,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     composerRef.current?.appendText(text);
   }, []);
 
+  // Stable so the memo'd VoiceMic doesn't get fresh props on every SSE tick.
+  const toggleDictation = useCallback(() => dictationRef.current?.toggle(), []);
+  const cancelDictation = useCallback(() => dictationRef.current?.cancel(), []);
+
   // Stable callbacks for the memo'd LoopBar — inline arrows here would give it a
   // fresh prop identity on every SSE tick and defeat the memo. pickPrompt is
   // stable; the *_TEMPLATE strings are module constants.
@@ -1777,7 +1787,22 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             reach for mid-scroll. */}
         {(showMicFab || hasLivePreview) && (
           <FabDock count={(showMicFab ? 1 : 0) + (hasLivePreview ? 1 : 0)}>
-            {showMicFab && <VoiceMic sessionId={sessionId} hidden={false} onTranscript={insertTranscript} />}
+            {showMicFab && (
+              <VoiceMic
+                sessionId={sessionId}
+                // Hidden — not unmounted — for the duration of a run. The FAB is
+                // draggable and the bar is not, so the two WILL overlap at some
+                // position (they did at the default one: the FAB sat on the
+                // bar's ✓). While a run is live the bar is the whole control
+                // surface, and it has both ✓ and ✕. Unmounting instead would run
+                // VoiceMic's cleanup, which releases the warm mic — mid-dictation.
+                hidden={dictating}
+                onTranscript={insertTranscript}
+                dictating={dictating}
+                onDictate={toggleDictation}
+                onDictateCancel={cancelDictation}
+              />
+            )}
             {/* Below the mic so the mic keeps its stored spot; only exists while
                 the session has a registered preview — "hidden by default". */}
             {hasLivePreview && (
@@ -1834,6 +1859,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             }}
             onClear={() => { setOptimisticQueue([]); clearQueue.mutate({ sessionId }); }}
             clearing={clearQueue.isPending}
+          />
+          <DictationDock
+            ref={dictationRef}
+            sessionId={sessionId}
+            composerRef={composerRef}
+            onActiveChange={setDictating}
+            onNotice={setComposerNotice}
           />
           <ComposeBar
             sessionId={sessionId}

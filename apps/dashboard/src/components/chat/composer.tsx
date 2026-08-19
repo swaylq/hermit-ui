@@ -13,6 +13,7 @@ import { trpc } from '@/lib/trpc';
 import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
 import { QUEUE_LIMIT } from '@/lib/chat-queue';
+import { foldTail, newClaim, type DictationClaim } from '@/lib/dictation-text';
 import dynamic from 'next/dynamic';
 import { Plus, ArrowUp, FileText, X } from 'lucide-react';
 import { msgText, type Attachment } from '@/components/chat/lib';
@@ -116,6 +117,12 @@ export interface ComposerHandle {
   clear: () => void;
   /** Put a value back (restore the draft after a failed send). */
   restore: (text: string) => void;
+  /** Start a dictation run — the draft as it stands becomes the frozen base. */
+  beginDictation: () => void;
+  /** Replace everything the run has dictated so far with `tail`. */
+  setDictationTail: (tail: string) => void;
+  /** End the run; the tail becomes ordinary draft text. */
+  endDictation: () => void;
 }
 
 export const ComposeBar = forwardRef<ComposerHandle, {
@@ -156,6 +163,10 @@ export const ComposeBar = forwardRef<ComposerHandle, {
 }, ref) {
   // Draft is owned here (see note above) so typing doesn't re-render SessionPane.
   const [draft, setDraft] = useState(() => loadDraft(sessionId));
+  // Dictation run state (see the handle's beginDictation below). `base: null`
+  // means the run has not put a character in the draft yet, so the base is
+  // still whatever the user has typed by the time the first sentence lands.
+  const dictRef = useRef<DictationClaim | null>(null);
   // Persist the draft per session (localStorage writes are cheap for short
   // text). Auto-cleared when the draft empties on send / Escape.
   useEffect(() => { saveDraft(sessionId, draft); }, [sessionId, draft]);
@@ -193,6 +204,38 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     },
     clear() { setDraft(''); },
     restore(text: string) { setDraft(text); },
+
+    // ── realtime dictation ────────────────────────────────────────────────
+    // A run owns a TAIL: the draft is `base + tail`, and the tail is rewritten
+    // whole on every change (a sentence closing, a correction landing). Whole,
+    // not patched by offset — corrections come back out of order, so the caller
+    // rebuilds the string from its segment array and hands it over; there is no
+    // arithmetic here to get wrong.
+    beginDictation() {
+      dictRef.current = newClaim();
+    },
+    setDictationTail(tail: string) {
+      setDraft((d) => {
+        const st = dictRef.current;
+        if (!st) return d;
+        // foldTail is pure and idempotent on the same (claim, draft, tail), which
+        // is what makes storing the result back into a ref from inside an updater
+        // safe under React's double-invocation.
+        const next = foldTail(st, d, tail);
+        dictRef.current = next.claim;
+        return next.draft;
+      });
+      requestAnimationFrame(() => {
+        const el = taRef.current;
+        if (!el) return;
+        el.setSelectionRange(el.value.length, el.value.length);
+        el.style.height = 'auto';
+        el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
+      });
+    },
+    endDictation() {
+      dictRef.current = null;
+    },
   }), [taRef]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);

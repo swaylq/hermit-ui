@@ -40,6 +40,7 @@ import {
   type VoiceRecorder,
 } from '@/lib/voice-capture';
 import { VoiceWave, type WavePhase } from '@/components/chat/voice-wave';
+import { readMicStyle, writeMicStyle, type MicStyle } from '@/lib/voice-style';
 import { FAB, HOLD_MS, useFabDock } from '@/components/chat/fab-dock';
 import { Dialog, DialogPortal, DialogOverlay } from '@/components/ui/dialog';
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
@@ -57,11 +58,10 @@ const MAX_MS = 60_000; // recording ceiling
 const SPRING = 'cubic-bezier(0.34, 1.35, 0.5, 1)';
 
 // ── polish style ────────────────────────────────────────────────────────────
-// Which transcription polish this device uses. Double-click the mic to change it;
-// the choice lives in localStorage (per-browser, like the mic position and
-// visibility) and rides along with each transcription as the `style` form field.
-type MicStyle = 'rewrite' | 'minimal';
-const STYLE_KEY = 'hermit:voice-mic-style';
+// Which transcription polish this device uses (lib/voice-style.ts — shared with
+// the dictation dock, which sends it to the realtime socket). Double-tap the mic
+// to change it; the choice lives in localStorage, per-browser, like the mic's
+// position and visibility.
 const DOUBLE_TAP_MS = 300;
 // The tap that OPENS the settings dialog on touch also produces a synthesized
 // `click` a few ms later; by then the backdrop covers the screen, so the click
@@ -72,10 +72,6 @@ const STYLE_OPTIONS: { value: MicStyle; label: string; desc: string }[] = [
   { value: 'rewrite', label: '改写润色', desc: '修改并重写转写文字，更贴合任务场景的表达习惯（默认）' },
   { value: 'minimal', label: '保留原话', desc: '尽量保留原始转写，仅纠正错别字、英文拼写和语法问题' },
 ];
-function readMicStyle(): MicStyle {
-  try { return localStorage.getItem(STYLE_KEY) === 'minimal' ? 'minimal' : 'rewrite'; } catch { return 'rewrite'; }
-}
-
 
 // memo: VoiceMic lives inside SessionPane, which re-renders on every SSE
 // streaming tick / poll. Its props (sessionId, hidden boolean, stable
@@ -87,10 +83,19 @@ export const VoiceMic = memo(function VoiceMic({
   sessionId,
   hidden,
   onTranscript,
+  dictating = false,
+  onDictate,
+  onDictateCancel,
 }: {
   sessionId: string;
   hidden: boolean;
   onTranscript: (text: string) => void;
+  /** A realtime dictation run is live (the dock owns it; we only show it). */
+  dictating?: boolean;
+  /** Tap = start / finish a dictation run. Absent → taps fall back to the hint. */
+  onDictate?: () => void;
+  /** The tap that started a run turned out to be half a double-tap; undo it. */
+  onDictateCancel?: () => void;
 }) {
   // Position + dragging belong to the dock now — the mic is one button in a group
   // that moves together. What stays here is what a PRESS means, which is the part
@@ -121,7 +126,11 @@ export const VoiceMic = memo(function VoiceMic({
     pointerDown: false, // finger/button still down — false means nobody is holding
     lastTapAt: 0, // time of the previous quick tap — two taps ≤ DOUBLE_TAP_MS opens settings
     tapHintTimer: 0 as unknown as ReturnType<typeof setTimeout>,
+    tapStartedDictation: false, // the previous tap STARTED a run (so a double-tap may undo it)
   });
+  // pointerdown has to know whether a run is live before React re-renders.
+  const dictatingRef = useRef(dictating);
+  dictatingRef.current = dictating;
 
 
   // Release the warm mic on unmount (leaving the chat) so it doesn't linger.
@@ -273,7 +282,7 @@ export const VoiceMic = memo(function VoiceMic({
         if (gg.armingKey) discardKeyPtt();
         return;
       }
-      if (e.repeat || hidden || gg.mode !== 'idle') return;
+      if (e.repeat || hidden || gg.mode !== 'idle' || dictatingRef.current) return;
       // Reserve the gesture + start capturing NOW (from keydown); the timer commits.
       gg.armingKey = true;
       gg.byKey = true;
@@ -321,10 +330,15 @@ export const VoiceMic = memo(function VoiceMic({
       // someone who may only be dragging, so the press becomes a "tap to allow"
       // handled on release (endGesture) instead.
       const touch = isTouchPrimary();
-      gg.needsAuth = touch && !canOpenMicSilently();
-      if (touch && !gg.needsAuth) void beginRecording();
+      // While a dictation run is live the button means one thing only — 结束 —
+      // so no hold-to-record underneath it, and no permission dance either (the
+      // mic is already open and granted).
+      const dict = dictatingRef.current;
+      gg.needsAuth = !dict && touch && !canOpenMicSilently();
+      if (!dict && touch && !gg.needsAuth) void beginRecording();
       gg.holdTimer = setTimeout(() => {
         if (gg.mode !== 'deciding') return;
+        if (dict) return; // stay in 'deciding' → the release toggles dictation
         if (gg.needsAuth) { setHint('松手授权麦克风'); return; } // stay a circle
         gg.mode = 'recording';
         // Show the recording capsule only once a track exists — until then it's
@@ -359,10 +373,17 @@ export const VoiceMic = memo(function VoiceMic({
     [dock],
   );
 
-  // A press that never held into a recording (released before HOLD_MS) is a TAP.
-  // Two taps within DOUBLE_TAP_MS open the style settings; a lone tap just hints
-  // '长按说话', delayed by the double-tap window so the hint can't flash in the
-  // gap before a second tap lands.
+  // A press that never held into a recording (released before HOLD_MS) is a TAP,
+  // and a tap now TOGGLES realtime dictation — start a run, or finish the one
+  // that's going. It fires immediately: waiting out the double-tap window before
+  // the bar appeared would put 300 ms of nothing between the tap and the first
+  // word, which is most of the latency budget this feature was built to spend.
+  //
+  // Double-tap still opens the style settings, and still works, because the tap
+  // that opened a run can be taken back: nobody says anything in 300 ms, so the
+  // second tap cancels the run it just started and opens the popup instead. A
+  // double-tap whose first tap FINISHED a run is not undone that way — those
+  // words are real — so it only opens the popup.
   const onTap = useCallback(() => {
     const gg = g.current;
     clearTimeout(gg.tapHintTimer);
@@ -376,16 +397,23 @@ export const VoiceMic = memo(function VoiceMic({
     gg.lastTapAt = isDouble ? 0 : now;
     setPhase('idle');
     if (isDouble) {
+      if (gg.tapStartedDictation) onDictateCancel?.();
+      gg.tapStartedDictation = false;
       setHint(null);
       dialogOpenedAt.current = Date.now();
       setSettingsOpen(true);
+      return;
+    }
+    if (onDictate) {
+      gg.tapStartedDictation = !dictatingRef.current;
+      onDictate();
       return;
     }
     gg.tapHintTimer = setTimeout(() => {
       setHint('长按说话');
       setTimeout(() => setHint(null), 1500);
     }, DOUBLE_TAP_MS);
-  }, []);
+  }, [onDictate, onDictateCancel]);
 
   const endGesture = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>) => {
@@ -438,7 +466,7 @@ export const VoiceMic = memo(function VoiceMic({
   }, []);
   const chooseStyle = useCallback((s: MicStyle) => {
     setStyle(s);
-    try { localStorage.setItem(STYLE_KEY, s); } catch { /* private mode */ }
+    writeMicStyle(s);
     setSettingsOpen(false);
   }, []);
   // See OUTSIDE_CLOSE_GRACE_MS: a tap that opened the dialog fires a leftover
@@ -495,8 +523,8 @@ export const VoiceMic = memo(function VoiceMic({
           onPointerMove={onPointerMove}
           onPointerUp={endGesture}
           onPointerCancel={endGesture}
-          aria-label="语音输入（长按说话，拖动可移位；未授权时点一下授权；双击打开设置）"
-          title="长按说话，拖动可移位（桌面可按住右 Option 说话；双击打开设置）"
+          aria-label="语音输入（点一下开始实时听写，长按说话，拖动可移位；双击打开设置）"
+          title="点一下实时听写，长按说话，拖动可移位（桌面可按住右 Option 说话；双击打开设置）"
           className="relative flex items-center justify-center overflow-hidden rounded-full border border-white/10 bg-[#111319]/85 backdrop-blur-xl cursor-pointer"
           style={{
             width,

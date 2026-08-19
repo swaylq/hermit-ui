@@ -11,6 +11,15 @@
 //                            Machine.keyHash, same as x-asst-key on every other
 //                            sync route.
 //
+//   /api/asr/<sessionId>  — realtime voice input. The browser streams 16 kHz mono
+//                            PCM16 up as binary frames and gets partial / final /
+//                            polished transcript JSON back down; the DashScope
+//                            streaming-ASR task on the far side lives in
+//                            src/server/asr-stream.ts. Same subprotocol auth as
+//                            the terminal below, and — like it — MACHINE KEY
+//                            ONLY: a scoped agent-share token gets 401 and the
+//                            browser stays on the batch /api/transcribe path.
+//
 //   /api/term/<sessionId> — per-tab from the browser running xterm.js. Auth:
 //                            Sec-WebSocket-Protocol subprotocol `hermit-key.<token>`
 //                            (keeping the key out of URL access logs).
@@ -38,6 +47,8 @@ import { WebSocketServer, type WebSocket as WSWebSocket } from 'ws';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from './src/generated/prisma/client';
 import { setGatewaySocket, clearGatewaySocket, resolveFsResponse } from './src/server/gateway-bridge';
+import { createAsrWsServer } from './src/server/asr-ws';
+import { loadContext } from './src/server/transcribe-context';
 import { tmuxPaneName } from './src/lib/pane-name';
 
 const port = parseInt(process.env.PORT || '4101', 10);
@@ -281,6 +292,20 @@ app.prepare().then(() => {
     });
   });
 
+  // ── Realtime voice-input WS server ───────────────────────────────────────
+  // Everything about it (auth, framing, the DashScope task) is in
+  // src/server/asr-ws.ts — this file only supplies the three things that are
+  // genuinely local: how a key becomes a machine, how a session is checked, and
+  // this process's Prisma client.
+  const asrWs = createAsrWsServer({
+    resolveMachineByKey,
+    sessionBelongsTo: async (sessionId, machineId) =>
+      !!(await prisma.chatSession.findFirst({ where: { id: sessionId, machineId }, select: { id: true } })),
+    loadContext: (sessionId) => loadContext(prisma, sessionId),
+    apiKey: () => process.env.DASHSCOPE_API_KEY,
+    log: (...a) => console.log('[asr-ws]', ...a),
+  });
+
   // ── HTTP → WS upgrade routing ────────────────────────────────────────────
   server.on('upgrade', async (req, socket, head) => {
     const url = req.url || '';
@@ -299,6 +324,11 @@ app.prepare().then(() => {
         gatewayWss.handleUpgrade(req, socket, head, (ws) => {
           gatewayWss.emit('connection', ws, req, { machineId });
         });
+        return;
+      }
+
+      if (asrWs.matches(url)) {
+        await asrWs.handleUpgrade(req, socket, head);
         return;
       }
 

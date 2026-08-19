@@ -29,7 +29,18 @@
 // and in total), because this runs in the latency path of every utterance: the
 // user is holding a button, waiting for their words.
 
-import { prisma } from './db';
+/**
+ * Just enough of a Prisma client to run the scan — passed in rather than imported.
+ *
+ * This module is reached from two very different runtimes: the app-router route
+ * (`@/server/db` resolves fine) and `server.ts`, which runs under tsx where the
+ * `@/` alias does NOT resolve — importing `./db` here would crash the whole
+ * server at boot the moment the realtime ASR socket pulled this in. So the caller
+ * brings its own client and this file stays runtime-agnostic.
+ */
+export interface ContextDb {
+  $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T>;
+}
 
 /**
  * One row from the scan, newest first. Projected in SQL — `texts` is the message's
@@ -166,9 +177,9 @@ export function buildContext(rows: ContextRow[]): string {
  * a helper query hiccuped would be a strictly worse product than one with no
  * context at all.
  */
-export async function loadContext(sessionId: string): Promise<string> {
+export async function loadContext(db: ContextDb, sessionId: string): Promise<string> {
   try {
-    const rows = await prisma.$queryRaw<ContextRow[]>`
+    const rows = await db.$queryRaw<ContextRow[]>`
       SELECT role,
              ("externalId" IS NULL) AS composed,
              jsonb_path_query_array(content, '$[*] ? (@.type == "text").text') AS texts,

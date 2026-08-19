@@ -261,6 +261,175 @@ export async function startRecording(opts: StartOpts = {}): Promise<VoiceRecorde
   };
 }
 
+// ── Streaming capture (realtime dictation) ──────────────────────────────────
+//
+// The batch recorder above hoards Float32 until stop(); this one emits 16 kHz
+// PCM16 as it goes, ~85 ms per block (one ScriptProcessor buffer), which is what
+// the /api/asr socket forwards to DashScope. Same warm-mic machinery, same
+// gesture rules — only the sink differs.
+//
+// TWO THINGS THIS DOES BEYOND FORWARDING:
+//
+// · A SILENCE GATE. DashScope bills by the audio second, and a dictation bar left
+//   open while nobody talks would stream billable nothing. So after SILENCE_TAIL_MS
+//   below the speech threshold we stop emitting until sound returns. The tail is
+//   deliberately longer than the server's 800 ms sentence-close silence, so the
+//   sentence in flight always gets the quiet it needs to close BEFORE the gate
+//   shuts — otherwise the last sentence of every paragraph would hang open.
+//
+// · A FALLBACK BUFFER. Everything emitted since the last mark() is also kept
+//   locally, so if the socket dies mid-dictation the words that were in the air
+//   are not lost: the widget POSTs them to the batch /api/transcribe instead.
+//   mark() is called on every closed sentence, so this is normally a few seconds
+//   of audio, not the whole run.
+
+/** RMS below this is "not speech". Same scale as the level callback ÷ 5. */
+const SILENCE_RMS = 0.012;
+/** Quiet for this long → stop emitting. Must exceed the server's max_sentence_silence. */
+const SILENCE_TAIL_MS = 1_500;
+
+export interface VoiceStream {
+  /** Audio emitted since the last mark(), as a WAV — the socket-died fallback clip. */
+  stop(): Promise<Blob>;
+  /** "Everything so far is safely transcribed" — drops it from the fallback clip. */
+  mark(): void;
+  /** Abort; no Blob, mic released. */
+  cancel(): void;
+}
+
+interface StreamOpts {
+  /** 16 kHz mono PCM16, ~85 ms per call. Not called while the silence gate is shut. */
+  onChunk: (pcm: Int16Array) => void;
+  onLevel?: (level: number) => void;
+  /** Gate transitions — true when we stopped emitting because nobody is talking. */
+  onSilence?: (silent: boolean) => void;
+  maxMs?: number;
+  onAutoStop?: () => void;
+}
+
+/**
+ * Stateful decimator. The batch path can resample the whole recording at once;
+ * a stream cannot, because 4096 input samples is not a whole number of output
+ * samples (48 kHz → 16 kHz leaves a remainder every block). The unconsumed tail
+ * carries into the next block, so no click is introduced at the seams.
+ */
+function makeDownsampler(from: number, to: number): (block: Float32Array) => Float32Array {
+  if (from === to) return (b) => b;
+  const ratio = from / to;
+  let carry = new Float32Array(0);
+  return (block: Float32Array) => {
+    let buf: Float32Array;
+    if (carry.length) {
+      buf = new Float32Array(carry.length + block.length);
+      buf.set(carry, 0);
+      buf.set(block, carry.length);
+    } else {
+      buf = block;
+    }
+    const outLen = Math.floor(buf.length / ratio);
+    const out = new Float32Array(outLen);
+    let n = 0;
+    for (let i = 0; i < outLen; i++) {
+      const start = Math.floor(i * ratio);
+      const end = Math.floor((i + 1) * ratio);
+      if (end > buf.length) break;
+      let sum = 0;
+      for (let j = start; j < end; j++) sum += buf[j];
+      out[n++] = sum / (end - start);
+    }
+    const consumed = Math.floor(n * ratio);
+    carry = buf.slice(consumed);
+    return n === outLen ? out : out.subarray(0, n);
+  };
+}
+
+function toPcm16(f32: Float32Array): Int16Array {
+  const out = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    const s = Math.max(-1, Math.min(1, f32[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+
+export async function startStreaming(opts: StreamOpts): Promise<VoiceStream> {
+  const { stream, ctx } = await acquireWarm();
+  if (ctx.state === 'suspended') await ctx.resume();
+
+  const source = ctx.createMediaStreamSource(stream);
+  const processor = ctx.createScriptProcessor(4096, 1, 1);
+  const mute = ctx.createGain();
+  mute.gain.value = 0;
+
+  const down = makeDownsampler(ctx.sampleRate, TARGET_RATE);
+  let fallback: Float32Array[] = []; // 16 kHz mono, since the last mark()
+  let stopped = false;
+  let lastLoudAt = Date.now();
+  let gated = false;
+
+  const maxMs = opts.maxMs ?? 30 * 60_000;
+  const autoTimer = setTimeout(() => { if (!stopped) opts.onAutoStop?.(); }, maxMs);
+
+  processor.onaudioprocess = (e) => {
+    const input = e.inputBuffer.getChannelData(0);
+    let sum = 0;
+    for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+    const rms = Math.sqrt(sum / input.length);
+    opts.onLevel?.(Math.min(1, rms * 5));
+
+    const now = Date.now();
+    if (rms >= SILENCE_RMS) lastLoudAt = now;
+    const shouldGate = now - lastLoudAt > SILENCE_TAIL_MS;
+    if (shouldGate !== gated) {
+      gated = shouldGate;
+      opts.onSilence?.(gated);
+    }
+    if (gated) return;
+
+    const pcm = down(new Float32Array(input));
+    if (!pcm.length) return;
+    fallback.push(pcm.slice());
+    opts.onChunk(toPcm16(pcm));
+  };
+
+  source.connect(processor);
+  processor.connect(mute);
+  mute.connect(ctx.destination);
+
+  const teardown = (keepWarm: boolean) => {
+    stopped = true;
+    clearTimeout(autoTimer);
+    processor.onaudioprocess = null;
+    try {
+      processor.disconnect();
+      mute.disconnect();
+      source.disconnect();
+    } catch {
+      /* already gone */
+    }
+    if (keepWarm) scheduleWarmRelease();
+    else releaseWarm();
+  };
+
+  return {
+    async stop() {
+      if (!stopped) teardown(true);
+      const total = fallback.reduce((n, c) => n + c.length, 0);
+      const merged = new Float32Array(total);
+      let off = 0;
+      for (const c of fallback) { merged.set(c, off); off += c.length; }
+      return encodeWav(merged, TARGET_RATE);
+    },
+    mark() {
+      fallback = [];
+    },
+    cancel() {
+      if (!stopped) teardown(false);
+      fallback = [];
+    },
+  };
+}
+
 // Concatenate the captured chunks and resample to `to` Hz with a cheap averaging
 // filter (mild anti-alias vs plain decimation). Mono in, mono out.
 function mergeAndDownsample(chunks: Float32Array[], from: number, to: number): Float32Array {

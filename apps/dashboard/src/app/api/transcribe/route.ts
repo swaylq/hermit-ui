@@ -43,13 +43,13 @@ import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
 
 import { openrouterChat, type ORMessage } from '@/server/openrouter';
+import { dashscopeChat, DASHSCOPE_BASE_URL } from '@/server/dashscope';
 import { POLISH_SYSTEM, MINIMAL_POLISH_SYSTEM, polishPrompt, acceptPolish, type PolishStyle } from '@/server/transcribe-polish';
 import { loadContext, isContextEcho } from '@/server/transcribe-context';
 
 const ASR_MODEL = process.env.OPENROUTER_ASR_MODEL || 'mistralai/voxtral-small-24b-2507';
 const POLISH_MODEL = process.env.OPENROUTER_POLISH_MODEL || 'deepseek/deepseek-v4-flash';
 
-const DASHSCOPE_BASE_URL = process.env.DASHSCOPE_BASE_URL || 'https://dashscope.aliyuncs.com';
 const DASHSCOPE_ASR_MODEL = process.env.DASHSCOPE_ASR_MODEL || 'qwen3-asr-flash';
 const DASHSCOPE_POLISH_MODEL = process.env.DASHSCOPE_POLISH_MODEL || 'qwen-flash';
 
@@ -92,34 +92,6 @@ function polishMessages(raw: string, context: string, style: PolishStyle): ORMes
     { role: 'system', content: style === 'minimal' ? MINIMAL_POLISH_SYSTEM : POLISH_SYSTEM },
     { role: 'user', content: polishPrompt(raw, context) },
   ];
-}
-
-// One DashScope chat/completions call (OpenAI-compatible), for the polish step.
-async function dashscopeChat(
-  apiKey: string,
-  model: string,
-  messages: ORMessage[],
-  opts: { temperature?: number; timeoutMs: number },
-): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
-  try {
-    const body: Record<string, unknown> = { model, messages };
-    if (opts.temperature != null) body.temperature = opts.temperature;
-    const r = await fetch(`${DASHSCOPE_BASE_URL}/compatible-mode/v1/chat/completions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const j = (await r.json().catch(() => null)) as
-      | { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string }; message?: string; code?: string }
-      | null;
-    if (!r.ok) throw new Error(`DashScope ${model} HTTP ${r.status}: ${j?.error?.message ?? j?.message ?? j?.code ?? 'unknown'}`);
-    return (j?.choices?.[0]?.message?.content ?? '').trim();
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 // An HTTP status carried out of a failed provider call, so the caller can tell
@@ -243,7 +215,7 @@ export async function POST(req: NextRequest) {
   // ASR to bias decoding toward names already on screen, polish to restore the
   // ones ASR still missed. Read while the audio is being encoded, and never fatal
   // — no context just means the old behaviour.
-  const contextP = loadContext(sessionId);
+  const contextP = loadContext(prisma, sessionId);
   const base64 = Buffer.from(await wav.arrayBuffer()).toString('base64');
   const context = await contextP;
 

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptPolish, fenceTranscript, fenceContext, polishPrompt, POLISH_SYSTEM, MINIMAL_POLISH_SYSTEM } from './transcribe-polish';
+import {
+  inventedTerm, acceptPolish, fenceTranscript, fenceContext, polishPrompt, POLISH_SYSTEM, MINIMAL_POLISH_SYSTEM } from './transcribe-polish';
 
 // Every pair below was produced by the live models (qwen-flash on DashScope and
 // deepseek-v4-flash on OpenRouter) — the answers by the original prompt, the
@@ -127,4 +128,44 @@ test('the same length guard governs both styles', () => {
   assert.equal(acceptPolish('用中文回复', '好的，请提供需要整理的语音转写内容。'), false);
   assert.equal(acceptPolish('道克', 'Docker'), true);
   assert.equal(acceptPolish('先别部署', '先别部署'), true);
+});
+
+// ── the invention guard ─────────────────────────────────────────────────────
+//
+// The realtime path asks the polish model to restore terms streaming ASR
+// mangled into other English words. These are the cases where that permission
+// has to stop: an unattested guess that displaced what the user actually said.
+
+test('a restoration attested by the context is allowed through', () => {
+  const raw = '帮我把japandev上的pady重启一下。';
+  const ctx = 'japan-dev 上的 Caddy 配置已经改好了，rathole 隧道也重连上了。';
+  assert.equal(inventedTerm(raw, '帮我把 japan-dev 上的 Caddy 重启一下。', ctx), null);
+});
+
+test('an unattested term that displaced the transcript’s own is rejected', () => {
+  const raw = '帮我把japandev上的pady重启一下。';
+  const ctx = 'japan-dev 上的 Caddy 配置已经改好了。';
+  assert.equal(inventedTerm(raw, '帮我把JUPYTER上的CADDY重启一下。', ctx), 'JUPYTER');
+});
+
+test('re-punctuating the same letters is not an invention', () => {
+  assert.equal(inventedTerm('把japandev重启', '把 japan-dev 重启', ''), null);
+});
+
+test('leaving the mangled term alone is obviously fine', () => {
+  assert.equal(inventedTerm('把pady重启一下', '把 pady 重启一下。', ''), null);
+});
+
+test('a term conjured out of Chinese displaces nothing, so it passes', () => {
+  // 「道克」→ Docker is the batch prompt's bread and butter; the guard must not
+  // eat it just because Docker appears nowhere else.
+  assert.equal(inventedTerm('用道克跑一下', '用 Docker 跑一下', ''), null);
+});
+
+test('spoken punctuation reassembled into an identifier is not an invention', () => {
+  assert.equal(inventedTerm('github 点 com 斜杠 keyo', 'github.com/keyo', ''), null);
+});
+
+test('short words are ignored — the guard is about terms, not articles', () => {
+  assert.equal(inventedTerm('run pady now', 'run it now', ''), null);
 });
