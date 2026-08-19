@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg, chunkLiteral, ensureSession, probeInputPath, hardKill, readComposerText, pickComposerLine, pickFocusStealer, dismissFocusStealer } from '@hermit-ui/tmux-driver';
+import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg, chunkLiteral, ensureSession, probeInputPath, hardKill, readComposerText, pickComposerLine, pickFocusStealer, dismissFocusStealer, sendKeys, confirmSubmitted, paneInMode, leaveCopyMode } from '@hermit-ui/tmux-driver';
 
 describe('tmuxPaneName', () => {
   it('keeps the last 12 id chars behind the hermit- prefix', () => {
@@ -506,5 +506,102 @@ describe('dismissFocusStealer — handing focus back to the composer', () => {
 
   it('is a no-op for a session that does not exist', { skip: !haveTmux }, async () => {
     assert.equal(await dismissFocusStealer('zzfocus-nonexistent-xyz'), 'none');
+  });
+});
+
+// copy-mode: the state that makes a healthy pane indistinguishable from a corpse.
+//
+// The browser terminal runs `set-option -t <session> mouse on` before attaching, so
+// the wheel scrolls tmux's scrollback — and with mouse mode on, ONE scroll IS
+// copy-mode. While the pane is in it tmux consumes every key itself: `send-keys`
+// still reports success, the program never reads a byte, and nothing on screen says
+// so. Scroll up to re-read what the agent said, press Enter to send the reply you
+// already typed, and the Enter is gone.
+//
+// It also reproduces a dead input path EXACTLY — composer still holds our text, no
+// transcript growth, no reaction to a probe — which is the chain diagnoseFailedSubmit
+// kills a process on. These tests are the two halves: keys must get through, and a
+// scrolled-back pane must never be condemned.
+describe('copy-mode — tmux eating the keys', () => {
+  const haveTmux = spawnSync('tmux', ['-V'], { encoding: 'utf8' }).status === 0;
+  const started: string[] = [];
+
+  // A fake REPL: echoes every LINE it reads, so "did the Enter arrive" is a question
+  // about the program's output, not about the pane's paint.
+  const REPL = "printf '❯ '; while read L; do printf '[GOT:%s]\\n❯ ' \"$L\"; done";
+  const spawnPane = () => {
+    const sessionId = 'zzcopy' + Math.random().toString(36).slice(2, 8);
+    started.push(sessionId);
+    const saved = process.env.TMUX;
+    delete process.env.TMUX;
+    try {
+      ensureSession({ sessionId, cwd: os.tmpdir(), claudeBin: '/bin/sh', claudeArgs: ['-c', REPL] });
+    } finally {
+      if (saved !== undefined) process.env.TMUX = saved;
+    }
+    spawnSync('tmux', ['set-option', '-t', tmuxPaneName(sessionId), 'mouse', 'on']);
+    return sessionId;
+  };
+  const enterCopyMode = (id: string) => spawnSync('tmux', ['copy-mode', '-t', `${tmuxPaneName(id)}.0`]);
+  const paneText = (id: string) => spawnSync('tmux', ['capture-pane', '-t', `${tmuxPaneName(id)}.0`, '-p'], { encoding: 'utf8' }).stdout;
+  const settle = (ms = 700) => new Promise((r) => setTimeout(r, ms));
+
+  after(() => {
+    for (const id of started) spawnSync('tmux', ['kill-session', '-t', tmuxPaneName(id)]);
+  });
+
+  it('detects the mode and leaves it (idempotently)', { skip: !haveTmux }, async () => {
+    const id = spawnPane();
+    await settle();
+    assert.equal(paneInMode(id), false);
+    assert.equal(leaveCopyMode(id), false, 'nothing to leave → false, and no error');
+    enterCopyMode(id);
+    assert.equal(paneInMode(id), true);
+    assert.equal(leaveCopyMode(id), true);
+    assert.equal(paneInMode(id), false);
+  });
+
+  // The regression proper. Without the guard in sendKeys, tmux eats the whole message
+  // AND its submit Enter, and every layer above reports success.
+  it('sendKeys still reaches the program when the pane is scrolled back', { skip: !haveTmux }, async () => {
+    const id = spawnPane();
+    await settle();
+    enterCopyMode(id);
+    assert.equal(paneInMode(id), true, 'precondition: the pane is swallowing keys');
+    sendKeys(id, 'hello-from-copy-mode');
+    await settle(900);
+    assert.match(paneText(id), /\[GOT:hello-from-copy-mode\]/, 'the program must have read the line');
+  });
+
+  // What Enter ITSELF does in copy-mode is table-dependent (emacs binds it to
+  // copy-selection-and-cancel, vi does not, and with no selection tmux 3.x leaves the
+  // mode up) — which is the whole reason confirmSubmitted must not rely on it. One
+  // round, so the assertion is about the guard and not about how many Enters it took.
+  it('confirmSubmitted submits in ONE round on a pane scrolled back after the send', { skip: !haveTmux }, async () => {
+    const id = spawnPane();
+    await settle();
+    spawnSync('tmux', ['send-keys', '-t', `${tmuxPaneName(id)}.0`, '-l', '--', 'typed-but-unsent']);
+    await settle(300);
+    enterCopyMode(id); // the person scrolls up to re-read before hitting send
+    assert.equal(await confirmSubmitted(id, 1, 300), true, 'the composer must end up empty');
+    await settle(500);
+    assert.match(paneText(id), /\[GOT:typed-but-unsent\]/);
+    assert.equal(paneInMode(id), false);
+  });
+
+  // The one that protects a running session: copy-mode passes every link of the
+  // deaf-pane chain, and the verdict there is hardKill.
+  it('NEVER condemns a scrolled-back pane as deaf — it fixes the mode and declines', { skip: !haveTmux }, async () => {
+    const id = spawnPane();
+    await settle();
+    spawnSync('tmux', ['send-keys', '-t', `${tmuxPaneName(id)}.0`, '-l', '--', 'stranded message']);
+    await settle(300);
+    enterCopyMode(id);
+    assert.equal(
+      await probeInputPath(id, { expectText: 'stranded message', timeoutMs: 2_000 }),
+      'inconclusive',
+      'a healthy claude in a scrolled pane must not be killed',
+    );
+    assert.equal(paneInMode(id), false, 'and the mode must be gone so the retry can land');
   });
 });

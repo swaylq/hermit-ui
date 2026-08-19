@@ -301,9 +301,58 @@ export function chunkLiteral(line: string, maxBytes = SEND_CHUNK_BYTES): string[
  * claude treats the buffer as a complete turn. Backslash-escapes any embedded
  * Enter via Alt+Enter so a multi-line paste doesn't accidentally submit early.
  */
+/**
+ * Is this pane sitting in a tmux MODE (copy-mode, view-mode) rather than passing
+ * keys through to the program running in it?
+ *
+ * This is the state nothing in this driver used to ask about, and it is a trap with
+ * teeth, because tmux swallows every key while it holds: `send-keys` returns success,
+ * the keys go to tmux's own mode bindings, and the program never sees them. Verified
+ * on tmux 3.x: with the pane in copy-mode, text typed earlier sits unsubmitted in the
+ * program's input, a subsequent `send-keys Enter` is never read, and the pane stays in
+ * the mode. Nothing on screen says so — the TUI is painted exactly as before.
+ *
+ * We put panes into this state OURSELVES: the browser terminal runs
+ * `set-option -t <session> mouse on` before attaching (so the wheel scrolls tmux's
+ * scrollback), and with mouse mode on ONE scroll of the wheel is copy-mode. So the
+ * ordinary act of scrolling up to re-read what the agent said, then pressing Enter to
+ * send the reply you already typed, silently eats the Enter and strands the message.
+ *
+ * Worse, it is indistinguishable from a corpse by every test diagnoseFailedSubmit
+ * runs: the composer still holds our text, the transcript never grows, and two
+ * keystroke probes get no reaction — all three links hold, and the verdict is to KILL
+ * the process. A healthy claude in a scrolled-back pane must never be condemned for
+ * tmux's mode.
+ */
+export function paneInMode(sessionId: string): boolean {
+  const name = paneName(sessionId);
+  if (!hasSession(name)) return false;
+  const r = tmux(['display-message', '-p', '-t', `${name}.0`, '#{pane_in_mode}']);
+  return r.ok && r.stdout.trim() === '1';
+}
+
+/**
+ * Take a pane out of copy-mode so keys reach the program again. Returns true if it
+ * actually had to (i.e. the pane WAS swallowing input), which is the signal callers
+ * use to explain away a silence they would otherwise have to blame on the process.
+ *
+ * `-X cancel` is the mode-table command for "leave the mode", so it works whatever
+ * mode and whatever mode-keys the user configured. Idempotent: on a pane that is in
+ * no mode it is a no-op error we ignore, which is why the state is checked first.
+ */
+export function leaveCopyMode(sessionId: string): boolean {
+  if (!paneInMode(sessionId)) return false;
+  const name = paneName(sessionId);
+  tmux(['send-keys', '-t', `${name}.0`, '-X', 'cancel']);
+  return true;
+}
+
 export function sendKeys(sessionId: string, text: string): void {
   const name = paneName(sessionId);
   if (!hasSession(name)) throw new Error(`tmux session not found: ${name}`);
+
+  // Never type into a mode — tmux would eat the whole message and report success.
+  leaveCopyMode(sessionId);
 
   // Strategy:
   //   For each line of `text`, paste-buffer the line, then send Alt+Enter for
@@ -470,6 +519,10 @@ export async function confirmSubmitted(sessionId: string, tries = 40, gapMs = 50
   for (let i = 0; i < tries; i++) {
     await sleep(gapMs);
     if (composerStatus(name) === 'clear') return true; // POSITIVELY empty → submitted
+    // A scroll of the wheel between our send and this poll puts the pane in copy-mode,
+    // where every Enter below would be eaten by tmux instead of submitting. Re-checked
+    // each round, not just once: the person reading the pane can scroll at any moment.
+    leaveCopyMode(sessionId);
     // 'text' (still buffered) or 'unknown' (capture failed / composer not seen this
     // frame) → re-send Enter and keep polling. We must NOT treat a failed capture as
     // "cleared": that's exactly what stranded image / multi-line pastes — the
@@ -524,6 +577,7 @@ export async function dismissFocusStealer(
 ): Promise<DismissOutcome> {
   const name = paneName(sessionId);
   if (!hasSession(name)) return 'none';
+  leaveCopyMode(sessionId); // the `x` below would be eaten by tmux's mode otherwise
   const before = capturePaneLines(name);
   if (!before || pickFocusStealer(before) === null) return 'none';
 
@@ -566,7 +620,12 @@ export type InputPathVerdict = 'alive' | 'deaf' | 'inconclusive';
  * first instead — backspace, look for a shorter line — would be simpler, but it eats a
  * real character of the user's text on every healthy pane it misjudges.)
  *
- * Two refusals, because a false 'deaf' costs a process:
+ * Three refusals, because a false 'deaf' costs a process:
+ *  - the pane must not be in a tmux MODE. copy-mode reproduces a corpse EXACTLY —
+ *    tmux eats every key, so the composer keeps our text, the transcript never grows,
+ *    and no probe ever gets a reaction — and one scroll of the wheel is all it takes
+ *    to get there (see paneInMode). We leave the mode and decline to judge this
+ *    round; the caller's next attempt meets a pane that can hear again;
  *  - the composer must be readable and non-empty; on an empty one the marker is
  *    indistinguishable from a stray keystroke landing → 'inconclusive';
  *  - with `expectText`, the composer must actually be holding THAT message. This is
@@ -585,6 +644,10 @@ export async function probeInputPath(
 ): Promise<InputPathVerdict> {
   const name = paneName(sessionId);
   if (!hasSession(name)) return 'inconclusive';
+
+  // tmux, not the process, is eating the keys. Fix that and let the caller retry —
+  // condemning here would kill a healthy claude because someone scrolled the pane.
+  if (leaveCopyMode(sessionId)) return 'inconclusive';
 
   const before = composerLine(name);
   if (!before) return 'inconclusive'; // null (unreadable) or '' (empty — nothing to compare against)
