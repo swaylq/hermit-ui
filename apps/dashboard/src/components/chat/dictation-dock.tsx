@@ -32,6 +32,7 @@ import {
 } from 'react';
 import { authedFetch } from '@/lib/asst-fetch';
 import { openAsrSocket, type AsrSocket } from '@/lib/asr-socket';
+import { joinSegments } from '@/lib/dictation-text';
 import { startStreaming, releaseWarmMic, type VoiceStream } from '@/lib/voice-capture';
 import { readRealtimeStyle } from '@/lib/voice-style';
 import { DictationBar, type DictationStatus } from '@/components/chat/dictation-bar';
@@ -63,7 +64,6 @@ export const DictationDock = forwardRef<DictationHandle, {
 }>(function DictationDock({ sessionId, composerRef, onActiveChange, onNotice }, ref) {
   const [active, setActive] = useState(false);
   const [status, setStatus] = useState<DictationStatus>('connecting');
-  const [partial, setPartial] = useState('');
   const [pending, setPending] = useState(0);
   const [level, setLevel] = useState(0);
   const [silent, setSilent] = useState(false);
@@ -72,6 +72,10 @@ export const DictationDock = forwardRef<DictationHandle, {
   const [tick, setTick] = useState(0);
 
   const sockRef = useRef<AsrSocket | null>(null);
+  // Closed sentences only, without the partial riding on the end. The draft gets
+  // both; this is what has to be left behind when a run ends badly, because the
+  // partial was never transcribed by anything that finished.
+  const committedRef = useRef('');
   const streamRef = useRef<VoiceStream | null>(null);
   const activeRef = useRef(false);
   const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -94,7 +98,6 @@ export const DictationDock = forwardRef<DictationHandle, {
     sockRef.current = null;
     composerRef.current?.endDictation();
     setActiveBoth(false);
-    setPartial('');
     setPending(0);
     setLevel(0);
     setSilent(false);
@@ -113,6 +116,9 @@ export const DictationDock = forwardRef<DictationHandle, {
     streamRef.current = null;
     sockRef.current?.close();
     sockRef.current = null;
+    // Whatever partial was on screen belongs to audio the batch call is about to
+    // redo — leave only the closed sentences, or the words arrive twice.
+    composerRef.current?.setDictationTail(committedRef.current);
     let text = '';
     try {
       const wav = stream ? await stream.stop() : null;
@@ -162,10 +168,10 @@ export const DictationDock = forwardRef<DictationHandle, {
     if (activeRef.current) return;
     setActiveBoth(true);
     setStatus('connecting');
-    setPartial('');
     setPending(0);
     setHint(null);
     setStartedAt(Date.now());
+    committedRef.current = '';
     composerRef.current?.beginDictation();
     clockTimer.current = setInterval(() => setTick((n) => n + 1), 1000);
 
@@ -177,9 +183,12 @@ export const DictationDock = forwardRef<DictationHandle, {
       sock = openAsrSocket(sessionId, readRealtimeStyle(), {
         onReady: () => setStatus('listening'),
         onState: (st) => {
-          setPartial(st.partial);
           setPending(st.pending);
-          composerRef.current?.setDictationTail(st.tail);
+          committedRef.current = st.tail;
+          // The unstable partial goes in the draft too, right behind the closed
+          // sentences — you watch the words appear where you are going to send
+          // them, and the ASR's self-correction happens in place.
+          composerRef.current?.setDictationTail(joinSegments([st.tail, st.partial]));
         },
         // A closed sentence is safely in the draft — the capture layer no longer
         // needs to keep its audio for the fallback.
@@ -229,7 +238,6 @@ export const DictationDock = forwardRef<DictationHandle, {
   void tick; // the 1 Hz clock only exists to re-render the timer
   return (
     <DictationBar
-      partial={partial}
       pending={pending}
       level={level}
       silent={silent}

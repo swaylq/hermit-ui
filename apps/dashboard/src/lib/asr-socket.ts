@@ -9,19 +9,20 @@
 //   partial  the sentence being spoken RIGHT NOW. Rewrites itself wholesale every
 //            few hundred ms — "发" → "发 red hot" → "把Red Hole的隧道重启" — which
 //            is exactly the effect worth showing, so it is passed through
-//            unsmoothed. It does NOT go in the textarea: it would fight the
-//            caret, and a <textarea> can't style a substring to say "this is
-//            still moving". It lives in the dictation bar, like an IME preedit
-//            string. Unstable text does not enter the document.
+//            unsmoothed.
 //
-//   tail     sentences the server has closed, joined. These DO go in the
-//            textarea — the moment a sentence closes it is real text the user
-//            could send.
+//   tail     sentences the server has closed, joined.
 //
 //   polished each of those sentences again, corrected, replacing itself in place.
 //            Arrives out of order (the jobs run concurrently), so segments are
 //            addressed by id and the tail is rebuilt from the array — never
 //            patched by string offset.
+//
+// All three end up in the composer's textarea: the words appear where you are
+// going to send them, and the correction happens in place. They are reported
+// separately rather than pre-joined for one reason — when the socket dies, only
+// the CLOSED sentences may stay in the draft. The partial's audio is about to be
+// re-transcribed by the batch fallback, and leaving it would deliver it twice.
 //
 // The socket carries the dashboard key as a `hermit-key.<token>` subprotocol,
 // same as the terminal, and 401s for a scoped agent-share token — the caller

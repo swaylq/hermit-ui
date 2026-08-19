@@ -1,19 +1,15 @@
 'use client';
 
-// The dictation bar — where the UNSTABLE half of realtime voice input lives.
+// The dictation bar — the controls for a running dictation, above the composer.
 //
-// Sits directly above the composer while a dictation run is going. It holds the
-// partial transcript: the sentence currently being spoken, which the ASR rewrites
-// wholesale every few hundred milliseconds as it hears more ("发" → "发 red hot"
-// → "把Red Hole的隧道重启"). That self-correction is the good part, so it is shown
-// raw rather than smoothed.
+// It does NOT hold the transcript. The words — partial included, the one the ASR
+// keeps rewriting as it hears more ("发" → "发 red hot" → "把Red Hole的隧道重启")
+// — go straight into the composer, so you watch them appear where you are going
+// to send them and the self-correction happens in place.
 //
-// It is a bar and not the textarea for two concrete reasons: a <textarea> cannot
-// style a substring, so there would be no way to say "these characters are still
-// moving"; and rewriting the draft four times a second fights the user's caret.
-// This is how an IME has always drawn its preedit string — unstable text stays
-// outside the document until it commits. The moment a sentence closes it leaves
-// this bar and lands in the draft for real.
+// What is left here is everything that is about the RUN rather than the text: a
+// recording indicator, the live level, how long you have been talking, how many
+// sentences are still being corrected behind you, and the two ways out.
 
 import { memo } from 'react';
 import { Check, Loader2, X } from 'lucide-react';
@@ -22,15 +18,8 @@ import { cn } from '@/lib/utils';
 
 export type DictationStatus = 'connecting' | 'listening' | 'finishing' | 'error';
 
-/** How much of a long partial stays on screen (the end of it). */
-const PREEDIT_CHARS = 64;
-
-function tailOf(text: string, max: number): string {
-  return text.length <= max ? text : `…${text.slice(-max)}`;
-}
 
 export const DictationBar = memo(function DictationBar({
-  partial,
   pending,
   level,
   silent,
@@ -40,7 +29,6 @@ export const DictationBar = memo(function DictationBar({
   onDone,
   onCancel,
 }: {
-  partial: string;
   /** Sentences still being corrected in the background. */
   pending: number;
   level: number;
@@ -55,15 +43,16 @@ export const DictationBar = memo(function DictationBar({
   const secs = Math.floor(elapsedMs / 1000);
   const mmss = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 
-  // What the middle of the bar says when there is no partial to show. Each of
-  // these is a different thing happening, and conflating them is how a user ends
-  // up talking to a socket that never opened.
-  const idleLabel =
+  // Each of these is a different thing happening, and conflating them is how a
+  // user ends up talking to a socket that never opened. `silent` is the capture
+  // gate: quiet long enough that we stopped streaming, which is also the state
+  // where nothing is going to appear no matter how long you stare at the box.
+  const label =
     status === 'connecting' ? '接通中…'
     : status === 'finishing' ? '收尾中…'
     : status === 'error' ? (hint ?? '出错了')
     : silent ? '在听…'
-    : '说吧';
+    : '正在识别';
 
   return (
     // Same container as the composer below it (mx-auto / max-w-3xl / px-3) so the
@@ -88,17 +77,9 @@ export const DictationBar = memo(function DictationBar({
         )}
       />
 
-      {/* Preedit. Dim + italic says "not committed yet". A long partial is shown
-          from its END — the words are appearing on the right, and watching the
-          beginning of a sentence you finished saying is useless. */}
       <div className="relative z-10 min-w-0 flex-1">
-        <div
-          className={cn(
-            'truncate text-[13px] leading-5',
-            partial ? 'text-white/60 italic' : 'text-white/35',
-          )}
-        >
-          {partial ? tailOf(partial, PREEDIT_CHARS) : idleLabel}
+        <div className={cn('truncate text-[13px] leading-5', status === 'error' ? 'text-rose-200' : 'text-white/45')}>
+          {label}
         </div>
       </div>
 

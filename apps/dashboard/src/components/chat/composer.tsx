@@ -231,6 +231,10 @@ export const ComposeBar = forwardRef<ComposerHandle, {
         el.setSelectionRange(el.value.length, el.value.length);
         el.style.height = 'auto';
         el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
+        // Past the 360px cap the box scrolls instead of growing, and the words
+        // are landing at the BOTTOM — without this you would be watching the
+        // beginning of a paragraph you finished dictating a minute ago.
+        el.scrollTop = el.scrollHeight;
       });
     },
     endDictation() {

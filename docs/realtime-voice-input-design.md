@@ -117,17 +117,25 @@
 
 ---
 
-## 交互：三层文本
+## 交互：文字全在输入框里
 
-| 层 | 内容 | 在哪 | 样式 |
-|---|---|---|---|
-| **partial** | 当前 partial，每帧整体替换，会自我改写 | 输入框**上方**的听写条 | 暗一档 + 斜体，长了只显示尾部 |
-| **tail（已断句）** | `sentence_end` 的句子，立刻落进草稿 | 输入框内 | 正常 |
-| **polished** | 纠错结果就地替换 | 输入框内，同一位置 | 正常 |
+三种状态的文字，**全部落在 composer 的 textarea 里**，一个地方看完整个过程：
 
-**partial 不进 textarea：** 它每 400ms 整体重写一次，写进去要跟光标抢所有权，而且 `<textarea>` 没法给子串上色 —— 没法表达「这几个字还会变」。放在上方的条里 = IME 预编辑串的老办法：**不稳的字不进文档**。
+| 状态 | 内容 | 表现 |
+|---|---|---|
+| **partial** | 当前正在说的这句，每帧整体替换 | 边说边长，并且**当场自我改写**（`帮我把这apan` → `帮我把JUPANDAV上的PADDY` → `帮我把JAPAN DEV上的PADDY重启一下。`） |
+| **final** | `sentence_end` 的句子 | 原地定住，partial 从它后面重新开始长 |
+| **polished** | 纠错结果 | **就地替换那一句**（实测 t=4.4s `…上的PADDY重启一下。` → t=4.8s `…上的Caddy重启一下。`） |
 
-**替换不做偏移算术：** 纠错是并发的、会乱序回来，所以 `asr-socket` 按 `segId` 更新它的 segment 数组，然后把**整条 tail 重新拼出来**交给 composer。composer 只维护一个不变式 `draft === base + tail`；不成立就说明用户中途手打了字 —— **用户的字赢**，把当前草稿收作新 base，tail 从后面重新长。全部逻辑在 `lib/dictation-text.ts`（纯函数，`foldTail` 幂等，12 个用例）。
+草稿始终是 `已断句的句子 + 当前 partial`。这意味着**所见即所发**：任何时刻按发送，发出去的就是框里那些字。
+
+「不稳的字要不要进文档」这件事上试过 IME 预编辑串那套（partial 单独放在上方的条里），实际用下来是错的：字出现在你**要发送它的地方**，自我改写在原地发生，整件事只有一个焦点。听写条因此不再显示文字，只剩下跟这次听写有关的东西：录音指示、电平、计时、还有几句在校对、以及两个出口。
+
+**替换只重拼、不做偏移算术**（见下），所以 partial 每 400ms 整体重写一次是安全的：composer 只守 `draft === base + tail`，用户中途手打字就把当前草稿收作新 base。textarea 的滚动跟着最新的字走（超过 360px 高度上限后框内滚动）。
+
+**替换不做偏移算术：** 纠错是并发的、会乱序回来，所以 `asr-socket` 按 `segId` 更新它的 segment 数组，dock 把**已断句的句子 + 当前 partial 整条重新拼出来**交给 composer。composer 只维护一个不变式 `draft === base + tail`；不成立就说明用户中途手打了字 —— **用户的字赢**，把当前草稿收作新 base，tail 从后面重新长。全部逻辑在 `lib/dictation-text.ts`（纯函数，`foldTail` 幂等，12 个用例）。
+
+`asr-socket` 对外仍然把 partial 和已断句的 tail **分开**给：socket 挂掉走整段兜底时，草稿里只能留已断句的部分 —— partial 对应的音频马上要被重新转写一次，留着就会出现两遍。
 
 ---
 
@@ -204,7 +212,18 @@
 
 ### 浏览器（真 Chromium + `--use-file-for-fake-audio-capture`）
 
-点一下麦克风 → 听写条出现 → 第一句纠错完成后落进输入框，**第二句还在条里出字** → ✓ 收尾，条消失，草稿保留。无 console 报错。
+点一下麦克风 → 听写条出现 → 字直接在输入框里长出来并自我改写 → 第一句 `sentence_end` 后 ~0.4s **就地**换成纠错版（`…上的PADDY重启一下。` → `…上的Caddy重启一下。`），此时第二句已经在往后接 → ✓ 收尾，条消失，草稿保留。无 console 报错。
+
+逐帧采样（每 400ms 读一次 textarea）：
+
+```
+t=0.8s  "帮我"
+t=2.8s  "帮我把JUPANDAV上的PADDY"
+t=3.2s  "帮我把JUPANDAV上的PADDY下"
+t=4.4s  "帮我把JAPAN DEV上的PADDY重启一下。"        ← sentence_end
+t=4.8s  "帮我把JAPAN DEV上的Caddy重启一下。然后"     ← 纠错就地替换，第二句已在后面
+t=8.4s  "帮我把JAPAN DEV上的Caddy重启一下。然后检查一下证书还有多少天过期"
+```
 
 ### 成本
 
@@ -223,7 +242,7 @@
 | `src/lib/asr-socket.ts` | **新** 浏览器 WS 客户端 + segment 状态机 |
 | `src/lib/dictation-text.ts` (+ `.test.ts`) | **新** `joinSegments` / `foldTail`，12 个用例 |
 | `src/lib/voice-style.ts` | **新** 风格常量，麦克风与听写台共用 |
-| `src/components/chat/dictation-bar.tsx` | **新** 预编辑条 |
+| `src/components/chat/dictation-bar.tsx` | **新** 听写控制条（录音指示 / 电平 / 计时 / 校对数 / ✕✓；不显示文字） |
 | `src/components/chat/dictation-dock.tsx` | **新** 听写台：麦克风流 + socket + 兜底，state 关在这里，SessionPane 只收到 start/stop |
 | `src/lib/voice-capture.ts` | `startStreaming()` + 有状态重采样 + 静音门控 + 兜底缓冲（`startRecording` 不动） |
 | `src/components/chat/voice-mic.tsx` | 点一下 = 听写；听写中禁用长按与 PTT |
