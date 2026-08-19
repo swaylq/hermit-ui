@@ -148,6 +148,7 @@ describe('robustSubmit', () => {
       confirmSubmitted: async () => true,          // composer cleared
       readComposer: () => 'clear' as const,
       waitForReplReady: async () => true,
+      dismissFocusStealer: async () => 'none' as const, // composer has focus
       diagnoseFailedSubmit: async () => 'deaf-pane' as const,
       nap: async () => {},                          // no real waiting in tests
       ...over,
@@ -202,6 +203,22 @@ describe('robustSubmit', () => {
     assert.equal(await robustSubmit(session, { jsonlPath: jsonlPath() }, 'hi', false, d), 'deaf-pane');
     assert.equal(d.sends.length, 1);  // re-typing on top of buffered text would duplicate
     assert.equal(enters, 2);          // the send's own confirm, then the hammer round
+  });
+
+  // 2026-08-19: a /compact left Claude Code's artifact chip holding focus, so the pane
+  // was not slow — it was pointed somewhere else, and every character typed at it was
+  // swallowed. Focus has to be taken back BEFORE the keystrokes, on the retry too: a
+  // send into a stolen-focus pane loses the message outright.
+  it('hands focus back to the composer before typing, on every send', async () => {
+    clean();
+    jsonl(UUID, 2);
+    const order: string[] = [];
+    const d = deps({
+      dismissFocusStealer: async () => { order.push('dismiss'); return 'dismissed' as const; },
+      sendKeys: (_id: string, text: string) => { order.push(`send:${text}`); },
+    });
+    assert.equal(await robustSubmit(session, { jsonlPath: jsonlPath() }, 'hi', false, d), 'unsent');
+    assert.deepEqual(order, ['dismiss', 'send:hi', 'dismiss', 'send:hi']);
   });
 
   it('a cold start waits for the REPL before typing', async () => {

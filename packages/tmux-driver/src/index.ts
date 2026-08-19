@@ -346,19 +346,105 @@ function composerStatus(name: string): 'text' | 'clear' | 'unknown' {
   return line.length > 0 ? 'text' : 'clear';
 }
 
+// Claude Code draws widgets BELOW the composer that carry their own `❯` when they hold
+// focus — currently the published-artifact chip:
+//
+//     ────────────────────────      ← composer box, top rule
+//     ❯                             ← the real composer, EMPTY
+//     ────────────────────────      ← bottom rule
+//       ⏵⏵ bypass permissions on (shift+tab to cycle)
+//     ❯ ⧉  cat-demo · Enter to open · x to dismiss     ← focus is HERE
+//          https://claude.ai/code/artifact/…
+//
+// A bottom-up "last ❯ wins" scan reads that chip as the composer, and every conclusion
+// downstream inverts: the composer is reported as permanently holding text, so
+// confirmSubmitted never sees 'clear' and hammers ~160 Enters at a chip whose Enter
+// binding is "open the artifact"; robustSubmit takes its buffered-text branch;
+// probeInputPath diffs a line that cannot change no matter what is typed, so the pane
+// can be neither cleared nor condemned and healDeafPane never runs. That is what
+// silently ate two messages on 2026-08-19 after a /compact left the chip focused —
+// the session stayed wedged with nothing but "likely unsent" in the log.
+//
+// So anchor on the BOX, not on the glyph: the composer is the region between the last
+// two full-width `─` rules, and only a `❯` inside it is the composer's.
+const RULE_RE = /^\s*─{8,}\s*$/;
+
+// The artifact chip and its siblings, matched by the hints they document themselves
+// with. Only used to skip them in the no-box fallback below (a permission prompt or
+// the resume picker paints a `❯` with no composer box at all, and those must still be
+// found) — the box path never needs it.
+const OVERLAY_CHIP_RE = /⧉|\bEnter to open\b|\b(?:x|esc(?:ape)?) to dismiss\b|←\/→ to navigate/i;
+
+/**
+ * The composer's input line out of one captured frame, or null when the frame has no
+ * composer in it. Pure over the pane's lines so the frames that broke it are locked in
+ * a unit test rather than reproduced by hand against a live claude.
+ */
+export function pickComposerLine(paneLines: string[]): string | null {
+  const rules: number[] = [];
+  for (let i = 0; i < paneLines.length; i++) if (RULE_RE.test(paneLines[i])) rules.push(i);
+
+  // The composer box: between the LAST two rules. Anything painted under the box —
+  // mode line, artifact chip, whatever Claude Code adds next — is out of scope by
+  // construction, focused or not.
+  if (rules.length >= 2) {
+    const [top, bottom] = [rules[rules.length - 2], rules[rules.length - 1]];
+    for (let i = top + 1; i < bottom; i++) {
+      const idx = paneLines[i].indexOf('❯');
+      if (idx >= 0) return paneLines[i].slice(idx + 1).trim();
+    }
+  }
+
+  // No box in this frame. Claude Code still paints a bare `❯` for the resume picker and
+  // for permission prompts, and waitForReplReady / the picker driver depend on seeing
+  // it, so keep the legacy bottom-up scan — minus the overlays, which are exactly the
+  // lines that must never win it.
+  for (let i = paneLines.length - 1; i >= 0; i--) {
+    const idx = paneLines[i].indexOf('❯');
+    if (idx < 0) continue;
+    const text = paneLines[i].slice(idx + 1).trim();
+    if (OVERLAY_CHIP_RE.test(text)) continue;
+    return text;
+  }
+  return null;
+}
+
+/**
+ * The line of the widget that has STOLEN focus from the composer, or null when the
+ * composer has it. A `❯` painted below the composer box is Claude Code saying "the
+ * cursor is down here, not in the input" — while it is, typed text never reaches the
+ * composer at all (verified 2026-08-19: a 9-char burst sent to such a pane left the
+ * composer empty; the same pane accepted a keystroke normally once the chip collapsed).
+ */
+export function pickFocusStealer(paneLines: string[]): string | null {
+  const rules: number[] = [];
+  for (let i = 0; i < paneLines.length; i++) if (RULE_RE.test(paneLines[i])) rules.push(i);
+  if (rules.length < 2) return null; // no box → no "below the box" to speak of
+  const bottom = rules[rules.length - 1];
+  for (let i = paneLines.length - 1; i > bottom; i--) {
+    const idx = paneLines[i].indexOf('❯');
+    if (idx < 0) continue;
+    const text = paneLines[i].slice(idx + 1).trim();
+    return OVERLAY_CHIP_RE.test(text) ? text : null; // only a KNOWN overlay is dismissable
+  }
+  return null;
+}
+
+// One captured frame as lines, SGR stripped. null when the capture failed — never an
+// empty frame, so "could not read" stays distinguishable from "read, saw nothing".
+function capturePaneLines(name: string): string[] | null {
+  const r = tmux(['capture-pane', '-t', `${name}.0`, '-p'], { timeoutMs: 2000 });
+  if (!r.ok) return null;
+  return r.stdout.replace(/\x1b\[[0-9;]*m/g, '').split('\n');
+}
+
 // The composer's input line (`❯ …`) as TEXT: '' when it is positively empty, null when
 // it could not be read at all. composerStatus is the tri-state view of this; the probe
 // below needs the characters themselves, because "did this pane react to a keystroke"
 // is a question about the content changing, not about empty-vs-not.
 function composerLine(name: string): string | null {
-  const r = tmux(['capture-pane', '-t', `${name}.0`, '-p'], { timeoutMs: 2000 });
-  if (!r.ok) return null;
-  const lines = r.stdout.replace(/\x1b\[[0-9;]*m/g, '').split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const idx = lines[i].indexOf('❯');
-    if (idx >= 0) return lines[i].slice(idx + 1).trim();
-  }
-  return null;
+  const lines = capturePaneLines(name);
+  return lines === null ? null : pickComposerLine(lines);
 }
 
 /**
@@ -409,6 +495,47 @@ export function readComposer(sessionId: string): 'text' | 'clear' | 'unknown' {
  */
 export function readComposerText(sessionId: string): string | null {
   return composerLine(paneName(sessionId));
+}
+
+/** See dismissFocusStealer. */
+export type DismissOutcome = 'none' | 'dismissed' | 'stuck';
+
+/**
+ * Hand focus back to the composer if a widget below it has taken it.
+ *
+ * A focused artifact chip swallows everything typed at the pane, so a message sent
+ * into one is not delayed — it is gone, and the pane looks perfectly healthy while it
+ * happens. The old code's answer was to press Enter until the composer cleared, which
+ * against this chip is the worst possible key: Enter is its "open the artifact"
+ * binding, so ~160 of them changed nothing and the session stayed wedged until the
+ * chip's own timer collapsed it ~25 minutes later (2026-08-19).
+ *
+ * The chip documents its own way out — `x to dismiss` — so use that, and only ever
+ * against a line pickFocusStealer has positively identified as a known overlay.
+ *
+ * Net-zero on the buffer, like probeInputPath: if the dismissal does not take, the `x`
+ * may have landed in the composer instead, and a stray character prepended to the
+ * user's message is its own corruption — so it is backspaced away on the failing path.
+ * Callers must run this BEFORE typing, so that undo can never eat real text.
+ */
+export async function dismissFocusStealer(
+  sessionId: string,
+  opts: { timeoutMs?: number; gapMs?: number } = {},
+): Promise<DismissOutcome> {
+  const name = paneName(sessionId);
+  if (!hasSession(name)) return 'none';
+  const before = capturePaneLines(name);
+  if (!before || pickFocusStealer(before) === null) return 'none';
+
+  tmux(['send-keys', '-t', `${name}.0`, '-l', '--', 'x']);
+  const deadline = Date.now() + (opts.timeoutMs ?? 4_000);
+  while (Date.now() < deadline) {
+    await sleep(opts.gapMs ?? 250);
+    const now = capturePaneLines(name);
+    if (now && pickFocusStealer(now) === null) return 'dismissed';
+  }
+  tmux(['send-keys', '-t', `${name}.0`, 'BSpace']); // the x may have gone into the composer
+  return 'stuck';
 }
 
 /** See probeInputPath. */

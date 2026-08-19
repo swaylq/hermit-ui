@@ -33,6 +33,7 @@ import {
   tmuxSessionExists,
   readComposer,
   readComposerText,
+  dismissFocusStealer,
   probeInputPath,
   hardKill,
   waitForReplReady,
@@ -1402,18 +1403,20 @@ function transcriptSize(p: string): number {
  * Robust delivery. The Ink TUI can swallow a prompt AND its submit Enter, leaving
  * the composer EMPTY — which is indistinguishable, by looking at the composer, from
  * a message that submitted cleanly. So the composer is never the proof; the proof is
- * that a turn actually STARTED, i.e. the transcript grew. Three defenses:
+ * that a turn actually STARTED, i.e. the transcript grew. Four defenses:
  *   1. on a cold start, wait for the `❯` composer to render before the first
  *      keystroke (+ a short settle — Ink can still drop the very first keys right
  *      after `❯` appears);
- *   2. confirm a turn started before trusting the send, on EVERY path;
- *   3. if no turn started and the composer is empty, the text was dropped → re-send
+ *   2. before EVERY send, make sure the composer — and not some widget painted under
+ *      it — actually has focus (see dismissFocusStealer);
+ *   3. confirm a turn started before trusting the send, on EVERY path;
+ *   4. if no turn started and the composer is empty, the text was dropped → re-send
  *      once. If the composer still HOLDS text, only re-press Enter (never re-type →
  *      never a duplicate turn).
  * Happy path is unchanged: a clean send grows the transcript within a second and it
  * returns 'delivered' immediately.
  *
- * Defense 2 used to be cold-start-only, and that hole is what 2026-08-14 found: TEN
+ * Defense 3 used to be cold-start-only, and that hole is what 2026-08-14 found: TEN
  * sessions on one machine were each holding a message that had been typed into the
  * pane and then vanished — no turn, no reply, no warning. The warm path sent, saw a
  * cleared composer, and returned 'delivered'; the drop it cannot see happens exactly
@@ -1443,6 +1446,7 @@ export type SubmitDeps = {
   confirmSubmitted: (sessionId: string, tries?: number) => Promise<boolean>;
   readComposer: (sessionId: string) => 'text' | 'clear' | 'unknown';
   waitForReplReady: (sessionId: string, timeoutMs: number) => Promise<unknown>;
+  dismissFocusStealer: (sessionId: string) => Promise<'none' | 'dismissed' | 'stuck'>;
   diagnoseFailedSubmit: (sessionId: string, text: string, started: () => boolean) => Promise<SubmitOutcome>;
   nap: (ms: number) => Promise<void>;
 };
@@ -1452,6 +1456,7 @@ const REAL_SUBMIT_DEPS: SubmitDeps = {
   confirmSubmitted,
   readComposer,
   waitForReplReady,
+  dismissFocusStealer,
   diagnoseFailedSubmit,
   nap: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
 };
@@ -1463,7 +1468,8 @@ export async function robustSubmit(
   freshSpawn: boolean,
   deps: SubmitDeps = REAL_SUBMIT_DEPS,
 ): Promise<SubmitOutcome> {
-  const { sendKeys, confirmSubmitted, readComposer, waitForReplReady, diagnoseFailedSubmit, nap } = deps;
+  const { sendKeys, confirmSubmitted, readComposer, waitForReplReady, dismissFocusStealer, diagnoseFailedSubmit, nap } = deps;
+  const short = session.id.slice(0, 8);
 
   // Growth is proof a turn ran, and its absence is the corroboration
   // diagnoseFailedSubmit needs before it is allowed to condemn a pane.
@@ -1486,6 +1492,14 @@ export async function robustSubmit(
   const turnTicks = freshSpawn ? 30 : 20;   // ≤15s / ≤10s for the turn's first line
 
   for (let send = 0; send < 2; send++) {
+    // Never type into a pane whose focus is somewhere else — an artifact chip holding
+    // it swallows the whole burst, and the message is gone rather than late.
+    const focus = await dismissFocusStealer(session.id);
+    if (focus !== 'none') {
+      console.warn(
+        `[chat] ${short}: an overlay had focus, not the composer — pressed x to dismiss it (${focus})`,
+      );
+    }
     sendKeys(session.id, promptText);            // type + submit
     await confirmSubmitted(session.id, enterTries);
     if (await awaitTurn(turnTicks)) return 'delivered';

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg, chunkLiteral, ensureSession, probeInputPath, hardKill, readComposerText } from '@hermit-ui/tmux-driver';
+import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg, chunkLiteral, ensureSession, probeInputPath, hardKill, readComposerText, pickComposerLine, pickFocusStealer, dismissFocusStealer } from '@hermit-ui/tmux-driver';
 
 describe('tmuxPaneName', () => {
   it('keeps the last 12 id chars behind the hermit- prefix', () => {
@@ -340,5 +340,171 @@ describe('hardKill — killing a process that cannot hear you', () => {
 
   it('is a no-op that reports success when the session is already gone', { skip: !haveTmux }, async () => {
     assert.equal(await hardKill('zzkill-nonexistent-xyz'), true);
+  });
+});
+
+// The composer read that decides whether a message was submitted, whether a pane is
+// deaf, and what text is worth rescuing before a kill. It used to be "the last ❯ on
+// the screen wins", which held right up until Claude Code started painting widgets
+// UNDER the composer that carry a `❯` of their own when focused.
+//
+// 2026-08-19: a /compact left the published-artifact chip focused. The bottom-up scan
+// read the chip as the composer, so the composer was reported as permanently holding
+// text; confirmSubmitted never saw 'clear' and pressed Enter ~160 times into a chip
+// whose Enter binding is "open the artifact"; probeInputPath diffed a line that could
+// not change; the deaf-pane heal never fired. Two messages were typed at that pane and
+// vanished, and the log said only "likely unsent".
+//
+// These frames are transcribed from that pane's `capture-pane` output.
+describe('pickComposerLine — the composer is the box, not the last ❯', () => {
+  const rule = '─'.repeat(152);
+  const WEDGED = [
+    '⏺ 循环已停。cron job da38bd9f 删掉了。',
+    '',
+    '✻ Sautéed for 55s',
+    '',
+    '❯ /compact',                                    // the echoed prompt, above the box
+    '  ⎿  Compacted (ctrl+o to see full summary)',
+    '',
+    rule,
+    '❯ ',                                            // the REAL composer — empty
+    rule,
+    '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+    '❯ ⧉  cat-demo · Enter to open · x to dismiss',   // the chip, holding focus
+    '     https://claude.ai/code/artifact/0ec5f10d-e50a-40e4-85b5-21ece682ae9e',
+  ];
+
+  it('reads the empty composer as EMPTY even while a focused chip paints its own ❯', () => {
+    assert.equal(pickComposerLine(WEDGED), '');
+  });
+
+  it('reads buffered text out of the box, not the chip', () => {
+    const held = WEDGED.map((l) => (l === '❯ ' ? '❯ 把 cron 时间改成 16:30' : l));
+    assert.equal(pickComposerLine(held), '把 cron 时间改成 16:30');
+  });
+
+  it('ignores the echoed prompt above the box (a plain idle pane)', () => {
+    assert.equal(pickComposerLine(['❯ an earlier turn', '', rule, '❯ ', rule, '  ⏵⏵ bypass permissions on']), '');
+  });
+
+  it('reads a multi-line composer from its ❯ line', () => {
+    assert.equal(pickComposerLine([rule, '❯ first line', '  second line', rule, '  ⏵⏵ mode']), 'first line');
+  });
+
+  // waitForReplReady and the resume-picker driver both depend on a bare ❯ still being
+  // found when Claude Code has painted no composer box at all.
+  it('falls back to a bare ❯ when there is no box — the resume picker', () => {
+    const picker = ['Resume this session?', '❯ 1. Resume from summary (recommended)', '  2. Resume full session as-is'];
+    assert.equal(pickComposerLine(picker), '1. Resume from summary (recommended)');
+  });
+
+  it('never lets an overlay win the no-box fallback either', () => {
+    const noBox = ['❯ 1. Approve', '❯ ⧉  cat-demo · Enter to open · x to dismiss'];
+    assert.equal(pickComposerLine(noBox), '1. Approve');
+  });
+
+  it('is null for a frame with no ❯ at all (pre-REPL / capture of a blank pane)', () => {
+    assert.equal(pickComposerLine(['', 'starting…', '']), null);
+  });
+});
+
+// The other half: knowing the composer is empty is not enough, because a focused chip
+// eats the keystrokes too. Typing into that pane loses the message outright, so the
+// send path has to notice and hand focus back first.
+describe('pickFocusStealer — has something under the composer taken focus?', () => {
+  const rule = '─'.repeat(80);
+  const box = [rule, '❯ ', rule, '  ⏵⏵ bypass permissions on (shift+tab to cycle)'];
+
+  it('finds the focused artifact chip below the box', () => {
+    const got = pickFocusStealer([...box, '❯ ⧉  cat-demo · Enter to open · x to dismiss', '     https://…']);
+    assert.match(got ?? '', /cat-demo/);
+  });
+
+  it('is null once the chip collapses and gives the ❯ back', () => {
+    assert.equal(pickFocusStealer([...box, '  ⧉  cat-demo']), null);
+  });
+
+  it('is null on an ordinary pane with nothing under the box', () => {
+    assert.equal(pickFocusStealer(box), null);
+  });
+
+  it('is null when the composer itself holds the ❯ — the box is never the stealer', () => {
+    assert.equal(pickFocusStealer([rule, '❯ typing something', rule, '  ⏵⏵ mode']), null);
+  });
+
+  // The verdict authorizes pressing `x` at someone's pane, so an UNRECOGNISED widget
+  // below the box must not qualify: a wrong dismissal types a stray character into a
+  // message. Only a line that documents its own dismiss key is dismissable.
+  it('refuses to judge an unfamiliar widget below the box', () => {
+    assert.equal(pickFocusStealer([...box, '❯ some future thing we have never seen']), null);
+  });
+
+  it('is null when there is no composer box to be "below" of', () => {
+    assert.equal(pickFocusStealer(['❯ 1. Resume from summary', '  2. Resume full session']), null);
+  });
+});
+
+// dismissFocusStealer against a real pane. The fixture paints the wedged frame and then
+// reads stdin, so `x` genuinely lands — proving the driver presses the key the chip
+// documents rather than the Enter that only opens the artifact.
+describe('dismissFocusStealer — handing focus back to the composer', () => {
+  const haveTmux = spawnSync('tmux', ['-V'], { encoding: 'utf8' }).status === 0;
+  const started: string[] = [];
+  const rule = '─'.repeat(80);
+
+  const spawnPane = (body: string) => {
+    const sessionId = 'zzfocus' + Math.random().toString(36).slice(2, 8);
+    started.push(sessionId);
+    const saved = process.env.TMUX;
+    delete process.env.TMUX;
+    try {
+      ensureSession({ sessionId, cwd: os.tmpdir(), claudeBin: '/bin/sh', claudeArgs: ['-c', body] });
+    } finally {
+      if (saved !== undefined) process.env.TMUX = saved;
+    }
+    return sessionId;
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 700));
+
+  after(() => {
+    for (const id of started) spawnSync('tmux', ['kill-session', '-t', tmuxPaneName(id)]);
+  });
+
+  // Paints the chip-focused frame, then consumes ONE character (raw mode — the chip's
+  // dismiss key is a bare `x`, never a line) and repaints with focus back in the
+  // composer, the same collapse the real chip does when dismissed.
+  const CHIP = [
+    `printf '${rule}\\n❯ \\n${rule}\\n  mode line\\n❯ \\u29c9  cat-demo · Enter to open · x to dismiss\\n'`,
+    'stty raw -echo',
+    'dd bs=1 count=1 >/dev/null 2>&1',
+    'stty sane',
+    `printf '\\033[2J\\033[H${rule}\\n❯ \\n${rule}\\n  mode line\\n  \\u29c9  cat-demo\\n'`,
+    'sleep 60',
+  ].join('; ');
+
+  it('presses x and reports the chip dismissed once the ❯ is back in the box', { skip: !haveTmux }, async () => {
+    const id = spawnPane(CHIP);
+    await settle();
+    assert.equal(await dismissFocusStealer(id, { timeoutMs: 4_000 }), 'dismissed');
+    assert.equal(readComposerText(id), '', 'the composer must be readable and empty afterwards');
+  });
+
+  it('is a no-op on a pane whose composer already has focus', { skip: !haveTmux }, async () => {
+    const id = spawnPane(`printf '${rule}\\n❯ \\n${rule}\\n  mode line\\n'; read k; sleep 60`);
+    await settle();
+    assert.equal(await dismissFocusStealer(id, { timeoutMs: 2_000 }), 'none');
+  });
+
+  // A pane that never consumes the x. The dismissal fails, and the buffer has to come
+  // back byte-identical — a stray character prepended to the user's next message is its
+  // own corruption.
+  it('backs the x out again when the dismissal does not take', { skip: !haveTmux }, async () => {
+    const id = spawnPane(`stty -echo; printf '${rule}\\n❯ \\n${rule}\\n  mode line\\n❯ \\u29c9  cat-demo · Enter to open · x to dismiss\\n'; sleep 60`);
+    await settle();
+    assert.equal(await dismissFocusStealer(id, { timeoutMs: 1_500 }), 'stuck');
+  });
+
+  it('is a no-op for a session that does not exist', { skip: !haveTmux }, async () => {
+    assert.equal(await dismissFocusStealer('zzfocus-nonexistent-xyz'), 'none');
   });
 });
