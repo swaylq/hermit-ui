@@ -7,17 +7,24 @@
 // typed out a character at a time, so you watch them appear where you are going
 // to send them and the ASR's self-correction happens in place.
 //
-// FINISHING is always the mic button — release it if you are holding it, tap it
-// if you are not. So there is no ✓ here, and the one button there is (cancel)
-// sits on the LEFT: the mic is draggable and this bar is not, so they can
-// overlap, and its default corner is bottom-RIGHT. Overlapping the clock is
-// cosmetic; overlapping a button would not have been.
+// ✓ AND ✕ LIVE HERE, not only on the floating mic, because the mic is not always
+// reachable. It is positioned against `window.innerHeight`, which on iOS does
+// NOT shrink when the on-screen keyboard opens — so a mic parked near the bottom
+// (the default) ends up behind the keyboard: invisible and untappable, which is
+// exactly what people hit. This bar rides in the composer's own stack and moves
+// with it, so a control here is always on screen.
 //
-// A held run can also be cancelled without lifting a finger — slide up off the
-// button, the WeChat idiom — which is why the label says so in that mode.
+// Both sit on the LEFT. The mic is draggable and this bar is not, so they can
+// overlap, and the mic's default corner is bottom-RIGHT — leaving the clock as
+// the only thing it can land on. Overlapping the clock is cosmetic; overlapping
+// the way out of a recording is the bug this exists to fix.
+//
+// The mic still finishes a run too (release it, or tap it), and a held run can
+// be cancelled without lifting a finger by sliding up off the button — the
+// WeChat idiom, which is why the label says so in that mode.
 
 import { memo } from 'react';
-import { X } from 'lucide-react';
+import { Check, Loader2, X } from 'lucide-react';
 import { VoiceWave } from '@/components/chat/voice-wave';
 import type { DictationSource } from '@/components/chat/dictation-dock';
 import { cn } from '@/lib/utils';
@@ -33,6 +40,7 @@ export const DictationBar = memo(function DictationBar({
   status,
   elapsedMs,
   hint,
+  onDone,
   onCancel,
 }: {
   source: DictationSource;
@@ -46,6 +54,7 @@ export const DictationBar = memo(function DictationBar({
   status: DictationStatus;
   elapsedMs: number;
   hint?: string | null;
+  onDone: () => void;
   onCancel: () => void;
 }) {
   const secs = Math.floor(elapsedMs / 1000);
@@ -63,7 +72,7 @@ export const DictationBar = memo(function DictationBar({
     : status === 'offline' ? '实时转写不可用 · 正在录音，松开后转写'
     : silent ? '在听…'
     : source === 'hold' ? '正在识别 · 松手结束，上滑取消'
-    : '正在识别 · 点麦克风结束';
+    : '正在识别';
 
   return (
     // Same container as the composer below it (mx-auto / max-w-3xl / px-3) so the
@@ -86,9 +95,18 @@ export const DictationBar = memo(function DictationBar({
           type="button"
           onClick={onCancel}
           aria-label="取消这次听写"
-          className="relative z-10 -ml-1 flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white"
+          className="relative z-10 -ml-1 flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white active:bg-white/15"
         >
           <X className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onDone}
+          disabled={status === 'finishing'}
+          aria-label="结束听写"
+          className="relative z-10 flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full bg-white/12 text-white transition-colors hover:bg-white/22 active:bg-white/28 disabled:cursor-default disabled:opacity-60"
+        >
+          {status === 'finishing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
         </button>
 
         <span

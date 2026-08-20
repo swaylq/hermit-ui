@@ -18,7 +18,9 @@
 //   'hold' — the mic is still held down. Release finishes, sliding up cancels.
 //   'tap'  — hands-free. Tapping the mic again finishes it.
 // Either way the mic button stays on screen: a button that vanishes mid-press
-// never delivers its pointerup, and a held run would never end.
+// never delivers its pointerup, and a held run would never end. The bar carries
+// its own ✓ and ✕ regardless, because the mic can be hidden behind the iOS
+// keyboard while the bar cannot — see dictation-bar.tsx.
 //
 // DEGRADING, NOT FAILING. There is no separate "old mode" any more, so this has
 // to cover everyone the socket can't serve: no DASHSCOPE_API_KEY, a scoped
@@ -313,6 +315,7 @@ export const DictationDock = forwardRef<DictationHandle, {
       status={status}
       elapsedMs={startedAt ? Date.now() - startedAt : 0}
       hint={hint}
+      onDone={stop}
       onCancel={cancel}
     />
   );
