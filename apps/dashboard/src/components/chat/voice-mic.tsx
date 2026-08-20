@@ -1,61 +1,60 @@
 'use client';
 
-// Draggable floating mic for voice input. Lives inside SessionPane so it can drop
-// the transcript straight into the active chat's composer draft.
+// Draggable floating mic. It has exactly one job now: decide what a press means
+// and hand that to the dictation dock, which owns the mic stream, the socket and
+// the text. There is no second "record it all, upload on release" pipeline any
+// more — every press is realtime dictation, and when realtime can't be had the
+// dock degrades to a recording by itself, invisibly.
 //
-// The button IS the HUD: idle it's a small dark-glass circle with a mic; hold to
-// record and it springs open into a capsule with the aurora waveform flowing
-// INSIDE it (level-reactive), the mic fading out, a pulsing REC dot + timer, and a
-// coloured glow. Release → transcribing sweep → collapse back to a circle.
+// PRESS SEMANTICS. Capture starts on POINTERDOWN, before we know whether this is
+// a tap or a hold, because waiting to find out clips the first syllable. What the
+// release means is decided after the fact:
 //
-// Gesture (pointer events, unified touch/mouse):
-//   · pointerdown  → open the mic IN-GESTURE (a getUserMedia made inside the
-//                    gesture's own call stack is "privileged", which is what buys
-//                    the long no-reprompt window on iOS) and arm the HUD.
-//   · move > 8px within 180 ms → it was a DRAG: abandon the recording, reposition
-//                    the FAB (persisted to localStorage, clamped to the viewport).
-//   · hold ≥ 180 ms (no early move) → locked recording; later moves are ignored.
-//   · pointerup while recording → stop + POST to /api/transcribe → onTranscript.
-//   · a too-short press (< 400 ms) is treated as an accidental tap (hint, no send).
+//   released < PTT_MS   → it was a tap. The run KEEPS GOING, hands-free; tap
+//                         again to finish. (Two taps inside DOUBLE_TAP_MS mean
+//                         the settings popup instead — nobody says anything in
+//                         300 ms, so the run that first tap opened is dropped.)
+//   released ≥ PTT_MS   → it was push-to-talk. The release finishes the run.
+//   slid up ≥ CANCEL_DY → cancel, without lifting a finger (the WeChat idiom).
+//   moved early         → it was a drag. Reposition, and drop the run.
+//
+// The button therefore must NOT disappear while a run is live: a button that
+// unmounts mid-press never delivers its pointerup, and a held run would never
+// end. The bar keeps its own controls clear of it instead (see dictation-bar).
 //
 // NOT-YET-AUTHORIZED touches take a different path (iOS PWAs re-ask constantly —
-// the grant is in-memory and dies ~10 min after capture stops, or on any relaunch):
-// opening the mic on pointerdown would throw the system alert at someone who is
-// merely DRAGGING the button, and the alert then swallows the touch so pointerup
-// never arrives — the old code sat expanded and "recording" with no mic behind it.
-// So when the permission isn't already granted we open nothing on pointerdown; the
-// press becomes an explicit "tap to allow" that fires the request on RELEASE, from
-// its own gesture, with the button staying a circle + spinner until it resolves.
+// the grant is in-memory and dies ~10 min after capture stops, or on any
+// relaunch): opening the mic on pointerdown would throw the system alert at
+// someone who is merely DRAGGING the button, and the alert then swallows the
+// touch so pointerup never arrives. So when the permission isn't already granted
+// we open nothing on pointerdown; the press becomes an explicit "tap to allow"
+// that fires the request on RELEASE, from its own gesture.
 
 import { memo, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Check, Loader2, Mic, XIcon } from 'lucide-react';
-import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
 import {
-  startRecording,
   releaseWarmMic,
   canOpenMicSilently,
   refreshMicPermission,
   requestMicAccess,
-  type VoiceRecorder,
 } from '@/lib/voice-capture';
-import { VoiceWave, type WavePhase } from '@/components/chat/voice-wave';
 import { readMicStyle, writeMicStyle, type MicStyle } from '@/lib/voice-style';
 import { FAB, HOLD_MS, useFabDock } from '@/components/chat/fab-dock';
+import type { DictationSource } from '@/components/chat/dictation-dock';
 import { Dialog, DialogPortal, DialogOverlay } from '@/components/ui/dialog';
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-// 'arming' = waiting on the mic (device opening, or the user answering the
-// permission alert). Deliberately NOT expanded: the capsule means "we are
-// recording you", and showing it before a track exists is the bug this fixes.
-type Phase = 'idle' | 'arming' | 'recording' | 'transcribing' | 'error';
+// 'arming' = waiting on the permission alert. Deliberately not the live look:
+// that means "we are recording you", and showing it before a track exists is a lie.
+type Phase = 'idle' | 'arming' | 'error';
 
-const EXP_MAX = 212; // expanded capsule width ceiling
-const MIN_MS = 400; // shorter press = accidental tap, don't send
-const MAX_MS = 60_000; // recording ceiling
-const SPRING = 'cubic-bezier(0.34, 1.35, 0.5, 1)';
+/** Held longer than this and the release means "done talking". */
+const PTT_MS = 400;
+/** Slide the finger this far up the screen to throw the run away. */
+const CANCEL_DY = 56;
 
 // ── polish style ────────────────────────────────────────────────────────────
 // Which transcription polish this device uses (lib/voice-style.ts — shared with
@@ -69,80 +68,64 @@ const DOUBLE_TAP_MS = 300;
 // after opening are ignored so the dialog survives its own tap-through.
 const OUTSIDE_CLOSE_GRACE_MS = 400;
 const STYLE_OPTIONS: { value: MicStyle; label: string; desc: string }[] = [
-  { value: 'rewrite', label: '改写润色', desc: '修改并重写转写文字，更贴合任务场景的表达习惯（默认）' },
-  { value: 'minimal', label: '保留原话', desc: '尽量保留原始转写，仅纠正错别字、英文拼写和语法问题' },
+  { value: 'rewrite', label: '改写润色', desc: '修改并重写转写文字，更贴合任务场景的表达习惯' },
+  { value: 'minimal', label: '保留原话', desc: '尽量保留原始转写，仅纠正错别字、英文拼写和语法问题（实时听写默认）' },
 ];
 
 // memo: VoiceMic lives inside SessionPane, which re-renders on every SSE
-// streaming tick / poll. Its props (sessionId, hidden boolean, stable
-// onTranscript callback) don't change on those, so without memo it re-ran its
-// whole gesture-setup + canvas-child render body ~4×/sec during a reply for
-// nothing. All dynamic rendering is driven by its own internal state, so memo
-// is behaviour-preserving.
+// streaming tick / poll. Its props don't change on those, so without memo it
+// re-ran its whole gesture-setup body ~4×/sec during a reply for nothing.
 export const VoiceMic = memo(function VoiceMic({
-  sessionId,
   hidden,
-  onTranscript,
-  dictating = false,
+  dictating,
+  cancelArmed,
   onDictate,
+  onDictateStop,
   onDictateCancel,
+  onSlideCancelArm,
 }: {
-  sessionId: string;
   hidden: boolean;
-  onTranscript: (text: string) => void;
-  /** A realtime dictation run is live (the dock owns it; we only show it). */
-  dictating?: boolean;
-  /** Tap = start / finish a dictation run. Absent → taps fall back to the hint. */
-  onDictate?: () => void;
-  /** The tap that started a run turned out to be half a double-tap; undo it. */
-  onDictateCancel?: () => void;
+  /** A run is live (started by this button or still going hands-free). */
+  dictating: boolean;
+  /** The finger has slid up far enough that releasing will cancel. */
+  cancelArmed: boolean;
+  /** Start a run of this kind — or, if one is live, make it that kind. */
+  onDictate: (source: DictationSource) => void;
+  onDictateStop: () => void;
+  onDictateCancel: () => void;
+  /** Report the slide-to-cancel arm state so the bar and button can show it. */
+  onSlideCancelArm: (armed: boolean) => void;
 }) {
-  // Position + dragging belong to the dock now — the mic is one button in a group
-  // that moves together. What stays here is what a PRESS means, which is the part
-  // with all the teeth (record vs drag vs ask-for-permission).
+  // Position + dragging belong to the dock — the mic is one button in a group
+  // that moves together. What stays here is what a PRESS means.
   const dock = useFabDock();
   const [phase, setPhase] = useState<Phase>('idle');
-  const [level, setLevel] = useState(0);
   const [hint, setHint] = useState<string | null>(null);
-  const [startedAt, setStartedAt] = useState(0);
   const [style, setStyle] = useState<MicStyle>('rewrite');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const dialogOpenedAt = useRef(0);
 
-  const recorderRef = useRef<VoiceRecorder | null>(null);
   const g = useRef({
-    mode: 'idle' as 'idle' | 'deciding' | 'recording' | 'dragging',
+    mode: 'idle' as 'idle' | 'deciding' | 'holding' | 'dragging',
     downAt: 0,
-    recAt: 0,
-    px: 0,
     py: 0,
-    fx: 0,
-    fy: 0,
     holdTimer: 0 as unknown as ReturnType<typeof setTimeout>,
     keyArmTimer: 0 as unknown as ReturnType<typeof setTimeout>,
-    armingKey: false, // right-Option held, waiting out the hold delay
-    byKey: false, // current recording was started by the PTT key (not the button)
+    byKey: false, // the live run was started by the push-to-talk key
     needsAuth: false, // this press must ask for permission on release, not record
-    pointerDown: false, // finger/button still down — false means nobody is holding
-    lastTapAt: 0, // time of the previous quick tap — two taps ≤ DOUBLE_TAP_MS opens settings
-    tapHintTimer: 0 as unknown as ReturnType<typeof setTimeout>,
-    tapStartedDictation: false, // the previous tap STARTED a run (so a double-tap may undo it)
+    startedRun: false, // THIS press opened the run (so its release ends it)
+    lastTapAt: 0, // previous quick tap — two inside DOUBLE_TAP_MS opens settings
+    tapStartedRun: false, // …and that previous tap had opened a run, so undo it
   });
-  // pointerdown has to know whether a run is live before React re-renders.
+  // pointerdown must know whether a run is live before React re-renders.
   const dictatingRef = useRef(dictating);
   dictatingRef.current = dictating;
 
-
-  // Release the warm mic on unmount (leaving the chat) so it doesn't linger.
-  useEffect(() => () => { clearTimeout(g.current.tapHintTimer); releaseWarmMic(); }, []);
-
-  // The polish style lives in localStorage — read it once on mount. It only ever
-  // changes through the settings popup on this same button, so no cross-tab sync.
+  useEffect(() => () => { releaseWarmMic(); }, []);
   useEffect(() => { setStyle(readMicStyle()); }, []);
 
-  // Keep the cached permission answer fresh — it expires on its own (iOS drops the
-  // grant ~10 min after capture stops) and pointerdown has to read it synchronously.
-  // Poll slowly + on wake; the query is a local IPC, not a network call.
+  // Keep the cached permission answer fresh — it expires on its own (iOS drops
+  // the grant ~10 min after capture stops) and pointerdown reads it synchronously.
   useEffect(() => {
     void refreshMicPermission();
     const id = setInterval(() => { if (!document.hidden) void refreshMicPermission(); }, 15_000);
@@ -150,87 +133,6 @@ export const VoiceMic = memo(function VoiceMic({
     document.addEventListener('visibilitychange', onVisible);
     return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible); };
   }, []);
-
-  const finishTranscribe = useCallback(
-    async (wav: Blob) => {
-      setPhase('transcribing');
-      try {
-        const fd = new FormData();
-        fd.append('sessionId', sessionId);
-        fd.append('wav', wav, 'voice.wav');
-        fd.append('style', style);
-        const r = await authedFetch('/api/transcribe', { method: 'POST', body: fd });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = (await r.json()) as { text?: string };
-        const text = (data.text || '').trim();
-        if (text) onTranscript(text);
-        setPhase('idle');
-      } catch {
-        setPhase('error');
-        setHint('转写失败，重试');
-        setTimeout(() => { setPhase('idle'); setHint(null); }, 2600);
-      }
-    },
-    [sessionId, onTranscript, style],
-  );
-
-  const stopAndTranscribe = useCallback(async () => {
-    const gg = g.current;
-    gg.byKey = false;
-    gg.mode = 'idle';
-    gg.armingKey = false;
-    clearTimeout(gg.keyArmTimer);
-    const rec = recorderRef.current;
-    recorderRef.current = null;
-    if (!rec) { setPhase('idle'); return; }
-    const tooShort = Date.now() - gg.recAt < MIN_MS;
-    const wav = await rec.stop();
-    setLevel(0);
-    if (tooShort || wav.size <= 44) {
-      setPhase('idle');
-      setHint('长按说话');
-      setTimeout(() => setHint(null), 1500);
-      return;
-    }
-    void finishTranscribe(wav);
-  }, [finishTranscribe]);
-
-  const beginRecording = useCallback(async (maxMs: number = MAX_MS) => {
-    const gg = g.current;
-    try {
-      const rec = await startRecording({
-        onLevel: setLevel,
-        maxMs,
-        onAutoStop: () => { void stopAndTranscribe(); },
-      });
-      // The gesture can be gone by the time the mic opens: a drag took over, the
-      // press was released, or a permission alert swallowed the pointerup. Handing
-      // the recorder over then would leave a HUD nobody can close until the 60 s
-      // cap — so drop it and reset instead.
-      const holderGone = !gg.byKey && !gg.pointerDown;
-      if ((gg.mode !== 'deciding' && gg.mode !== 'recording') || holderGone) {
-        rec.cancel();
-        if (holderGone && gg.mode !== 'idle') { gg.mode = 'idle'; setPhase('idle'); setLevel(0); }
-        return;
-      }
-      recorderRef.current = rec;
-      gg.recAt = Date.now();
-      setStartedAt(Date.now());
-      // Pointer path: the hold timer armed the HUD, this flips it live. The key
-      // path owns its phase (it discards a pre-commit release), so leave it alone
-      // while it's still arming.
-      if (gg.mode === 'recording' && !gg.armingKey) setPhase('recording');
-    } catch (e) {
-      const denied = (e as DOMException)?.name === 'NotAllowedError';
-      setPhase('error');
-      setHint(denied ? '麦克风被拒绝，去系统设置开启' : '麦克风不可用');
-      setTimeout(() => { setPhase('idle'); setHint(null); }, denied ? 3600 : 2600);
-      gg.mode = 'idle';
-      gg.byKey = false;
-      gg.armingKey = false;
-      clearTimeout(gg.keyArmTimer);
-    }
-  }, [stopAndTranscribe]);
 
   // First-run (and post-expiry) authorization: fired from pointerUP so the system
   // alert never lands mid-press. requestMicAccess() runs synchronously inside this
@@ -242,7 +144,7 @@ export const VoiceMic = memo(function VoiceMic({
     requestMicAccess()
       .then(() => {
         setPhase('idle');
-        setHint('已授权 · 按住说话');
+        setHint('已授权 · 再按一下开始说话');
         setTimeout(() => setHint(null), 2400);
       })
       .catch((e: unknown) => {
@@ -254,52 +156,29 @@ export const VoiceMic = memo(function VoiceMic({
       .finally(() => { void refreshMicPermission(); });
   }, []);
 
-  // Desktop push-to-talk: hold RIGHT Option (⌥, code "AltRight") to record — the
-  // same voice key as Keyo. Capture starts on keydown (so the first words aren't
-  // clipped); the ~180 ms arm only decides whether to KEEP it (commit → show the
-  // recording HUD) or discard it. Pressing any OTHER key while arming aborts it —
-  // that's an Option+arrow / Option+delete edit, not talking. Held recording gets
-  // a 5-min cap (a stuck key won't run forever).
+  // Desktop push-to-talk: hold RIGHT Option (⌥). Capture starts on keydown so the
+  // first words aren't clipped; the ~180 ms arm only decides whether to KEEP it.
+  // Pressing any OTHER key while arming aborts it — that's an Option+arrow edit,
+  // not talking.
   useEffect(() => {
     if (isTouchPrimary()) return; // desktop only — touch uses the button
     const KEY = 'AltRight';
     const gg = g.current;
-    const discardKeyPtt = () => {
-      clearTimeout(gg.keyArmTimer);
-      gg.armingKey = false;
-      gg.byKey = false;
-      gg.mode = 'idle';
-      recorderRef.current?.cancel();
-      recorderRef.current = null;
-      setPhase('idle');
-      setLevel(0);
-    };
     const onDown = (e: KeyboardEvent) => {
       if (e.code !== KEY) {
-        // Another key WHILE ARMING (before commit) ⇒ an Option+key shortcut, not
-        // talking — drop the just-opened capture. Once committed we ignore other
-        // keys so a stray keypress can't kill an active recording.
-        if (gg.armingKey) discardKeyPtt();
+        if (gg.byKey && gg.keyArmTimer) { clearTimeout(gg.keyArmTimer); gg.keyArmTimer = 0 as never; gg.byKey = false; onDictateCancel(); }
         return;
       }
       if (e.repeat || hidden || gg.mode !== 'idle' || dictatingRef.current) return;
-      // Reserve the gesture + start capturing NOW (from keydown); the timer commits.
-      gg.armingKey = true;
       gg.byKey = true;
-      gg.mode = 'recording';
-      void beginRecording(300_000);
-      gg.keyArmTimer = setTimeout(() => {
-        if (gg.armingKey && gg.byKey && !hidden) {
-          gg.armingKey = false; // committed
-          setPhase('recording');
-          setHint(null);
-        }
-      }, HOLD_MS);
+      onDictate('hold');
+      gg.keyArmTimer = setTimeout(() => { gg.keyArmTimer = 0 as never; }, HOLD_MS);
     };
     const onUp = (e: KeyboardEvent) => {
       if (e.code !== KEY || !gg.byKey) return;
-      if (gg.armingKey) { discardKeyPtt(); return; } // released before commit → tap, no send
-      void stopAndTranscribe(); // committed → stop + transcribe
+      gg.byKey = false;
+      if (gg.keyArmTimer) { clearTimeout(gg.keyArmTimer); gg.keyArmTimer = 0 as never; onDictateCancel(); return; } // tap, not talk
+      onDictateStop();
     };
     window.addEventListener('keydown', onDown);
     window.addEventListener('keyup', onUp);
@@ -307,113 +186,85 @@ export const VoiceMic = memo(function VoiceMic({
       window.removeEventListener('keydown', onDown);
       window.removeEventListener('keyup', onUp);
     };
-  }, [hidden, beginRecording, stopAndTranscribe]);
+  }, [hidden, onDictate, onDictateStop, onDictateCancel]);
 
   const onPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>) => {
-      if (phase === 'transcribing' || g.current.mode !== 'idle') return;
+      if (phase === 'arming' || g.current.mode !== 'idle') return;
       e.currentTarget.setPointerCapture(e.pointerId);
       const gg = g.current;
       gg.mode = 'deciding';
       gg.downAt = Date.now();
-      gg.pointerDown = true;
-      gg.px = e.clientX;
       gg.py = e.clientY;
+      gg.startedRun = false;
       dock.onDown(e); // the dock decides whether this becomes a group drag
       setHint(null);
-      clearTimeout(gg.tapHintTimer); // a new press cancels a pending tap hint
-      // Open the mic only once the hold is confirmed, so a DRAG never opens it (no
-      // stray mic indicator). Exception: on touch we open on pointerdown — only a
-      // request made inside this gesture is privileged, and that privilege is what
-      // keeps iOS from re-prompting later — and a drag's cancel() releases it.
-      // …unless we aren't authorized yet: then opening here would ask permission of
-      // someone who may only be dragging, so the press becomes a "tap to allow"
-      // handled on release (endGesture) instead.
+
+      // Open the mic NOW unless we'd be asking permission of someone who might
+      // only be dragging. A run already going is being ENDED by this press, not
+      // started, so don't open a second one.
       const touch = isTouchPrimary();
-      // While a dictation run is live the button means one thing only — 结束 —
-      // so no hold-to-record underneath it, and no permission dance either (the
-      // mic is already open and granted).
-      const dict = dictatingRef.current;
-      gg.needsAuth = !dict && touch && !canOpenMicSilently();
-      if (!dict && touch && !gg.needsAuth) void beginRecording();
+      gg.needsAuth = touch && !canOpenMicSilently();
+      if (!gg.needsAuth && !dictatingRef.current) {
+        gg.startedRun = true;
+        onDictate('hold');
+      }
       gg.holdTimer = setTimeout(() => {
         if (gg.mode !== 'deciding') return;
-        if (dict) return; // stay in 'deciding' → the release toggles dictation
-        if (gg.needsAuth) { setHint('松手授权麦克风'); return; } // stay a circle
-        gg.mode = 'recording';
-        // Show the recording capsule only once a track exists — until then it's
-        // 'arming' (circle + spinner), so a pending permission alert can never
-        // leave a fake "recording" HUD on screen.
-        setPhase(recorderRef.current ? 'recording' : 'arming');
-        if (!touch) void beginRecording();
-      }, HOLD_MS);
+        if (gg.needsAuth) { setHint('松手授权麦克风'); return; }
+        gg.mode = 'holding'; // committed to push-to-talk; later moves mean cancel
+      }, PTT_MS);
     },
-    [phase, beginRecording, dock],
+    [phase, dock, onDictate],
   );
 
   const onPointerMove = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>) => {
       const gg = g.current;
       if (gg.mode === 'idle') return;
-      // The dock owns the drag threshold and moves the whole group; it tells us the
-      // moment this press stopped being a press. Everything below is the mic
-      // abandoning the recording it was about to make.
-      const isDrag = dock.onMove(e);
-      if (isDrag && gg.mode !== 'dragging') {
+      if (gg.mode === 'holding') {
+        // Slide up off the button to throw the run away.
+        onSlideCancelArm(gg.py - e.clientY >= CANCEL_DY);
+        return;
+      }
+      // The dock owns the drag threshold and moves the whole group; it tells us
+      // the moment this press stopped being a press.
+      if (dock.onMove(e) && gg.mode !== 'dragging') {
         clearTimeout(gg.holdTimer);
         gg.mode = 'dragging';
         gg.needsAuth = false; // moving the button is not a request to be recorded
-        recorderRef.current?.cancel();
-        recorderRef.current = null;
-        setPhase('idle');
+        if (gg.startedRun) { gg.startedRun = false; onDictateCancel(); }
         setHint(null);
-        setLevel(0);
       }
     },
-    [dock],
+    [dock, onDictateCancel, onSlideCancelArm],
   );
 
-  // A press that never held into a recording (released before HOLD_MS) is a TAP,
-  // and a tap now TOGGLES realtime dictation — start a run, or finish the one
-  // that's going. It fires immediately: waiting out the double-tap window before
-  // the bar appeared would put 300 ms of nothing between the tap and the first
-  // word, which is most of the latency budget this feature was built to spend.
-  //
-  // Double-tap still opens the style settings, and still works, because the tap
-  // that opened a run can be taken back: nobody says anything in 300 ms, so the
-  // second tap cancels the run it just started and opens the popup instead. A
-  // double-tap whose first tap FINISHED a run is not undone that way — those
-  // words are real — so it only opens the popup.
+  // A press released before PTT_MS is a TAP, and a tap LEAVES THE RUN GOING —
+  // hands-free, finish by tapping again. Two taps inside DOUBLE_TAP_MS mean the
+  // settings popup instead, and the run the first one opened is dropped (nobody
+  // says anything in 300 ms, so nothing is lost).
   const onTap = useCallback(() => {
     const gg = g.current;
-    clearTimeout(gg.tapHintTimer);
-    // Touch opens the mic on pointerdown; a sub-400ms press is never a real
-    // recording, so cancel it silently instead of transcribing.
-    const rec = recorderRef.current;
-    recorderRef.current = null;
-    if (rec) { rec.cancel(); setLevel(0); }
     const now = Date.now();
     const isDouble = now - gg.lastTapAt <= DOUBLE_TAP_MS;
+    const startedRun = gg.startedRun;
+    gg.startedRun = false;
     gg.lastTapAt = isDouble ? 0 : now;
-    setPhase('idle');
     if (isDouble) {
-      if (gg.tapStartedDictation) onDictateCancel?.();
-      gg.tapStartedDictation = false;
+      if (startedRun || gg.tapStartedRun) onDictateCancel();
+      gg.tapStartedRun = false;
       setHint(null);
       dialogOpenedAt.current = Date.now();
       setSettingsOpen(true);
       return;
     }
-    if (onDictate) {
-      gg.tapStartedDictation = !dictatingRef.current;
-      onDictate();
-      return;
-    }
-    gg.tapHintTimer = setTimeout(() => {
-      setHint('长按说话');
-      setTimeout(() => setHint(null), 1500);
-    }, DOUBLE_TAP_MS);
-  }, [onDictate, onDictateCancel]);
+    gg.tapStartedRun = startedRun;
+    // This press opened a run → hand it over to hands-free. It didn't → the run
+    // was already going and this tap ends it.
+    if (startedRun) onDictate('tap');
+    else onDictateStop();
+  }, [onDictate, onDictateStop, onDictateCancel]);
 
   const endGesture = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>) => {
@@ -423,47 +274,43 @@ export const VoiceMic = memo(function VoiceMic({
       const mode = gg.mode;
       const needsAuth = gg.needsAuth;
       gg.mode = 'idle';
-      gg.pointerDown = false;
       gg.needsAuth = false;
-      // The dock persists the new position and reports whether this was a drag; a
-      // drag is never also a recording.
-      if (dock.onUp(e) || mode === 'dragging') return;
-      // Unauthorized press → this release IS the permission request (its own
-      // gesture, finger already up, so the alert can't strand the UI).
+      onSlideCancelArm(false);
+      // The dock persists the new position and reports whether this was a drag;
+      // a drag is never also a recording.
+      if (dock.onUp(e) || mode === 'dragging') { gg.startedRun = false; return; }
       if (needsAuth) { authorizeMic(); return; }
-      if (mode === 'recording') { void stopAndTranscribe(); return; }
-      // mode === 'deciding' → a quick tap, never a recording: the first tap of a
-      // double-tap (settings) or an accidental tap (hint). stopAndTranscribe is
-      // deliberately NOT called — its too-short path would flash '长按说话'
-      // immediately and eat the double-tap window.
-      void onTap();
+      if (mode === 'holding') {
+        gg.startedRun = false;
+        if (cancelArmed) onDictateCancel();
+        else onDictateStop();
+        return;
+      }
+      onTap();
     },
-    [stopAndTranscribe, authorizeMic, onTap, dock],
+    [dock, authorizeMic, onTap, onDictateStop, onDictateCancel, onSlideCancelArm, cancelArmed],
   );
 
   // Safety net for a press that never gets its pointerup: the tab going away
-  // mid-recording (iOS backgrounding kills capture anyway — voice-capture drops the
-  // warm mic on hidden). Without this the HUD would sit "recording" until the cap.
+  // mid-run (iOS backgrounding kills capture anyway).
   useEffect(() => {
     const bail = () => {
       if (!document.hidden) return;
       const gg = g.current;
-      if (gg.mode === 'idle' && !recorderRef.current) return;
+      if (gg.mode === 'idle' && !gg.startedRun) return;
       clearTimeout(gg.holdTimer);
-      clearTimeout(gg.tapHintTimer);
       gg.mode = 'idle';
-      gg.pointerDown = false;
       gg.needsAuth = false;
       gg.byKey = false;
-      recorderRef.current?.cancel();
-      recorderRef.current = null;
+      gg.startedRun = false;
+      onDictateStop();
       setPhase('idle');
-      setLevel(0);
       setHint(null);
     };
     document.addEventListener('visibilitychange', bail);
     return () => document.removeEventListener('visibilitychange', bail);
-  }, []);
+  }, [onDictateStop]);
+
   const chooseStyle = useCallback((s: MicStyle) => {
     setStyle(s);
     writeMicStyle(s);
@@ -478,41 +325,22 @@ export const VoiceMic = memo(function VoiceMic({
 
   if (hidden) return null;
 
-  // 'arming' stays a circle on purpose — the capsule is the "you are being
-  // recorded" signal and must not appear before a mic track exists.
-  const arming = phase === 'arming';
-  const active = phase === 'recording' || phase === 'transcribing' || phase === 'error';
-  // The recording capsule grows sideways. The dock is anchored by its LEFT edge, so
-  // a capsule near the right edge has to grow leftwards instead — done with a
-  // negative margin rather than by moving the dock, which would drag the sibling
-  // button along with it.
-  const vw = window.innerWidth;
-  const expW = Math.min(EXP_MAX, vw - 24);
-  const expandsLeft = dock.x + expW + 8 > vw;
-  const width = active ? expW : FAB;
-  const shift = active && expandsLeft ? Math.min(dock.x - 8, expW - FAB) : 0;
-
-  const elapsed = phase === 'recording' && startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
-  const mmss = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
-
+  const live = dictating && phase === 'idle';
   const glow =
-    phase === 'recording'
-      ? '0 10px 34px -4px rgba(79,123,255,0.55), 0 4px 12px -2px rgba(0,0,0,0.5)'
+    cancelArmed
+      ? '0 10px 34px -4px rgba(244,63,94,0.6), 0 4px 12px -2px rgba(0,0,0,0.5)'
+      : live
+      ? '0 10px 34px -4px rgba(56,189,248,0.55), 0 4px 12px -2px rgba(0,0,0,0.5)'
       : phase === 'arming'
       ? '0 8px 26px -6px rgba(129,140,248,0.45), 0 4px 12px -2px rgba(0,0,0,0.5)'
-      : phase === 'transcribing'
-      ? '0 10px 34px -4px rgba(56,189,248,0.5), 0 4px 12px -2px rgba(0,0,0,0.5)'
       : phase === 'error'
       ? '0 10px 34px -4px rgba(244,63,94,0.5), 0 4px 12px -2px rgba(0,0,0,0.5)'
       : '0 6px 20px -6px rgba(0,0,0,0.55)';
 
   return (
     <>
-      <div
-        className="relative"
-        style={{ marginLeft: -shift, transition: dock.dragging ? 'none' : `margin-left 0.42s ${SPRING}` }}
-      >
-        {!active && hint && (
+      <div className="relative">
+        {hint && (
           <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap rounded-full bg-black/75 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
             {hint}
           </div>
@@ -523,51 +351,38 @@ export const VoiceMic = memo(function VoiceMic({
           onPointerMove={onPointerMove}
           onPointerUp={endGesture}
           onPointerCancel={endGesture}
-          aria-label="语音输入（点一下开始实时听写，长按说话，拖动可移位；双击打开设置）"
-          title="点一下实时听写，长按说话，拖动可移位（桌面可按住右 Option 说话；双击打开设置）"
-          className="relative flex items-center justify-center overflow-hidden rounded-full border border-white/10 bg-[#111319]/85 backdrop-blur-xl cursor-pointer"
+          aria-label={live ? '结束听写（上滑取消）' : '语音输入（按住说话，点一下免提听写，拖动可移位；双击打开设置）'}
+          title={live ? '松手或再点一下结束，上滑取消' : '按住说话，点一下免提听写，拖动可移位（桌面可按住右 Option 说话；双击打开设置）'}
+          className={cn(
+            'relative flex items-center justify-center overflow-hidden rounded-full border backdrop-blur-xl cursor-pointer',
+            cancelArmed ? 'border-rose-400/40 bg-[#2a1218]/90' : 'border-white/10 bg-[#111319]/85',
+          )}
           style={{
-            width,
+            width: FAB,
             height: FAB,
             boxShadow: glow,
-            transition: dock.dragging ? 'none' : `width 0.42s ${SPRING}, box-shadow 0.35s ease`,
+            transition: dock.dragging ? 'none' : `box-shadow 0.3s ease, background-color 0.2s ease`,
           }}
         >
-          {active && (
-            <div className="pointer-events-none absolute inset-0">
-              <VoiceWave phase={phase as WavePhase} level={level} />
-            </div>
+          {live && !cancelArmed && (
+            <span className="pointer-events-none absolute inset-0 animate-ping rounded-full border border-sky-300/40" />
           )}
-          <Mic
-            className="pointer-events-none absolute h-5 w-5 text-white/85 transition-all duration-200"
-            style={{
-              opacity: active || arming ? 0 : 1,
-              transform: active || arming ? 'scale(0.5)' : 'scale(1)',
-            }}
-          />
-          {arming && (
+          {phase === 'arming' ? (
             <Loader2 className="pointer-events-none absolute h-5 w-5 animate-spin text-white/85" />
-          )}
-          {phase === 'recording' && (
-            <>
-              <span className="pointer-events-none absolute left-4 h-2 w-2 animate-pulse rounded-full bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.9)]" />
-              <span className="pointer-events-none absolute right-4 text-[11px] font-medium tabular-nums text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
-                {mmss}
-              </span>
-            </>
-          )}
-          {phase === 'transcribing' && (
-            <Loader2 className="pointer-events-none absolute right-4 h-3.5 w-3.5 animate-spin text-white/90" />
-          )}
-          {phase === 'error' && (
-            <span className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] font-medium text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
-              {hint ?? '出错了'}
-            </span>
+          ) : cancelArmed ? (
+            <XIcon className="pointer-events-none absolute h-5 w-5 text-rose-300" />
+          ) : (
+            <Mic
+              className={cn(
+                'pointer-events-none absolute h-5 w-5 transition-colors duration-200',
+                live ? 'text-sky-300' : 'text-white/85',
+              )}
+            />
           )}
         </button>
       </div>
 
-      {/* Double-click the mic → this settings popup. Composed on the base-ui
+      {/* Double-tap the mic → this settings popup. Composed on the base-ui
           primitives directly (not the stock DialogContent) because the dock sits at
           z-[70] and the stock dialog is z-50 — the mic would float above its own
           settings popup. Both overlay and popup get z-[80]. */}
@@ -608,9 +423,7 @@ export const VoiceMic = memo(function VoiceMic({
               })}
             </div>
             <DialogPrimitive.Close
-              render={
-                <Button variant="ghost" className="absolute top-2 right-2" size="icon-sm" />
-              }
+              render={<Button variant="ghost" className="absolute top-2 right-2" size="icon-sm" />}
             >
               <XIcon />
               <span className="sr-only">Close</span>

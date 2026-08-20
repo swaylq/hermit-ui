@@ -37,7 +37,7 @@ import { TypingIndicator } from '@/components/chat/message-bits';
 import { MessageTimeline } from '@/components/chat/message-timeline';
 import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
 import { VoiceMic } from '@/components/chat/voice-mic';
-import { DictationDock, type DictationHandle } from '@/components/chat/dictation-dock';
+import { DictationDock, type DictationHandle, type DictationSource } from '@/components/chat/dictation-dock';
 import { FabDock } from '@/components/chat/fab-dock';
 import { PreviewFab } from '@/components/chat/preview-fab';
 import { LivePreviewPanel, parseLivePreview } from '@/components/chat/preview-panel';
@@ -652,11 +652,12 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // out-of-band writes (empty-state chip, voice transcript, send clear/restore)
   // via this imperative handle — so typing never re-renders SessionPane.
   const composerRef = useRef<ComposerHandle>(null);
-  // Realtime dictation lives in its own dock (above the composer) so its ~4 Hz
-  // partial updates re-render one bar instead of this whole pane. All that
-  // reaches here is a ref to drive it and a boolean for the mic's face.
+  // Realtime dictation lives in its own dock (above the composer) so the text
+  // arriving ~36×/second re-renders the composer's own draft and nothing else.
+  // All that reaches here is a ref to drive it and two booleans the mic draws.
   const dictationRef = useRef<DictationHandle>(null);
   const [dictating, setDictating] = useState(false);
+  const [slideCancelArmed, setSlideCancelArmed] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // Composer notice line: attachment-cap warnings (set in ComposeBar.addFiles) AND
   // send failures (set in onSend's onError) — so a rejected send explains itself
@@ -1320,13 +1321,14 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
   // Voice transcript → APPEND to the current draft (never clobber typed text),
   // then focus + caret-to-end + resize (all handled inside ComposeBar).
-  const insertTranscript = useCallback((text: string) => {
-    composerRef.current?.appendText(text);
-  }, []);
-
   // Stable so the memo'd VoiceMic doesn't get fresh props on every SSE tick.
-  const toggleDictation = useCallback(() => dictationRef.current?.toggle(), []);
+  const startDictation = useCallback((source: DictationSource) => dictationRef.current?.start(source), []);
+  const stopDictation = useCallback(() => dictationRef.current?.stop(), []);
   const cancelDictation = useCallback(() => dictationRef.current?.cancel(), []);
+  const onDictationActive = useCallback((live: boolean) => {
+    setDictating(live);
+    if (!live) setSlideCancelArmed(false);
+  }, []);
 
   // Stable callbacks for the memo'd LoopBar — inline arrows here would give it a
   // fresh prop identity on every SSE tick and defeat the memo. pickPrompt is
@@ -1788,19 +1790,17 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         {(showMicFab || hasLivePreview) && (
           <FabDock count={(showMicFab ? 1 : 0) + (hasLivePreview ? 1 : 0)}>
             {showMicFab && (
+              // Never hidden while a run is live: the button IS the way out of
+              // one (release it, or tap it), and a button that unmounts
+              // mid-press never delivers its pointerup.
               <VoiceMic
-                sessionId={sessionId}
-                // Hidden — not unmounted — for the duration of a run. The FAB is
-                // draggable and the bar is not, so the two WILL overlap at some
-                // position (they did at the default one: the FAB sat on the
-                // bar's ✓). While a run is live the bar is the whole control
-                // surface, and it has both ✓ and ✕. Unmounting instead would run
-                // VoiceMic's cleanup, which releases the warm mic — mid-dictation.
-                hidden={dictating}
-                onTranscript={insertTranscript}
+                hidden={false}
                 dictating={dictating}
-                onDictate={toggleDictation}
+                cancelArmed={slideCancelArmed}
+                onDictate={startDictation}
+                onDictateStop={stopDictation}
                 onDictateCancel={cancelDictation}
+                onSlideCancelArm={setSlideCancelArmed}
               />
             )}
             {/* Below the mic so the mic keeps its stored spot; only exists while
@@ -1864,7 +1864,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             ref={dictationRef}
             sessionId={sessionId}
             composerRef={composerRef}
-            onActiveChange={setDictating}
+            cancelArmed={slideCancelArmed}
+            onActiveChange={onDictationActive}
             onNotice={setComposerNotice}
           />
           <ComposeBar

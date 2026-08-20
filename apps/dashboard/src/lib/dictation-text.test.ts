@@ -82,6 +82,27 @@ test('an edit that deletes part of the dictation is respected, not undone', () =
   assert.equal(draft, '第一句。 第一句。第二句。第三句。');
 });
 
+test('an emptied tail hands back the draft, not the draft plus a separator', () => {
+  // Cancelling a run. The space that was added to hang the dictation off is not
+  // the user's, and must not be left behind.
+  let claim = newClaim();
+  let draft = '先打了几个字';
+  ({ draft, claim } = foldTail(claim, draft, '说的第一句。'));
+  assert.equal(draft, '先打了几个字 说的第一句。');
+  ({ draft, claim } = foldTail(claim, draft, ''));
+  assert.equal(draft, '先打了几个字');
+});
+
+test('dictation can resume after being emptied', () => {
+  let claim = newClaim();
+  let draft = '前缀';
+  ({ draft, claim } = foldTail(claim, draft, '一句。'));
+  ({ draft, claim } = foldTail(claim, draft, ''));
+  assert.equal(draft, '前缀');
+  ({ draft, claim } = foldTail(claim, draft, '重来一句。'));
+  assert.equal(draft, '前缀 重来一句。');
+});
+
 test('folding the same tail twice changes nothing (React may double-invoke)', () => {
   const claim = newClaim();
   const once = foldTail(claim, '基础', '一句。');

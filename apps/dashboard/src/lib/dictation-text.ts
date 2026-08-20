@@ -30,11 +30,18 @@ export function joinSegments(texts: string[]): string {
  */
 export interface DictationClaim {
   base: string | null;
-  tail: string;
+  /**
+   * Exactly what was last written, which is not always `base + tail`: an empty
+   * tail renders as `base` with its separator trimmed, so cancelling a run gives
+   * back the user's own text rather than their text plus a stray space. Storing
+   * what we rendered — rather than recomputing it — is what keeps the
+   * "did the user edit this?" check honest.
+   */
+  rendered: string;
 }
 
 export function newClaim(): DictationClaim {
-  return { base: null, tail: '' };
+  return { base: null, rendered: '' };
 }
 
 /**
@@ -58,11 +65,12 @@ export function foldTail(
   // than materialising a separator the user never asked for.
   if (claim.base === null && !tail) return { draft, claim };
 
-  const intact = claim.base !== null && draft === claim.base + claim.tail;
+  const intact = claim.base !== null && draft === claim.rendered;
   let base = claim.base;
   if (!intact) {
     const head = draft.trimEnd();
     base = head ? `${head} ` : '';
   }
-  return { draft: base! + tail, claim: { base: base!, tail } };
+  const rendered = tail ? base! + tail : base!.trimEnd();
+  return { draft: rendered, claim: { base: base!, rendered } };
 }

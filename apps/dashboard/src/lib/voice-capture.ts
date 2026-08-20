@@ -1,12 +1,12 @@
 'use client';
 
-// Browser mic capture → 16 kHz mono PCM16 WAV, for the voice-input feature.
+// Browser mic capture for voice input: 16 kHz mono PCM16, emitted as it arrives.
 //
 // getUserMedia + a Web Audio ScriptProcessorNode pull raw Float32 PCM off the
-// mic; on stop() we merge + downsample to 16 kHz mono and encode a WAV Blob —
-// exactly what /api/transcribe → OpenRouter/DashScope expects. A live RMS level
-// drives the HUD waveform. ScriptProcessorNode is deprecated but works everywhere
-// including iOS Safari and needs no separate worklet module URL.
+// mic; each block is downsampled to 16 kHz and handed straight to the caller,
+// which streams it to /api/asr. A live RMS level drives the waveform.
+// ScriptProcessorNode is deprecated but works everywhere including iOS Safari
+// and needs no separate worklet module URL.
 //
 // WARM MIC: the mic stream + AudioContext are kept alive for a short while after a
 // recording (WARM_HOLD_MS) and reused by the next one. Opening the mic device
@@ -14,22 +14,9 @@
 // means a rapid second recording starts capturing INSTANTLY. Released on idle or
 // when the tab is hidden (so the mic indicator doesn't linger indefinitely).
 //
-// iOS note: startRecording() MUST be invoked synchronously inside a user gesture
+// iOS note: startStreaming() MUST be invoked synchronously inside a user gesture
 // (the FAB pointerdown / the PTT keydown) so getUserMedia + AudioContext.resume
 // are allowed.
-
-export interface VoiceRecorder {
-  /** Stop capture and resolve the recording as a 16 kHz mono WAV Blob. */
-  stop(): Promise<Blob>;
-  /** Abort capture without producing a Blob (the warm mic is kept for reuse). */
-  cancel(): void;
-}
-
-interface StartOpts {
-  onLevel?: (level: number) => void; // 0..1 RMS envelope, ~ every 85 ms
-  maxMs?: number; // auto-stop ceiling (default 60 s)
-  onAutoStop?: () => void; // fired when maxMs is hit (the widget should then stop())
-}
 
 const TARGET_RATE = 16_000;
 // Keep the mic warm briefly after a recording so a back-to-back recording starts
@@ -196,69 +183,6 @@ async function acquireWarm(): Promise<{ stream: MediaStream; ctx: AudioContext }
     window.addEventListener('pagehide', releaseWarm);
   }
   return warm;
-}
-
-export async function startRecording(opts: StartOpts = {}): Promise<VoiceRecorder> {
-  const { stream, ctx } = await acquireWarm();
-  if (ctx.state === 'suspended') await ctx.resume();
-
-  const source = ctx.createMediaStreamSource(stream);
-  const processor = ctx.createScriptProcessor(4096, 1, 1);
-  // Route processor → muted gain → destination: the graph must reach a
-  // destination for onaudioprocess to fire, but gain 0 avoids mic feedback.
-  const mute = ctx.createGain();
-  mute.gain.value = 0;
-
-  const chunks: Float32Array[] = [];
-  const sourceRate = ctx.sampleRate;
-  let stopped = false;
-
-  const maxMs = opts.maxMs ?? 60_000;
-  const autoTimer = setTimeout(() => { if (!stopped) opts.onAutoStop?.(); }, maxMs);
-
-  processor.onaudioprocess = (e) => {
-    const input = e.inputBuffer.getChannelData(0);
-    chunks.push(new Float32Array(input));
-    if (opts.onLevel) {
-      let sum = 0;
-      for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
-      opts.onLevel(Math.min(1, Math.sqrt(sum / input.length) * 5));
-    }
-  };
-
-  source.connect(processor);
-  processor.connect(mute);
-  mute.connect(ctx.destination);
-
-  // Detach this recording's nodes but KEEP the stream + ctx warm for the next one.
-  const teardown = (keepWarm: boolean) => {
-    stopped = true;
-    clearTimeout(autoTimer);
-    processor.onaudioprocess = null;
-    try {
-      processor.disconnect();
-      mute.disconnect();
-      source.disconnect();
-    } catch {
-      /* already gone */
-    }
-    // A real recording keeps the mic warm for the next one; a cancel (drag /
-    // discard) releases it immediately so the mic indicator doesn't linger.
-    if (keepWarm) scheduleWarmRelease();
-    else releaseWarm();
-  };
-
-  return {
-    async stop() {
-      if (stopped) return new Blob([], { type: 'audio/wav' });
-      teardown(true);
-      const pcm = mergeAndDownsample(chunks, sourceRate, TARGET_RATE);
-      return encodeWav(pcm, TARGET_RATE);
-    },
-    cancel() {
-      if (!stopped) teardown(false);
-    },
-  };
 }
 
 // ── Streaming capture (realtime dictation) ──────────────────────────────────
@@ -428,28 +352,6 @@ export async function startStreaming(opts: StreamOpts): Promise<VoiceStream> {
       fallback = [];
     },
   };
-}
-
-// Concatenate the captured chunks and resample to `to` Hz with a cheap averaging
-// filter (mild anti-alias vs plain decimation). Mono in, mono out.
-function mergeAndDownsample(chunks: Float32Array[], from: number, to: number): Float32Array {
-  const total = chunks.reduce((n, c) => n + c.length, 0);
-  const merged = new Float32Array(total);
-  let off = 0;
-  for (const c of chunks) { merged.set(c, off); off += c.length; }
-  if (from === to || total === 0) return merged;
-
-  const ratio = from / to;
-  const outLen = Math.floor(merged.length / ratio);
-  const out = new Float32Array(outLen);
-  for (let i = 0; i < outLen; i++) {
-    const start = Math.floor(i * ratio);
-    const end = Math.min(merged.length, Math.floor((i + 1) * ratio));
-    let sum = 0;
-    for (let j = start; j < end; j++) sum += merged[j];
-    out[i] = end > start ? sum / (end - start) : merged[start] || 0;
-  }
-  return out;
 }
 
 // Encode mono Float32 PCM as a 16-bit little-endian PCM WAV Blob.
