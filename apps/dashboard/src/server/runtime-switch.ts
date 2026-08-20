@@ -17,20 +17,10 @@
 
 import type { RuntimeChoice } from './runtime-resolve';
 
-/**
- * Harnesses that share one conversation store, so moving between them carries
- * the history rather than abandoning it.
- *
- * Only the two Claude Code drivers qualify: both spawn the same binary against
- * the same session uuid and append to the same transcript file. Every other
- * pair holds ids that are meaningless (pi, prime) or fatal (codex's
- * `thread/resume: no rollout found`) to the other side.
- */
-const CLAUDE_HARNESSES: ReadonlySet<string> = new Set(['claude-tmux', 'claude-sdk']);
-
-function sameConversation(before: string, after: string): boolean {
-  return CLAUDE_HARNESSES.has(before) && CLAUDE_HARNESSES.has(after);
-}
+// One definition, shared with the UI: the sheet has to WARN about losing the
+// running context exactly when this returns false, and the two drifting apart
+// would either scare a user off a lossless move or promise one that is not.
+import { sharesConversation } from '@/lib/runtime-labels';
 
 export type SwitchPlan =
   | { ok: false; reason: string }
@@ -89,7 +79,7 @@ export function planRuntimeSwitch(
     return {
       ok: true,
       restart: true,
-      resetExternalId: !sameConversation(before.runtime, after.runtime),
+      resetExternalId: !sharesConversation(before.runtime, after.runtime),
     };
   }
 

@@ -28,7 +28,7 @@ import { contextWindowFor } from '@/lib/context-window';
 import { BackendPicker } from './backend-picker';
 import { useScope } from '@/lib/use-scope';
 import {
-  runtimeLabel,
+  runtimeLabel, sharesConversation,
 } from '@/lib/runtime-labels';
 import { availableBackends, backendById } from '@/lib/backends';
 import { isPiMode, piModeLabel, PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, type PiMode } from '@/lib/pi-modes';
@@ -112,6 +112,9 @@ export function SessionDetailSheet({
   const shownIsPi = backendById(cfg.data, shownBackend)?.harness === 'pi-rpc';
   const backendLabelOf = (id: string) =>
     availableBackends(cfg.data, id).find((b) => b.id === id)?.label ?? runtimeLabel(id);
+  // A backend id is not a harness — a composed one has an id of its own — and
+  // it is the HARNESS that decides whether a switch keeps the conversation.
+  const harnessOfBackend = (id: string) => backendById(cfg.data, id)?.harness ?? id;
   // A claude session resolves to no mode at all, so when the picker is flipped
   // to pi the mode select opens on what the AGENT would start pi in — the same
   // answer "New chat" would give — rather than snapping to the fleet default.
@@ -160,9 +163,21 @@ export function SessionDetailSheet({
   async function submit() {
     if (!d || !dirty) return;
     const changingBackend = shownBackend !== d.backend.backendId;
+    // The two Claude Code drivers write the same transcript, so moving between
+    // them resumes it rather than abandoning it — the running context comes
+    // along. Saying otherwise would talk a user out of a move that costs
+    // nothing, which is the opposite of what this dialog is for.
+    const keepsContext = changingBackend && sharesConversation(d.backend.runtime, harnessOfBackend(shownBackend));
     const ok = await confirm({
       title: changingBackend ? `Switch to ${backendLabelOf(shownBackend)}?` : `Switch mode to ${piModeLabel(shownMode)}?`,
-      message: (
+      message: keepsContext ? (
+        <>
+          Both are Claude Code on the same conversation, so nothing is lost:{' '}
+          {backendLabelOf(d.backend.backendId)} is stopped and{' '}
+          {backendLabelOf(shownBackend)} resumes the same transcript, with its full history, on the
+          next message.
+        </>
+      ) : (
         <>
           The conversation on this page is kept. What is <em>not</em> kept is the running context:{' '}
           {changingBackend ? backendLabelOf(d.backend.backendId) : 'pi'} is stopped, and the next message starts a fresh

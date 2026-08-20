@@ -453,10 +453,15 @@ export const chatRouter = router({
   // user should not have it change under them the next time the agent's default
   // is edited.
   //
-  // Context does not travel. Each backend keeps its own history (claude's
-  // transcript, pi's session file) and the dashboard keeps the full message
-  // list either way — but the new backend starts the next turn without the old
-  // one's context. The UI says so before it fires.
+  // Context usually does not travel. Each backend keeps its own history
+  // (claude's transcript, pi's session file) and the dashboard keeps the full
+  // message list either way — but the new backend normally starts the next turn
+  // without the old one's context, and the UI says so before it fires.
+  //
+  // The exception is the two Claude Code drivers: claude-tmux and claude-sdk
+  // write the SAME transcript, so a move between them resumes it and the running
+  // context comes along. `sharesConversation` gates both this and the dialog
+  // copy, so they cannot disagree.
   setSessionRuntime: agentProcedure
     .input(
       z.object({

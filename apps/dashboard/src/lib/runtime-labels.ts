@@ -133,3 +133,27 @@ const PANELESS_RUNTIMES: ReadonlySet<string> = new Set([
 export function hasTmuxPane(runtime: string | null | undefined): boolean {
   return !PANELESS_RUNTIMES.has(runtime ?? '');
 }
+
+/**
+ * Harnesses that share one conversation store.
+ *
+ * The two Claude Code drivers spawn the same binary against the same session
+ * uuid and append to the same `~/.claude/projects/<cwd>/<uuid>.jsonl`. So moving
+ * a session between them carries the RUNNING CONTEXT, not just the message list
+ * the dashboard keeps — the new driver resumes the transcript the old one wrote.
+ *
+ * Verified end-to-end in production: a session told a number on claude-tmux,
+ * switched to claude-sdk, recalled it on the next turn.
+ *
+ * Every other pair holds session ids that are meaningless (pi, prime) or fatal
+ * (codex's `thread/resume: no rollout found`) to the other side, so for those
+ * the context genuinely is dropped.
+ */
+const SAME_CONVERSATION: ReadonlySet<string> = new Set(['claude-tmux', 'claude-sdk']);
+
+export function sharesConversation(
+  before: string | null | undefined,
+  after: string | null | undefined,
+): boolean {
+  return SAME_CONVERSATION.has(before ?? '') && SAME_CONVERSATION.has(after ?? '');
+}

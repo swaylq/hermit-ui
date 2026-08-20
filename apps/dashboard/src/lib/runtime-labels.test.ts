@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   RUNTIME_KINDS, CUSTOM_HARNESSES, RUNTIME_BLURB, RUNTIME_NEEDS,
-  runtimeLabel, runtimeShortLabel, runtimeDetail, isCustomHarness, hasTmuxPane,
+  runtimeLabel, runtimeShortLabel, sharesConversation, runtimeDetail, isCustomHarness, hasTmuxPane,
 } from './runtime-labels';
 
 test('every harness has a label, a blurb and an install note', () => {
@@ -90,4 +90,30 @@ test('neither claude harness is user-composable', () => {
 test('the SDK driver has no pane to attach a terminal to', () => {
   assert.equal(hasTmuxPane('claude-sdk'), false);
   assert.equal(hasTmuxPane('claude-tmux'), true);
+});
+
+// The switch dialog warns "the running context is not kept" and the resolver
+// drops the external session id — both gated on this one predicate, so they can
+// never disagree about whether a move is lossless.
+test('only the two claude drivers share a conversation', () => {
+  assert.equal(sharesConversation('claude-tmux', 'claude-sdk'), true);
+  assert.equal(sharesConversation('claude-sdk', 'claude-tmux'), true);
+  // Same harness on both sides is trivially the same conversation.
+  assert.equal(sharesConversation('claude-sdk', 'claude-sdk'), true);
+});
+
+test('every other pair drops the conversation', () => {
+  for (const other of ['pi-rpc', 'prime-rpc', 'codex-exec', 'dsh-exec']) {
+    for (const claude of ['claude-sdk', 'claude-tmux']) {
+      assert.equal(sharesConversation(claude, other), false, `${claude} → ${other}`);
+      assert.equal(sharesConversation(other, claude), false, `${other} → ${claude}`);
+    }
+  }
+  assert.equal(sharesConversation('pi-rpc', 'prime-rpc'), false);
+});
+
+test('an absent or unknown harness never claims to keep context', () => {
+  assert.equal(sharesConversation(null, 'claude-sdk'), false);
+  assert.equal(sharesConversation('claude-sdk', undefined), false);
+  assert.equal(sharesConversation('claude-sdk', 'something-new'), false);
 });
