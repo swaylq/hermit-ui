@@ -13,7 +13,7 @@ import path from 'node:path';
 
 // config.ts exits the process without a key; nothing here talks to the dashboard.
 process.env.ASST_KEY ||= 'test-key-unused';
-const { resolveResumedUuid, robustSubmit } = await import('./chat-runner');
+const { resolveResumedUuid, robustSubmit, tmuxOwnsSession } = await import('./chat-runner');
 type SubmitDeps = Parameters<typeof robustSubmit>[4];
 
 const CWD = '/Users/test/agent';
@@ -231,5 +231,37 @@ describe('robustSubmit', () => {
     });
     assert.equal(await robustSubmit(session, { jsonlPath: jsonlPath() }, 'hi', true, d), 'delivered');
     assert.deepEqual(order, ['wait', 'send:hi']);
+  });
+});
+
+// ── which sessions this file drives ─────────────────────────────────────────
+//
+// The reattach loop runs on every tick and attaches a JSONL tail to any live
+// pane it finds. Once a session can move to a backend that drives ITSELF — and
+// claude-sdk resumes the very same transcript — "there is a pane" stopped being
+// sufficient grounds. A leftover pane is not this file's to watch.
+
+describe('tmuxOwnsSession', () => {
+  it('owns the pane backend, and anything it does not recognise', () => {
+    assert.equal(tmuxOwnsSession({ runtime: 'claude-tmux', runtimeMode: null }), true);
+    assert.equal(tmuxOwnsSession({ runtime: null, runtimeMode: null }), true);
+    assert.equal(tmuxOwnsSession({}), true);
+    // An unknown value must land on the pane path rather than nowhere — the same
+    // fallback runtimeFor itself makes.
+    assert.equal(tmuxOwnsSession({ runtime: 'something-from-the-future' }), true);
+  });
+
+  it('does NOT own a session on any child-process backend', () => {
+    for (const runtime of ['claude-sdk', 'codex-exec', 'dsh-exec', 'prime-rpc']) {
+      assert.equal(tmuxOwnsSession({ runtime, runtimeMode: null }), false, runtime);
+    }
+    assert.equal(tmuxOwnsSession({ runtime: 'pi-rpc', runtimeMode: 'omp' }), false);
+  });
+
+  // The case this exists for: a session that just moved from the pane to the SDK
+  // still HAS its pane for a while. Two watchers on one transcript is the bug.
+  it('releases a session the moment it moves to claude-sdk', () => {
+    assert.equal(tmuxOwnsSession({ runtime: 'claude-tmux' }), true);
+    assert.equal(tmuxOwnsSession({ runtime: 'claude-sdk' }), false);
   });
 });

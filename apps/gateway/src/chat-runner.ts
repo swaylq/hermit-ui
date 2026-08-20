@@ -64,6 +64,20 @@ import { cronOwnedUuids } from './cron-uuids';
 import { buildMcpConfigArg } from './mcp-config';
 export { buildMcpConfigArg };
 
+/**
+ * Does the tmux path own this session?
+ *
+ * The mirror of `runtimeFor()`: every backend it hands a session to drives that
+ * session itself, and what is left over — claude-tmux, or anything
+ * unrecognised — is this file's. Pure and exported because getting it wrong is
+ * invisible: the wrong answer does not throw, it quietly puts a second watcher
+ * on a transcript another backend is already reading, and parks a stale entry in
+ * `sessionStates` for a session this path no longer drives.
+ */
+export function tmuxOwnsSession(s: { runtime?: string | null; runtimeMode?: string | null }): boolean {
+  return runtimeFor(s.runtime, s.runtimeMode) === null;
+}
+
 type PendingMsg = { id: string; sessionId: string; role: string; content: any; createdAt: string };
 type PendingSession = {
   id: string; agentName: string; claudeSessionId: string | null;
@@ -383,6 +397,15 @@ export async function chatTick() {
   const havePending = new Set(payload.messages.map((m) => m.sessionId));
   for (const s of payload.sessions) {
     if (havePending.has(s.id)) continue;
+    // Only sessions this file owns. A session on any other backend reaches here
+    // with a pane that is merely LEFTOVER — most often one that just moved to
+    // claude-sdk, which resumes the very same transcript. Attaching a tail to it
+    // would put two watchers on one file (the runtime keeps its own as a
+    // backstop) and would park a stale entry in sessionStates for a session this
+    // path no longer drives. The leftover pane is not orphaned by the skip: the
+    // claude-sdk runtime kills it before resuming, and the idle reaper's
+    // hibernate kills it either way.
+    if (!tmuxOwnsSession(s)) continue;
     if (sessionStates.has(s.id) || isLocked('setup', s.id)) continue;
     // Don't reattach a session that's mid-restart: chatRestartTick is about to
     // (or is currently) killing its pane. Reattaching here would re-populate
