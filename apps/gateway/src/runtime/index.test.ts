@@ -66,6 +66,32 @@ test('dsh is its own backend and takes no mode', () => {
 test('teardown paths see every engine', () => {
   assert.deepEqual(
     allRuntimes().map((r) => r.kind).sort(),
-    ['codex-exec', 'dsh-exec', 'omp-rpc', 'pi-rpc', 'prime-rpc'],
+    ['claude-sdk', 'codex-exec', 'dsh-exec', 'omp-rpc', 'pi-rpc', 'prime-rpc'],
   );
+});
+
+test('claude-sdk is its own backend and takes no mode', () => {
+  assert.equal(runtimeFor('claude-sdk', null)?.kind, 'claude-sdk');
+  assert.equal(runtimeFor('claude-sdk', 'omp')?.kind, 'claude-sdk');
+  // Singleton, for the same reason the others are: the live-handle map that
+  // owns a session's query object is module state, so two instances would each
+  // see half the fleet.
+  assert.equal(runtimeFor('claude-sdk', null), runtimeFor('claude-sdk', null));
+});
+
+// The pane path is reached by returning null, and it has to STAY reachable:
+// it is the fallback for the one thing the SDK cannot do (outlive the gateway),
+// and a session already running on it must not be silently re-pointed.
+test('claude-tmux still means the inline pane path', () => {
+  assert.equal(runtimeFor('claude-tmux', null), null);
+  assert.equal(runtimeFor(null, null), null);
+  assert.equal(runtimeFor('something-unknown', null), null);
+});
+
+// Both claude backends must be able to hand a session to each other, which
+// only works if they agree on what an external session id IS.
+test('claude-sdk accepts image attachments, the child-process backends do not', () => {
+  assert.equal(runtimeFor('claude-sdk', null)?.acceptsImages, true);
+  assert.ok(!runtimeFor('codex-exec', null)?.acceptsImages);
+  assert.ok(!runtimeFor('pi-rpc', 'omp')?.acceptsImages);
 });

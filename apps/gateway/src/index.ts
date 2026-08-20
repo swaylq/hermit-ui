@@ -31,6 +31,8 @@ import { collectCodexUsage } from './collect/codex-usage';
 import { api } from './api';
 import { tick as cronTick } from './cron-runner';
 import { chatTick, chatCancelTick, chatRestartTick, chatHibernateTick, shutdownChatRunner } from './chat-runner';
+import { shutdownClaudeSdk } from './runtime/claude-sdk';
+import { sdkBucketTick } from './collect/sdk-bucket';
 import { agentRequestTick } from './agent-lifecycle';
 import { machineRequestTick } from './machine-requests';
 import { startLoginBridge } from './login-bridge';
@@ -268,6 +270,11 @@ function loop(fn: () => Promise<void>, ms: number) {
   await pushPlanUsage(); // last — runs after the blocking ccusage scans, not starved by them
 })();
 
+// Hourly, and silent unless Anthropic's paused Agent-SDK billing split comes
+// back. A control request against a session that is already running, so it costs
+// nothing; see collect/sdk-bucket.ts for what it watches and why it has to.
+loop(() => safe('sdk-bucket', sdkBucketTick), 60 * 60_000);
+
 // Persistent outbound control WebSocket to the dashboard for the browser
 // terminal feature. Fires-and-reconnects-forever; no loop needed.
 startControlChannel();
@@ -322,6 +329,10 @@ loop(() => safe('preview-sweep', previewSweepTick), 60 * 60_000); // retire live
 function shutdown(signal: string) {
   console.log(`[gateway] ${signal}, exiting`);
   try { shutdownChatRunner(); } catch {}
+  // Close the SDK children explicitly. They are our subprocesses and would die
+  // with us anyway, but ending each input stream lets the CLI finish its write
+  // and exit cleanly rather than losing the tail of a turn to a broken pipe.
+  try { shutdownClaudeSdk(); } catch {}
   try { shutdownControlChannel(); } catch {}
   process.exit(0);
 }

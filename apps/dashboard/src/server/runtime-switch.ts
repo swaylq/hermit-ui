@@ -17,6 +17,21 @@
 
 import type { RuntimeChoice } from './runtime-resolve';
 
+/**
+ * Harnesses that share one conversation store, so moving between them carries
+ * the history rather than abandoning it.
+ *
+ * Only the two Claude Code drivers qualify: both spawn the same binary against
+ * the same session uuid and append to the same transcript file. Every other
+ * pair holds ids that are meaningless (pi, prime) or fatal (codex's
+ * `thread/resume: no rollout found`) to the other side.
+ */
+const CLAUDE_HARNESSES: ReadonlySet<string> = new Set(['claude-tmux', 'claude-sdk']);
+
+function sameConversation(before: string, after: string): boolean {
+  return CLAUDE_HARNESSES.has(before) && CLAUDE_HARNESSES.has(after);
+}
+
 export type SwitchPlan =
   | { ok: false; reason: string }
   | {
@@ -61,7 +76,22 @@ export function planRuntimeSwitch(
   // moving between them is every bit as much a backend change — different
   // endpoint, different model catalog, and a session id the other side's
   // provider never issued.
-  if (before.backendId !== after.backendId) return { ok: true, restart: true, resetExternalId: true };
+  //
+  // …with one exception, and it is the whole point of shipping two Claude Code
+  // drivers: 'claude-sdk' and 'claude-tmux' are the same binary writing the same
+  // `~/.claude/projects/<cwd>/<uuid>.jsonl`, so the id is not foreign across
+  // that pair — it IS the conversation. Clearing it would answer "change how
+  // this chat is driven" by starting the user a brand-new chat, which is the
+  // opposite of the intent and unrecoverable from the UI. The restart still
+  // happens: the outgoing driver has to let go of the transcript before the
+  // incoming one resumes it.
+  if (before.backendId !== after.backendId) {
+    return {
+      ok: true,
+      restart: true,
+      resetExternalId: !sameConversation(before.runtime, after.runtime),
+    };
+  }
 
   // codex and dsh read the model off these columns like pi does, but neither
   // has a long-lived process to tear down — each turn is its own subprocess,

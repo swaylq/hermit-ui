@@ -5,12 +5,15 @@
 // claude transcript JSONL and forwards new assistant/tool_result rows to
 // the dashboard via /api/sync/chat-message.
 //
-// Why interactive instead of `claude --print -p`:
-//   - Interactive sessions bill against Claude Max's "Interactive" bucket
-//     (large, normal usage), not the "Agent SDK" bucket (small, full API
-//     rates after 2026-06-15). See evolution/lessons.md → L1.
-//   - Slash commands, sub-agents, /compact, plan mode — all work natively.
-//   - Conversation context lives in the pane; no per-turn `--resume` dance.
+// This is the OLDER of the two Claude Code backends and no longer the default.
+// `claude-sdk` (runtime/claude-sdk.ts) drives the same binary on the same login
+// through the Agent SDK; the billing split that made a pane the only affordable
+// option was paused before it took effect (evolution/lessons.md → L1).
+//
+// The pane is kept, and this path stays live, for the one thing it does better:
+// it outlives the gateway process. Sessions reach it by choosing 'claude-tmux'
+// explicitly, or as the fallback if the billing split ever returns.
+// See docs/claude-sdk-runtime-design.md.
 //
 // JSONL is the structured-output source of truth. Tmux capture-pane returns
 // ANSI/box-drawing TUI output which is unparseable; the JSONL transcript at
@@ -20,7 +23,6 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readdirSync, statSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import {
   ensureSession,
   sendKeys,
@@ -46,41 +48,21 @@ import { paneIsWorking, WORK_MARKER_RE, sessionTranscriptPath } from './pane';
 import { extractText, hasToolResult, CcEvent } from './claude-code';
 
 import { runtimeFor, allRuntimes } from './runtime';
+import type { RuntimeImage } from './runtime/types';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
 import { relayImages } from './image-relay';
+import { planAttachments } from './attachments';
 import { describeImage, formatVision } from './vision';
 import { tryAcquire, release, isLocked } from './op-locks';
 import { cronOwnedUuids } from './cron-uuids';
 
-// MCP stub gives the in-pane claude these tools: set_session_title, log_status,
-// attach_image, attach_file. Spawned as a stdio child of `claude --mcp-config <json>`.
-const MCP_STUB_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-stub.cjs');
-
-export function buildMcpConfigArg(chatSessionId: string, isBrain = false): string {
-  const config = {
-    mcpServers: {
-      hermit: {
-        command: 'node',
-        args: [MCP_STUB_PATH],
-        // 4h5m: the `ask` tool blocks until the user clicks a button in the
-        // dashboard; this per-server ceiling sits just ABOVE the stub's own 4h
-        // ASK_MAX_MS so the stub returns a clean "timed out" result before
-        // claude force-kills the tool call (which would error the turn).
-        timeout: 14_700_000,
-        env: {
-          HERMIT_SESSION_ID: chatSessionId,
-          HERMIT_DASHBOARD_URL: DASHBOARD_URL,
-          HERMIT_KEY: ASST_KEY,
-          // The orchestrator ("义脑") session gets HERMIT_BRAIN=1 — the stub then
-          // registers the brain-only cross-agent tools (roster/dispatch/...).
-          ...(isBrain ? { HERMIT_BRAIN: '1' } : {}),
-        },
-      },
-    },
-  };
-  return JSON.stringify(config);
-}
+// The hermit MCP stub's spawn config lives in ./mcp-config now — the claude-sdk
+// runtime needs the same servers object and cannot import this file (it would
+// close an import cycle through ./runtime). Re-exported because cron-runner
+// imports it from here.
+import { buildMcpConfigArg } from './mcp-config';
+export { buildMcpConfigArg };
 
 type PendingMsg = { id: string; sessionId: string; role: string; content: any; createdAt: string };
 type PendingSession = {
@@ -622,6 +604,7 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
           model: session.runtimeModel,
           mode: session.runtimeMode,
           credentialId: session.runtimeCredentialId,
+          isOrchestrator: session.isOrchestrator ?? false,
         },
         (item) => queueSync(state, item),
       );
@@ -634,30 +617,43 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
       if (!oldest) return;
       let text = typeof oldest.content === 'string' ? oldest.content : extractText(oldest.content);
 
-      // Relay + recognise attached images. tmux send-keys can't carry binaries,
+      // Relay attachments into the local cache. What happens to them next
+      // depends on the backend: one that speaks Anthropic content blocks takes
+      // the bytes directly, and one that does not needs a vision pass to turn
+      // each image into prose it CAN carry.
       const relay = await relayImages([oldest.content]);
       if (relay.errors.length > 0) {
-        console.warn(`[chat] pi image relay errors for ${session.id.slice(0, 8)}:`, relay.errors);
+        console.warn(`[chat] ${runtime.kind} image relay errors for ${session.id.slice(0, 8)}:`, relay.errors);
       }
-      if (relay.paths.length > 0) {
-        // Recognise every attachment concurrently — a layout pass runs ~17s, and
-        // three screenshots in one message should not cost a minute of delivery
-        // latency one after another.
-        const described = await Promise.all(
-          relay.paths.map(async (p) => {
-            const desc = await describeImage(p);
-            if (desc.ocr || desc.description) return formatVision(desc, p);
-            return (
-              `[上传的截图已缓存于 ${p}，但图片识别不可用（${desc.error || '未启用图片识别'}）。` +
-              `如需查看内容，请用 describe_image 工具（参数 filePath=${p}）。]`
-            );
-          }),
-        );
-        text = [text, ...described].join('\n\n');
-      }
-      if (!text.trim()) return;
 
-      const ok = await runtime.submit(handle, text, []);
+      let images: RuntimeImage[] = [];
+      if (relay.paths.length > 0) {
+        if (runtime.acceptsImages) {
+          // Native path: images ride along as blocks, everything else keeps the
+          // same per-type instructions the pane gets.
+          const plan = planAttachments(relay.paths, { nativeImages: true });
+          images = plan.images;
+          if (plan.hints.length > 0) text = [text, ...plan.hints].join('\n\n');
+        } else {
+          // Recognise every attachment concurrently — a layout pass runs ~17s, and
+          // three screenshots in one message should not cost a minute of delivery
+          // latency one after another.
+          const described = await Promise.all(
+            relay.paths.map(async (p) => {
+              const desc = await describeImage(p);
+              if (desc.ocr || desc.description) return formatVision(desc, p);
+              return (
+                `[上传的截图已缓存于 ${p}，但图片识别不可用（${desc.error || '未启用图片识别'}）。` +
+                `如需查看内容，请用 describe_image 工具（参数 filePath=${p}）。]`
+              );
+            }),
+          );
+          text = [text, ...described].join('\n\n');
+        }
+      }
+      if (!text.trim() && images.length === 0) return;
+
+      const ok = await runtime.submit(handle, text, images);
       if (ok) await api.ackChatDelivered([oldest.id]).catch(() => {});
     } catch (e) {
       console.error(`[chat] ${runtime.kind} delivery failed for ${session.agentName}:`, e);
@@ -801,87 +797,12 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
       .catch(() => {});
   }
 
-  // Assemble the prompt: user text first, then explicit Read lines for each
-  // cached image so claude consumes them via its Read tool (which is what
-  // pipes the bytes into the context). tmux send-keys can't carry binaries.
+  // Assemble the prompt: user text first, then per-type instructions for each
+  // cached attachment (see ./attachments — a pane carries no binary, so even an
+  // image is named rather than sent).
   const promptParts: string[] = [];
   if (textPart) promptParts.push(textPart);
-  // Archives are binary — Read'ing them is gibberish. Detect by extension and
-  // tell claude to extract via Bash instead, so an uploaded .zip/.tar/.gz is
-  // actually usable. Everything else flows through the normal `Read <path>`.
-  const ARCHIVE_EXTS = new Set(['zip', 'tar', 'gz', 'tgz', 'bz2', 'tbz2', 'xz', 'txz', '7z', 'rar', 'zst']);
-  const isArchive = (p: string) => ARCHIVE_EXTS.has((p.split('.').pop() || '').toLowerCase());
-  // Audio is binary too — Read'ing it is gibberish. Tell claude to transcribe /
-  // inspect it via Bash (whisper for speech, ffmpeg to inspect/convert) instead.
-  const AUDIO_EXTS = new Set(['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac']);
-  const isAudio = (p: string) => AUDIO_EXTS.has((p.split('.').pop() || '').toLowerCase());
-  // Video is binary too, and Claude can't ingest it natively — Read'ing it is
-  // gibberish. Tell claude to inspect with ffprobe, extract frames → Read them as
-  // images, and/or transcribe the audio track via Bash. ffmpeg/ffprobe are on the
-  // macOS agent host.
-  const VIDEO_EXTS = new Set(['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'mpeg', 'mpg', '3gp', 'wmv']);
-  const isVideo = (p: string) => VIDEO_EXTS.has((p.split('.').pop() || '').toLowerCase());
-  // Office docs are binary too (zip+XML for the modern formats) — Read'ing them
-  // is gibberish. Hand claude a per-type "convert via Bash" instruction so an
-  // uploaded .docx/.xlsx/.pptx is actually usable. Tools confirmed on the macOS
-  // agent host: textutil (Word, native) · python3 + pandas/openpyxl (Excel) · unzip.
-  const officeHint = (p: string): string | null => {
-    const e = (p.split('.').pop() || '').toLowerCase();
-    if (e === 'doc' || e === 'docx' || e === 'odt') {
-      return (
-        `An uploaded Word document is at ${p} — it is binary, so do NOT Read it directly. ` +
-        `Get its plain text with \`textutil -convert txt -stdout ${p}\` (macOS built-in).`
-      );
-    }
-    if (e === 'xls' || e === 'xlsx' || e === 'ods') {
-      return (
-        `An uploaded spreadsheet is at ${p} — it is binary, so do NOT Read it directly. ` +
-        `Convert it in Python (pandas + openpyxl are installed): ` +
-        `\`pd.read_excel('${p}', sheet_name=None)\` returns {sheet: DataFrame}; print or write each sheet's \`.to_csv()\`. ` +
-        `Fallback: it is a zip — \`unzip -o ${p} -d /tmp/xlsx\` then read xl/worksheets/*.xml + xl/sharedStrings.xml.`
-      );
-    }
-    if (e === 'ppt' || e === 'pptx' || e === 'odp') {
-      return (
-        `An uploaded presentation is at ${p} — it is binary, so do NOT Read it directly. ` +
-        `Pull the slide text with \`unzip -p ${p} 'ppt/slides/slide*.xml' | sed -E 's/<[^>]+>/ /g'\` ` +
-        `(text lives in <a:t> elements), or use python-pptx if available.`
-      );
-    }
-    return null;
-  };
-  for (const p of relay.paths) {
-    const office = officeHint(p);
-    if (isArchive(p)) {
-      promptParts.push(
-        `An uploaded archive is at ${p} — it is binary, so do NOT Read it directly. ` +
-          `Run \`file ${p}\` to confirm the type, then extract it into a fresh temp directory ` +
-          `(unzip / tar -xf / gunzip / 7z as appropriate) and inspect the extracted files.`,
-      );
-    } else if (isAudio(p)) {
-      promptParts.push(
-        `An uploaded audio file is at ${p} — it is binary, so do NOT Read it directly. ` +
-          `Inspect it with \`ffmpeg -i ${p}\` (format / duration). For speech, transcribe via Bash ` +
-          `with whisper / whisper-cpp if installed (\`command -v whisper whisper-cpp ffmpeg\` first); ` +
-          `if no transcriber is available, tell the user what to install.`,
-      );
-    } else if (isVideo(p)) {
-      promptParts.push(
-        `An uploaded video file is at ${p} — it is binary, so do NOT Read it directly. ` +
-          `First inspect it with \`ffprobe -hide_banner ${p}\` (duration / resolution / streams). ` +
-          `To see the visuals, extract frames into a temp dir and Read those images — e.g. ` +
-          `\`mkdir -p /tmp/vframes && ffmpeg -i ${p} -vf "fps=1,scale=-2:720" /tmp/vframes/f_%03d.jpg\` ` +
-          `(1 fps, 720p — lower the fps for long clips so Read doesn't wedge on too many frames). ` +
-          `For speech, extract the audio (\`ffmpeg -i ${p} -vn -ac 1 /tmp/vaudio.wav\`) and transcribe with ` +
-          `whisper / whisper-cpp if installed (\`command -v ffmpeg ffprobe whisper whisper-cpp\` first); ` +
-          `if no transcriber is available, tell the user what to install.`,
-      );
-    } else if (office) {
-      promptParts.push(office);
-    } else {
-      promptParts.push(`Read ${p}`);
-    }
-  }
+  promptParts.push(...planAttachments(relay.paths, { nativeImages: false }).hints);
   const promptText = promptParts.join('\n\n');
 
   if (!promptText) {

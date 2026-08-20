@@ -22,7 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { tmuxPaneName } from '@hermit-ui/tmux-driver';
+import { tmuxPaneName, parseClaudeSessionIdArg } from '@hermit-ui/tmux-driver';
 import { AGENTS_ROOT } from '../config';
 import { api } from '../api';
 import { sessionActivity, sessionTranscriptPath } from '../pane';
@@ -295,6 +295,39 @@ async function probe(
 
   if (!tp) return { ...empty, alive, pid, state: 'starting', rssMb };
 
+  const t = await readTranscriptState(tp, lines);
+  return {
+    sessionId, pid, alive, state,
+    contextTokens: t.contextTokens,
+    outputTokens: t.outputTokens,
+    lastActivity: t.lastActivity,
+    transcriptPath: tp,
+    lastUserPrompt: t.lastUserPrompt,
+    lastAssistantText: t.lastAssistantText,
+    loopState,
+    rssMb,
+  };
+}
+
+/**
+ * Everything a snapshot reads out of the transcript itself.
+ *
+ * Split out of `probe` because it is backend-INDEPENDENT: the claude-sdk
+ * backend writes the same `~/.claude/projects/<cwd>/<uuid>.jsonl` the pane does,
+ * so a session driven through the SDK deserves the same context bar, the same
+ * last-message previews and the same activity clock rather than the reduced
+ * runtime-only view the child-process backends get. Only liveness differs, and
+ * that is the caller's job.
+ */
+type TranscriptState = {
+  lastActivity: string | null;
+  contextTokens: number | null;
+  outputTokens: number | null;
+  lastUserPrompt: string | null;
+  lastAssistantText: string | null;
+};
+
+async function readTranscriptState(tp: string, lines: string[]): Promise<TranscriptState> {
   let lastActivityMs = 0;
   let contextTokens: number | null = null;
   let outputTokens: number | null = null;
@@ -312,8 +345,14 @@ async function probe(
     }
     if (contextTokens == null && ev.type === CcEvent.assistant && ev.message?.usage) {
       const u = ev.message.usage;
-      contextTokens = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-      outputTokens = u.output_tokens || 0;
+      const ctx = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+      // Skip a zeroed usage rather than reporting it. Claude Code answers
+      // `/context`, `/status` and friends locally and writes them to the
+      // transcript as assistant records whose usage is all zeros — and this
+      // scan is newest-first, so one of those at the tail used to pin the
+      // context bar to 0 for a session that is nowhere near empty. No real
+      // model call has a zero prompt.
+      if (ctx > 0) { contextTokens = ctx; outputTokens = u.output_tokens || 0; }
     }
     // A compact (manual /compact or auto-compact when the window fills) resets
     // the context. Claude Code records the post-compact size on the boundary
@@ -324,7 +363,7 @@ async function probe(
     // `contextTokens == null` guard + newest-first means whichever is more
     // recent wins: a post-compact turn's usage, or the boundary itself.
     if (contextTokens == null && ev.type === 'system' && ev.subtype === 'compact_boundary') {
-      const post = ev.compactMetadata?.postTokens;
+      const post = ev.compactMetadata?.postTokens ?? ev.compact_metadata?.post_tokens;
       if (typeof post === 'number' && post > 0) contextTokens = post;
     }
     if (lastAssistant == null && ev.type === CcEvent.assistant && ev.message?.content) {
@@ -345,19 +384,102 @@ async function probe(
   }
 
   return {
-    sessionId,
-    pid,
-    alive,
-    state,
+    lastActivity: lastActivityMs > 0 ? new Date(lastActivityMs).toISOString() : null,
     contextTokens,
     outputTokens,
-    lastActivity: lastActivityMs > 0 ? new Date(lastActivityMs).toISOString() : null,
-    transcriptPath: tp,
     lastUserPrompt: lastUser,
     lastAssistantText: lastAssistant,
-    loopState,
-    rssMb,
   };
+}
+
+/**
+ * Snapshot for a claude-sdk session.
+ *
+ * The middle ground between the two probes that already exist, and the reason
+ * it is worth its own function: liveness comes from the runtime (there is no
+ * pane to capture and no mode line to scrape), but EVERYTHING else comes from
+ * the transcript, exactly as it does for a pane. A session driven through the
+ * SDK therefore shows the same context bar, message previews and activity clock
+ * it showed on tmux — the child-process backends' reduced view would have been
+ * a visible downgrade for what is meant to be the same product.
+ */
+export async function probeClaudeSdk(
+  runtime: NonNullable<ReturnType<typeof runtimeFor>>,
+  sessionId: string,
+  agentName: string,
+  agentDirectory: string | null,
+  claudeSessionId: string | null,
+  psTree: PsTree,
+  pidByUuid: Map<string, number>,
+): Promise<SessionSnapshot> {
+  const agentDir = agentDirectory ?? path.join(AGENTS_ROOT, agentName);
+  const loopState = readLoopState(agentDir);
+  const base: SessionSnapshot = {
+    sessionId, pid: null, alive: false, state: null,
+    contextTokens: null, outputTokens: null, lastActivity: null,
+    transcriptPath: null, lastUserPrompt: null, lastAssistantText: null,
+    loopState, rssMb: null,
+  };
+
+  const handle = { sessionId, externalSessionId: claudeSessionId ?? '' };
+  const usage = await runtime.usage(handle);
+  // usage() returns null exactly when there is no live handle — an idle-but-open
+  // or hibernated session, which is "not alive" rather than an error.
+  const alive = usage !== null;
+  const working = alive ? await runtime.isWorking(handle) : false;
+
+  const tp = claudeSessionId ? transcriptPath(claudeSessionId, agentDir) : null;
+  if (!tp) {
+    return { ...base, alive, state: alive ? 'starting' : null };
+  }
+
+  const [lines, stored] = await Promise.all([
+    tailLines(tp),
+    alive ? Promise.resolve(null) : (runtime.storedUsage?.(handle) ?? Promise.resolve(null)),
+  ]);
+  const t = await readTranscriptState(tp, lines);
+
+  // The SDK child is a gateway subprocess, so its RSS is findable the same way
+  // the pane's was — by the session uuid on its argv. Resource governance ranks
+  // on this; leaving it null would make every SDK session look free.
+  const pid = claudeSessionId ? pidByUuid.get(claudeSessionId) ?? null : null;
+
+  return {
+    ...base,
+    alive,
+    pid,
+    state: alive ? (working ? 'working' : 'idle') : null,
+    contextTokens: t.contextTokens ?? usage?.contextTokens ?? stored?.contextTokens ?? null,
+    outputTokens: t.outputTokens ?? usage?.outputTokens ?? stored?.outputTokens ?? null,
+    lastActivity: t.lastActivity,
+    transcriptPath: tp,
+    lastUserPrompt: t.lastUserPrompt,
+    lastAssistantText: t.lastAssistantText,
+    rssMb: pid != null ? subtreeRssMb(pid, psTree) : null,
+  };
+}
+
+/**
+ * claude session uuid → pid, for the Claude Code processes this gateway spawned
+ * through the SDK.
+ *
+ * The SDK puts the session on the child's command line (`--session-id` for a
+ * fresh one, `--resume` for a woken one), which is the same ground truth the
+ * pane path reads with `paneClaudeSessionId`. One `ps` per tick for the whole
+ * fleet, not one per session.
+ */
+async function collectSdkPids(): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  const out = await run('ps', ['-axww', '-o', 'pid=,command=']);
+  if (out == null) return map;
+  for (const line of out.split('\n')) {
+    const m = line.trim().match(/^(\d+)\s+(.*)$/);
+    if (!m) continue;
+    if (!/\bclaude\b/.test(m[2])) continue;
+    const uuid = parseClaudeSessionIdArg(m[2]);
+    if (uuid && !map.has(uuid)) map.set(uuid, Number(m[1]));
+  }
+  return map;
 }
 
 export async function collectSessionSnapshots(): Promise<SessionSnapshot[]> {
@@ -377,6 +499,9 @@ export async function collectSessionSnapshots(): Promise<SessionSnapshot[]> {
   // One ps snapshot for the whole tick → every session's pane-subtree RSS is
   // summed from the same map (no per-session ps fork).
   const psTree = await collectPsTree();
+  // Only paid for when a claude-sdk session is actually present.
+  const needSdkPids = pending.sessions.some((s) => s.runtime === 'claude-sdk');
+  const sdkPids = needSdkPids ? await collectSdkPids() : new Map<string, number>();
   const settled = await Promise.allSettled(
     pending.sessions.map((s) => {
       // The MODE is not optional here. It is what picks the engine, and each
@@ -384,6 +509,11 @@ export async function collectSessionSnapshots(): Promise<SessionSnapshot[]> {
       // pi's runtime finds no handle, reads no usage, and the session shows a
       // blank context bar forever while its child is perfectly healthy.
       const runtime = runtimeFor(s.runtime, s.runtimeMode);
+      if (runtime?.kind === 'claude-sdk') {
+        return probeClaudeSdk(
+          runtime, s.id, s.agentName, s.agentDirectory, s.claudeSessionId, psTree, sdkPids,
+        );
+      }
       return runtime
         ? probeRuntime(runtime, s.id, s.agentName, s.agentDirectory, s.claudeSessionId)
         : probe(s.id, s.agentName, s.agentDirectory, s.claudeSessionId, psTree);

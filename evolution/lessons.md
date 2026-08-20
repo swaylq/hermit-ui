@@ -6,13 +6,44 @@ Format: title in `##`, then **What failed** / **Why** / **How to avoid**, ≤8 l
 
 ---
 
-## L1 — `claude -p` falls in Agent SDK billing bucket starting 2026-06-15
+## L1 — the Agent SDK billing split was announced, then PAUSED (superseded 2026-08-21)
 
-**What failed:** v1 gateway routed every chat turn through `claude --print -p`. Quota would have blown through Max-20x's $200/mo SDK cap once multi-agent traffic ramped.
+**The original lesson (2026-06-15), kept because the reasoning still matters:**
+the v1 gateway routed every chat turn through `claude --print -p`. Anthropic had
+announced on 2026-05-13 that from 2026-06-15 Max would split into two buckets —
+Interactive (claude.ai, terminal `claude`, IDE) vs Agent SDK (`-p`, the SDK, GH
+Actions, third-party apps) — with the second priced at full API rates against a
+much smaller cap. Quota would have blown through the Max-20x SDK cap once
+multi-agent traffic ramped. The fix was to drive interactive `claude` in a tmux
+pane and read the JSONL transcript for structured output.
 
-**Why:** Anthropic split Max into two buckets — Interactive (claude.ai chat, terminal `claude`, IDE) vs Agent SDK (`-p` flag, SDK, GH Actions). `-p` lands in the smaller bucket priced at full API rates.
+**What is true now:** Anthropic **paused that change on the day it was due to
+take effect**. Agent SDK and `claude -p` usage draws on the ordinary
+subscription limits again. Verified on this fleet's own account on 2026-08-21,
+not taken from the announcement: an SDK turn reports `apiKeySource: none`,
+`subscriptionType: Claude Max`, and the SAME `five_hour` / `seven_day`
+utilisation windows an interactive session reports, with the would-be SDK bucket
+(`seven_day_oauth_apps`) null.
 
-**How to avoid:** Run `claude` interactively inside a tmux pane and drive it via `tmux send-keys`. JSONL transcript under `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` provides the structured events; never parse the TUI capture-pane output (ANSI hell). See `skills/tmux-claude-driver.md` for the working pattern.
+**So the constraint this lesson existed to enforce is gone**, and with it the
+reason the tmux path was load-bearing. `claude-sdk` is now the default backend —
+same binary, same login, same transcript, reached through the supported
+programmatic interface instead of by typing into a terminal UI. See
+`docs/claude-sdk-runtime-design.md`.
+
+**How to avoid re-learning this the expensive way:** paused is not cancelled, and
+the failure mode if it returns is silent — nothing breaks, the fleet just starts
+spending a metered credit and the first symptom is a bill. So it is watched
+rather than remembered: `apps/gateway/src/collect/sdk-bucket.ts` re-reads the
+plan's rate-limit windows hourly (a control request against a session that is
+already running — no tokens) and alerts the moment a `*_oauth_apps` window
+becomes populated. If that fires, switch agents back to `claude-tmux` — the
+backend is kept for exactly this, and the switch preserves the conversation.
+
+**The wider lesson:** this entry sat unchallenged for two months and shaped a
+whole architecture around a vendor policy that had already been withdrawn. A
+lesson that encodes someone else's pricing decision needs an expiry check, not
+just a write-up — preferably an automated one.
 
 ---
 

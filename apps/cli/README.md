@@ -96,7 +96,7 @@ Earlier versions (≤ v0.1.x) bridged the agent to **Telegram** — `npx create-
 - No bot token gymnastics, no Telegram API rate limits.
 - Image upload / inline rendering / multi-session chat all work natively.
 - Long-running tmux session per chat means slash commands, sub-agents, `/compact`, plan mode — every Claude Code feature is available, not just the subset Telegram's plugin exposed.
-- Chat traffic bills against Claude Max's Interactive bucket (the large one), not the Agent SDK bucket — see hermit-ui's `evolution/lessons.md` L1 for the math.
+- Chat traffic draws on the ordinary Claude Max subscription windows. The Agent-SDK billing split announced for 2026-06-15 was paused before it took effect — see hermit-ui's `evolution/lessons.md` L1, and `docs/claude-sdk-runtime-design.md` for how it is monitored.
 
 If you need Telegram, stay on v0.1.x or pin `create-hermit-agent@0.1`.
 

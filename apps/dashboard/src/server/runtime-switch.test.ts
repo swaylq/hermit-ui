@@ -170,3 +170,56 @@ test('a prime session restarts for a new model and keeps its session id', () => 
     { ok: true, restart: false, resetExternalId: false },
   );
 });
+
+// ── moving between the two Claude Code drivers ──────────────────────────────
+//
+// 'claude-sdk' and 'claude-tmux' are the same binary writing the same
+// `~/.claude/projects/<cwd>/<uuid>.jsonl`. That makes them the one pair where
+// the shared external-id column is NOT foreign across a switch — it is the
+// conversation itself.
+
+const cc = (harness: string) => ({
+  backendId: harness, runtime: harness, runtimeCredentialId: null,
+  runtimeProvider: null, runtimeModel: null, runtimeMode: null,
+});
+
+test('switching between the two claude drivers KEEPS the conversation', () => {
+  // Clearing the id here would answer "change how this chat is driven" by
+  // starting the user a brand-new chat — unrecoverable from the UI, and the
+  // exact opposite of the intent.
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, cc('claude-tmux'), cc('claude-sdk')),
+    { ok: true, restart: true, resetExternalId: false },
+  );
+  // …and back, so the move is reversible rather than a one-way door.
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, cc('claude-sdk'), cc('claude-tmux')),
+    { ok: true, restart: true, resetExternalId: false },
+  );
+});
+
+// The restart is still required: the outgoing driver has to let go of the
+// transcript before the incoming one resumes it, or two Claude Codes end up
+// appending to one file.
+test('the claude↔claude switch still tears the old driver down', () => {
+  const plan = planRuntimeSwitch({ state: 'idle' }, cc('claude-tmux'), cc('claude-sdk'));
+  assert.equal(plan.ok && plan.restart, true);
+});
+
+test('leaving claude for another harness still drops the id', () => {
+  for (const other of ['pi-rpc', 'prime-rpc', 'codex-exec', 'dsh-exec']) {
+    for (const mine of ['claude-sdk', 'claude-tmux']) {
+      const out = planRuntimeSwitch({ state: 'idle' }, cc(mine), cc(other));
+      assert.equal(out.ok && out.resetExternalId, true, `${mine} → ${other}`);
+      const back = planRuntimeSwitch({ state: 'idle' }, cc(other), cc(mine));
+      assert.equal(back.ok && back.resetExternalId, true, `${other} → ${mine}`);
+    }
+  }
+});
+
+test('a mid-turn session refuses the switch on either claude driver', () => {
+  assert.equal(
+    planRuntimeSwitch({ state: 'working' }, cc('claude-tmux'), cc('claude-sdk')).ok,
+    false,
+  );
+});

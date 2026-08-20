@@ -72,8 +72,16 @@ export type Backend = {
   mode: string | null;
 };
 
-/** The floor. Needs no per-machine setup, so it is what an empty config means. */
-export const DEFAULT_BACKEND_ID = 'claude-tmux';
+/**
+ * The floor. Needs no per-machine setup, so it is what an empty config means.
+ *
+ * Was 'claude-tmux' until the Agent SDK stopped being billed separately
+ * (evolution/lessons.md → L1). Same binary and same login either way, so the
+ * default should be the driver that does not have to guess at a terminal UI. A
+ * session already running on the pane keeps it — this is only what an unstated
+ * preference resolves to.
+ */
+export const DEFAULT_BACKEND_ID = 'claude-sdk';
 
 /**
  * The two that ship enabled.
@@ -85,7 +93,16 @@ export const DEFAULT_BACKEND_ID = 'claude-tmux';
  */
 export const BUILT_IN_BACKENDS: Backend[] = [
   {
-    id: 'claude-tmux', harness: 'claude-tmux', label: 'Claude Code',
+    id: 'claude-sdk', harness: 'claude-sdk', label: 'Claude Code',
+    blurb: RUNTIME_BLURB['claude-sdk'], builtIn: true,
+    credentialId: null, model: null, mode: null,
+  },
+  {
+    // The same Claude Code, driven through a pane. A separate card rather than
+    // a hidden setting because it is a real trade-off a user may want to make:
+    // an attachable terminal and a session that survives a gateway restart, at
+    // the cost of everything in docs/claude-sdk-runtime-design.md.
+    id: 'claude-tmux', harness: 'claude-tmux', label: 'Claude Code (tmux)',
     blurb: RUNTIME_BLURB['claude-tmux'], builtIn: true,
     credentialId: null, model: null, mode: null,
   },

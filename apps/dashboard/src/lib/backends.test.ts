@@ -15,19 +15,23 @@ const PI: BackendsConfig = {
   ],
 };
 
-// The resting state of a machine nobody has configured: two subscription
-// backends, both on. Not "everything this build knows about" — pi and prime
+// The resting state of a machine nobody has configured: the subscription
+// backends, all on. Not "everything this build knows about" — pi and prime
 // cannot start without a credential, so offering them would be a lie.
-test('an unconfigured machine offers exactly the two built-ins', () => {
-  assert.deepEqual(listBackends(null).map((b) => b.id), ['claude-tmux', 'codex-exec']);
-  assert.deepEqual(availableBackends(null).map((b) => b.id), ['claude-tmux', 'codex-exec']);
+//
+// Three, not two: the two Claude Code drivers are separate cards because the
+// choice between them is a real trade-off (see lib/backends.ts), and both
+// authenticate as themselves, so neither needs a credential.
+test('an unconfigured machine offers exactly the built-ins', () => {
+  assert.deepEqual(listBackends(null).map((b) => b.id), ['claude-sdk', 'claude-tmux', 'codex-exec']);
+  assert.deepEqual(availableBackends(null).map((b) => b.id), ['claude-sdk', 'claude-tmux', 'codex-exec']);
   assert.equal(BUILT_IN_BACKENDS.every((b) => b.builtIn && b.credentialId === null), true);
 });
 
 test('composed backends join the list after the built-ins', () => {
   assert.deepEqual(
     listBackends(PI).map((b) => b.id),
-    ['claude-tmux', 'codex-exec', 'pi-hyqubit', 'prime-kimi'],
+    ['claude-sdk', 'claude-tmux', 'codex-exec', 'pi-hyqubit', 'prime-kimi'],
   );
 });
 
@@ -66,8 +70,8 @@ test('a disabled backend is hidden, unless it is the one in hand', () => {
 });
 
 // It looks like a gap in "never misrepresent what is running" and is not: the
-// resolver has already moved such a session to the floor, so claude-tmux is
-// what its next message really starts on.
+// resolver has already moved such a session to the floor, so the floor backend
+// is what its next message really starts on.
 test('a DELETED backend gets no card', () => {
   const gone = removeBackendInstance(PI, 'pi-hyqubit');
   assert.equal(availableBackends(gone, 'pi-hyqubit').some((b) => b.id === 'pi-hyqubit'), false);
@@ -76,7 +80,7 @@ test('a DELETED backend gets no card', () => {
 
 test('the picker is never empty, whatever is switched off', () => {
   let cfg: BackendsConfig | null = PI;
-  for (const id of ['claude-tmux', 'codex-exec', 'pi-hyqubit', 'prime-kimi']) {
+  for (const id of ['claude-sdk', 'claude-tmux', 'codex-exec', 'pi-hyqubit', 'prime-kimi']) {
     const next = toggleBackend(cfg, id, false);
     if (next) cfg = next;
   }
@@ -86,6 +90,7 @@ test('the picker is never empty, whatever is switched off', () => {
 
 test('disabling everything is refused', () => {
   let cfg: BackendsConfig | null = { disabled: [], instances: [] };
+  cfg = toggleBackend(cfg, 'claude-sdk', false)!;
   cfg = toggleBackend(cfg, 'claude-tmux', false)!;
   assert.equal(toggleBackend(cfg, 'codex-exec', false), null);
 });
@@ -94,11 +99,18 @@ test('disabling everything is refused', () => {
 
 test('a default the machine cannot run falls through to one it can', () => {
   const off = toggleBackend(PI, 'pi-hyqubit', false)!;
-  assert.equal(effectiveDefaultBackendId('pi-hyqubit', off), 'claude-tmux');
+  assert.equal(effectiveDefaultBackendId('pi-hyqubit', off), 'claude-sdk');
   assert.equal(effectiveDefaultBackendId('prime-kimi', PI), 'prime-kimi');
   // A legacy bare harness resolves through to the instance, not to the floor.
   assert.equal(effectiveDefaultBackendId('pi-rpc', PI), 'pi-hyqubit');
-  assert.equal(effectiveDefaultBackendId(null, PI), 'claude-tmux');
+  assert.equal(effectiveDefaultBackendId(null, PI), 'claude-sdk');
+});
+
+// Switching the SDK driver off leaves the pane one, which is the substitution
+// the fleet actually wants: the same product, not a different vendor.
+test('with the SDK driver off, the floor is the pane driver', () => {
+  const off = toggleBackend({ disabled: [], instances: [] }, 'claude-sdk', false)!;
+  assert.equal(effectiveDefaultBackendId(null, off), 'claude-tmux');
 });
 
 // ── mutation helpers ────────────────────────────────────────────────────────

@@ -67,3 +67,27 @@ test('an unknown or absent runtime keeps the pane answer, as the gateway does', 
 test('every harness is accounted for', () => {
   assert.equal(RUNTIME_KINDS.filter((k) => hasTmuxPane(k)).length, 1);
 });
+
+// Both drivers are Claude Code, and both must say so — the header chip, the
+// picker and the session sheet all read these. They must also be tellable
+// apart, or a user cannot see which one a session is on.
+test('both claude harnesses are labelled as Claude Code, distinguishably', () => {
+  assert.equal(runtimeLabel('claude-sdk'), 'Claude Code');
+  assert.equal(runtimeLabel('claude-tmux'), 'Claude Code (tmux)');
+  assert.equal(runtimeShortLabel('claude-sdk'), 'Claude');
+  assert.equal(runtimeShortLabel('claude-tmux'), 'Claude');
+  assert.notEqual(runtimeLabel('claude-sdk'), runtimeLabel('claude-tmux'));
+});
+
+// Neither takes a credential: each authenticates as itself against this
+// machine's subscription, so offering "Claude Code + hyqubit" would offer
+// something that does not exist.
+test('neither claude harness is user-composable', () => {
+  assert.equal(isCustomHarness('claude-sdk'), false);
+  assert.equal(isCustomHarness('claude-tmux'), false);
+});
+
+test('the SDK driver has no pane to attach a terminal to', () => {
+  assert.equal(hasTmuxPane('claude-sdk'), false);
+  assert.equal(hasTmuxPane('claude-tmux'), true);
+});

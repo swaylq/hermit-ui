@@ -69,6 +69,9 @@ side. The typed API maps onto what `chat-runner` currently does by hand:
 `chat-runner.ts`'s header records that interactive `claude` bills against Claude
 Max's *Interactive* bucket, while the Agent SDK path bills against a much
 smaller *Agent SDK* bucket at full API rates (evolution/lessons.md → L1).
+**Superseded 2026-08-21:** that split was paused before it took effect, so the
+Agent SDK draws on the same subscription windows — see
+`docs/claude-sdk-runtime-design.md`. The paragraph is kept for the history.
 Driving Claude Code programmatically would move every existing agent onto the
 expensive meter. So the tmux path is not legacy to be cleaned up — it is load-
 bearing, and this design leaves it alone.

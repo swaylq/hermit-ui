@@ -4,6 +4,7 @@ import { OmpRpcRuntime } from './omp-rpc';
 import { PrimeRpcRuntime } from './prime-rpc';
 import { CodexExecRuntime } from './codex-exec';
 import { DshExecRuntime } from './dsh-exec';
+import { ClaudeSdkRuntime } from './claude-sdk';
 import { resolveMode } from './pi-modes';
 
 const piRuntime = new PiRpcRuntime();
@@ -11,14 +12,21 @@ const ompRuntime = new OmpRpcRuntime();
 const primeRuntime = new PrimeRpcRuntime();
 const codexRuntime = new CodexExecRuntime();
 const dshRuntime = new DshExecRuntime();
+const claudeSdkRuntime = new ClaudeSdkRuntime();
 
 /**
  * Pick the backend for a session.
  *
  * 'claude-tmux' (and anything unrecognised) returns null so the caller keeps
- * its existing inline tmux path, which this deliberately does not touch — that
- * path is the fleet's critical path and the only one that bills against Claude
- * Max's Interactive bucket.
+ * its existing inline tmux path. That path is no longer the only one on the
+ * subscription's own usage windows — 'claude-sdk' runs the same Claude Code on
+ * the same login through the supported programmatic interface — but it stays as
+ * the fallback for the case the SDK cannot cover (see
+ * docs/claude-sdk-runtime-design.md), so returning null still means "the pane".
+ *
+ * 'claude-sdk' takes no mode and no credential: like codex, it authenticates
+ * as itself against this machine's own subscription, so there is nothing to
+ * compose and nothing to select.
  *
  * 'codex-exec', 'dsh-exec' and 'prime-rpc' take no mode. None has an
  * equivalent of a pi mode: codex and dsh have no spawn recipe to compose, and
@@ -49,6 +57,7 @@ export function runtimeFor(
   kind: string | null | undefined,
   mode: string | null | undefined,
 ): AgentRuntime | null {
+  if (kind === 'claude-sdk') return claudeSdkRuntime;
   if (kind === 'codex-exec') return codexRuntime;
   if (kind === 'dsh-exec') return dshRuntime;
   if (kind === 'prime-rpc') return primeRuntime;
@@ -67,7 +76,7 @@ export function runtimeFor(
  * the three sites, and so that adding a third never does either.
  */
 export function allRuntimes(): AgentRuntime[] {
-  return [piRuntime, ompRuntime, primeRuntime, codexRuntime, dshRuntime];
+  return [piRuntime, ompRuntime, primeRuntime, codexRuntime, dshRuntime, claudeSdkRuntime];
 }
 
 export type {

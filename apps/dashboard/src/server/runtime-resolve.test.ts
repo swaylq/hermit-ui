@@ -23,15 +23,30 @@ const CTX: RuntimeContext = {
   ],
 };
 
-test('nothing set anywhere falls back to claude-tmux', () => {
+test('nothing set anywhere falls back to claude-sdk', () => {
   assert.deepEqual(resolveRuntime(null, null), {
-    backendId: 'claude-tmux', runtime: 'claude-tmux', runtimeCredentialId: null,
+    backendId: 'claude-sdk', runtime: 'claude-sdk', runtimeCredentialId: null,
     runtimeProvider: null, runtimeModel: null, runtimeMode: null,
   });
   assert.deepEqual(resolveRuntime({}, {}), {
-    backendId: 'claude-tmux', runtime: 'claude-tmux', runtimeCredentialId: null,
+    backendId: 'claude-sdk', runtime: 'claude-sdk', runtimeCredentialId: null,
     runtimeProvider: null, runtimeModel: null, runtimeMode: null,
   });
+});
+
+// The pane is no longer the default, but a session that is ON it stays on it.
+// Re-pointing a running session at a different driver would move the process
+// that is holding its conversation, behind the user's back.
+test('an existing claude-tmux session is left on the pane', () => {
+  assert.equal(resolveRuntime({ runtime: 'claude-tmux' }, null).runtime, 'claude-tmux');
+  assert.equal(resolveRuntime(null, { runtime: 'claude-tmux' }).runtime, 'claude-tmux');
+});
+
+// A mode is a pi spawn recipe; neither claude driver can honour one, so
+// returning it would be a value the gateway must remember to ignore.
+test('neither claude driver carries a mode', () => {
+  assert.equal(resolveRuntime({ runtime: 'claude-sdk', runtimeMode: 'ops' }, null).runtimeMode, null);
+  assert.equal(resolveRuntime({ runtime: 'claude-tmux', runtimeMode: 'ops' }, null).runtimeMode, null);
 });
 
 // The whole point of the credential split: "pi + hyqubit" already knows which
@@ -122,7 +137,7 @@ test('a row holding a bare harness name still runs', () => {
 
 test('a bare harness with no backend behind it falls to the floor, not to a broken spawn', () => {
   const out = resolveRuntime({ runtime: 'dsh-exec' }, null, CTX);
-  assert.equal(out.backendId, 'claude-tmux');
+  assert.equal(out.backendId, 'claude-sdk');
 });
 
 // ── availability ────────────────────────────────────────────────────────────
@@ -130,7 +145,7 @@ test('a bare harness with no backend behind it falls to the floor, not to a brok
 test("an agent default the machine cannot run is substituted; a session's own choice is not", () => {
   const off: RuntimeContext = { ...CTX, backends: { ...CTX.backends!, disabled: ['pi-hyqubit'] } };
   // Inherited: re-pointed, because a new chat has to open on something runnable.
-  assert.equal(resolveRuntime(null, { runtime: 'pi-hyqubit' }, off).backendId, 'claude-tmux');
+  assert.equal(resolveRuntime(null, { runtime: 'pi-hyqubit' }, off).backendId, 'claude-sdk');
   // Stated: left alone. Switching a backend off hides it from NEW work; it does
   // not stop what is already running, and relabelling it would make the header
   // chip a lie.
@@ -141,7 +156,7 @@ test('a substituted agent default carries none of its pins', () => {
   const off: RuntimeContext = { ...CTX, backends: { ...CTX.backends!, disabled: ['pi-hyqubit'] } };
   const out = resolveRuntime(null, { runtime: 'pi-hyqubit', runtimeModel: 'claude-opus-5' }, off);
   assert.deepEqual(out, {
-    backendId: 'claude-tmux', runtime: 'claude-tmux', runtimeCredentialId: null,
+    backendId: 'claude-sdk', runtime: 'claude-sdk', runtimeCredentialId: null,
     runtimeProvider: null, runtimeModel: null, runtimeMode: null,
   });
 });

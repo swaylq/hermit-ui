@@ -9,13 +9,20 @@
 // sheet and the new-chat picker — and they were drifting apart (the header said
 // "Claude", the picker "Claude Code"). One table, no ternaries.
 
-// Five harnesses. omp (oh-my-pi) is NOT one of them: it is a second ENGINE
+// Six harnesses. omp (oh-my-pi) is NOT one of them: it is a second ENGINE
 // inside the pi harness, selected by the mode — see lib/pi-modes.ts.
 //
-// claude-tmux and codex-exec are the two that authenticate as themselves, on
-// the machine, against a subscription. The other three take a credential from
-// Settings → Models, which is what makes them user-composable.
-export const RUNTIME_KINDS = ['claude-tmux', 'pi-rpc', 'prime-rpc', 'codex-exec', 'dsh-exec'] as const;
+// claude-sdk, claude-tmux and codex-exec are the three that authenticate as
+// themselves, on the machine, against a subscription. The other three take a
+// credential from Settings → Models, which is what makes them user-composable.
+//
+// The two claude harnesses are the SAME Claude Code, reached two ways:
+// 'claude-sdk' through its official Agent SDK, 'claude-tmux' by typing into its
+// terminal UI in a pane. The pane exists only because the SDK was once billed
+// separately — a split that was paused before it took effect (evolution/
+// lessons.md → L1) — and is kept for the one thing it still does better:
+// outliving the gateway process. See docs/claude-sdk-runtime-design.md.
+export const RUNTIME_KINDS = ['claude-sdk', 'claude-tmux', 'pi-rpc', 'prime-rpc', 'codex-exec', 'dsh-exec'] as const;
 export type RuntimeKind = (typeof RUNTIME_KINDS)[number];
 
 export function isRuntimeKind(v: string | null | undefined): v is RuntimeKind {
@@ -25,10 +32,10 @@ export function isRuntimeKind(v: string | null | undefined): v is RuntimeKind {
 /**
  * The harnesses a user can build a backend out of.
  *
- * The other two are excluded because there is nothing to compose: Claude Code
- * and Codex each have exactly one credential — their own subscription on this
- * machine — so a picker offering "Claude Code + hyqubit" would be offering
- * something that does not exist.
+ * The other three are excluded because there is nothing to compose: both Claude
+ * Code drivers and Codex each have exactly one credential — their own
+ * subscription on this machine — so a picker offering "Claude Code + hyqubit"
+ * would be offering something that does not exist.
  */
 export const CUSTOM_HARNESSES = ['pi-rpc', 'prime-rpc', 'dsh-exec'] as const;
 export type CustomHarness = (typeof CUSTOM_HARNESSES)[number];
@@ -42,6 +49,7 @@ export function isCustomHarness(v: unknown): v is CustomHarness {
 
 /** Full name of a harness, for pickers and headings. */
 export function runtimeLabel(kind: string | null | undefined): string {
+  if (kind === 'claude-tmux') return 'Claude Code (tmux)';
   if (kind === 'pi-rpc') return 'pi';
   if (kind === 'prime-rpc') return 'Prime Agent';
   if (kind === 'codex-exec') return 'Codex';
@@ -68,13 +76,15 @@ export function runtimeDetail(
   // no endpoint to name, so naming one would be a field the user cannot set and
   // the harness does not read.
   if (kind === 'codex-exec') return ['Codex', model].filter(Boolean).join(' · ');
+  if (kind === 'claude-sdk') return ['Claude Code (Agent SDK)', model].filter(Boolean).join(' · ');
   if (kind === 'claude-tmux') return 'Claude Code (interactive, tmux pane)';
   return [runtimeLabel(kind), provider, model].filter(Boolean).join(' · ');
 }
 
 /** What each harness actually is — shown under the picker so a choice is informed. */
 export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
-  'claude-tmux': 'Claude Code in a tmux pane, on this machine’s subscription. Slash commands, subagents, terminal.',
+  'claude-sdk': 'Claude Code via its official Agent SDK, on this machine’s subscription. Same tools and skills; typed events, no pane.',
+  'claude-tmux': 'The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.',
   'pi-rpc': 'pi or omp as an RPC child process. Small and predictable; pick the engine and recipe under Mode.',
   'prime-rpc': 'Prime Agent. One tool — a persistent IPython kernel — plus subagents and a self-refining harness.',
   'codex-exec': 'OpenAI Codex, one run per turn, on this machine’s own codex login.',
@@ -83,7 +93,8 @@ export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
 
 /** What a harness needs on the machine before a backend built on it will start. */
 export const RUNTIME_NEEDS: Record<RuntimeKind, string> = {
-  'claude-tmux': 'Claude Code installed and logged in. Nothing else to configure.',
+  'claude-sdk': 'Claude Code installed and logged in. Nothing else to configure.',
+  'claude-tmux': 'Claude Code installed and logged in, plus tmux. Nothing else to configure.',
   'pi-rpc': 'pi (bundled) or omp (`bun install -g @oh-my-pi/pi-coding-agent`) on this machine.',
   'prime-rpc': 'Prime Agent installed (`curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh`) plus its Python kernel.',
   'codex-exec': '`codex` installed and `codex login` completed as the gateway’s user.',
@@ -106,6 +117,9 @@ export const RUNTIME_NEEDS: Record<RuntimeKind, string> = {
  * the xterm dies on open).
  */
 const PANELESS_RUNTIMES: ReadonlySet<string> = new Set([
+  // Claude Code through the Agent SDK: a gateway subprocess on pipes, with no
+  // terminal to attach to. Its transcript is identical to the pane's.
+  'claude-sdk',
   'pi-rpc',
   'prime-rpc',
   // the retired third backend, now an engine under pi — a session row created

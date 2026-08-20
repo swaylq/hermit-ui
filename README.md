@@ -6,7 +6,7 @@ Web UI + local gateway for hermit-agent. Multi-agent control, chat, usage, obser
 
 `hermit-ui` is the home for everything that used to live across `asst/dashboard`, `asst/gateway`, and `hermit-agent/` (the npm scaffold). Reunified into one monorepo so a single change can ship through to all three at once.
 
-Replaces the Telegram-based chat surface that `create-hermit-agent` used to scaffold. Chat now happens in the dashboard, via the gateway, attached to a real interactive `claude` running inside a long-lived tmux pane — same Interactive billing bucket as a terminal session.
+Replaces the Telegram-based chat surface that `create-hermit-agent` used to scaffold. Chat now happens in the dashboard, via the gateway, attached to a real Claude Code session driven through the official Agent SDK — same binary, same `/login`, same subscription windows as a terminal session. A tmux-pane backend is kept alongside it (`claude-tmux`) for the one thing a pane does better: outliving the gateway process. See `docs/claude-sdk-runtime-design.md`.
 
 ## Layout
 
@@ -18,7 +18,7 @@ hermit-ui/
 │   └── cli/         # create-hermit-agent — npm-published scaffold
 ├── packages/
 │   ├── proto/       # shared zod schemas + tRPC contract
-│   ├── tmux-driver/ # tmux session pool + send-keys + JSONL watcher
+│   ├── tmux-driver/ # the claude-tmux backend + the shared Claude Code path/transcript helpers
 │   └── ui/          # shared design system
 ├── template/        # agent skeleton (copied by the CLI)
 ├── agents/          # test workspaces (NOT sway's real asst agent)

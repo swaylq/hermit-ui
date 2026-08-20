@@ -1,6 +1,12 @@
 # Running the pi runtime on Claude Code
 
-Status: design, 2026-08-06. Companion to `pi-runtime-design.md`.
+Status: **partly superseded, 2026-08-21.** Companion to `pi-runtime-design.md`.
+
+> Shape B (an Agent SDK runtime) was the fallback here, ruled out on billing.
+> That ruling has expired: the Agent SDK billing split was paused before it took
+> effect, and Shape B is now built and is the default backend — see
+> `docs/claude-sdk-runtime-design.md`. Shapes A and C, and the analysis of why
+> "pi on Claude Code" does not compose, are unaffected and still stand.
 
 ## The ask
 

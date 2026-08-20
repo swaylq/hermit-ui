@@ -16,7 +16,10 @@ export type SyncItem = {
   claudeSessionId: string | null;
 };
 
-export type RuntimeKind = 'claude-tmux' | 'pi-rpc' | 'omp-rpc' | 'prime-rpc' | 'codex-exec' | 'dsh-exec';
+export type RuntimeKind =
+  | 'claude-tmux' | 'claude-sdk'
+  | 'pi-rpc' | 'omp-rpc' | 'prime-rpc'
+  | 'codex-exec' | 'dsh-exec';
 
 export type RuntimeSession = {
   id: string;
@@ -42,6 +45,12 @@ export type RuntimeSession = {
    * codex-exec and dsh-exec.
    */
   mode?: string | null;
+  /**
+   * The orchestrator ("义脑") session, which gets the brain-only cross-agent MCP
+   * tools. Only the backends that run a real Claude Code session read it; the
+   * others have no equivalent tool surface to widen.
+   */
+  isOrchestrator?: boolean;
 };
 
 export type RuntimeImage = { path: string; mediaType: string };
@@ -73,6 +82,18 @@ export interface RuntimeHandle {
 
 export interface AgentRuntime {
   readonly kind: RuntimeKind;
+
+  /**
+   * Does `submit` take image attachments as-is?
+   *
+   * Most backends cannot: the chat runner recognises each attachment with a
+   * vision pass first and hands over the DESCRIPTION as text. A backend that
+   * speaks Anthropic content blocks wants the opposite — the bytes, in the
+   * first request, with no round-trip and no lossy prose in between. Declaring
+   * it here keeps that decision with the backend that knows the answer rather
+   * than as a `kind ===` test in the runner.
+   */
+  readonly acceptsImages?: boolean;
 
   /**
    * Start or re-attach the session. Idempotent.
