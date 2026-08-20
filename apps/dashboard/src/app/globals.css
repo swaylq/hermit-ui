@@ -347,3 +347,15 @@
   .lb-root, .lb-root .lb-stage { transition-duration: 0.01ms !important; }
   .lb-slide-in { animation-duration: 0.01ms !important; }
 }
+
+/* A scroll container with no scrollbar drawn. It still scrolls — by wheel, by
+   trackpad, by dragging, by moving the caret into view.
+ 
+   For the composer textarea specifically. It is `overflow-auto` so a long draft
+   can scroll inside its 360px cap, and on macOS with "Show scroll bars: Always"
+   (and in any browser once the content actually overflows) that puts a fat
+   rounded thumb against its right edge — reported as "麦克风输入时右边有个很大的
+   很丑的光标", because dictation is when the box fills up. It is not a caret;
+   there is nothing to aim at and nothing to click. It just sits there. */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { width: 0; height: 0; display: none; }

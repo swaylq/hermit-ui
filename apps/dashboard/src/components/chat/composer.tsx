@@ -119,7 +119,10 @@ function StopPill({ onStop, stopping }: { onStop: () => void; stopping: boolean 
       aria-label={stopping ? 'stopping' : 'stop this turn'}
       title={stopping ? 'stopping…' : 'stop this turn (Esc)'}
       className={cn(
-        'mr-1 h-8 shrink-0 inline-flex items-center gap-1.5 rounded-full border border-rose-500/40',
+        // h-9, matching the clear/send buttons beside it. The row is `items-end`,
+        // so a shorter pill bottom-aligns and reads as sitting low rather than
+        // centred — which is exactly what it looked like at h-8.
+        'mr-1 h-9 shrink-0 inline-flex items-center gap-1.5 rounded-full border border-rose-500/40',
         'px-2.5 text-xs font-medium text-rose-600 dark:text-rose-400',
         'transition-colors cursor-pointer hover:bg-rose-500/10',
         'disabled:cursor-wait disabled:opacity-60',
@@ -729,7 +732,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             }
             disabled={disabled || awaitingInput}
             rows={1}
-            className="flex-1 bg-transparent text-base sm:text-[15px] resize-none outline-none leading-relaxed min-h-[28px] max-h-[360px] overflow-auto py-1.5 text-foreground placeholder:text-muted-foreground/70 disabled:cursor-not-allowed"
+            className="no-scrollbar flex-1 bg-transparent text-base sm:text-[15px] resize-none outline-none leading-relaxed min-h-[28px] max-h-[360px] overflow-auto py-1.5 text-foreground placeholder:text-muted-foreground/70 disabled:cursor-not-allowed"
             style={dictating ? { caretColor: 'transparent' } : undefined}
           />
 
