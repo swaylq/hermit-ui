@@ -134,6 +134,30 @@ rather than by reading code. The first two were latent in the pane path too.
 Run the integration suite before shipping any change to this runtime. Every
 property it checks is one the unit tests cannot see.
 
+## Completing the rollout
+
+Making claude-sdk the default changes what an agent with NO stored preference
+resolves to. Every agent on this fleet has one — `claude-tmux`, written before
+this backend existed — so the deploy moved no running conversation, which is
+what made it safe to ship at all.
+
+`scripts/migrate-agents-to-claude-sdk.mjs` is the separate, reviewable step that
+does move them. It defaults to a dry run and reports the real blast radius,
+which is smaller than the session count suggests: measured on 2026-08-21, of 47
+claude-tmux sessions, 26 inherit their agent's default and would move, while 21
+pinned a backend of their own and are untouched by it (those need the
+per-session picker). A session mid-turn refuses the switch and moves on its next
+message instead.
+
+    node scripts/migrate-agents-to-claude-sdk.mjs                    # dry run
+    node scripts/migrate-agents-to-claude-sdk.mjs --apply --only asst  # a canary
+    node scripts/migrate-agents-to-claude-sdk.mjs --apply            # the rest
+    node scripts/migrate-agents-to-claude-sdk.mjs --apply --to claude-tmux  # back
+
+Rolling back is the same command reversed, and it costs nothing: both drivers
+write the same transcript, so a session moved either way resumes its own
+history.
+
 ## What would change this
 
 The billing split returning is the only thing that invalidates the backend
