@@ -74,3 +74,56 @@ export function foldTail(
   const rendered = tail ? base! + tail : base!.trimEnd();
   return { draft: rendered, claim: { base: base!, rendered } };
 }
+
+/**
+ * Swap a finished run's whole tail for the corrected passage — the end-of-run
+ * refine landing.
+ *
+ * Deliberately NOT foldTail. foldTail rebases when the draft has moved under it,
+ * because the tail it folds is still GROWING: words that arrive after the user
+ * typed something must land after what they typed, not on top of it. A refine is
+ * the opposite shape — it replaces text that is already on the screen — so
+ * "the draft moved" cannot mean "append after it". That would leave the passage
+ * in the draft twice. It means this correction is stale, and stale corrections
+ * are dropped: the user's draft is the newer of the two.
+ *
+ * Also dropped when the run never put anything in the draft (`base === null`),
+ * which is the cancelled/empty case — there is no tail to replace.
+ */
+export function replaceTail(
+  claim: DictationClaim,
+  draft: string,
+  tail: string,
+): { draft: string; claim: DictationClaim; applied: boolean } {
+  if (claim.base === null || draft !== claim.rendered) return { draft, claim, applied: false };
+  const rendered = tail ? claim.base + tail : claim.base.trimEnd();
+  return { draft: rendered, claim: { base: claim.base, rendered }, applied: true };
+}
+
+// Both counts are in characters, and the unit that matters is the CJK one — a
+// dictated Chinese sentence runs 8–15 characters, so 16 is "more than one thing
+// was said" and 36 is a paragraph's worth. (Latin text of the same length says
+// less, which errs toward refining a short English utterance. That costs one
+// ~300 ms call; the other error costs the user their meaning.)
+/** Below this there is no passage, only an utterance — and nothing to stitch. */
+const REFINE_MIN_CHARS = 16;
+/** …unless it is long enough that one sentence can be mangled on its own. */
+const REFINE_LONG_CHARS = 36;
+/** What ASR puts between two pauses. Each one is a place the meaning may be cut. */
+const SENTENCE_BREAK = /[。．.！!？?；;\n]/g;
+
+/**
+ * Is this passage worth a whole-passage correction pass?
+ *
+ * The pass costs a round trip and a visible half-second at the end of a run, so
+ * it should not run on 「继续」. What it is FOR is the seam between sentences —
+ * so the trigger is that there were seams: two or more closed sentences, which
+ * means per-sentence polish ran at least twice with no idea of the other. One
+ * long sentence qualifies too (it can be mangled internally), a short one never.
+ */
+export function worthRefining(passage: string): boolean {
+  const text = passage.trim();
+  if (text.length < REFINE_MIN_CHARS) return false;
+  if (text.length >= REFINE_LONG_CHARS) return true;
+  return (text.match(SENTENCE_BREAK) ?? []).length >= 2;
+}

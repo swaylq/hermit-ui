@@ -29,7 +29,12 @@ import { VoiceWave } from '@/components/chat/voice-wave';
 import type { DictationSource } from '@/components/chat/dictation-dock';
 import { cn } from '@/lib/utils';
 
-export type DictationStatus = 'connecting' | 'listening' | 'offline' | 'finishing' | 'error';
+// 'finishing' = the tail of the transcript is still arriving; 'refining' = it
+// has all arrived and is being read through as one passage (the end-of-run
+// pass in server/transcribe-refine.ts). The second one gets its own label
+// because the words on screen are about to CHANGE, and a rewrite nobody
+// announced reads as a glitch rather than a correction.
+export type DictationStatus = 'connecting' | 'listening' | 'offline' | 'finishing' | 'refining' | 'error';
 
 export const DictationBar = memo(function DictationBar({
   source,
@@ -68,6 +73,7 @@ export const DictationBar = memo(function DictationBar({
     cancelArmed ? '松开取消'
     : status === 'connecting' ? '接通中…'
     : status === 'finishing' ? '收尾中…'
+    : status === 'refining' ? '通读整理中…'
     : status === 'error' ? (hint ?? '出错了')
     : status === 'offline' ? '实时转写不可用 · 正在录音，松开后转写'
     : silent ? '在听…'
@@ -86,7 +92,7 @@ export const DictationBar = memo(function DictationBar({
             wave is a level indicator behind it rather than the main event. */}
         <div className="pointer-events-none absolute inset-0 opacity-30">
           <VoiceWave
-            phase={status === 'error' ? 'error' : status === 'finishing' ? 'transcribing' : 'recording'}
+            phase={status === 'error' ? 'error' : status === 'finishing' || status === 'refining' ? 'transcribing' : 'recording'}
             level={level}
           />
         </div>
@@ -102,18 +108,20 @@ export const DictationBar = memo(function DictationBar({
         <button
           type="button"
           onClick={onDone}
-          disabled={status === 'finishing'}
+          disabled={status === 'finishing' || status === 'refining'}
           aria-label="结束听写"
           className="relative z-10 flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full bg-white/12 text-white transition-colors hover:bg-white/22 active:bg-white/28 disabled:cursor-default disabled:opacity-60"
         >
-          {status === 'finishing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+          {status === 'finishing' || status === 'refining'
+            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            : <Check className="h-3.5 w-3.5" />}
         </button>
 
         <span
           className={cn(
             'relative z-10 h-2 w-2 shrink-0 rounded-full',
             cancelArmed || status === 'error' ? 'bg-rose-400'
-              : silent || status === 'connecting' || status === 'finishing' ? 'bg-white/40'
+              : silent || status === 'connecting' || status === 'finishing' || status === 'refining' ? 'bg-white/40'
               : status === 'offline' ? 'bg-amber-400'
               : 'animate-pulse bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.9)]',
           )}

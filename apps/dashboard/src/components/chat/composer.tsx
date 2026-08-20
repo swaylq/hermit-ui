@@ -13,7 +13,7 @@ import { trpc } from '@/lib/trpc';
 import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
 import { QUEUE_LIMIT } from '@/lib/chat-queue';
-import { foldTail, newClaim, type DictationClaim } from '@/lib/dictation-text';
+import { foldTail, newClaim, replaceTail, type DictationClaim } from '@/lib/dictation-text';
 import dynamic from 'next/dynamic';
 import { Plus, ArrowUp, FileText, X } from 'lucide-react';
 import { msgText, type Attachment } from '@/components/chat/lib';
@@ -157,6 +157,14 @@ export interface ComposerHandle {
   beginDictation: () => void;
   /** Replace everything the run has dictated so far with `tail`. */
   setDictationTail: (tail: string) => void;
+  /**
+   * Land the end-of-run whole-passage correction over the run's tail. Unlike
+   * setDictationTail this gives up rather than rebasing when the draft has moved
+   * — see replaceTail in lib/dictation-text.ts.
+   */
+  refineDictationTail: (tail: string) => void;
+  /** What was in the draft before the run started — reference for the refine. */
+  dictationBase: () => string;
   /** End the run; the tail becomes ordinary draft text. */
   endDictation: () => void;
 }
@@ -288,6 +296,27 @@ export const ComposeBar = forwardRef<ComposerHandle, {
         // is appended by setting `value`, not by typing at a cursor.
         el.scrollTop = el.scrollHeight;
       });
+    },
+    refineDictationTail(tail: string) {
+      setDraft((d) => {
+        const st = dictRef.current;
+        if (!st) return d;
+        const next = replaceTail(st, d, tail);
+        dictRef.current = next.claim;
+        return next.draft;
+      });
+      requestAnimationFrame(() => {
+        const el = taRef.current;
+        if (!el) return;
+        // The passage usually gets SHORTER here (that is what stitching does),
+        // so the box has to be allowed to shrink as well as grow.
+        el.style.height = 'auto';
+        el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
+        el.scrollTop = el.scrollHeight;
+      });
+    },
+    dictationBase() {
+      return dictRef.current?.base ?? '';
     },
     endDictation() {
       dictRef.current = null;

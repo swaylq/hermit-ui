@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { joinSegments, foldTail, newClaim, type DictationClaim } from './dictation-text';
+import { joinSegments, foldTail, newClaim, replaceTail, worthRefining, type DictationClaim } from './dictation-text';
 
 test('sentences abut directly — ASR punctuates its own output', () => {
   assert.equal(
@@ -118,4 +118,67 @@ test('re-running an updater against the ORIGINAL draft is idempotent too', () =>
   const a = foldTail(claim, '基础', '一句。');
   const b = foldTail(claim, '基础', '一句。');
   assert.equal(a.draft, b.draft);
+});
+
+// ── the end-of-run refine landing ───────────────────────────────────────────
+// The failure these guard against is the passage appearing TWICE: the refine
+// comes back while the draft has moved on, and something appends it.
+
+test('the refine replaces the run\'s tail and leaves the base alone', () => {
+  const { draft, claim } = foldTail(newClaim(), '先打了几个字', '把这个。改一下。');
+  assert.equal(draft, '先打了几个字 把这个。改一下。');
+  const r = replaceTail(claim, draft, '把这个改一下。');
+  assert.equal(r.applied, true);
+  assert.equal(r.draft, '先打了几个字 把这个改一下。');
+  // …and the claim now describes what is actually on screen.
+  assert.equal(r.claim.rendered, r.draft);
+});
+
+test('a refine that lands after the user edited the draft is dropped', () => {
+  const { draft, claim } = foldTail(newClaim(), '', '把这个。改一下。');
+  const edited = `${draft} 还有别的`;
+  const r = replaceTail(claim, edited, '把这个改一下。');
+  assert.equal(r.applied, false);
+  assert.equal(r.draft, edited); // their text, untouched — not appended to
+});
+
+test('a refine that lands after the draft was sent is dropped', () => {
+  const { draft, claim } = foldTail(newClaim(), '', '把这个。改一下。');
+  assert.equal(replaceTail(claim, '', '把这个改一下。').applied, false);
+  assert.notEqual(draft, '');
+});
+
+test('a refine for a run that never wrote anything is dropped', () => {
+  const r = replaceTail(newClaim(), '手打的字', '凭空来的一句');
+  assert.equal(r.applied, false);
+  assert.equal(r.draft, '手打的字');
+});
+
+test('replacing twice with the same passage is idempotent', () => {
+  const { draft, claim } = foldTail(newClaim(), '基础', '一句。两句。');
+  const once = replaceTail(claim, draft, '一句，两句。');
+  const twice = replaceTail(once.claim, once.draft, '一句，两句。');
+  assert.equal(twice.draft, once.draft);
+  assert.deepEqual(twice.claim, once.claim);
+});
+
+// ── when the pass is worth making ───────────────────────────────────────────
+
+test('a short utterance is not a passage', () => {
+  assert.equal(worthRefining('继续'), false);
+  assert.equal(worthRefining('把隧道重启一下。'), false);
+  assert.equal(worthRefining('   '), false);
+});
+
+test('two closed sentences mean two blind corrections — refine', () => {
+  assert.equal(worthRefining('把这个改一下。然后看看日志。还有证书。'), true);
+});
+
+test('one long sentence can be mangled on its own', () => {
+  assert.equal(worthRefining('把那个部署脚本里面自动拉取代码然后构建镜像再推送到仓库的那一段整个重写一遍'), true);
+});
+
+test('a punctuated-but-tiny utterance is still not a passage', () => {
+  // Two breaks, seven characters. The break count alone would refine this.
+  assert.equal(worthRefining('好的。就这样。'), false);
 });
