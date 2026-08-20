@@ -103,6 +103,31 @@ If interrupts-without-intent reappear in the gateway logs, this is the first pla
 to look — the fingerprint to search for is still "killed mid-stream, followed
 within three minutes by a short 「继续」".
 
+## 2026-08-20 — the opposite failure: Stop missing while the agent worked
+
+Reported with a screenshot of a session mid-run: header amber and reading
+`working`, thinking dots in the timeline — and the composer saying "Ask anything"
+with no Stop pill. The agent was several minutes into a single Bash call.
+
+`showStopPill` keyed off `isInFlight`, which is a LOCAL signal: the tail row grew
+within ~1.8s, or the newest message is an unanswered user row. An agent that is
+busy without emitting satisfies neither, so the button vanished exactly when it
+was most wanted. The thinking dots had already been moved off that signal for the
+same reason (`showThinkingDots`, and its note about the >1.8s gap); Stop and
+Escape were simply left behind.
+
+Both now follow `status.key === 'working'`, which is the union of the local
+signal and the gateway's pane-derived state — a strict superset, so it cannot
+hide Stop anywhere it used to appear. The composer's `inFlight` follows too, so
+the placeholder stops saying "Ask anything" at an agent that is mid-tool-call.
+
+The cost is that a stale snapshot can leave Stop up for a few seconds after a
+turn ends; pressing it then sends Escape to an idle pane, which does nothing. A
+Stop that lingers is a far smaller problem than one that disappears.
+
+Verified both ways on the same conversation: pane `working` with a silent
+tool call → Stop present; pane `idle` → no Stop.
+
 ## Still open
 
 The terminal view (`/chat/terminal`) pins a quick-key bar to the bottom edge whose first

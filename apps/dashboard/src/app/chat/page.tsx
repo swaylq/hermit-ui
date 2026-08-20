@@ -1260,6 +1260,28 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const showThinkingDots =
     status.key === 'working' || status.key === 'starting' || status.key === 'restarting';
 
+  // "A turn is running" — for everything that ACTS on that fact: Stop, Escape,
+  // and what the composer says about itself.
+  //
+  // NOT isInFlight alone. That is a local SSE heuristic (the tail row grew within
+  // ~1.8s, or the newest message is an unanswered user row), and it goes false
+  // whenever the agent is busy WITHOUT emitting — which is precisely a long tool
+  // call. Reported: a session sitting in a multi-minute Bash showed "working" in
+  // the header and thinking dots in the timeline, while the composer said "Ask
+  // anything" and offered no way to stop it. The Stop button disappeared exactly
+  // when it was most needed.
+  //
+  // The thinking dots already had this fixed (see showThinkingDots above, and its
+  // note about the >1.8s gap); Stop and Escape were left behind on the old
+  // signal. `status.key === 'working'` is the union — sessionStatusView ORs our
+  // fast local signal with the gateway's pane-derived state — so this is a strict
+  // superset of the old condition and cannot hide Stop anywhere it used to show.
+  //
+  // The cost of the union is a stale snapshot leaving Stop up for a few seconds
+  // after a turn ends. Pressing it then sends Escape to an idle pane, which does
+  // nothing. A Stop that lingers is a far smaller problem than one that vanishes.
+  const turnRunning = isInFlight || status.key === 'working';
+
   // Whether the composer shows its Stop pill. It sits at the right of the input
   // row, where the thumb already is — but BESIDE the send circle, never in it.
   // It once lived in the send button's own slot, styled identically, so while a
@@ -1267,7 +1289,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // "send" to "kill the turn"; the gateway logs are full of turns killed
   // mid-stream and followed by a short 「继续」. What makes the current placement
   // safe is in ComposeBar's StopPill. See docs/composer-stop-misfire.md.
-  const showStopPill = isInFlight && !session?.closedAt;
+  const showStopPill = turnRunning && !session?.closedAt;
 
   // Viewing a session = reading it. Stamp it read on open and on every new
   // message that lands while open, so it never shows the red "unread" dot to the
@@ -1286,7 +1308,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // field (the composer also stops propagation itself); or a layer that owns Esc
   // is open — those mark themselves with data-esc-layer.
   useEffect(() => {
-    if (!isInFlight || session?.closedAt) return;
+    if (!turnRunning || session?.closedAt) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       const t = e.target as HTMLElement | null;
@@ -1298,7 +1320,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isInFlight, session?.closedAt, sessionId, cancelTurn]);
+  }, [turnRunning, session?.closedAt, sessionId, cancelTurn]);
 
   // Cmd/Ctrl+/ from anywhere on the chat page jumps focus into the composer.
   // Standard ChatGPT-style shortcut for "back to typing" without grabbing
@@ -1887,7 +1909,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             disabled={!!session?.closedAt}
             awaitingInput={!!pendingInteraction}
             sending={send.isPending}
-            inFlight={isInFlight}
+            inFlight={turnRunning}
             queueFull={queueLen >= QUEUE_LIMIT}
             brainDraft={takenOver ? takeover?.takeoverDraft : null}
             onSend={(text, images, files) => {
