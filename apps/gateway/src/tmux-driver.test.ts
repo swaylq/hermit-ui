@@ -5,12 +5,13 @@
 // behavior here is what makes the P1 dedup safe — the hand copies must produce
 // exactly these strings. Tested from the gateway package because it already
 // depends on @hermit-ui/tmux-driver and ships tsx.
-import { describe, it, after } from 'node:test';
+import { describe, it, test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
+import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { tmuxPaneName, encodedProjectDir, pickLiveTranscript, parseClaudeSessionIdArg, chunkLiteral, ensureSession, probeInputPath, hardKill, readComposerText, pickComposerLine, pickFocusStealer, dismissFocusStealer, sendKeys, confirmSubmitted, paneInMode, leaveCopyMode } from '@hermit-ui/tmux-driver';
+import { tmuxPaneName, encodedProjectDir, encodeProjectPath, pickLiveTranscript, parseClaudeSessionIdArg, chunkLiteral, ensureSession, probeInputPath, hardKill, readComposerText, pickComposerLine, pickFocusStealer, dismissFocusStealer, sendKeys, confirmSubmitted, paneInMode, leaveCopyMode } from '@hermit-ui/tmux-driver';
 
 describe('tmuxPaneName', () => {
   it('keeps the last 12 id chars behind the hermit- prefix', () => {
@@ -604,4 +605,71 @@ describe('copy-mode — tmux eating the keys', () => {
     );
     assert.equal(paneInMode(id), false, 'and the mode must be gone so the retry can land');
   });
+});
+
+// ── the project-directory encoding ──────────────────────────────────────────
+//
+// Where Claude Code keeps a cwd's transcripts. Everything that asks "does this
+// session have history" resolves through here — the context bar, the wake path,
+// the orphan sweep — so a wrong answer does not fail loudly, it reports an empty
+// conversation and a wake then starts a fresh one on top of real history.
+//
+// The rule below was read off a live 2.1.237 rather than assumed: run `claude -p`
+// in a directory and see what it creates under ~/.claude/projects.
+
+test('every non-alphanumeric character becomes a dash', () => {
+  // Measured: /private/tmp/p/a_b.c d-e+f@g(h) → -private-tmp-p-a-b-c-d-e-f-g-h-
+  assert.equal(
+    encodeProjectPath('/private/tmp/p/a_b.c d-e+f@g(h)'),
+    '-private-tmp-p-a-b-c-d-e-f-g-h-',
+  );
+});
+
+// This is what the old `/`-only rule got wrong, and it is not exotic: an agent
+// directory called `my_agent`, or any path with a dot or a space in it, resolved
+// to a directory Claude Code never writes to.
+test('underscores, dots and spaces are separators too', () => {
+  assert.equal(encodeProjectPath('/Users/mac/my_agent'), '-Users-mac-my-agent');
+  assert.equal(encodeProjectPath('/Users/mac/.hermit/a'), '-Users-mac--hermit-a');
+  assert.equal(encodeProjectPath('/Users/mac/my agent'), '-Users-mac-my-agent');
+});
+
+// Measured: /private/tmp/p/a__b..c → -private-tmp-p-a--b--c. One dash per
+// character, so two separators stay two — collapsing them would alias distinct
+// directories onto one transcript store.
+test('runs of separators are not collapsed', () => {
+  assert.equal(encodeProjectPath('/p/a__b..c'), '-p-a--b--c');
+  assert.notEqual(encodeProjectPath('/p/a__b'), encodeProjectPath('/p/a_b'));
+});
+
+test('case is preserved', () => {
+  assert.equal(encodeProjectPath('/Users/Mac/Agent'), '-Users-Mac-Agent');
+});
+
+test('a plain lowercase path is unchanged apart from the slashes', () => {
+  // The case the old rule handled correctly, and which must keep working —
+  // every existing agent directory on this fleet looks like this.
+  assert.equal(
+    encodeProjectPath('/Users/mac/claudeclaw/asst'),
+    '-Users-mac-claudeclaw-asst',
+  );
+});
+
+// The directory is resolved before it is encoded: Claude Code encodes the path
+// it actually ends up in. On macOS /tmp and /var are symlinks into /private,
+// so encoding the unresolved path looks in a directory that never exists.
+test('encodedProjectDir resolves symlinks before encoding', () => {
+  const real = fs.realpathSync(os.tmpdir());
+  assert.equal(
+    encodedProjectDir(os.tmpdir()),
+    path.join(os.homedir(), '.claude', 'projects', encodeProjectPath(real)),
+  );
+});
+
+test('a path that does not exist yet is encoded as given rather than throwing', () => {
+  const missing = '/definitely/not/here/agent_x';
+  assert.equal(
+    encodedProjectDir(missing),
+    path.join(os.homedir(), '.claude', 'projects', '-definitely-not-here-agent-x'),
+  );
 });

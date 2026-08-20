@@ -18,7 +18,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import {
-  existsSync, readdirSync, statSync, mkdirSync,
+  existsSync, readdirSync, statSync, mkdirSync, realpathSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -184,7 +184,7 @@ export interface EnsureOpts {
  * if none of the known locations exist (PATH may genuinely carry it elsewhere).
  * HERMIT_CLAUDE_BIN overrides everything for an unusual install.
  */
-function resolveClaudeBin(): string {
+export function resolveClaudeBin(): string {
   const override = process.env.HERMIT_CLAUDE_BIN;
   if (override && existsSync(override)) return override;
   const home = homedir();
@@ -888,11 +888,53 @@ export async function awaitTranscript(jsonlPath: string, timeoutMs = 30_000, pol
   throw new Error(`Timed out waiting for transcript at ${jsonlPath}`);
 }
 
-/** Returns the encoded project directory under ~/.claude/projects/. */
+/**
+ * Returns the encoded project directory under ~/.claude/projects/.
+ *
+ * The path is RESOLVED first. Claude Code encodes the cwd it actually ends up
+ * in, which is the symlink target — so on macOS an agent under `/tmp` or
+ * `/var/folders` writes its transcripts to `-private-tmp-…`, while encoding the
+ * unresolved path here would look for them under `-tmp-…` and find nothing.
+ *
+ * The failure that follows is quiet and expensive: `resumableUuid` sees no
+ * transcript for a session that has one, decides the conversation was pruned,
+ * and starts a FRESH one — the user sends a message to an old chat and gets an
+ * agent with no memory of it. Every caller reads or writes transcripts, so the
+ * resolution belongs here rather than at each of them.
+ *
+ * A path that does not exist yet resolves to itself: a fresh agent directory is
+ * created before its first spawn, and guessing is better than throwing from a
+ * pure path helper.
+ */
 export function encodedProjectDir(cwd: string): string {
-  // Claude Code replaces every `/` with `-`. Leading `/` becomes leading `-`.
-  const encoded = cwd.replace(/\//g, '-');
-  return join(homedir(), '.claude', 'projects', encoded);
+  let real = cwd;
+  try { real = realpathSync(cwd); } catch { /* not created yet — encode as given */ }
+  return join(homedir(), '.claude', 'projects', encodeProjectPath(real));
+}
+
+/**
+ * Claude Code's project-directory encoding: every character that is not
+ * `[a-zA-Z0-9]` becomes `-`, one for one, with no collapsing of runs.
+ *
+ * Derived by observation against 2.1.237, not from documentation — the probe is
+ * to run `claude -p` in a directory with the characters in question and read
+ * back the name it creates under `~/.claude/projects/`:
+ *
+ *   /private/tmp/p/a_b.c d-e+f@g(h)  →  -private-tmp-p-a-b-c-d-e-f-g-h-
+ *   /private/tmp/p/a__b..c           →  -private-tmp-p-a--b--c
+ *
+ * This used to replace only `/`, which is right for a path made of plain
+ * lowercase names and wrong for every other one. An agent directory containing
+ * an underscore, a dot or a space resolved to a directory Claude Code never
+ * writes to — so the transcript was "missing", and everything downstream that
+ * asks "does this session have history" answered no: the context bar read
+ * empty, and a wake decided the conversation had been pruned and started a
+ * fresh one. Silent, and it looks exactly like ordinary data loss.
+ *
+ * Exported for the unit test; the rule is the whole point of the function.
+ */
+export function encodeProjectPath(realPath: string): string {
+  return realPath.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
 /** UUID list from .jsonl files in a project dir. */
