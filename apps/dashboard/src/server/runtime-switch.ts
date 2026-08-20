@@ -13,7 +13,7 @@
 // machine's settings.json and ignores those columns entirely, so writing them
 // on a claude session changes nothing that is running.
 //
-// See docs/pi-runtime-design.md.
+// See docs/pi-runtime-design.md and docs/backends-and-models-design.md.
 
 import type { RuntimeChoice } from './runtime-resolve';
 
@@ -55,7 +55,13 @@ export function planRuntimeSwitch(
   // this is NOT interchangeable with `restart`: pi restarts on a bare model or
   // mode change, and clearing the id there would silently discard the very
   // conversation the restart is meant to carry over.
-  if (before.runtime !== after.runtime) return { ok: true, restart: true, resetExternalId: true };
+  //
+  // Compared on backendId rather than harness: two backends can run the SAME
+  // harness against different credentials ("pi + hyqubit" and "pi + Kimi"), and
+  // moving between them is every bit as much a backend change — different
+  // endpoint, different model catalog, and a session id the other side's
+  // provider never issued.
+  if (before.backendId !== after.backendId) return { ok: true, restart: true, resetExternalId: true };
 
   // codex and dsh read the model off these columns like pi does, but neither
   // has a long-lived process to tear down — each turn is its own subprocess,
@@ -67,13 +73,14 @@ export function planRuntimeSwitch(
     return { ok: true, restart: false, resetExternalId: false };
   }
 
-  // Same backend. Only the child-process backends read provider/model/mode off
-  // these columns; claude takes its model from the machine's settings.json.
-  if (after.runtime === 'pi-rpc') {
+  // Same backend. Only the RPC harnesses bake provider/model/mode into the
+  // child at spawn; claude takes its model from the machine's settings.json.
+  if (after.runtime === 'pi-rpc' || after.runtime === 'prime-rpc') {
     const moved =
       (before.runtimeProvider ?? null) !== (after.runtimeProvider ?? null) ||
       (before.runtimeModel ?? null) !== (after.runtimeModel ?? null) ||
-      (before.runtimeMode ?? null) !== (after.runtimeMode ?? null);
+      (before.runtimeMode ?? null) !== (after.runtimeMode ?? null) ||
+      (before.runtimeCredentialId ?? null) !== (after.runtimeCredentialId ?? null);
     return { ok: true, restart: moved, resetExternalId: false };
   }
 

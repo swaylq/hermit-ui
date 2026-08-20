@@ -30,7 +30,7 @@ import type {
 } from './types';
 import { DshEventTranslator, parseRunnerLine, type DshTotals, type DshUsage } from './dsh-events';
 import { readSecret } from './pi-credentials';
-import { getPiConfig, type PiConfig } from '../pi-config';
+import { getCredential, type ModelCredential } from '../pi-config';
 import { modelLimitsFor } from '../pi-model-limits';
 import { api } from '../api';
 
@@ -56,6 +56,8 @@ type DshHandle = RuntimeHandle & {
   translator: DshEventTranslator | null;
   /** Cumulative usage as the runner last reported it. */
   totals: DshTotals | null;
+  /** Which Settings → Models credential this backend was composed with. */
+  credentialId: string | null;
 };
 
 const live = new Map<string, DshHandle>();
@@ -132,14 +134,14 @@ function cleanValue(v: string | null | undefined): string | null {
  * cannot speak, or cc-subscription mode, whose Keychain OAuth path is
  * pi-specific (llm-pi-ai authenticates routes by API key only).
  */
-export function piEndpointRoute(cfg: PiConfig): {
+export function piEndpointRoute(cfg: ModelCredential | null): {
   rows: string[];
   provider: string;
   models: string[];
   defaultModel: string;
   secretKey: string;
 } | null {
-  if (cfg.authMode === 'cc-subscription') return null;
+  if (!cfg) return null;
   const provider = cleanValue(cfg.provider);
   const baseUrl = cleanValue(cfg.baseUrl);
   const secretKey = cleanValue(cfg.secretKey);
@@ -275,27 +277,6 @@ export function resetDeepseekKeyCache(): void {
 }
 
 /**
- * Settings → Backends' dsh model source, polled with a short TTL (it sits on
- * the message-delivery path). 'pi-endpoint' points an UNPINNED dsh session at
- * the machine's pi endpoint and its default model instead of dsh's own
- * deepseek catalog; pinned sessions are unaffected. Unreachable dashboard or
- * unknown value = 'deepseek', the historical behaviour.
- */
-let cachedSource: { at: number; value: 'deepseek' | 'pi-endpoint' } = { at: 0, value: 'deepseek' };
-async function dshSource(): Promise<'deepseek' | 'pi-endpoint'> {
-  if (Date.now() - cachedSource.at < 30_000) return cachedSource.value;
-  let value: 'deepseek' | 'pi-endpoint' = 'deepseek';
-  try {
-    const cfg = (await api.pollBackendsConfig()) as { dshSource?: unknown } | null;
-    if (cfg?.dshSource === 'pi-endpoint') value = 'pi-endpoint';
-  } catch {
-    // keep the default; a dashboard blip must not change where models come from
-  }
-  cachedSource = { at: Date.now(), value };
-  return value;
-}
-
-/**
  * A turn that produces no runner output for this long is wedged — the model
  * call inside dsh has its own retry/timeout machinery, so silence this length
  * means the process is stuck, not thinking.
@@ -314,6 +295,7 @@ export class DshExecRuntime implements AgentRuntime {
       existing.agentDirectory = session.agentDirectory;
       existing.provider = session.provider?.trim() || null;
       existing.modelPin = session.model?.trim() || null;
+      existing.credentialId = session.credentialId ?? null;
       return existing;
     }
 
@@ -345,6 +327,7 @@ export class DshExecRuntime implements AgentRuntime {
       interrupted: false,
       translator: dshId ? new DshEventTranslator(dshId) : null,
       totals: null,
+      credentialId: session.credentialId ?? null,
     };
     live.set(session.id, handle);
     return handle;
@@ -377,7 +360,7 @@ export class DshExecRuntime implements AgentRuntime {
     // capability, not a precondition.
     let bridge: { route: NonNullable<ReturnType<typeof piEndpointRoute>>; key: string | null } | null = null;
     try {
-      const route = piEndpointRoute(await getPiConfig());
+      const route = piEndpointRoute(await getCredential(h.credentialId));
       // The route rows go in even when the secret is absent from the store:
       // a claude-pinned turn then fails with llm-pi-ai's own MISSING_CREDENTIAL
       // naming the secret to set, which beats "unknown provider" confusion.
@@ -386,13 +369,13 @@ export class DshExecRuntime implements AgentRuntime {
       console.warn('[dsh] pi endpoint bridge skipped:', e instanceof Error ? e.message : String(e));
     }
 
-    // Settings → Backends can point unpinned dsh sessions at the pi endpoint.
-    // Expressed as a provider default so inferDshSelection fills the model in,
-    // exactly as if the session had pinned the provider by hand.
-    const sourceProvider =
-      bridge && !h.provider && !h.modelPin && (await dshSource()) === 'pi-endpoint'
-        ? bridge.route.provider
-        : null;
+    // The backend's credential IS the model source. One that names an endpoint
+    // routes unpinned turns there; one with a blank baseUrl (which is how the
+    // catalog spells "this harness supplies its own") leaves dsh on its own
+    // deepseek catalog. Expressed as a provider default so inferDshSelection
+    // fills the model in, exactly as if the session had pinned it by hand.
+    // Pinned sessions are unaffected either way.
+    const sourceProvider = bridge && !h.provider && !h.modelPin ? bridge.route.provider : null;
 
     return this.spawnTurn(h, command, text, key, bridge, sourceProvider);
   }

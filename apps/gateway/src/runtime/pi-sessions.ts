@@ -19,8 +19,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AGENTS_ROOT } from '../config';
 
-/** Which engine wrote a session — they cannot read each other's files. */
-export type PiEngine = 'pi' | 'omp';
+/**
+ * Which engine wrote a session — none of them can read another's file.
+ *
+ * 'prime' is Prime Agent, a fork of pi with its own config dir (~/.prime/agent),
+ * its own session store and its own resume flag. Same reason omp is listed
+ * separately: a pointer from the wrong engine has to read as "nothing to
+ * resume", not as a file worth trying.
+ */
+export type PiEngine = 'pi' | 'omp' | 'prime';
 
 export type PiSessionPointer = {
   /** Absolute path to the engine's session JSONL — what `--session`/`--resume` is given. */
@@ -126,7 +133,9 @@ export function readPiSession(sessionId: string, file = piSessionStorePath()): P
 
 /** The engine a pointer belongs to, defaulting the pre-omp shape to 'pi'. */
 export function pointerEngine(pointer: PiSessionPointer): PiEngine {
-  return pointer.engine === 'omp' ? 'omp' : 'pi';
+  if (pointer.engine === 'omp') return 'omp';
+  if (pointer.engine === 'prime') return 'prime';
+  return 'pi';
 }
 
 /**

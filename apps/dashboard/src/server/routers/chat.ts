@@ -23,8 +23,8 @@ import {
   type TakeoverEndReason,
 } from '../../lib/takeover';
 import { HUMAN_MESSAGES_MAX, humanMessages } from '../user-profile';
-import { resolveRuntime } from '../runtime-resolve';
-import { backendsConfigOf } from '../../lib/backend-availability';
+import { resolveRuntime, runtimeContextOf } from '../runtime-resolve';
+import { listBackends, backendsConfigOf } from '../../lib/backends';
 import { planRuntimeSwitch } from '../runtime-switch';
 import {
   LIVE_SESSION,
@@ -305,7 +305,7 @@ export const chatRouter = router({
       const byName = new Map(agentRuntimes.map((a) => [a.name, a]));
       // …and against what this machine offers, so an inherited default the
       // machine has switched off resolves to one it can actually run.
-      const backends = backendsConfigOf(ctx.machine);
+      const backends = runtimeContextOf(ctx.machine);
       return rows.map((r) => ({ ...r, ...resolveRuntime(r, byName.get(r.agentName), backends) }));
     }),
 
@@ -370,7 +370,7 @@ export const chatRouter = router({
           where: { machineId_name: { machineId: ctx.machine.id, name: s.agentName } },
           select: { runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true },
         });
-        backend = resolveRuntime(s, agent, backendsConfigOf(ctx.machine));
+        backend = resolveRuntime(s, agent, runtimeContextOf(ctx.machine));
       }
 
       // While a takeover is live, also report whether the BRAIN itself is mid-turn.
@@ -427,7 +427,7 @@ export const chatRouter = router({
           ? prisma.sessionGroup.findUnique({ where: { id: s.groupId }, select: { name: true } })
           : Promise.resolve(null),
       ]);
-      const machineBackends = backendsConfigOf(ctx.machine);
+      const machineBackends = runtimeContextOf(ctx.machine);
 
       return {
         ...s,
@@ -461,7 +461,11 @@ export const chatRouter = router({
     .input(
       z.object({
         id: z.string(),
-        runtime: z.enum(['claude-tmux', 'pi-rpc', 'codex-exec', 'dsh-exec']),
+        // A BACKEND id, not a harness: the two built-ins keep the harness
+        // names they always had, and a composed backend has an id of its own.
+        // Validated against this machine's list below rather than by an enum —
+        // the set is per machine and the dashboard is not the authority on it.
+        runtime: z.string().min(1).max(64),
         runtimeProvider: z.string().max(64).nullish(),
         runtimeModel: z.string().max(128).nullish(),
         runtimeMode: z.string().max(64).nullish(),
@@ -471,6 +475,9 @@ export const chatRouter = router({
       const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
       ctx.assertAgent(s.agentName);
+      if (!listBackends(backendsConfigOf(ctx.machine)).some((b) => b.id === input.runtime)) {
+        throw new Error('That backend does not exist on this machine.');
+      }
 
       const agent = await prisma.agent.findUnique({
         where: { machineId_name: { machineId: ctx.machine.id, name: s.agentName } },
@@ -479,7 +486,7 @@ export const chatRouter = router({
       // Same machine set on both sides: `before` has to be the backend the
       // gateway was actually told to run (pollPending resolves it that way), or
       // planRuntimeSwitch would compare against a backend that never started.
-      const backends = backendsConfigOf(ctx.machine);
+      const backends = runtimeContextOf(ctx.machine);
       const before = resolveRuntime(s, agent, backends);
       const after = resolveRuntime(
         {
@@ -566,7 +573,7 @@ export const chatRouter = router({
         dispatchedBySessionId: z.string().max(64).optional(),
         // Which backend runs this session. Omitted = inherit the agent's
         // default, which is what every caller that predates the picker does.
-        runtime: z.enum(['claude-tmux', 'pi-rpc', 'codex-exec', 'dsh-exec']).optional(),
+        runtime: z.string().min(1).max(64).optional(),
         runtimeProvider: z.string().max(64).optional(),
         runtimeModel: z.string().max(128).optional(),
         // Which pi mode to spawn under. Omitted = inherit the agent's, then the
@@ -1297,7 +1304,7 @@ export const chatRouter = router({
       // default as this machine can run it, else claude-tmux. Provider/model
       // follow whichever level won — a session that picked pi must not inherit
       // the agent's claude settings.
-      ...resolveRuntime(s, runtimeByName.get(s.agentName), backendsConfigOf(ctx.machine)),
+      ...resolveRuntime(s, runtimeByName.get(s.agentName), runtimeContextOf(ctx.machine)),
     }));
 
     const sessionIds = sessions.map((s) => s.id);

@@ -125,6 +125,7 @@ export const api = {
       agentDirectory: string | null; isOrchestrator?: boolean;
       runtime?: string | null; runtimeProvider?: string | null;
       runtimeModel?: string | null; runtimeMode?: string | null;
+      runtimeCredentialId?: string | null;
     }>;
     messages: Array<{ id: string; sessionId: string; role: string; content: any; createdAt: string }>;
   }> => {
@@ -344,8 +345,18 @@ export const api = {
     return r?.[0]?.result?.data?.json ?? null;
   },
 
-  // Machine-level pi runtime config (hyqubit endpoint + image recognition),
-  // edited on Settings → Pi Runtime. The gateway merges it over its own .env.
+  // The machine's credential catalog plus its backend list — everything a
+  // session spawn needs beyond what the dashboard already resolved onto it.
+  pollRuntimeConfig: async (): Promise<unknown> => {
+    const r = await get<any>(
+      '/api/trpc/machines.pollRuntimeConfig?batch=1&input=' +
+        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r?.[0]?.result?.data?.json ?? null;
+  },
+
+  // The vision block, and (for a machine that has not been migrated) the legacy
+  // single endpoint. Same poll-row contract as the rest.
   pollPiConfig: async (): Promise<unknown> => {
     const r = await get<any>(
       '/api/trpc/machines.pollPiConfig?batch=1&input=' +
@@ -354,10 +365,27 @@ export const api = {
     return r?.[0]?.result?.data?.json ?? null;
   },
 
-  // Write the machine's pi config. Used once at startup to seed it from the
-  // legacy .env knobs — see seedPiConfigFromEnv.
-  setPiConfig: async (config: unknown): Promise<void> => {
-    await post('/api/trpc/machines.setPiConfig?batch=1', { 0: { json: { config } } });
+  // Write the machine's credential catalog. Used once at startup to seed it
+  // from the legacy .env knobs — see seedPiConfigFromEnv.
+  setModelCredentials: async (credentials: unknown[]): Promise<void> => {
+    await post('/api/trpc/machines.setModelCredentials?batch=1', { 0: { json: { credentials } } });
+  },
+
+  // Append one composed backend, preserving whatever the machine already has.
+  // Read-modify-write rather than a dedicated mutation: the seeder is the only
+  // caller, it runs once, and a second endpoint for one caller is not worth the
+  // surface.
+  addBackendInstance: async (instance: Record<string, unknown>): Promise<void> => {
+    const current = (await get<any>(
+      '/api/trpc/machines.pollBackendsConfig?batch=1&input=' +
+        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    ))?.[0]?.result?.data?.json ?? null;
+    const disabled: string[] = Array.isArray(current?.disabled) ? current.disabled : [];
+    const instances: unknown[] = Array.isArray(current?.instances) ? current.instances : [];
+    if (instances.some((i: any) => i?.id === instance.id)) return;
+    await post('/api/trpc/machines.setBackendsConfig?batch=1', {
+      0: { json: { config: { disabled, instances: [...instances, instance] } } },
+    });
   },
 
   // ── File Station (large-file delivery) round-trip ───────────────────────────

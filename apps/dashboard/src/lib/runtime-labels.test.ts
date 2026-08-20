@@ -1,49 +1,54 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BACKEND_OPTIONS, BACKEND_BLURB, RUNTIME_KINDS,
-  backendLabel, toBackendOption, fromBackendOption, hasTmuxPane,
+  RUNTIME_KINDS, CUSTOM_HARNESSES, RUNTIME_BLURB, RUNTIME_NEEDS,
+  runtimeLabel, runtimeShortLabel, runtimeDetail, isCustomHarness, hasTmuxPane,
 } from './runtime-labels';
 
-test('every backend option has a label and a blurb', () => {
-  for (const o of BACKEND_OPTIONS) {
-    assert.ok(backendLabel(o).length > 0, `${o} needs a label`);
-    assert.ok(BACKEND_BLURB[o]?.length > 0, `${o} needs a blurb`);
-  }
-});
-
-test('every stored kind gets a card, and every card stores a kind', () => {
+test('every harness has a label, a blurb and an install note', () => {
   for (const k of RUNTIME_KINDS) {
-    assert.equal(toBackendOption(k, null), k);
-    assert.deepEqual(fromBackendOption(k), { runtime: k, runtimeMode: null });
+    assert.ok(runtimeLabel(k).length > 0, `${k} needs a label`);
+    assert.ok(runtimeShortLabel(k).length > 0, `${k} needs a short label`);
+    assert.ok(RUNTIME_BLURB[k]?.length > 0, `${k} needs a blurb`);
+    assert.ok(RUNTIME_NEEDS[k]?.length > 0, `${k} needs an install note`);
   }
 });
 
-test('a pi session is the pi card whatever its mode', () => {
-  // Including 'triage', which sessions created before the triage card was
-  // removed (2026-08-15) still hold in runtimeMode. They must light the pi
-  // card, not fall through to claude.
-  for (const m of [null, 'omp', 'scout', 'writer', 'triage']) {
-    assert.equal(toBackendOption('pi-rpc', m), 'pi-rpc');
-  }
+// The two subscription harnesses are the ones a user cannot compose a backend
+// out of — there is only ever one credential for each, and it is not ours.
+test('only the non-subscription harnesses are composable', () => {
+  assert.deepEqual([...CUSTOM_HARNESSES], ['pi-rpc', 'prime-rpc', 'dsh-exec']);
+  assert.equal(isCustomHarness('claude-tmux'), false);
+  assert.equal(isCustomHarness('codex-exec'), false);
+  assert.equal(isCustomHarness('prime-rpc'), true);
 });
 
-test('an unknown or absent runtime falls back to claude, not to a blank card', () => {
-  assert.equal(toBackendOption(null, null), 'claude-tmux');
-  assert.equal(toBackendOption('omp-rpc', null), 'claude-tmux');
-  // The retired triage card stored runtime 'pi-rpc', never 'triage' — but a
-  // value that never existed must still land somewhere real.
-  assert.equal(toBackendOption('triage', null), 'claude-tmux');
+// It reads straight off a JSON column, so it has to survive a non-string.
+test('isCustomHarness tolerates whatever the JSON column held', () => {
+  assert.equal(isCustomHarness(null), false);
+  assert.equal(isCustomHarness(undefined), false);
+  assert.equal(isCustomHarness(42), false);
+  assert.equal(isCustomHarness({}), false);
 });
 
-// ── which backends have a pane to attach to ─────────────────────────────────
+test('detail names the endpoint for the harnesses that have one', () => {
+  assert.equal(runtimeDetail('pi-rpc', 'hyqubit', 'claude-opus-5'), 'pi · hyqubit · claude-opus-5');
+  assert.equal(runtimeDetail('prime-rpc', 'kimi', 'kimi-k3'), 'Prime Agent · kimi · kimi-k3');
+  // codex authenticates as itself; naming a provider would be a field the user
+  // cannot set and the harness does not read.
+  assert.equal(runtimeDetail('codex-exec', 'hyqubit', 'gpt-5.1'), 'Codex · gpt-5.1');
+  assert.equal(runtimeDetail('claude-tmux', 'hyqubit', 'x'), 'Claude Code (interactive, tmux pane)');
+});
+
+// ── which harnesses have a pane to attach to ────────────────────────────────
 
 // codex and dsh are one subprocess per turn — no pane, exactly like pi. codex
 // was missed when the terminal link was written against pi alone, so the button
 // was there and attached to nothing.
-test('only the tmux backend has a pane', () => {
+test('only the tmux harness has a pane', () => {
   assert.equal(hasTmuxPane('claude-tmux'), true);
   assert.equal(hasTmuxPane('pi-rpc'), false);
+  assert.equal(hasTmuxPane('prime-rpc'), false);
   assert.equal(hasTmuxPane('codex-exec'), false);
   assert.equal(hasTmuxPane('dsh-exec'), false);
   assert.equal(hasTmuxPane('omp-rpc'), false);
@@ -57,19 +62,8 @@ test('an unknown or absent runtime keeps the pane answer, as the gateway does', 
   assert.equal(hasTmuxPane('something-else'), true);
 });
 
-// Every stored kind is either paneless or the tmux one — a new backend that is
+// Every stored kind is either paneless or the tmux one — a new harness that is
 // neither would slip through this predicate unnoticed.
-test('every runtime kind is accounted for', () => {
-  for (const k of RUNTIME_KINDS) {
-    assert.equal(typeof hasTmuxPane(k), 'boolean');
-  }
+test('every harness is accounted for', () => {
   assert.equal(RUNTIME_KINDS.filter((k) => hasTmuxPane(k)).length, 1);
-});
-
-test('no card carries a mode of its own out of the picker', () => {
-  // null means "this card says nothing about the mode" — the caller keeps
-  // whatever the Mode select holds.
-  assert.deepEqual(fromBackendOption('pi-rpc'), { runtime: 'pi-rpc', runtimeMode: null });
-  assert.deepEqual(fromBackendOption('claude-tmux'), { runtime: 'claude-tmux', runtimeMode: null });
-  assert.deepEqual(fromBackendOption('dsh-exec'), { runtime: 'dsh-exec', runtimeMode: null });
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { backendById, backendsConfigOf, listBackends } from '@/lib/backends';
 import { router, gatewayProcedure, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 import { LIVE_SESSION } from '../session-cleanup';
@@ -555,7 +556,8 @@ export const agentsRouter = router({
   setDefaultRuntime: machineProcedure
     .input(z.object({
       name: z.string(),
-      runtime: z.enum(['claude-tmux', 'pi-rpc', 'codex-exec', 'dsh-exec']),
+      // A BACKEND id — see chat.setSessionRuntime for why this is not an enum.
+      runtime: z.string().min(1).max(64),
       runtimeMode: z.string().max(64).nullish(),
     }))
     .mutation(async ({ ctx, input }) => {
@@ -565,11 +567,19 @@ export const agentsRouter = router({
       });
       if (!agent) throw new Error('agent not found');
       if (agent.trashedAt) throw new Error('cannot edit a trashed agent');
+      if (!listBackends(backendsConfigOf(ctx.machine)).some((b) => b.id === input.runtime)) {
+        throw new Error('That backend does not exist on this machine.');
+      }
       await prisma.agent.update({
         where: { id: agent.id },
         data: {
           runtime: input.runtime,
-          runtimeMode: input.runtime === 'pi-rpc' ? (input.runtimeMode ?? null) : null,
+          // A mode is a pi spawn recipe, so it is only stored when the chosen
+          // backend actually runs pi. resolveRuntime forces null for everything
+          // else anyway; writing null keeps the column clean for a switch back.
+          runtimeMode: backendById(backendsConfigOf(ctx.machine), input.runtime)?.harness === 'pi-rpc'
+            ? (input.runtimeMode ?? null)
+            : null,
         },
       });
       return { ok: true };

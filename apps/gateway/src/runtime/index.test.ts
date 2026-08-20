@@ -44,6 +44,19 @@ test('codex is its own backend and takes no mode', () => {
   assert.equal(runtimeFor('codex-exec', null), runtimeFor('codex-exec', null));
 });
 
+// Prime has exactly ONE built-in tool, so a mode's tool allowlist — written in
+// pi's vocabulary of read/bash/edit/write — would name four tools that do not
+// exist and drop the only one that does. It takes no mode for that reason, and
+// resolveRuntime nulls one out upstream.
+test('prime is its own harness and takes no mode', () => {
+  assert.equal(runtimeFor('prime-rpc', null)?.kind, 'prime-rpc');
+  assert.equal(runtimeFor('prime-rpc', 'omp')?.kind, 'prime-rpc');
+  assert.equal(runtimeFor('prime-rpc', 'coding')?.kind, 'prime-rpc');
+  // Singleton for the same reason the others are: probeRuntime looks a session
+  // up by id in the runtime's own map.
+  assert.equal(runtimeFor('prime-rpc', null), runtimeFor('prime-rpc', null));
+});
+
 test('dsh is its own backend and takes no mode', () => {
   assert.equal(runtimeFor('dsh-exec', null)?.kind, 'dsh-exec');
   assert.equal(runtimeFor('dsh-exec', 'omp')?.kind, 'dsh-exec');
@@ -51,5 +64,8 @@ test('dsh is its own backend and takes no mode', () => {
 });
 
 test('teardown paths see every engine', () => {
-  assert.deepEqual(allRuntimes().map((r) => r.kind).sort(), ['codex-exec', 'dsh-exec', 'omp-rpc', 'pi-rpc']);
+  assert.deepEqual(
+    allRuntimes().map((r) => r.kind).sort(),
+    ['codex-exec', 'dsh-exec', 'omp-rpc', 'pi-rpc', 'prime-rpc'],
+  );
 });

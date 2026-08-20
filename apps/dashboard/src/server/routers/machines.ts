@@ -3,12 +3,16 @@ import { router, gatewayProcedure, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { invalidateMachineCache } from '../auth';
 import { Prisma } from '@/generated/prisma/client';
-import { BACKEND_OPTIONS } from '@/lib/runtime-labels';
+import { CUSTOM_HARNESSES } from '@/lib/runtime-labels';
+import { listBackends, backendsConfigOf } from '@/lib/backends';
+import { modelCredentialsOf, defaultModelOf } from '@/lib/model-credentials';
 
 export const PI_CONFIG_SCHEMA = z.object({
-  // 'api-key' (default): provider + secretKey as below; 'cc-subscription': reuse
-  // this machine's Claude Code Keychain OAuth credentials instead of an API key.
-  authMode: z.enum(['api-key', 'cc-subscription']).optional(),
+  // NOTE: `authMode` used to live here and could name 'cc-subscription', which
+  // pointed pi at this machine's Claude Code OAuth credentials. That option is
+  // gone — running third-party harnesses against one Max account is the thing
+  // rate limits and the request classifier exist to catch. A stored value is
+  // simply ignored; the schema strips it on the next write.
   // hyqubit (or any Anthropic-compatible endpoint) base config
   provider: z.string().trim().min(1).optional(),
   baseUrl: z.string().trim().url().optional(),
@@ -50,6 +54,49 @@ export const PI_CONFIG_SCHEMA = z.object({
     .optional(),
 });
 
+const SLUG = /^[a-z0-9][a-z0-9-]*$/;
+
+/** One Settings → Models entry. Holds a secret NAME, never a secret value. */
+export const MODEL_CREDENTIAL_SCHEMA = z.object({
+  id: z.string().trim().regex(SLUG).max(48),
+  label: z.string().trim().min(1).max(60),
+  provider: z.string().trim().min(1).max(64),
+  api: z.string().trim().min(1).max(48),
+  // Blank is legal and meaningful: it marks a credential whose harness supplies
+  // its own endpoint (dsh against DeepSeek's own catalog). A URL is validated
+  // only when one is given, so a typo still cannot become a silent 404.
+  baseUrl: z.union([z.literal(''), z.string().trim().url()]),
+  models: z.array(z.string().trim().min(1).max(128)).max(50),
+  defaultModel: z.string().trim().max(128).optional(),
+  secretKey: z.string().trim().regex(/^[A-Za-z0-9_-]+$/).max(64).optional().nullable(),
+  modelLimits: z
+    .record(
+      z.string().trim().min(1),
+      z.object({
+        contextWindow: z.number().int().positive().optional(),
+        maxTokens: z.number().int().positive().optional(),
+      }),
+    )
+    .optional(),
+});
+
+/** One composed backend: a harness paired with a credential. */
+export const BACKEND_INSTANCE_SCHEMA = z.object({
+  id: z.string().trim().regex(SLUG).max(64),
+  harness: z.enum(CUSTOM_HARNESSES),
+  credentialId: z.string().trim().regex(SLUG).max(48),
+  label: z.string().trim().min(1).max(60),
+  model: z.string().trim().max(128).nullish(),
+  mode: z.string().trim().max(64).nullish(),
+});
+
+export const BACKENDS_CONFIG_SCHEMA = z.object({
+  disabled: z.array(z.string().max(64)).max(40),
+  instances: z.array(BACKEND_INSTANCE_SCHEMA).max(20).optional(),
+  // Read by the migration, never written again.
+  dshSource: z.enum(['deepseek', 'pi-endpoint']).optional(),
+});
+
 export const machinesRouter = router({
   me: machineProcedure.query(async ({ ctx }) => {
     // Read fresh, NOT the cached auth snapshot — so alias / limits reflect the
@@ -71,74 +118,183 @@ export const machinesRouter = router({
     };
   }),
 
-  // Pi-runtime machine config (hyqubit endpoint + image recognition). Reads
-  // fresh from the DB so the gateway's polling and the browser see the same
-  // snapshot; never returns the API key value, only the secret name.
+  // ── Settings → Models: the machine's model credentials ───────────────────
+  //
+  // Never returns a key VALUE — a credential holds the NAME of a secret in the
+  // machine's own store, and that is all this endpoint has ever seen.
+  getModelCredentials: machineProcedure.query(async ({ ctx }) => {
+    const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
+    return modelCredentialsOf(m);
+  }),
+
+  setModelCredentials: machineProcedure
+    .input(z.object({ credentials: z.array(MODEL_CREDENTIAL_SCHEMA).max(30) }))
+    .mutation(async ({ ctx, input }) => {
+      const ids = input.credentials.map((c) => c.id);
+      if (new Set(ids).size !== ids.length) throw new Error('Two credentials cannot share an id.');
+
+      // A credential a backend is built on cannot be deleted out from under it:
+      // the backend would keep resolving, spawn with no endpoint and no key, and
+      // fail at the first turn with a 401 nobody could trace back to here.
+      const backends = backendsConfigOf(await prisma.machine.findUnique({ where: { id: ctx.machine.id } }));
+      const orphaned = listBackends(backends)
+        .filter((b) => b.credentialId && !ids.includes(b.credentialId));
+      if (orphaned.length > 0) {
+        throw new Error(
+          `Still in use by ${orphaned.map((b) => b.label).join(', ')}. `
+          + 'Remove those backends first, or point them at another credential.',
+        );
+      }
+
+      await prisma.machine.update({
+        where: { id: ctx.machine.id },
+        data: { modelProviders: input.credentials as unknown as Prisma.InputJsonValue },
+      });
+      invalidateMachineCache(ctx.machine.id);
+      return { ok: true };
+    }),
+
+  // The vision fallback (used when an endpoint drops image blocks) still lives
+  // on piConfig, because it is a machine-level pair of models and not a
+  // credential a backend is built on. Merged rather than replaced so the legacy
+  // endpoint fields survive for pollPiConfig's compatibility projection.
+  setVisionConfig: machineProcedure
+    .input(z.object({ image: PI_CONFIG_SCHEMA.shape.image }))
+    .mutation(async ({ ctx, input }) => {
+      const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
+      const current = (m?.piConfig as Record<string, unknown> | null) ?? {};
+      await prisma.machine.update({
+        where: { id: ctx.machine.id },
+        data: { piConfig: { ...current, image: input.image ?? undefined } as unknown as Prisma.InputJsonValue },
+      });
+      return { ok: true };
+    }),
+
+  // Read for the vision card and for the legacy endpoint fields the projection
+  // below still needs. Reads fresh from the DB so the gateway's polling and the
+  // browser see the same snapshot.
   getPiConfig: machineProcedure.query(async ({ ctx }) => {
     const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
     return (m?.piConfig as unknown as z.infer<typeof PI_CONFIG_SCHEMA> | null) ?? null;
   }),
 
-  setPiConfig: machineProcedure
-    .input(z.object({ config: PI_CONFIG_SCHEMA.nullable() }))
-    .mutation(async ({ ctx, input }) => {
-      await prisma.machine.update({
-        where: { id: ctx.machine.id },
-        data: { piConfig: (input.config ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue },
-      });
-      return { ok: true };
-    }),
+  /**
+   * Whether the two subscription backends are actually live on this machine.
+   *
+   * Derived from the usage collectors rather than probed: the Claude and Codex
+   * collectors only produce a row when their CLI is installed, authenticated
+   * and reporting, so a fresh `capturedAt` is the same evidence a probe would
+   * gather, at no cost and with no new gateway round-trip. Absent means "the
+   * collector has never seen it", which is what the page says — not "logged
+   * out", which we would be guessing.
+   */
+  subscriptionStatus: machineProcedure.query(async ({ ctx }) => {
+    const [claude, codex] = await Promise.all([
+      prisma.planUsage.findUnique({ where: { machineId: ctx.machine.id }, select: { capturedAt: true } }),
+      prisma.codexUsage.findUnique({ where: { machineId: ctx.machine.id }, select: { capturedAt: true, planType: true } }),
+    ]);
+    return {
+      'claude-tmux': { seenAt: claude?.capturedAt ?? null, plan: null as string | null },
+      'codex-exec': { seenAt: codex?.capturedAt ?? null, plan: codex?.planType ?? null },
+    };
+  }),
 
-  // Settings → Backends. Shape and defaulting rules live in
-  // lib/backend-availability; this only stores and returns them.
+  // ── Settings → Backends ──────────────────────────────────────────────────
+  //
+  // Shape and defaulting rules live in lib/backends; this stores and returns
+  // them, and refuses the two states the UI must never be able to reach.
   getBackendsConfig: machineProcedure.query(async ({ ctx }) => {
     const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
-    return (m?.backendsConfig as unknown as { disabled: string[] } | null) ?? null;
+    return backendsConfigOf(m);
   }),
 
   setBackendsConfig: machineProcedure
-    .input(z.object({
-      config: z.object({
-        disabled: z.array(z.string().max(64)).max(20),
-        // Where an unpinned dsh session gets its model — see lib/backend-availability.
-        dshSource: z.enum(['deepseek', 'pi-endpoint']).optional(),
-      }).nullable(),
-    }))
+    .input(z.object({ config: BACKENDS_CONFIG_SCHEMA.nullable() }))
     .mutation(async ({ ctx, input }) => {
-      // The "never disable everything" rule is enforced in the UI against the
-      // option list it renders, but it is re-checked here because this is a
-      // public procedure: a machine with every backend off would have a picker
-      // with nothing in it and no way to fix itself from the app.
-      if (input.config && input.config.disabled.length >= BACKEND_OPTIONS.length) {
-        throw new Error('At least one backend has to stay enabled.');
+      const cfg = input.config;
+      if (cfg) {
+        const instances = cfg.instances ?? [];
+        const ids = instances.map((i) => i.id);
+        if (new Set(ids).size !== ids.length) throw new Error('Two backends cannot share an id.');
+        if (ids.some((id) => id === 'claude-tmux' || id === 'codex-exec')) {
+          throw new Error('That id belongs to a built-in backend.');
+        }
+
+        // Every composed backend must name a credential that exists. Checked
+        // here rather than only in the form because this is a public procedure,
+        // and a dangling reference fails invisibly at spawn time.
+        const credentials = modelCredentialsOf(await prisma.machine.findUnique({ where: { id: ctx.machine.id } }));
+        const known = new Set(credentials.map((c) => c.id));
+        const missing = instances.filter((i) => !known.has(i.credentialId));
+        if (missing.length > 0) {
+          throw new Error(`Unknown credential: ${missing.map((i) => i.credentialId).join(', ')}`);
+        }
+
+        // The "never disable everything" rule is enforced in the UI against the
+        // list it renders, but it is re-checked here: a machine with every
+        // backend off would have a picker with nothing in it and no way to fix
+        // itself from the app.
+        const all = ['claude-tmux', 'codex-exec', ...ids];
+        if (all.every((id) => cfg.disabled.includes(id))) {
+          throw new Error('At least one backend has to stay enabled.');
+        }
       }
       await prisma.machine.update({
         where: { id: ctx.machine.id },
-        data: { backendsConfig: (input.config ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue },
+        data: { backendsConfig: (cfg ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue },
       });
-      // The runtime resolver reads this set off the CACHED machine row (it runs
-      // on the gateway's 2s poll, so it cannot afford its own query). Without
-      // this, switching a backend off left inherited sessions resolving to it
-      // for up to the 5-minute auth TTL.
+      // The runtime resolver reads this off the CACHED machine row (it runs on
+      // the gateway's 2s poll, so it cannot afford its own query). Without this,
+      // switching a backend off left inherited sessions resolving to it for up
+      // to the 5-minute auth TTL.
       invalidateMachineCache(ctx.machine.id);
       return { ok: true };
     }),
 
-  // Gateway-side read of the backends config, same split as pollPiConfig below:
-  // a poll row whose shape is the gateway's contract, so the UI getter is free
-  // to change. The gateway wants it for the dsh model source (dshSource).
-  pollBackendsConfig: gatewayProcedure.query(async ({ ctx }) => {
+  // ── Gateway-side reads ───────────────────────────────────────────────────
+  //
+  // Separate from the browser getters so those are free to change shape without
+  // breaking a gateway that has not been restarted.
+
+  /** Everything a current gateway needs to spawn a session: catalog + backends. */
+  pollRuntimeConfig: gatewayProcedure.query(async ({ ctx }) => {
     const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
-    return (m?.backendsConfig as unknown as { disabled?: string[]; dshSource?: string } | null) ?? null;
+    return { credentials: modelCredentialsOf(m), backends: backendsConfigOf(m) };
   }),
 
-  // Gateway-side read: same shape as getPiConfig but behind gatewayProcedure,
-  // so a gateway polls it with its machine key without going through the
-  // browser-scoped getter. Kept separate so getPiConfig can change shape for
-  // the UI (e.g. add a mask) without breaking the gateway contract.
+  pollBackendsConfig: gatewayProcedure.query(async ({ ctx }) => {
+    const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
+    return backendsConfigOf(m);
+  }),
+
+  /**
+   * Compatibility projection for a gateway that has not restarted yet.
+   *
+   * The fleet's minis run a lagging gateway for days after a dashboard deploy,
+   * and that gateway asks for one endpoint in the old shape. It gets the
+   * credential its first pi backend is built on — the same endpoint it was
+   * already running — with the vision block carried through untouched. A
+   * machine with no pi backend falls back to the first credential it has, and
+   * to the stored legacy fields if it has none.
+   */
   pollPiConfig: gatewayProcedure.query(async ({ ctx }) => {
     const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
-    return (m?.piConfig as unknown as z.infer<typeof PI_CONFIG_SCHEMA> | null) ?? null;
+    const legacy = (m?.piConfig as Record<string, unknown> | null) ?? null;
+    const credentials = modelCredentialsOf(m);
+    const piBackend = listBackends(backendsConfigOf(m)).find((b) => b.harness === 'pi-rpc');
+    const chosen =
+      credentials.find((c) => c.id === piBackend?.credentialId) ?? credentials[0] ?? null;
+    if (!chosen) return legacy;
+    return {
+      ...(legacy ?? {}),
+      provider: chosen.provider,
+      baseUrl: chosen.baseUrl,
+      api: chosen.api,
+      models: chosen.models,
+      defaultModel: piBackend?.model ?? defaultModelOf(chosen) ?? undefined,
+      secretKey: chosen.secretKey ?? null,
+      ...(chosen.modelLimits ? { modelLimits: chosen.modelLimits } : {}),
+    };
   }),
 
   setLimits: machineProcedure

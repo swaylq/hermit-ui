@@ -22,7 +22,7 @@ import {
 import { resolveMode, buildModeArgs } from './pi-modes';
 import { readPiSession, rememberPiSession, resumablePiSession } from './pi-sessions';
 import { globalMemoryPrompt } from './context-files';
-import { getPiConfig, resolveDefaultModel } from '../pi-config';
+import { getCredential, credentialDefaultModel } from '../pi-config';
 import { modelLimitsFor, type ModelLimits } from '../pi-model-limits';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 
@@ -139,6 +139,8 @@ type PiHandle = RuntimeHandle & {
    * catches the other routes in (the agent default changing, a direct DB edit).
    */
   mode: string | null;
+  /** Credential it booted against; a change is a different endpoint entirely. */
+  credentialId: string | null;
   /**
    * Fingerprint of the credentials this child was booted with.
    *
@@ -363,7 +365,7 @@ export function emitItemsFor(sessionId: string, externalId: string, ev: unknown)
  */
 async function staleAuth(h: PiHandle): Promise<boolean> {
   if (!h.authFingerprint) return false;
-  const now = await currentAuthFingerprint();
+  const now = await currentAuthFingerprint(h.credentialId);
   return now !== null && now !== h.authFingerprint;
 }
 
@@ -378,6 +380,10 @@ export class PiRpcRuntime implements AgentRuntime {
       const wanted = resolveMode(session.mode)?.name ?? null;
       if (wanted !== existing.mode) {
         evict(session.id, `mode changed ${existing.mode ?? 'none'} → ${wanted ?? 'none'}`);
+      } else if ((session.credentialId ?? null) !== existing.credentialId) {
+        // A different credential is a different endpoint and model catalog,
+        // both baked into the child at spawn. New child, not a push.
+        evict(session.id, 'credential changed');
       } else if (await staleAuth(existing)) {
         // Idle only — evicting mid-turn would abandon a reply that is still
         // streaming, and the next tick catches the child once it is quiet.
@@ -431,13 +437,15 @@ export class PiRpcRuntime implements AgentRuntime {
     const mode = resolveMode(session.mode);
     const modeArgs = buildModeArgs(mode, { agentDirectory: session.agentDirectory });
     const globalMemoryArg = globalMemoryPrompt();
-    const piConfig = await getPiConfig();
-    const machineDefaultModel = resolveDefaultModel(piConfig);
+    // The credential this backend was composed with — one entry of Settings →
+    // Models, already chosen by the dashboard.
+    const piConfig = await getCredential(session.credentialId);
+    const machineDefaultModel = credentialDefaultModel(piConfig);
     // pi resolves --provider against a persistent config file at CLI parse time
     // (before extensions load), so the extension's registerProvider cannot
     // satisfy it — the child would die "Unknown provider" every boot. Keep the
     // file in step the same way the omp engine keeps models.yml.
-    ensurePiModelsJson(piConfig);
+    if (piConfig) ensurePiModelsJson(piConfig);
     // ...and the provider that serves it. A model id alone is NOT enough: pi
     // resolves a bare id against its own built-in catalogue, so `claude-opus-5`
     // with no provider came back as {provider: 'anthropic', baseUrl:
@@ -445,7 +453,7 @@ export class PiRpcRuntime implements AgentRuntime {
     // produced NOTHING: no reply, no error event, no stderr, just a child
     // sitting idle while the chat waited forever. Every pi session that pinned
     // no provider was dead from the moment the machine default model shipped.
-    const machineProvider = piConfig.provider?.trim() || undefined;
+    const machineProvider = piConfig?.provider?.trim() || undefined;
 
     // The conversation this session was already having, if it had one. `pi
     // --session <path>` opens that file instead of creating a session, which is
@@ -458,7 +466,7 @@ export class PiRpcRuntime implements AgentRuntime {
     // One read, shared by the child's env and the fingerprint recorded for it —
     // two reads could straddle a rotation and record a fingerprint the child
     // never had, which reads as "already stale" on the very next tick.
-    const machineEnv = await machineProviderEnv();
+    const machineEnv = await machineProviderEnv(session.credentialId);
 
     // The child inherits the gateway's env plus the provider key, resolved from
     // the encrypted store at start time so it never lands in a config file.
@@ -573,6 +581,7 @@ export class PiRpcRuntime implements AgentRuntime {
       // turn of the previous child wrote.
       bootId: `${state?.sessionId ?? 'pi'}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
       mode: mode?.name ?? null,
+      credentialId: session.credentialId ?? null,
       authFingerprint: fingerprintAuthEnv(machineEnv),
       emit,
       lastTurn: null,

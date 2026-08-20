@@ -13,8 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { getPiConfig } from '../pi-config';
+import { getPiConfig, getCredential } from '../pi-config';
 
 const SECRET_BIN = path.join(os.homedir(), '.local', 'bin', 'secret');
 const PROVIDER_RE = /^[A-Za-z0-9_-]+$/;
@@ -57,136 +56,67 @@ export function readSecret(key: string): Promise<string | null> {
 }
 
 /**
- * Claude Code OAuth access token from the macOS Keychain — the same credential
- * Claude Code itself uses (service "Claude Code-credentials", JSON payload
- * with claudeAiOauth.accessToken). Mirror of agent/anthropic_adapter.py's
- * keychain reader in Hermes.
+ * NOTE — the Claude Code subscription path used to live here.
+ *
+ * A machine could set `authMode: 'cc-subscription'` and every pi child would be
+ * handed this host's Claude Code OAuth token through ANTHROPIC_OAUTH_TOKEN,
+ * which triggered pi-ai's stealth-OAuth branch: the verbatim Claude Code
+ * identity as system block 0, the claude-cli UA, the claude-code beta. It
+ * worked — the responses came back `anthropic-ratelimit-unified-status:
+ * allowed`, i.e. inside the plan rather than on extra usage.
+ *
+ * It is gone deliberately, not because it broke. Pointing pi (and then prime,
+ * and then a third harness) at one Max account is exactly what the rate limits
+ * and the request classifier exist to catch, and a single reclassification
+ * would have taken the whole fleet's non-Claude backends down at once. Claude
+ * Code keeps its own subscription, through its own tmux path, and nothing else
+ * reaches for it. Removed with the Keychain reader, the SYSTEM.md writer and
+ * the ANTHROPIC_OAUTH_TOKEN fingerprint key on 2026-08-21.
  */
-function readClaudeCodeKeychainToken(): Promise<string | null> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      'security',
-      ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
-      { timeout: 8_000, maxBuffer: 256 * 1024 },
-      (err, stdout) => {
-        if (err) return resolve(null);
-        try {
-          const data = JSON.parse(stdout);
-          resolve(data?.claudeAiOauth?.accessToken ?? null);
-        } catch {
-          resolve(null);
-        }
-      },
-    );
-    child.stdin?.end();
-  });
-}
 
 /**
- * pi 全局配置目录的干净 SYSTEM.md，cc-subscription 模式幂等写入。
- *
- * 这份文件的内容会成为 system 数组的第二个 block：pi-ai 的 stealth OAuth 分支
- * （apiKey 含 sk-ant-oat 时）会把 "You are Claude Code, Anthropic's official CLI
- * for Claude." 作为第一个 block 逐字前置（见 pi-ai anthropic-messages.js
- * buildParams），本文件只承载我们的指令。因此它绝不能含 pi/harness 身份段
- * （"operating inside pi" / "Pi documentation"），否则分类器会把它判成第三方
- * harness，拒掉订阅额度。不要删除用户已有的 SYSTEM.md —— 只在该模式下补一个
- * 干净版本（若已有则不动）。
- */
-function ensureCleanSystemPrompt(): void {
-  const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent');
-  const sysPath = path.join(agentDir, 'SYSTEM.md');
-  if (existsSync(sysPath)) return; // 已有自定义 system prompt，尊重它
-  try {
-    mkdirSync(agentDir, { recursive: true });
-    writeFileSync(
-      sysPath,
-      [
-        'You are an expert coding assistant. You help users by reading files, executing commands, editing code, and writing new files.',
-        '',
-        'Guidelines:',
-        '- Be concise in your responses',
-        '- Show file paths clearly when working with files',
-        '',
-      ].join('\n'),
-      'utf8',
-    );
-  } catch (e) {
-    console.warn('[pi-credentials] 写入 SYSTEM.md 失败:', (e as Error).message);
-  }
-}
-/**
- * The env that makes pi take its stealth-OAuth path for a Claude Code OAuth
- * token.
- *
- * MUST be ANTHROPIC_OAUTH_TOKEN, not ANTHROPIC_AUTH_TOKEN: pi's anthropic
- * provider resolves AUTH_TOKEN to a plain `Authorization: Bearer` header, which
- * bypasses the OAuth branch in pi-ai anthropic-messages.js entirely. That branch
- * only fires when the token reaches createClient as `apiKey` (it checks
- * `apiKey.includes("sk-ant-oat")`), and it is what adds the verbatim Claude Code
- * identity as system block 1, the claude-cli UA and x-app headers, and the
- * claude-code beta. Without it the request is classified as third-party and gets
- * a 429 rate_limit_error with no `anthropic-ratelimit-unified-status: allowed`
- * header — the exact failure this whole path exists to avoid.
- */
-export function subscriptionTokenEnv(token: string): Record<string, string> {
-  if (!token.includes('sk-ant-oat')) {
-    console.warn(
-      '[pi-credentials] cc-subscription: Keychain token 不含 sk-ant-oat，'
-      + 'pi-ai 的 stealth OAuth 分支不会触发，请求会落 extra usage / 429（无 unified 头）',
-    );
-  }
-  return { ANTHROPIC_OAUTH_TOKEN: token };
-}
-
-/**
- * This machine's own model endpoint, if it declares one.
+ * The env a child needs to reach ONE credential from Settings → Models.
  *
  * pi honours ANTHROPIC_AUTH_TOKEN but NOT ANTHROPIC_BASE_URL, so a
  * self-hosted/proxied endpoint cannot be selected by environment alone. The
- * hermit extension registers it as a pi provider instead (pi.registerProvider),
+ * hermit extension registers it as a provider instead (pi.registerProvider),
  * and these values are what it registers.
  *
- * Config comes from the dashboard's Settings → Pi Runtime page (Machine.piConfig,
- * merged over the legacy gateway .env knobs), so it can be edited without
- * touching files. The key is passed as HERMIT_PI_API_KEY and referenced from
- * the provider registration as "$HERMIT_PI_API_KEY", so it never appears in a
- * config file.
+ * The key is passed as HERMIT_PI_API_KEY and referenced from the provider
+ * registration as "$HERMIT_PI_API_KEY", so it never appears in a config file.
+ *
+ * `credentialId` is the backend's own credential, resolved by the dashboard and
+ * carried on the session. Omitted (or naming nothing) falls back to the first
+ * credential the machine has — which is what a lagging caller, and the vision
+ * path, still expect.
  */
-async function computeMachineProviderEnv(): Promise<Record<string, string>> {
-  const cfg = await getPiConfig();
-
-  // Claude Code 订阅模式：复用本机 Claude Code 的 Keychain OAuth 凭据，anthropic
-  // 是 pi 内置 provider，无需注册也无需 API key。token 必须经 ANTHROPIC_OAUTH_TOKEN
-  // 注入（见 subscriptionTokenEnv）：pi 把 AUTH_TOKEN 当普通 Bearer 头，只有
-  // OAUTH_TOKEN 会触发 pi-ai 的 stealth OAuth 分支——system 第一块逐字带上 Claude
-  // Code 身份行 + claude-cli UA，请求才进订阅桶（响应头 unified=allowed），否则
-  // 429 无 unified 头。同时确保 pi 全局配置目录里有干净的 SYSTEM.md（system 第二块）。
-  if (cfg.authMode === 'cc-subscription') {
-    const token = await readClaudeCodeKeychainToken();
-    if (!token) {
-      console.warn('[pi-credentials] cc-subscription: 无法从 Keychain 读取 Claude Code 凭据，跳过订阅注入');
-      return {};
-    }
-    ensureCleanSystemPrompt();
-    return subscriptionTokenEnv(token);
-  }
+async function computeMachineProviderEnv(credentialId?: string | null): Promise<Record<string, string>> {
+  const cfg = await getCredential(credentialId);
+  if (!cfg) return {};
 
   const id = cfg.provider?.trim();
   const baseUrl = cfg.baseUrl?.trim();
-  if (!id || !baseUrl) return {};
-
-  const out: Record<string, string> = {
-    HERMIT_PI_PROVIDER: id,
-    HERMIT_PI_BASE_URL: baseUrl,
-    HERMIT_PI_API: cfg.api?.trim() || 'anthropic-messages',
-    HERMIT_PI_MODELS: (cfg.models ?? []).join(',') || '',
-  };
+  // A credential with no endpoint is the marker for "this harness supplies its
+  // own" (dsh against DeepSeek's own catalog). There is nothing to register,
+  // but its key still has to reach the child, so the secret lookup below runs
+  // either way.
+  const out: Record<string, string> = {};
+  if (id && baseUrl) {
+    out.HERMIT_PI_PROVIDER = id;
+    out.HERMIT_PI_BASE_URL = baseUrl;
+    out.HERMIT_PI_API = cfg.api?.trim() || 'anthropic-messages';
+    out.HERMIT_PI_MODELS = (cfg.models ?? []).join(',') || '';
+  }
 
   const secretName = cfg.secretKey?.trim();
   if (secretName && PROVIDER_RE.test(secretName.replace(/_/g, '-'))) {
     const value = await readSecret(secretName);
-    if (value) out.HERMIT_PI_API_KEY = value;
+    if (value) {
+      out.HERMIT_PI_API_KEY = value;
+      // Built-in providers read their own env var rather than the hermit one —
+      // a Kimi key has to arrive as MOONSHOT_API_KEY or pi cannot see it.
+      if (id && !baseUrl) out[envVarForProvider(id)] = value;
+    }
   }
   return out;
 }
@@ -197,7 +127,7 @@ async function computeMachineProviderEnv(): Promise<Record<string, string>> {
  * Only credential-bearing names belong here. A base URL or a model list moving
  * is not a reason to recycle a live conversation.
  */
-const AUTH_ENV_KEYS = ['ANTHROPIC_OAUTH_TOKEN', 'HERMIT_PI_API_KEY'] as const;
+const AUTH_ENV_KEYS = ['HERMIT_PI_API_KEY'] as const;
 
 /**
  * A stable, non-reversible fingerprint of the credentials in an env.
@@ -218,19 +148,23 @@ export function fingerprintAuthEnv(env: Record<string, string>): string | null {
   return parts.length > 0 ? parts.join(' ') : null;
 }
 
-// Last fingerprint observed, refreshed as a side effect of every
+// Last fingerprint observed PER CREDENTIAL, refreshed as a side effect of every
 // machineProviderEnv() call so a boot and a later check can never disagree
 // about what "current" means (see currentAuthFingerprint).
-let authFp: { at: number; value: string | null } = { at: 0, value: null };
+//
+// Keyed, because a machine now has several credentials at once: one cache slot
+// would report the last one resolved as "current" for every session, and a
+// pi-on-hyqubit child would be evicted every time a prime-on-Kimi child booted.
+const authFp = new Map<string, { at: number; value: string | null }>();
 
 /**
  * Provider/auth env for a child, and the single place the fingerprint cache is
  * kept honest — boot resolves credentials through here, so the value it records
  * is by construction the value a later staleness check compares against.
  */
-export async function machineProviderEnv(): Promise<Record<string, string>> {
-  const env = await computeMachineProviderEnv();
-  authFp = { at: Date.now(), value: fingerprintAuthEnv(env) };
+export async function machineProviderEnv(credentialId?: string | null): Promise<Record<string, string>> {
+  const env = await computeMachineProviderEnv(credentialId);
+  authFp.set(credentialId ?? '', { at: Date.now(), value: fingerprintAuthEnv(env) });
   return env;
 }
 
@@ -238,14 +172,19 @@ export async function machineProviderEnv(): Promise<Record<string, string>> {
  * Fingerprint of the credentials a child would boot with *right now*.
  *
  * Cached, because the callers are on the message-delivery path and the
- * uncached form shells out to `security` (Keychain) or to `secret`. A Claude
- * Code OAuth token lives ~8h, so a minute of staleness costs nothing and saves
- * a subprocess per message.
+ * uncached form shells out to `secret`. A rotated key is picked up within the
+ * window; a minute of staleness costs nothing and saves a subprocess per
+ * message.
  */
-export async function currentAuthFingerprint(maxAgeMs = 60_000): Promise<string | null> {
-  if (authFp.at > 0 && Date.now() - authFp.at < maxAgeMs) return authFp.value;
-  await machineProviderEnv();
-  return authFp.value;
+export async function currentAuthFingerprint(
+  credentialId?: string | null,
+  maxAgeMs = 60_000,
+): Promise<string | null> {
+  const key = credentialId ?? '';
+  const hit = authFp.get(key);
+  if (hit && Date.now() - hit.at < maxAgeMs) return hit.value;
+  await machineProviderEnv(credentialId);
+  return authFp.get(key)?.value ?? null;
 }
 
 /**

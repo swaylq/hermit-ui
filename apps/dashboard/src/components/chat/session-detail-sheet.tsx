@@ -28,9 +28,9 @@ import { contextWindowFor } from '@/lib/context-window';
 import { BackendPicker } from './backend-picker';
 import { useScope } from '@/lib/use-scope';
 import {
-  isRuntimeKind, runtimeLabel, toBackendOption, backendLabel,
-  type RuntimeKind, type BackendOption,
+  runtimeLabel,
 } from '@/lib/runtime-labels';
+import { availableBackends, backendById } from '@/lib/backends';
 import { isPiMode, piModeLabel, PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, type PiMode } from '@/lib/pi-modes';
 
 function Row({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
@@ -75,6 +75,13 @@ export function SessionDetailSheet({
   );
   const d = q.data;
 
+  // The same query (and staleTime) the picker inside this sheet runs, so
+  // react-query serves both from one request. Read here as well because the
+  // sheet has to know which HARNESS the chosen backend runs before it can decide
+  // whether a Mode select belongs on screen.
+  const cfg = trpc.machines.getBackendsConfig.useQuery(undefined, { staleTime: 60_000 });
+
+
   // The form holds only what the user has CHANGED; null means "whatever the
   // server says". So there is nothing to seed on load, an in-flight edit is
   // never clobbered by the 10s refetch, and a successful save snaps back to the
@@ -84,12 +91,12 @@ export function SessionDetailSheet({
   // landed, or another device switched this session — the override is dropped.
   // Adjusting state during render is React's own escape hatch for exactly this
   // (an effect here causes the cascading render the lint rule warns about).
-  const [runtime, setRuntime] = useState<BackendOption | null>(null);
+  const [runtime, setRuntime] = useState<string | null>(null);
   const [mode, setMode] = useState<PiMode | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [stamped, setStamped] = useState<string | null>(null);
 
-  const stamp = d ? `${sessionId}|${d.backend.runtime}|${d.backend.runtimeMode ?? ''}` : null;
+  const stamp = d ? `${sessionId}|${d.backend.backendId}|${d.backend.runtimeMode ?? ''}` : null;
   if (stamp && stamped !== stamp) {
     setStamped(stamp);
     setRuntime(null);
@@ -99,9 +106,12 @@ export function SessionDetailSheet({
 
   // Both pickers show the RESOLVED value — they must say what is actually
   // running, not what this session happens to have written in its own columns.
-  const shownBackend: BackendOption =
-    runtime ?? toBackendOption(d?.backend.runtime, d?.backend.runtimeMode);
-  const shownRuntime: RuntimeKind = isRuntimeKind(shownBackend) ? shownBackend : 'claude-tmux';
+  const shownBackend: string = runtime ?? d?.backend.backendId ?? 'claude-tmux';
+  // The mode select follows the HARNESS behind the chosen backend, not its
+  // name: two backends can both run pi against different credentials.
+  const shownIsPi = backendById(cfg.data, shownBackend)?.harness === 'pi-rpc';
+  const backendLabelOf = (id: string) =>
+    availableBackends(cfg.data, id).find((b) => b.id === id)?.label ?? runtimeLabel(id);
   // A claude session resolves to no mode at all, so when the picker is flipped
   // to pi the mode select opens on what the AGENT would start pi in — the same
   // answer "New chat" would give — rather than snapping to the fleet default.
@@ -138,8 +148,8 @@ export function SessionDetailSheet({
         : 'The default mode.';
 
   const dirty = !!d
-    && (shownRuntime !== d.backend.runtime
-      || (shownRuntime === 'pi-rpc' && shownMode !== d.backend.runtimeMode));
+    && (shownBackend !== d.backend.backendId
+      || (shownIsPi && shownMode !== d.backend.runtimeMode));
   const working = d?.state === 'working';
   // A share link is scoped to one agent and deliberately gets no machine-level
   // control (the terminal is closed to it for the same reason). It can read the
@@ -149,14 +159,14 @@ export function SessionDetailSheet({
 
   async function submit() {
     if (!d || !dirty) return;
-    const changingBackend = shownRuntime !== d.backend.runtime;
+    const changingBackend = shownBackend !== d.backend.backendId;
     const ok = await confirm({
-      title: changingBackend ? `Switch to ${backendLabel(shownBackend)}?` : `Switch mode to ${piModeLabel(shownMode)}?`,
+      title: changingBackend ? `Switch to ${backendLabelOf(shownBackend)}?` : `Switch mode to ${piModeLabel(shownMode)}?`,
       message: (
         <>
           The conversation on this page is kept. What is <em>not</em> kept is the running context:{' '}
-          {changingBackend ? runtimeLabel(d.backend.runtime) : 'pi'} is stopped, and the next message starts a fresh
-          turn on {changingBackend ? backendLabel(shownBackend) : piModeLabel(shownMode)} with no memory of this thread
+          {changingBackend ? backendLabelOf(d.backend.backendId) : 'pi'} is stopped, and the next message starts a fresh
+          turn on {changingBackend ? backendLabelOf(shownBackend) : piModeLabel(shownMode)} with no memory of this thread
           beyond what you say in it.
         </>
       ),
@@ -165,17 +175,17 @@ export function SessionDetailSheet({
     if (!ok) return;
     save.mutate({
       id: sessionId,
-      runtime: shownRuntime,
+      runtime: shownBackend,
       // The session's OWN provider/model pins, not the resolved ones. Writing a
       // resolved value would turn "inherits the agent's" into a pin, and on a
       // cross-backend switch it would pin the OLD backend's. Neither is editable
       // here any more, so both simply survive a mode change untouched.
-      runtimeProvider: shownRuntime === 'pi-rpc' ? d.runtimeProvider ?? null : null,
-      runtimeModel: shownRuntime === 'pi-rpc' ? d.runtimeModel ?? null : null,
+      runtimeProvider: shownIsPi ? d.runtimeProvider ?? null : null,
+      runtimeModel: shownIsPi ? d.runtimeModel ?? null : null,
       // Omitted on a switch to claude, which has no modes: leaving the column
       // alone keeps the pi mode for a switch back, and the resolver already
       // reports null for anything that is not pi.
-      ...(shownRuntime === 'pi-rpc' ? { runtimeMode: shownMode } : {}),
+      ...(shownIsPi ? { runtimeMode: shownMode } : {}),
     });
   }
 
@@ -210,7 +220,7 @@ export function SessionDetailSheet({
                 value={shownBackend}
                 onChange={(v) => { setRuntime(v); setErr(null); }}
                 disabled={readOnly || working || save.isPending}
-                agentDefault={toBackendOption(d.agentBackend.runtime, d.agentBackend.runtimeMode)}
+                agentDefault={d.agentBackend.backendId}
               />
 
               {/* Which mode this session runs — the setting that decides the
@@ -248,9 +258,9 @@ export function SessionDetailSheet({
 
               <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
                 {d.inherited ? (
-                  <>Inherited from <span className="font-mono">{d.agentName}</span> ({runtimeLabel(d.agentBackend.runtime)}). Choosing here pins it to this session.</>
+                  <>Inherited from <span className="font-mono">{d.agentName}</span> ({backendLabelOf(d.agentBackend.backendId)}). Choosing here pins it to this session.</>
                 ) : (
-                  <>Set on this session. The agent&apos;s own default is {runtimeLabel(d.agentBackend.runtime)}.</>
+                  <>Set on this session. The agent&apos;s own default is {backendLabelOf(d.agentBackend.backendId)}.</>
                 )}
               </p>
 
@@ -282,7 +292,7 @@ export function SessionDetailSheet({
                 )}
                 {save.data?.restarted && !dirty && (
                   <span className="text-[11px] text-muted-foreground">
-                    stopped — the next message starts it on {runtimeLabel(d.backend.runtime)}
+                    stopped — the next message starts it on {backendLabelOf(d.backend.backendId)}
                     {d.backend.runtime === 'pi-rpc' && ` · ${piModeLabel(d.backend.runtimeMode)}`}
                   </span>
                 )}

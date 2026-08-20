@@ -1,12 +1,14 @@
 import type { AgentRuntime } from './types';
 import { PiRpcRuntime } from './pi-rpc';
 import { OmpRpcRuntime } from './omp-rpc';
+import { PrimeRpcRuntime } from './prime-rpc';
 import { CodexExecRuntime } from './codex-exec';
 import { DshExecRuntime } from './dsh-exec';
 import { resolveMode } from './pi-modes';
 
 const piRuntime = new PiRpcRuntime();
 const ompRuntime = new OmpRpcRuntime();
+const primeRuntime = new PrimeRpcRuntime();
 const codexRuntime = new CodexExecRuntime();
 const dshRuntime = new DshExecRuntime();
 
@@ -18,10 +20,12 @@ const dshRuntime = new DshExecRuntime();
  * path is the fleet's critical path and the only one that bills against Claude
  * Max's Interactive bucket.
  *
- * 'codex-exec' and 'dsh-exec' are their own backends and take no mode: neither
- * has an equivalent of a pi mode (no spawn recipe, no tool allowlist we
- * compose — dsh composes its own from its profile), so there is nothing for
- * one to select and resolveRuntime already nulls it out upstream.
+ * 'codex-exec', 'dsh-exec' and 'prime-rpc' take no mode. None has an
+ * equivalent of a pi mode: codex and dsh have no spawn recipe to compose, and
+ * prime has exactly one built-in tool (`ipython`), so a mode's tool allowlist —
+ * written in pi's vocabulary of read/bash/edit/write — would name four tools
+ * that do not exist and drop the only one that does. resolveRuntime already
+ * nulls it out upstream.
  *
  * There is one *backend* in the pi family and two *engines* under it. Which
  * engine runs is declared by the MODE, not chosen separately: from the user's
@@ -47,6 +51,7 @@ export function runtimeFor(
 ): AgentRuntime | null {
   if (kind === 'codex-exec') return codexRuntime;
   if (kind === 'dsh-exec') return dshRuntime;
+  if (kind === 'prime-rpc') return primeRuntime;
   if (kind !== 'pi-rpc') return null;
   return resolveMode(mode)?.engine === 'omp' ? ompRuntime : piRuntime;
 }
@@ -62,7 +67,7 @@ export function runtimeFor(
  * the three sites, and so that adding a third never does either.
  */
 export function allRuntimes(): AgentRuntime[] {
-  return [piRuntime, ompRuntime, codexRuntime, dshRuntime];
+  return [piRuntime, ompRuntime, primeRuntime, codexRuntime, dshRuntime];
 }
 
 export type {

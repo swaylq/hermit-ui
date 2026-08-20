@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveDefaultModel } from './pi-config';
+import { credentialDefaultModel as resolveDefaultModel } from './pi-config';
 
 test('an explicit default wins', () => {
   assert.equal(

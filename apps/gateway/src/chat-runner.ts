@@ -89,6 +89,7 @@ type PendingSession = {
   // Which backend runs this session. Absent means claude-tmux (the path this
   // whole file implements); 'pi-rpc' is handed off in deliverMessages.
   runtime?: string | null; runtimeProvider?: string | null; runtimeModel?: string | null;
+  runtimeCredentialId?: string | null;
   // pi only: which mode recipe the child is spawned with. Already resolved
   // against the agent's default by the dashboard.
   runtimeMode?: string | null;
@@ -620,6 +621,7 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
           provider: session.runtimeProvider,
           model: session.runtimeModel,
           mode: session.runtimeMode,
+          credentialId: session.runtimeCredentialId,
         },
         (item) => queueSync(state, item),
       );

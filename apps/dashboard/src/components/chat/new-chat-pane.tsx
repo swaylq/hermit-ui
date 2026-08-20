@@ -12,8 +12,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { SearchSelect } from '@/components/ui/search-select';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { BackendPicker } from './backend-picker';
-import { toBackendOption, fromBackendOption, type BackendOption } from '@/lib/runtime-labels';
-import { effectiveDefaultBackend } from '@/lib/backend-availability';
+import { effectiveDefaultBackendId, backendById } from '@/lib/backends';
 import { PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
 
 export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }: { agents: string[]; preset?: string; lockedAgent?: string; onCreated: (id: string) => void; onCancel: () => void }) {
@@ -27,7 +26,7 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
   // Holds only an explicit choice; null = "the agent's default", resolved at
   // render. That way the picker is right the instant the agent lookup lands,
   // without a re-seed that would overwrite a choice made while it was in flight.
-  const [runtime, setRuntime] = useState<BackendOption | null>(null);
+  const [runtime, setRuntime] = useState<string | null>(null);
   // pi only. Same "explicit choice or null" shape as `runtime`: null means the
   // agent's default, resolved at render once the agent lookup lands.
   const [mode, setMode] = useState<PiMode | null>(null);
@@ -59,17 +58,17 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
   // serves both from one request.
   const backends = trpc.machines.getBackendsConfig.useQuery(undefined, { staleTime: 60_000 });
 
-  // The card, read from the stored pair (the card list once held entries that
-  // pinned a mode), and as this machine can run it. An agent defaulting to a backend switched
-  // off under Settings → Backends opens on the first one the machine does offer
-  // — the same substitution the server applies to an inherited default — rather
-  // than on an unclickable "off" card above a Start button that would create a
-  // session nothing here can run.
-  const agentBackend: BackendOption = effectiveDefaultBackend(
-    toBackendOption(agentRuntime, agentMode),
-    backends.data,
-  );
-  const chosen: BackendOption = runtime ?? agentBackend;
+  // The agent's default AS THIS MACHINE CAN RUN IT. An agent defaulting to a
+  // backend switched off (or deleted) under Settings → Backends opens on the
+  // first one the machine does offer — the same substitution the server applies
+  // to an inherited default — rather than on an unclickable "off" card above a
+  // Start button that would create a session nothing here can run.
+  const agentBackend: string = effectiveDefaultBackendId(agentRuntime, backends.data);
+  const chosen: string = runtime ?? agentBackend;
+  // A mode is a pi spawn recipe, so the select only appears for a backend that
+  // actually runs pi — which now depends on the backend the user composed, not
+  // on the card's own name.
+  const isPiBackend = backendById(backends.data, chosen)?.harness === 'pi-rpc';
   const chosenMode: PiMode = mode ?? (isPiMode(agentMode) ? agentMode : DEFAULT_PI_MODE);
 
   const create = trpc.chat.createSession.useMutation({ onSuccess: (s) => onCreated(s.id) });
@@ -85,17 +84,13 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
           onSubmit={(e) => {
             e.preventDefault();
             if (!agent) return;
-            const backend = fromBackendOption(chosen);
             create.mutate({
               agentName: agent,
-              runtime: backend.runtime,
+              runtime: chosen,
               // Written explicitly, for the same reason the backend is: a
               // session that states its mode keeps the one you started it in
-              // when the agent's default is later edited. pi takes whatever
-              // the Mode select holds; no current card pins one itself.
-              ...(backend.runtimeMode
-                ? { runtimeMode: backend.runtimeMode }
-                : chosen === 'pi-rpc' ? { runtimeMode: chosenMode } : {}),
+              // when the agent's default is later edited.
+              ...(isPiBackend ? { runtimeMode: chosenMode } : {}),
             });
           }}
         >
@@ -133,7 +128,7 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
               <BackendPicker value={chosen} onChange={setRuntime} agentDefault={agentBackend} />
             </div>
           </div>
-          {chosen === 'pi-rpc' && (
+          {isPiBackend && (
             <label className="block">
               <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Mode</span>
               <Select
@@ -154,8 +149,8 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
             </label>
           )}
           {/* No model field here on purpose. Starting a chat should be: agent,
-              backend, mode, go. The model comes from Settings → Pi Runtime
-              ("默认模型") or the agent's own pin. This used to be a free-text
+              backend, mode, go. The model comes from the backend's own default,
+              then its credential's ("默认模型" under Settings → Models). This used to be a free-text
               box you had to leave blank on every single new chat — and for the
               same reason the session detail sheet no longer carries one either,
               so mode is the only pi dial in both places. */}

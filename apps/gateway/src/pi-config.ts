@@ -19,12 +19,6 @@ export type PiImageConfig = {
 };
 
 export type PiConfig = {
-  /**
-   * 'api-key' (default) uses `provider`+`secretKey` below; 'cc-subscription'
-   * reuses this machine's Claude Code Keychain OAuth credentials instead — no
-   * API key needed, the anthropic provider is pi's built-in.
-   */
-  authMode?: 'api-key' | 'cc-subscription';
   provider?: string;
   baseUrl?: string;
   api?: string;
@@ -39,7 +33,7 @@ export type PiConfig = {
   modelLimits?: Record<string, ModelLimits>;
   /**
    * Model for a pi session that pins none of its own. Blank falls back to the
-   * first entry of `models` — see resolveDefaultModel.
+   * first entry of `models` — see credentialDefaultModel.
    */
   defaultModel?: string;
   /** Secret-store name for the provider API key (never the value). */
@@ -66,47 +60,44 @@ function envFallback(): PiConfig {
 }
 
 /**
- * Copy the legacy .env endpoint knobs into the dashboard's config, once.
+ * Promote the legacy .env endpoint into the machine's credential catalog, once.
  *
- * The two have been layered since pi shipped: `mergeRemote` falls back to
- * HERMIT_PI_* for anything the dashboard leaves blank, so a machine configured
- * entirely by .env works — but its Settings → Pi Runtime page renders *empty*,
- * every field showing a grey example instead of what the machine is actually
- * running. That is not a cosmetic gap: the page's example values happen to name
- * models, so a blank page reads as "everything defaults to claude-opus-5" when
- * the machine is really on hyqubit with three models from a file nobody is
- * looking at. Reported as exactly that confusion.
+ * The two have been layered since pi shipped, and a machine configured entirely
+ * by HERMIT_PI_* renders an EMPTY settings page — every field a grey example
+ * instead of what the machine is actually running. That is not cosmetic: the
+ * examples name models, so a blank page reads as "everything defaults to
+ * claude-opus-5" when the machine is really on hyqubit with three models from a
+ * file nobody is looking at. Reported as exactly that confusion.
  *
- * So the env values are promoted into the DB the first time a gateway starts
- * without them, after which the settings page is the single source of truth and
- * .env is only bootstrap. Deliberately conservative:
+ * Now it writes a credential AND the pi backend built on it, because a
+ * credential alone is not something you can start a chat on. Deliberately
+ * conservative:
  *
- *  - Only when the stored config names no provider. A machine configured on the
- *    page is never overwritten, and this becomes a no-op forever after.
- *  - Only fields the env actually declares; the stored image/auth settings are
- *    carried through untouched.
+ *  - Only when the catalog is empty. A machine configured on the page is never
+ *    overwritten, and this becomes a no-op forever after.
+ *  - Only when the env actually declares an endpoint.
  *  - A failure is logged and dropped. Seeding is a convenience; a dashboard blip
- *    must not stop pi sessions from spawning, which is why nothing awaits it.
+ *    must not stop sessions from spawning, which is why nothing awaits it.
  */
 export async function seedPiConfigFromEnv(): Promise<void> {
   const env = envFallback();
   if (!env.provider || !env.baseUrl) return; // nothing to promote — cheap early out
 
-  let remote: PiConfig | null = null;
+  let existing: ModelCredential[] = [];
   try {
-    remote = (await api.pollPiConfig()) as PiConfig | null;
+    existing = await getModelCredentials(true);
   } catch (e) {
-    console.warn('[pi-config] seed: could not read current config:', (e as Error).message);
+    console.warn('[pi-config] seed: could not read the catalog:', (e as Error).message);
     return;
   }
-
-  const next = planPiConfigSeed(env, remote);
-  if (!next) return;
+  const plan = planCredentialSeed(env, existing);
+  if (!plan) return;
 
   try {
-    await api.setPiConfig(next);
-    cache = null; // force the next getPiConfig to see what we just wrote
-    console.log(`[pi-config] seeded Settings → Pi Runtime from .env (provider "${env.provider}")`);
+    await api.setModelCredentials([plan.credential]);
+    await api.addBackendInstance(plan.instance);
+    credCache = null;
+    console.log(`[pi-config] seeded Settings → Models from .env (provider "${env.provider}")`);
   } catch (e) {
     console.warn('[pi-config] seed: write failed:', (e as Error).message);
   }
@@ -119,39 +110,34 @@ export async function seedPiConfigFromEnv(): Promise<void> {
  * of them — see the singleFlight note in pi-rpc.ts for what a re-implemented
  * guard costs.
  */
-export function planPiConfigSeed(env: PiConfig, remote: PiConfig | null): PiConfig | null {
+export function planCredentialSeed(
+  env: PiConfig,
+  existing: ModelCredential[],
+): { credential: ModelCredential; instance: Record<string, unknown> } | null {
   if (!env.provider || !env.baseUrl) return null;
-  if (remote?.provider?.trim()) return null; // already configured on the page
+  if (existing.length > 0) return null; // already configured on the page
 
-  return {
-    ...(remote ?? {}),
+  const id = env.provider.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'endpoint';
+  const credential: ModelCredential = {
+    id,
+    label: env.provider,
     provider: env.provider,
+    api: env.api ?? 'anthropic-messages',
     baseUrl: env.baseUrl,
-    api: env.api,
-    models: env.models?.length ? env.models : remote?.models,
-    secretKey: remote?.secretKey || env.secretKey || null,
-    defaultModel: remote?.defaultModel?.trim() || env.models?.[0],
+    models: env.models ?? [],
+    ...(env.defaultModel?.trim() || env.models?.[0] ? { defaultModel: env.defaultModel?.trim() || env.models?.[0] } : {}),
+    secretKey: env.secretKey ?? null,
   };
-}
-
-/**
- * The model a pi session gets when it pins none of its own.
- *
- * Explicit setting first, then the head of the models list. The list is ordered
- * by preference on the settings page, so its first entry is the machine's
- * "best" model — on this fleet that is claude-opus-5. Returns undefined when
- * nothing is configured, which leaves pi to pick, because inventing a model id
- * here would name something the machine's provider may not serve.
- */
-export function resolveDefaultModel(cfg: PiConfig): string | undefined {
-  return cfg.defaultModel?.trim() || cfg.models?.[0]?.trim() || undefined;
+  return {
+    credential,
+    instance: { id: `pi-${id}`, harness: 'pi-rpc', credentialId: id, label: `pi · ${env.provider}` },
+  };
 }
 
 function mergeRemote(remote: PiConfig | null): PiConfig {
   const env = envFallback();
   if (!remote) return env;
   return {
-    authMode: remote.authMode || 'api-key',
     provider: remote.provider?.trim() || env.provider,
     baseUrl: remote.baseUrl?.trim() || env.baseUrl,
     api: remote.api?.trim() || env.api || 'anthropic-messages',
@@ -191,4 +177,97 @@ export async function getPiConfig(force = false): Promise<PiConfig> {
     }
   }
   return cache ?? next;
+}
+
+
+// ── The model-credential catalog ────────────────────────────────────────────
+//
+// A credential is one endpoint plus the NAME of the secret that authenticates
+// to it. Backends reference one by id, and the dashboard resolves that id onto
+// the session before the gateway ever sees it — so all this layer does is keep
+// a short-TTL copy of the catalog and hand back the entry a session asked for.
+//
+// See docs/backends-and-models-design.md.
+
+export type ModelCredential = {
+  id: string;
+  label: string;
+  provider: string;
+  api: string;
+  baseUrl: string;
+  models: string[];
+  defaultModel?: string;
+  secretKey?: string | null;
+  modelLimits?: Record<string, ModelLimits>;
+};
+
+let credCache: ModelCredential[] | null = null;
+let credFetched = 0;
+
+/**
+ * The machine's credentials, cached for the same TTL as the pi config.
+ *
+ * A failed poll keeps the previous list rather than erroring: a dashboard blip
+ * must never stop a session from spawning, and an empty list would look exactly
+ * like "this machine has no credentials", which is a different and much worse
+ * answer.
+ */
+export async function getModelCredentials(force = false): Promise<ModelCredential[]> {
+  if (!force && credCache && Date.now() - credFetched < TTL_MS) return credCache;
+  try {
+    const remote = (await api.pollRuntimeConfig()) as { credentials?: ModelCredential[] } | null;
+    if (Array.isArray(remote?.credentials)) {
+      credCache = remote.credentials;
+      credFetched = Date.now();
+    }
+  } catch (e) {
+    console.warn('[pi-config] pollRuntimeConfig failed, using cached credentials:', (e as Error).message);
+  }
+  return credCache ?? [];
+}
+
+/**
+ * One credential by id.
+ *
+ * An id that names nothing falls back to the FIRST credential rather than to
+ * nothing. That covers the window where a dashboard has been upgraded and a
+ * gateway has not — the session arrives with no credential id at all — and it
+ * covers a credential deleted out from under a live session. Both are better
+ * served by the machine's one obvious endpoint than by an unauthenticated
+ * child that 401s at the first turn.
+ */
+export async function getCredential(id?: string | null): Promise<ModelCredential | null> {
+  const all = await getModelCredentials();
+  if (all.length === 0) {
+    // Nothing in the catalog: fall back to the legacy single-endpoint config,
+    // which is what an un-migrated machine still has.
+    const legacy = await getPiConfig();
+    if (!legacy.provider || !legacy.baseUrl) return null;
+    return {
+      id: 'legacy', label: legacy.provider, provider: legacy.provider,
+      api: legacy.api ?? 'anthropic-messages', baseUrl: legacy.baseUrl,
+      models: legacy.models ?? [], defaultModel: legacy.defaultModel,
+      secretKey: legacy.secretKey ?? null, modelLimits: legacy.modelLimits,
+    };
+  }
+  return all.find((c) => c.id === id) ?? all[0] ?? null;
+}
+
+/**
+ * The model a session on this credential gets when it pins none of its own.
+ *
+ * Explicit setting first, then the head of the models list. The list is ordered
+ * by preference on the settings page, so its first entry is the credential's
+ * "best" model. Returns undefined when neither is set, which leaves the harness
+ * to pick — inventing a model id here would name something the provider may not
+ * serve.
+ *
+ * Structurally typed rather than taking a whole ModelCredential: it reads two
+ * fields, and the callers that have only those two should not have to fake the
+ * rest.
+ */
+export function credentialDefaultModel(
+  c: { defaultModel?: string; models?: string[] } | null | undefined,
+): string | undefined {
+  return c?.defaultModel?.trim() || c?.models?.[0]?.trim() || undefined;
 }

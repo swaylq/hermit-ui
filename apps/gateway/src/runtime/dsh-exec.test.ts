@@ -35,6 +35,8 @@ test('a blank override falls through to the default install lookup', () => {
 // ── the pi endpoint bridge ──────────────────────────────────────────────────
 
 const HYQUBIT = {
+  id: 'hyqubit',
+  label: 'hyqubit',
   provider: 'hyqubit',
   baseUrl: 'https://litellm.hyqubit.com',
   api: 'anthropic-messages',
@@ -93,13 +95,12 @@ test('an api dsh cannot speak drops the bridge, never a broken route', () => {
 });
 
 test('an unusable endpoint is no bridge at all', () => {
-  assert.equal(piEndpointRoute({}), null);
+  assert.equal(piEndpointRoute(null), null);
+  assert.equal(piEndpointRoute({ ...HYQUBIT, baseUrl: '' }), null);
   assert.equal(piEndpointRoute({ ...HYQUBIT, provider: '' }), null);
   assert.equal(piEndpointRoute({ ...HYQUBIT, secretKey: null }), null);
   assert.equal(piEndpointRoute({ ...HYQUBIT, secretKey: 'not a var name' }), null);
   assert.equal(piEndpointRoute({ ...HYQUBIT, models: [] }), null);
-  // cc-subscription's Keychain OAuth path is pi-specific.
-  assert.equal(piEndpointRoute({ ...HYQUBIT, authMode: 'cc-subscription' }), null);
 });
 
 // ── pin inference ───────────────────────────────────────────────────────────

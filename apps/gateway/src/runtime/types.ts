@@ -16,7 +16,7 @@ export type SyncItem = {
   claudeSessionId: string | null;
 };
 
-export type RuntimeKind = 'claude-tmux' | 'pi-rpc' | 'omp-rpc' | 'codex-exec' | 'dsh-exec';
+export type RuntimeKind = 'claude-tmux' | 'pi-rpc' | 'omp-rpc' | 'prime-rpc' | 'codex-exec' | 'dsh-exec';
 
 export type RuntimeSession = {
   id: string;
@@ -26,6 +26,16 @@ export type RuntimeSession = {
   externalSessionId: string | null;
   provider?: string | null;
   model?: string | null;
+  /**
+   * Which Settings → Models credential authenticates this session's harness.
+   *
+   * Already resolved by the dashboard: a backend is a harness paired with a
+   * credential, and the pairing is a machine-level setting the gateway has no
+   * business re-deriving. Null for the two subscription backends, which
+   * authenticate as themselves — and for a session from a dashboard that has
+   * not been upgraded yet, which falls back to the machine's first credential.
+   */
+  credentialId?: string | null;
   /**
    * Which pi mode to spawn under (already resolved by the dashboard against the
    * agent's default). null for the backends with no such concept — claude-tmux,

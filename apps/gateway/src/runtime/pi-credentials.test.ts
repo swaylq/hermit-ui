@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  envVarForProvider, fingerprintAuthEnv, providerEnv, subscriptionTokenEnv,
+  envVarForProvider, fingerprintAuthEnv, providerEnv,
 } from './pi-credentials';
 
 test('provider name maps onto the store key convention', () => {
@@ -21,22 +21,12 @@ test('built-in moonshot providers read MOONSHOT_API_KEY, not the convention name
   assert.equal(envVarForProvider('huggingface'), 'HF_TOKEN');
 });
 
-test('cc-subscription env uses ANTHROPIC_OAUTH_TOKEN so pi-ai\'s OAuth branch fires', () => {
-  // pi-ai only takes its stealth-OAuth path when the token reaches createClient
-  // as `apiKey` (checked via apiKey.includes("sk-ant-oat")). ANTHROPIC_AUTH_TOKEN
-  // resolves to a plain Authorization header instead, which never enters that
-  // branch — the exact 429-without-unified-header failure this guards against.
-  assert.deepEqual(subscriptionTokenEnv('sk-ant-oat01-test-token'), {
-    ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-test-token',
-  });
-});
-
-test('a non-OAuth token still maps to ANTHROPIC_OAUTH_TOKEN (prefix guard is a warning only)', () => {
-  // The env is set regardless; whether pi routes the request through the OAuth
-  // branch is pi-ai's decision, so the guard can only warn.
-  assert.deepEqual(subscriptionTokenEnv('sk-ant-api03-xxxx'), {
-    ANTHROPIC_OAUTH_TOKEN: 'sk-ant-api03-xxxx',
-  });
+// The Claude Code subscription path used to live here: a Keychain OAuth token
+// injected as ANTHROPIC_OAUTH_TOKEN so pi-ai took its stealth-OAuth branch. It
+// worked, and it is gone deliberately — see the note in pi-credentials.ts. What
+// remains testable is that no credential path can produce that env var again.
+test('no credential path emits an Anthropic OAuth token', () => {
+  assert.equal(fingerprintAuthEnv({ ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-x' }), null);
 });
 
 test('no provider means no injected env', async () => {
@@ -62,32 +52,25 @@ test('an unknown provider degrades to the gateway env instead of throwing', asyn
 // that has since been rotated away — the failure that wedged sway003 and
 // macmini003 for ~9h each with 401 "OAuth access token has been revoked".
 test('a rotated credential produces a different fingerprint', () => {
-  const before = fingerprintAuthEnv({ ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-old' });
-  const after = fingerprintAuthEnv({ ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-new' });
+  const before = fingerprintAuthEnv({ HERMIT_PI_API_KEY: 'key-one' });
+  const after = fingerprintAuthEnv({ HERMIT_PI_API_KEY: 'key-two' });
   assert.ok(before);
   assert.notEqual(before, after);
 });
 
 test('the same credential fingerprints identically, so a live child is left alone', () => {
-  const env = { ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-same' };
+  const env = { HERMIT_PI_API_KEY: 'key-same' };
   assert.equal(fingerprintAuthEnv(env), fingerprintAuthEnv({ ...env }));
 });
 
 // It ends up in logs and in an eviction reason shown to the user, so it must
 // not be possible to read the credential back out of it.
 test('the fingerprint never carries the secret itself', () => {
-  const secret = 'sk-ant-oat01-SUPERSECRET-VALUE';
-  const fp = fingerprintAuthEnv({ ANTHROPIC_OAUTH_TOKEN: secret })!;
+  const secret = 'SUPERSECRET-VALUE-1234';
+  const fp = fingerprintAuthEnv({ HERMIT_PI_API_KEY: secret })!;
   assert.ok(!fp.includes(secret));
   assert.ok(!fp.includes('SUPERSECRET'));
-  assert.match(fp, /^ANTHROPIC_OAUTH_TOKEN:[0-9a-f]{12}$/);
-});
-
-test('an api-key machine is fingerprinted too — rotation is not OAuth-only', () => {
-  const before = fingerprintAuthEnv({ HERMIT_PI_API_KEY: 'key-one' });
-  const after = fingerprintAuthEnv({ HERMIT_PI_API_KEY: 'key-two' });
-  assert.ok(before);
-  assert.notEqual(before, after);
+  assert.match(fp, /^HERMIT_PI_API_KEY:[0-9a-f]{12}$/);
 });
 
 // Null is the "do not check" signal: a machine that configures no credential
@@ -103,13 +86,15 @@ test('no credential means no fingerprint, which disables the staleness check', (
   }), null);
 });
 
-test('both credentials present fingerprint as one value, in a fixed order', () => {
+// Only credential-bearing names are hashed, and only the ones AUTH_ENV_KEYS
+// lists. A second key alongside the credential — a provider's own env var, say
+// — must not change the answer, or every boot would look like a rotation.
+test('the fingerprint reads only the credential, whatever else is in the env', () => {
   const fp = fingerprintAuthEnv({
     HERMIT_PI_API_KEY: 'k',
-    ANTHROPIC_OAUTH_TOKEN: 't',
+    MOONSHOT_API_KEY: 'other',
+    HERMIT_PI_PROVIDER: 'hyqubit',
   })!;
-  assert.match(fp, /^ANTHROPIC_OAUTH_TOKEN:[0-9a-f]{12} HERMIT_PI_API_KEY:[0-9a-f]{12}$/);
-  // Key order in the object must not change the answer, or every boot would
-  // look like a rotation.
-  assert.equal(fp, fingerprintAuthEnv({ ANTHROPIC_OAUTH_TOKEN: 't', HERMIT_PI_API_KEY: 'k' }));
+  assert.match(fp, /^HERMIT_PI_API_KEY:[0-9a-f]{12}$/);
+  assert.equal(fp, fingerprintAuthEnv({ HERMIT_PI_API_KEY: 'k' }));
 });

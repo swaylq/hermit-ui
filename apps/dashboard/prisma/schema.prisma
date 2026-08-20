@@ -55,20 +55,34 @@ model Machine {
   lastCleanupSummary Json?
 
   // Which backends this machine offers, edited from Settings → Backends.
-  // Shape: `{ disabled: string[] }` naming BACKEND_OPTIONS values.
+  // Shape: `{ disabled: string[], instances: BackendInstance[], dshSource? }`
+  // — see lib/backends.ts.
+  //
+  // `instances` are the backends the user COMPOSED: one harness (pi, prime,
+  // dsh) paired with one credential from `modelProviders`. The two built-in
+  // backends — Claude Code and Codex, each on its own subscription — are not
+  // stored here at all; they always exist and only appear in `disabled`.
   //
   // Stored as the DISABLED set, not the enabled one, so "nothing configured"
-  // means "everything this build knows about is available" — and so a backend
-  // added in a later release shows up rather than being invisible until someone
-  // discovers a toggle they were never told about.
+  // means "the two built-ins, both on", which is exactly what a fresh machine
+  // should offer.
   //
   // Per machine because availability genuinely is: codex needs `codex login` on
-  // that host, pi needs its endpoint configured. A fleet-wide switch would
-  // offer backends that cannot run.
+  // that host, and a composed backend needs its harness installed there.
   backendsConfig Json?
 
-  // Pi-runtime machine config, edited from the dashboard Settings → Pi Runtime
-  // page and consumed by the machine's gateway when it spawns pi children.
+  // The machine's model credentials, edited from Settings → Models. A JSON
+  // ARRAY of { id, label, provider, api, baseUrl, models[], defaultModel,
+  // secretKey, modelLimits } — see lib/model-credentials.ts.
+  //
+  // `secretKey` is the NAME of a secret in the machine's store, never a value.
+  // Nothing in here authenticates a subscription: Claude Code and Codex do that
+  // themselves, on the machine.
+  modelProviders Json?
+
+  // Legacy pi-runtime machine config, superseded by `modelProviders`. Still
+  // written by nothing and read only by the compatibility projection that keeps
+  // a lagging gateway working until it restarts (machines.pollPiConfig).
   // { provider, baseUrl, api, models[], secretKey, image: { enabled, provider,
   //   apiKeySecret, ocrModel, describeModel, prompt } }
   piConfig Json?

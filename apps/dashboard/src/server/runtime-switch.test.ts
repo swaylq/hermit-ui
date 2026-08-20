@@ -2,8 +2,19 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { planRuntimeSwitch } from './runtime-switch';
 
-const claude = { runtime: 'claude-tmux', runtimeProvider: null, runtimeModel: null, runtimeMode: null };
-const pi = (provider: string | null = null, model: string | null = null, mode: string | null = 'coding') => ({
+const claude = {
+  backendId: 'claude-tmux', runtime: 'claude-tmux', runtimeCredentialId: null,
+  runtimeProvider: null, runtimeModel: null, runtimeMode: null,
+};
+const pi = (
+  provider: string | null = null,
+  model: string | null = null,
+  mode: string | null = 'coding',
+  backendId = 'pi-hyqubit',
+  runtimeCredentialId: string | null = 'hyqubit',
+) => ({
+  backendId,
+  runtimeCredentialId,
   runtime: 'pi-rpc', runtimeProvider: provider, runtimeModel: model, runtimeMode: mode,
 });
 
@@ -29,7 +40,10 @@ test('an idle session switches backends and needs the old process torn down', ()
 // `thread/resume: no rollout found`, forever, and the chat goes silent. It has
 // to be cleared on the way across.
 test('crossing to another backend clears the external session id', () => {
-  const codex = { runtime: 'codex-exec', runtimeProvider: null, runtimeModel: null, runtimeMode: null };
+  const codex = {
+    backendId: 'codex-exec', runtime: 'codex-exec', runtimeCredentialId: null,
+    runtimeProvider: null, runtimeModel: null, runtimeMode: null,
+  };
   assert.deepEqual(
     planRuntimeSwitch({ state: 'idle' }, claude, codex),
     { ok: true, restart: true, resetExternalId: true },
@@ -74,8 +88,8 @@ test('re-saving a pi session unchanged does not restart it', () => {
 test('provider/model churn on a claude session is inert', () => {
   const plan = planRuntimeSwitch(
     { state: 'idle' },
-    { runtime: 'claude-tmux', runtimeProvider: 'anthropic', runtimeModel: 'opus', runtimeMode: null },
-    { runtime: 'claude-tmux', runtimeProvider: null, runtimeModel: null, runtimeMode: null },
+    { ...claude, runtimeProvider: 'anthropic', runtimeModel: 'opus' },
+    claude,
   );
   assert.deepEqual(plan, { ok: true, restart: false, resetExternalId: false });
 });
@@ -83,8 +97,10 @@ test('provider/model churn on a claude session is inert', () => {
 test('null and undefined provider/model are the same absence', () => {
   const plan = planRuntimeSwitch(
     { state: 'idle' },
-    { runtime: 'pi-rpc', runtimeProvider: null, runtimeModel: null, runtimeMode: null },
+    pi(null, null, null),
     {
+      backendId: 'pi-hyqubit',
+      runtimeCredentialId: 'hyqubit',
       runtime: 'pi-rpc',
       runtimeProvider: undefined as unknown as null,
       runtimeModel: undefined as unknown as null,
@@ -118,8 +134,39 @@ test('same mode does not restart', () => {
 test('mode churn on a claude session is inert', () => {
   const plan = planRuntimeSwitch(
     { state: 'idle' },
-    { runtime: 'claude-tmux', runtimeProvider: null, runtimeModel: null, runtimeMode: 'ops' },
-    { runtime: 'claude-tmux', runtimeProvider: null, runtimeModel: null, runtimeMode: 'coding' },
+    { ...claude, runtimeMode: 'ops' },
+    { ...claude, runtimeMode: 'coding' },
   );
   assert.deepEqual(plan, { ok: true, restart: false, resetExternalId: false });
+});
+
+// Two backends can run the SAME harness against different credentials, and
+// moving between them is every bit as much a backend change — different
+// endpoint, different model catalog, and a session id the other side's provider
+// never issued. Compared on backendId for exactly this case.
+test('moving between two pi backends is a backend change, not a model change', () => {
+  const plan = planRuntimeSwitch(
+    { state: 'idle' },
+    pi('hyqubit', 'claude-opus-5', 'coding', 'pi-hyqubit', 'hyqubit'),
+    pi('moonshotai-cn', 'kimi-k3', 'coding', 'pi-kimi', 'kimi'),
+  );
+  assert.deepEqual(plan, { ok: true, restart: true, resetExternalId: true });
+});
+
+// Prime bakes provider, model and credential into the child at spawn, exactly
+// as pi does — so it restarts on the same conditions and keeps its session id
+// across them.
+test('a prime session restarts for a new model and keeps its session id', () => {
+  const prime = (model: string) => ({
+    backendId: 'prime-kimi', runtime: 'prime-rpc', runtimeCredentialId: 'kimi',
+    runtimeProvider: 'moonshotai-cn', runtimeModel: model, runtimeMode: null,
+  });
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, prime('kimi-k3'), prime('kimi-k2')),
+    { ok: true, restart: true, resetExternalId: false },
+  );
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, prime('kimi-k3'), prime('kimi-k3')),
+    { ok: true, restart: false, resetExternalId: false },
+  );
 });

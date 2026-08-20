@@ -29,9 +29,9 @@ import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
 import { BackendPicker } from './chat/backend-picker';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import {
-  backendLabel, toBackendOption, type RuntimeKind, type BackendOption,
+  runtimeLabel,
 } from '@/lib/runtime-labels';
-import { effectiveDefaultBackend } from '@/lib/backend-availability';
+import { effectiveDefaultBackendId, backendById, availableBackends } from '@/lib/backends';
 import { PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
 
 // ── Deferred sub-trees ───────────────────────────────────────────────────────
@@ -335,29 +335,32 @@ function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput[
   // A stored mode the select does not offer (the removed triage router, a
   // machine-local mode) opens on the fleet default rather than on a missing row.
   const storedMode: PiMode | null = isPiMode(agent.runtimeMode) ? agent.runtimeMode : null;
-  const storedBackend: BackendOption = toBackendOption(agent.runtime, agent.runtimeMode);
+  const storedBackend: string = agent.runtime ?? 'claude-tmux';
   // What the default resolves to ON THIS MACHINE. An agent whose stored default
-  // has been switched off under Settings → Backends falls through to one the
-  // machine runs — the same substitution the server applies when a session
-  // inherits — so this section opens on the answer, not on a card marked "off".
-  const baseBackend: BackendOption = effectiveDefaultBackend(storedBackend, cfg.data);
-  const baseRuntime: RuntimeKind = baseBackend;
+  // has been switched off (or deleted) under Settings → Backends falls through
+  // to one the machine runs — the same substitution the server applies when a
+  // session inherits — so this section opens on the answer, not on a card
+  // marked "off".
+  const baseBackend: string = effectiveDefaultBackendId(storedBackend, cfg.data);
   const substituted = baseBackend !== storedBackend;
-  const [draftRuntime, setDraftRuntime] = useState<BackendOption | null>(null);
+  const [draftRuntime, setDraftRuntime] = useState<string | null>(null);
   const [draftMode, setDraftMode] = useState<PiMode | null>(null);
-  const shownBackend: BackendOption = draftRuntime ?? baseBackend;
-  const shownRuntime: RuntimeKind = shownBackend;
+  const shownBackend: string = draftRuntime ?? baseBackend;
   const shownMode: PiMode = draftMode ?? storedMode ?? DEFAULT_PI_MODE;
-  // What Save would write for a card + mode: pi stores only a mode that differs
-  // from the fleet default; the other backends have no mode at all.
-  const modeToStore = (b: BackendOption, m: PiMode): string | null =>
-    b === 'pi-rpc' ? (m === DEFAULT_PI_MODE ? null : m) : null;
+  const harnessOf = (id: string) => backendById(cfg.data, id)?.harness ?? null;
+  const shownIsPi = harnessOf(shownBackend) === 'pi-rpc';
+  // What Save would write for a backend + mode: pi stores only a mode that
+  // differs from the fleet default; every other harness has no mode at all.
+  const modeToStore = (b: string, m: PiMode): string | null =>
+    harnessOf(b) === 'pi-rpc' ? (m === DEFAULT_PI_MODE ? null : m) : null;
   const nextMode: string | null = modeToStore(shownBackend, shownMode);
   // Measured against what the sheet OPENED on, and through the same
   // normalization, so neither a machine-level substitution nor a stored mode
   // that spells out the fleet default makes an untouched sheet look edited.
   const dirty =
-    shownRuntime !== baseRuntime || nextMode !== modeToStore(baseBackend, storedMode ?? DEFAULT_PI_MODE);
+    shownBackend !== baseBackend || nextMode !== modeToStore(baseBackend, storedMode ?? DEFAULT_PI_MODE);
+  const labelOf = (id: string) =>
+    availableBackends(cfg.data, id).find((b) => b.id === id)?.label ?? runtimeLabel(id);
   const save = trpc.agents.setDefaultRuntime.useMutation({
     onSuccess: () => {
       // byName is cached at 30s (detail) / 60s (new-chat); invalidate so the
@@ -381,14 +384,14 @@ function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput[
         <BackendPicker value={shownBackend} onChange={setDraftRuntime} agentDefault={baseBackend} />
         {substituted && (
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            {backendLabel(storedBackend)} is this agent&apos;s stored default, but it is switched off
-            on this machine — so new chats and sessions open on {backendLabel(baseBackend)} instead.
+            {labelOf(storedBackend)} is this agent&apos;s stored default, but this machine does not
+            offer it — so new chats and sessions open on {labelOf(baseBackend)} instead.
             Turning it back on under{' '}
             <Link href="/backends" className="underline hover:text-foreground">Settings → Backends</Link>{' '}
             restores it; nothing here has to be re-saved.
           </p>
         )}
-        {shownBackend === 'pi-rpc' && (
+        {shownIsPi && (
           <label className="block">
             <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Mode</span>
             <Select value={shownMode} onValueChange={(v) => setDraftMode(isPiMode(v) ? v : DEFAULT_PI_MODE)} modal={false}>
@@ -411,7 +414,7 @@ function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput[
             onClick={() =>
               save.mutate({
                 name: agentName,
-                runtime: shownRuntime,
+                runtime: shownBackend,
                 runtimeMode: nextMode,
               })
             }

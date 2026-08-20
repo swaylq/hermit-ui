@@ -6,7 +6,7 @@
 import { Boxes, BarChart3, Wrench, HardDriveUpload, Brain, SunMoon, Activity, HelpCircle, Cpu, BellRing, Layers, type LucideIcon } from 'lucide-react';
 
 export type SettingsTabKey =
-  | 'skills' | 'memory' | 'usage' | 'ops' | 'system' | 'files' | 'appearance' | 'help' | 'pi' | 'push'
+  | 'skills' | 'memory' | 'usage' | 'ops' | 'system' | 'files' | 'appearance' | 'help' | 'models' | 'push'
   | 'backends';
 
 export const SETTINGS_TABS: { key: SettingsTabKey; label: string; href: string; Icon: LucideIcon }[] = [
@@ -14,7 +14,7 @@ export const SETTINGS_TABS: { key: SettingsTabKey; label: string; href: string; 
   { key: 'skills', label: 'Global Skills', href: '/skills', Icon: Boxes },
   { key: 'memory', label: 'Global Memory', href: '/global-memory', Icon: Brain },
   { key: 'backends', label: 'Backends', href: '/backends', Icon: Layers },
-  { key: 'pi', label: 'Pi Runtime', href: '/pi', Icon: Cpu },
+  { key: 'models', label: 'Models', href: '/models', Icon: Cpu },
   { key: 'ops', label: 'Operations', href: '/ops', Icon: Wrench },
   { key: 'system', label: 'System', href: '/system', Icon: Activity },
   { key: 'push', label: 'Push', href: '/push', Icon: BellRing },
