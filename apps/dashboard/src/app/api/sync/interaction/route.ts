@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
+import { fire as fireChat } from '@/server/chat-bus';
 import { resolveMachine } from '../route';
 import { stripNulDeep } from '@/server/sanitize';
 import { enqueuePush } from '@/server/push';
@@ -75,6 +76,9 @@ export async function POST(req: NextRequest) {
     },
   });
   await prisma.chatSession.update({ where: { id: session.id }, data: { lastMessageAt: new Date() } });
+  // The agent is blocked until someone answers this — it must appear now, not on
+  // the SSE stream's next safety-net poll.
+  fireChat(session.id);
 
   // The agent is now stopped dead waiting on a human. This is the highest-value
   // push there is, and it goes out marked urgent so it pierces a Focus mode.

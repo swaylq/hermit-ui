@@ -6,6 +6,10 @@
 import { z } from 'zod';
 import { router, gatewayProcedure, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
+// Writing a ChatMessage without firing this is what made the header sit on
+// "ready" for up to POLL_MS after you pressed send: the SSE stream only
+// noticed the row on its 2 s safety-net poll. Every write here signals.
+import { fire as fireChat } from '../chat-bus';
 import { QUEUE_LIMIT } from '../../lib/chat-queue';
 import { sessionRecencyMs } from '../../lib/session-recency';
 import { stripNulDeep } from '../sanitize';
@@ -140,6 +144,7 @@ async function pokeSession(sessionId: string, machineId: string, text: string): 
     },
   });
   await prisma.chatSession.update({ where: { id: target.id }, data: { lastMessageAt: new Date() } });
+  fireChat(target.id);
   return true;
 }
 
@@ -174,6 +179,7 @@ async function endTakeover(
       content: asContent([{ type: 'text', text: endNote(reason, summary) }]),
     },
   });
+  fireChat(sessionId);
   return true;
 }
 
@@ -656,13 +662,15 @@ export const chatRouter = router({
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
       ctx.assertAgent(s.agentName);
       const content = [{ type: 'text', text: input.text }];
-      return prisma.chatMessage.create({
+      const row = await prisma.chatMessage.create({
         data: {
           sessionId: input.sessionId,
           role: 'system',
           content: content as unknown as Parameters<typeof prisma.chatMessage.create>[0]['data']['content'],
         },
       });
+      fireChat(input.sessionId);
+      return row;
     }),
 
   setTitle: agentProcedure
@@ -1155,6 +1163,11 @@ export const chatRouter = router({
           authoredBy: byBrain ? 'brain' : null,
         },
       });
+      // Wake every SSE stream watching this session NOW. Without it the row sat
+      // in Postgres until the stream's 2 s safety-net poll found it, and the
+      // header — which reads "a user row with no answer yet" as working — stayed
+      // on `ready` for up to that long after you pressed send.
+      fireChat(input.sessionId);
       // Clear any stale cancel signal from a previous turn so this new
       // turn isn't immediately killed by the gateway.
       await prisma.chatSession.update({
@@ -1859,6 +1872,7 @@ export const chatRouter = router({
       await prisma.chatMessage.create({
         data: { sessionId: input.sessionId, role: 'system', content: asContent([{ type: 'text', text: startNote() }]) },
       });
+      fireChat(input.sessionId);
 
       await pokeSession(
         brainSession.id,

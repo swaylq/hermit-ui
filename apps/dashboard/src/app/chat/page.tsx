@@ -1083,9 +1083,21 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // either a snapshot taken past the message, or a grace backstop if snapshots
   // stall. A genuinely running turn keeps state==='working', so a real turn is
   // never cut short.
+  //
+  // Read the OPTIMISTIC row too, not just what the server has echoed back. The
+  // bubble goes on screen the instant you press send; the header used to wait for
+  // that row to come back down the SSE stream before agreeing anything was
+  // happening, so the status sat on `ready` while your own message was already
+  // visible above it. `pending` is pruned the moment the real row lands, so this
+  // only ever covers the gap.
+  const optimisticUser = pending.length ? pending[pending.length - 1] : null;
   const lastMsg = messages.data?.[messages.data.length - 1];
-  const lastMsgIsUser = lastMsg?.role === 'user';
-  const lastMsgTime = lastMsg ? new Date(lastMsg.createdAt).getTime() : 0;
+  const lastMsgIsUser = optimisticUser ? true : lastMsg?.role === 'user';
+  const lastMsgTime = optimisticUser
+    ? new Date(optimisticUser.createdAt).getTime()
+    : lastMsg
+    ? new Date(lastMsg.createdAt).getTime()
+    : 0;
   const snapTime = session?.snapshotAt ? new Date(session.snapshotAt).getTime() : 0;
   const turnSettled =
     session?.state === 'idle' && (snapTime > lastMsgTime || Date.now() - lastMsgTime > 90_000);

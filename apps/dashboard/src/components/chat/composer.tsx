@@ -167,6 +167,13 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   // means the run has not put a character in the draft yet, so the base is
   // still whatever the user has typed by the time the first sentence lands.
   const dictRef = useRef<DictationClaim | null>(null);
+  // Rendered, not just a ref, because hiding the caret is a style. While
+  // dictation is running the box is being written INTO by something that is not
+  // the user, and a caret parked at the end of it is noise at best: it does not
+  // mark where typing will go (nobody is typing), it cannot blink properly
+  // because the value changes ~36×/second, and on iOS repeatedly moving the
+  // selection surfaces the fat caret handle. So it goes away for the duration.
+  const [dictating, setDictating] = useState(false);
   // Persist the draft per session (localStorage writes are cheap for short
   // text). Auto-cleared when the draft empties on send / Escape.
   useEffect(() => { saveDraft(sessionId, draft); }, [sessionId, draft]);
@@ -213,6 +220,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     // arithmetic here to get wrong.
     beginDictation() {
       dictRef.current = newClaim();
+      setDictating(true);
     },
     setDictationTail(tail: string) {
       setDraft((d) => {
@@ -228,17 +236,30 @@ export const ComposeBar = forwardRef<ComposerHandle, {
       requestAnimationFrame(() => {
         const el = taRef.current;
         if (!el) return;
-        el.setSelectionRange(el.value.length, el.value.length);
         el.style.height = 'auto';
         el.style.height = `${Math.min(el.scrollHeight, 360)}px`;
         // Past the 360px cap the box scrolls instead of growing, and the words
         // are landing at the BOTTOM — without this you would be watching the
         // beginning of a paragraph you finished dictating a minute ago.
+        //
+        // Note what is NOT here: setSelectionRange. Dragging the caret to the end
+        // on every frame is what made it ugly, and it bought nothing — the text
+        // is appended by setting `value`, not by typing at a cursor.
         el.scrollTop = el.scrollHeight;
       });
     },
     endDictation() {
       dictRef.current = null;
+      setDictating(false);
+      // Now that the words have stopped arriving, put the caret where someone
+      // would want to keep typing. Once, not per frame — and without focusing,
+      // which would throw the on-screen keyboard up at someone who just finished
+      // deliberately NOT using it.
+      requestAnimationFrame(() => {
+        const el = taRef.current;
+        if (!el) return;
+        el.setSelectionRange(el.value.length, el.value.length);
+      });
     },
   }), [taRef]);
 
@@ -665,6 +686,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             disabled={disabled || awaitingInput}
             rows={1}
             className="flex-1 bg-transparent text-base sm:text-[15px] resize-none outline-none leading-relaxed min-h-[28px] max-h-[360px] overflow-auto py-1.5 text-foreground placeholder:text-muted-foreground/70 disabled:cursor-not-allowed"
+            style={dictating ? { caretColor: 'transparent' } : undefined}
           />
 
           {/* Clear the draft once there's text — mirrors the x on the other inputs. */}

@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
+import { fire as fireChat } from '@/server/chat-bus';
 import { resolveMachine } from '../route';
 import { stripNulDeep } from '@/server/sanitize';
 import { enqueuePush } from '@/server/push';
@@ -109,6 +110,7 @@ export async function POST(req: NextRequest) {
         where: { id: target.id },
         data: { lastMessageAt: new Date() },
       });
+      fireChat(target.id);
     }
   }
 

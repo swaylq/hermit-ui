@@ -135,6 +135,8 @@
 
 **替换只重拼、不做偏移算术**（见下），所以 partial 每 400ms 整体重写一次是安全的：composer 只守 `draft === base + tail`，用户中途手打字就把当前草稿收作新 base。textarea 的滚动跟着最新的字走（超过 360px 高度上限后框内滚动）。
 
+**听写期间光标是隐藏的**（`caret-color: transparent`）。它没有意义：没人在打字，它不标记任何东西；值每秒变 36 次，它也没法正常闪；而在 iOS 上反复挪 selection 还会把那个又大又丑的光标手柄勾出来 —— 这就是「输入框右边有个很大的很丑的光标」的来源。同时**每帧的 `setSelectionRange` 也去掉了**：文字是靠设 `value` 追加的，不是靠光标打进去的，那行代码只带来了丑。听写结束时才把光标放到末尾一次（不 focus —— 那会给一个刚刚故意没用键盘的人弹出键盘）。
+
 **替换不做偏移算术：** 纠错是并发的、会乱序回来，所以 `asr-socket` 按 `segId` 更新它的 segment 数组，dock 把**已断句的句子 + 当前 partial 整条重新拼出来**交给 composer。composer 只维护一个不变式 `draft === base + tail`；不成立就说明用户中途手打了字 —— **用户的字赢**，把当前草稿收作新 base，tail 从后面重新长。全部逻辑在 `lib/dictation-text.ts`（纯函数，`foldTail` 幂等，12 个用例）。
 
 `asr-socket` 对外仍然把 partial 和已断句的 tail **分开**给：socket 挂掉走整段兜底时，草稿里只能留已断句的部分 —— partial 对应的音频马上要被重新转写一次，留着就会出现两遍。
