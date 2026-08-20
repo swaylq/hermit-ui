@@ -78,6 +78,31 @@ decision.
   the sidebar while its mobile drawer is open). The composer additionally stops
   propagation itself: Escape in the box clears the draft and never touches the turn.
 
+## 2026-08-20 — it moved back into the row (and why that is not a regression)
+
+The pill above the composer was hard to find on a phone: it floated in the strip
+above the suggestion chips, a long way from where a thumb rests, and it crowded the
+floating mic. So it is back at the right end of the input row — but only the
+POSITION came back, not the thing that made the original arrangement dangerous.
+
+Two properties are what actually caused the misfires, and both are still gone:
+
+- **The send button's pixels never change meaning.** Stop is a separate control
+  beside it. Send only ever sends, in flight or not.
+- **The send button never moves.** The textarea is `flex-1`, so it absorbs the
+  pill's width when a turn starts. Measured: send's right edge is at x=369 on a
+  390px viewport both with a turn running and without — identical. Nothing slides
+  under a finger.
+
+Plus the two it never lost: it is a labelled rose PILL, not a circle in the
+composer's own colours, so it cannot be mistaken for send at a glance; and the
+400ms arming delay still ignores clicks that land before it has been on screen
+long enough to have been aimed at.
+
+If interrupts-without-intent reappear in the gateway logs, this is the first place
+to look — the fingerprint to search for is still "killed mid-stream, followed
+within three minutes by a short 「继续」".
+
 ## Still open
 
 The terminal view (`/chat/terminal`) pins a quick-key bar to the bottom edge whose first

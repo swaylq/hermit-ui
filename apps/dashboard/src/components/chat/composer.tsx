@@ -98,6 +98,39 @@ export function QueueBar({
 // not the whole chat pane (timeline / voice FAB / loop bar). SessionPane's
 // occasional draft writes (empty-state chip, voice transcript, send clear /
 // restore) go through the imperative ComposerHandle below.
+// Stop the running turn. A pill, not a circle, and rose, not foreground —
+// whatever else changes, it must never be confusable with the send button an
+// inch to its right. See the note on `working` below for why that matters.
+function StopPill({ onStop, stopping }: { onStop: () => void; stopping: boolean }) {
+  // A turn can start while a finger is already moving toward this corner, so the
+  // button ignores clicks that arrive before it has been on screen long enough
+  // to have been aimed at.
+  const ARM_MS = 400;
+  const shownAt = useRef(0);
+  useEffect(() => { shownAt.current = Date.now(); }, []);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (Date.now() - shownAt.current < ARM_MS) return;
+        onStop();
+      }}
+      disabled={stopping}
+      aria-label={stopping ? 'stopping' : 'stop this turn'}
+      title={stopping ? 'stopping…' : 'stop this turn (Esc)'}
+      className={cn(
+        'mr-1 h-8 shrink-0 inline-flex items-center gap-1.5 rounded-full border border-rose-500/40',
+        'px-2.5 text-xs font-medium text-rose-600 dark:text-rose-400',
+        'transition-colors cursor-pointer hover:bg-rose-500/10',
+        'disabled:cursor-wait disabled:opacity-60',
+      )}
+    >
+      <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden="true" />
+      {stopping ? 'stopping…' : 'Stop'}
+    </button>
+  );
+}
+
 const draftKey = (sid: string) => `hermit:draft:${sid}`;
 function loadDraft(sid: string): string {
   try { return localStorage.getItem(draftKey(sid)) ?? ''; } catch { return ''; }
@@ -138,6 +171,9 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
   notice: string | null;
   setNotice: (s: string | null) => void;
+  /** Kill the running turn. Rendered as a labelled pill at the right of the row. */
+  onStop?: () => void;
+  stopping?: boolean;
   onSend: (
     text: string,
     images: Array<{ url: string; mimeType: string; width: number | null; height: number | null }>,
@@ -157,6 +193,8 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   setAttachments,
   notice,
   setNotice,
+  onStop,
+  stopping = false,
   onSend,
   taRef,
   history,
@@ -489,8 +527,14 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   // made two different gestures land on the same pixels: "tap the round button"
   // meant send at rest and KILL THE RUNNING TURN while it worked — and with a
   // draft typed, stop and send sat side by side as two indistinguishable circles.
-  // Stop now lives above the composer as a labelled pill (SessionPane's StopPill);
-  // `inFlight` only tints the placeholder here. See docs/composer-stop-misfire.md.
+  // Stop is back at the right of this row, but as a LABELLED ROSE PILL sitting
+  // BESIDE the send circle — never in it, never styled like it. The two
+  // properties that made the old arrangement dangerous are both gone: the send
+  // button's pixels never change meaning (it still only ever sends), and it
+  // never moves when a turn starts, because the textarea is flex-1 and absorbs
+  // the pill's width. The 400 ms arm delay survives too — a turn can begin under
+  // a finger already travelling toward that corner.
+  // See docs/composer-stop-misfire.md.
   const working = inFlight && !disabled;
   // The Brain's in-progress sentence shows only while the box is otherwise empty —
   // the moment you start typing, the composer is yours and the ghost gets out.
@@ -688,6 +732,8 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             className="flex-1 bg-transparent text-base sm:text-[15px] resize-none outline-none leading-relaxed min-h-[28px] max-h-[360px] overflow-auto py-1.5 text-foreground placeholder:text-muted-foreground/70 disabled:cursor-not-allowed"
             style={dictating ? { caretColor: 'transparent' } : undefined}
           />
+
+          {working && onStop && <StopPill onStop={onStop} stopping={stopping} />}
 
           {/* Clear the draft once there's text — mirrors the x on the other inputs. */}
           {draft.length > 0 && !disabled && (
