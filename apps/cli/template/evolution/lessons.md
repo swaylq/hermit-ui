@@ -13,7 +13,7 @@ Split each lesson across two files:
 
 When the budget is hit, don't delete: merge lessons that share a root cause, tighten the
 `How to avoid` wording, and move anything that looks stale into an archive section headed
-`## 疑似过期（待确认）` for a human to rule on. A lesson you delete is one you get to learn
+`## Possibly stale — needs a human ruling` for a human to rule on. A lesson you delete is one you get to learn
 again the hard way.
 
 _(empty — your first lesson lands here when you have one to write.)_
