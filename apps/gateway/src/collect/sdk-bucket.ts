@@ -21,6 +21,20 @@
 // A non-null `*_oauth_apps` window means the split is live and this backend is
 // no longer free. Reading it costs nothing — it is a control request to a CLI
 // that is already running, not a model call.
+//
+// ── The precondition, and what happens when it stops holding ────────────────
+//
+// "A CLI that is already running" is the catch. The probe asks the LIVE sessions
+// and returns null when there are none, and this tick used to answer that with a
+// bare `return`. On a machine with nothing open — a laptop overnight, a fleet
+// member nobody has messaged in a week — the sentinel was therefore permanently
+// and invisibly off: "no alert" and "never checked" produced identical output,
+// which is exactly the shape of a guard that is not there.
+//
+// It cannot force a reading without spawning a CLI, and spawning one hourly to
+// ask a billing question is not a trade this should make on its own. What it can
+// do is refuse to be silent about it: the last successful reading is stamped, and
+// a gap wide enough to matter says so. A stale sentinel is a finding.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,6 +47,74 @@ const SPLIT_KEYS = ['seven_day_oauth_apps', 'five_hour_oauth_apps', 'oauth_apps'
 
 /** Survives a gateway restart, so the alert fires once per episode, not per boot. */
 const MARKER = path.join(os.homedir(), '.hermit', 'sdk-bucket-split.json');
+
+/**
+ * When the windows were last actually READ, and when we last said they were not.
+ *
+ * Deliberately a second file rather than a field on MARKER: MARKER means "the
+ * split was reported", is read on the hot path by `alreadyReported`, and should
+ * not start changing shape for a different concern.
+ */
+const STATE = path.join(os.homedir(), '.hermit', 'sdk-bucket-state.json');
+
+/** No reading for this long means the check is not running. */
+export const STALE_AFTER_MS = 6 * 60 * 60_000;
+
+/** ...and keep saying so, at this interval, for as long as it stays true. */
+export const STALE_REPEAT_MS = 24 * 60 * 60_000;
+
+export type SentinelState = { lastOkAt?: number; lastStaleWarnAt?: number };
+
+function readState(): SentinelState {
+  try {
+    const j = JSON.parse(fs.readFileSync(STATE, 'utf8'));
+    return {
+      lastOkAt: typeof j?.lastOkAt === 'number' ? j.lastOkAt : undefined,
+      lastStaleWarnAt: typeof j?.lastStaleWarnAt === 'number' ? j.lastStaleWarnAt : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function writeState(st: SentinelState) {
+  try {
+    fs.mkdirSync(path.dirname(STATE), { recursive: true });
+    fs.writeFileSync(STATE, JSON.stringify(st, null, 2));
+  } catch { /* best effort — a lost stamp costs one extra warning, not a wrong one */ }
+}
+
+/**
+ * Has the sentinel gone quiet long enough to be worth saying so?
+ *
+ * Returns the state to persist and the line to log, if any. Pure, with the clock
+ * passed in, because the whole point is behaviour that only manifests after
+ * hours of a particular kind of nothing happening — which is not observable by
+ * running the gateway and looking at it.
+ *
+ * A first-ever run has no stamp. That is not a six-hour gap, it is a machine
+ * that has never checked, so the clock STARTS rather than the warning firing.
+ */
+export function noteProbeGap(
+  st: SentinelState,
+  probedOk: boolean,
+  now: number,
+): { next: SentinelState; warning: string | null } {
+  if (probedOk) return { next: { lastOkAt: now }, warning: null };
+  if (st.lastOkAt == null) return { next: { ...st, lastOkAt: now }, warning: null };
+  const gap = now - st.lastOkAt;
+  if (gap < STALE_AFTER_MS) return { next: st, warning: null };
+  const saidRecently = st.lastStaleWarnAt != null && now - st.lastStaleWarnAt < STALE_REPEAT_MS;
+  if (saidRecently) return { next: st, warning: null };
+  const hours = Math.floor(gap / 3_600_000);
+  return {
+    next: { ...st, lastStaleWarnAt: now },
+    warning:
+      '[sdk-bucket] the Agent SDK billing sentinel has not been able to read the plan ' +
+      `windows for ${hours}h — no live claude-sdk session to ask. The split check is NOT ` +
+      'running on this machine. Open or message any claude-sdk session to restore it.',
+  };
+}
 
 function alreadyReported(): boolean {
   try {
@@ -81,9 +163,15 @@ export async function sdkBucketTick(): Promise<void> {
   try {
     probe = await runtime.probeRateLimits();
   } catch {
-    return; // no live session, old CLI, transport blip — try again next hour
+    probe = null; // old CLI, transport blip — indistinguishable from nothing to ask
   }
-  const limits = probe?.rateLimits ?? null;
+  // Whether there was anything to read is itself worth recording: a sentinel
+  // that cannot run is a finding, not a no-op.
+  const { next, warning } = noteProbeGap(readState(), probe != null, Date.now());
+  writeState(next);
+  if (warning) console.error(warning);
+  if (!probe) return;
+  const limits = probe.rateLimits ?? null;
   const split = splitBucketsIn(limits);
   if (split.length === 0) return;
 
@@ -100,7 +188,7 @@ export async function sdkBucketTick(): Promise<void> {
   // …and say it somewhere a human actually looks.
   try {
     await api.syncChatMessages([{
-      sessionId: probe!.sessionId,
+      sessionId: probe.sessionId,
       role: 'system',
       content: [{
         type: 'text',

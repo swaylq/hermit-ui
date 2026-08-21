@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { splitBucketsIn } from './sdk-bucket';
+import { splitBucketsIn, noteProbeGap, STALE_AFTER_MS, STALE_REPEAT_MS } from './sdk-bucket';
 
 // The shape this account reports TODAY, copied from a live probe on 2026-08-21.
 // The interactive windows are populated; the programmatic one is null, which is
@@ -50,4 +50,56 @@ test('a split at zero utilisation is still a split', () => {
 test('an empty placeholder window is not an alert', () => {
   assert.deepEqual(splitBucketsIn({ seven_day_oauth_apps: {} }), []);
   assert.deepEqual(splitBucketsIn({ seven_day_oauth_apps: false as any }), []);
+});
+
+// ── The sentinel that could not run ─────────────────────────────────────────
+// The probe asks the LIVE sessions and returns null when there are none, and
+// the tick used to answer that with a bare return. On a machine with nothing
+// open, "no alert" and "never checked" were the same output — for the one guard
+// against a failure whose first symptom is a bill. These are about the second
+// state being visible.
+
+const H = 3_600_000;
+const T0 = 1_700_000_000_000;
+
+test('a reading stamps the clock and says nothing', () => {
+  const r = noteProbeGap({ lastOkAt: T0 - 99 * H, lastStaleWarnAt: T0 - H }, true, T0);
+  assert.equal(r.warning, null);
+  assert.equal(r.next.lastOkAt, T0);
+  // The warn stamp is dropped with it, so the NEXT outage is reported on its own
+  // schedule rather than being muted by the last one.
+  assert.equal(r.next.lastStaleWarnAt, undefined);
+});
+
+test('a machine that has never checked starts the clock, it does not cry immediately', () => {
+  const r = noteProbeGap({}, false, T0);
+  assert.equal(r.warning, null);
+  assert.equal(r.next.lastOkAt, T0);
+});
+
+test('a gap shorter than the threshold is just a quiet machine', () => {
+  const r = noteProbeGap({ lastOkAt: T0 - (STALE_AFTER_MS - 1) }, false, T0);
+  assert.equal(r.warning, null);
+  assert.equal(r.next.lastOkAt, T0 - (STALE_AFTER_MS - 1), 'a failed probe must not stamp a reading');
+});
+
+test('a gap past the threshold is reported, with how long it has been', () => {
+  const r = noteProbeGap({ lastOkAt: T0 - 9 * H }, false, T0);
+  assert.match(String(r.warning), /has not been able to read the plan windows for 9h/);
+  assert.match(String(r.warning), /NOT\s+running on this machine/);
+  assert.equal(r.next.lastStaleWarnAt, T0);
+});
+
+test('it does not repeat itself hourly for as long as the machine stays quiet', () => {
+  const st = { lastOkAt: T0 - 9 * H, lastStaleWarnAt: T0 };
+  for (let i = 1; i <= 12; i++) {
+    assert.equal(noteProbeGap(st, false, T0 + i * H).warning, null, `hour ${i}`);
+  }
+});
+
+test('but a long outage restates itself, so it cannot be forgotten', () => {
+  const st = { lastOkAt: T0 - 9 * H, lastStaleWarnAt: T0 };
+  const r = noteProbeGap(st, false, T0 + STALE_REPEAT_MS);
+  assert.match(String(r.warning), /for 33h/);
+  assert.equal(r.next.lastStaleWarnAt, T0 + STALE_REPEAT_MS);
 });
