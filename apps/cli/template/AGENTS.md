@@ -35,7 +35,8 @@ so the harness surfaces and invokes them.
 
 ### Search before you answer — HARD RULE
 
-Retrospective questions ("earlier / last time / do you remember…") — **before** answering:
+Retrospective questions — {{USER_NAME}} typing 「以前」/「之前」/「上次」/「记不记得」, or the
+English equivalents — get searched **before** they get answered:
 `grep -r <keyword> evolution/`, then check the `memory/auto/MEMORY.md` index. No search =
 guessing, and guessing from model memory has produced wrong answers before.
 
