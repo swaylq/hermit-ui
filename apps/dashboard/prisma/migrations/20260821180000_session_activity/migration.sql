@@ -1,0 +1,18 @@
+-- What a session is doing right now, beyond "working or not".
+--
+-- The pane backend could only ever answer the boolean, because the only signal
+-- it had was a spinner scraped off a terminal. A backend with a typed event
+-- stream (claude-sdk) can name the tool and how long it has been on it, the
+-- subagent, or the API retry it is waiting out — which is the difference
+-- between a chat that looks hung and one that says why it is slow.
+--
+-- Opaque JSON for the same reason loopState is: the shape belongs to the
+-- gateway (RuntimeActivity) and the dashboard only renders it, so a gateway
+-- that learns to report something new does not need a migration to say it.
+--
+-- Additive and nullable. Every existing row reads NULL, which is exactly what
+-- "this backend cannot say" means, so nothing behaves differently until a
+-- claude-sdk session writes one. The column is rewritten on every snapshot tick
+-- INCLUDING the null ones — a chip describes a moment, and a moment that has
+-- passed has to clear rather than linger.
+ALTER TABLE "ChatSession" ADD COLUMN "activity" JSONB;

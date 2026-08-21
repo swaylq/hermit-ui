@@ -117,6 +117,17 @@ export interface AgentRuntime {
   usage(handle: RuntimeHandle): Promise<RuntimeUsage | null>;
 
   /**
+   * What the session is doing right now, beyond "working or not".
+   *
+   * Optional because most backends cannot say: a pane offers a scraped spinner,
+   * and the one-subprocess-per-turn backends know only that a child is alive. A
+   * backend with a typed event stream can name the tool, its elapsed time, the
+   * subagent, or the API retry it is waiting on — which is the difference
+   * between a session that LOOKS hung and one that says why it is slow.
+   */
+  activity?(handle: RuntimeHandle): Promise<unknown | null>;
+
+  /**
    * Optional durable usage when no live handle exists (for example, a Codex
    * rollout after a gateway restart). Collectors may use this to repair token
    * fields, but it does not make the session alive or wake a hibernated one.

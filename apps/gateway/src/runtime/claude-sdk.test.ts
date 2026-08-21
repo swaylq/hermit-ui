@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { encodedProjectDir } from '@hermit-ui/tmux-driver';
-import { buildUserContent, resumableUuid } from './claude-sdk';
+import { buildUserContent, resumableUuid, shouldBackgroundBash } from './claude-sdk';
 
 // A 1x1 PNG, so the base64 path is exercised on real bytes rather than a stub.
 const PNG_1PX = Buffer.from(
@@ -167,4 +167,42 @@ test('the uuid check is case-insensitive but shape-strict', () => {
   assert.equal(resumableUuid(cwd, uuid), uuid);
   assert.equal(resumableUuid(cwd, uuid.slice(0, -1)), null);
   assert.equal(resumableUuid(cwd, `${uuid}-extra`), null);
+});
+
+// ── which Bash calls start in the background ────────────────────────────────
+//
+// A PreToolUse hook, not `canUseTool`: under `bypassPermissions` — which every
+// dashboard session runs — the SDK never consults canUseTool and says so
+// outright ("permissionMode 'bypassPermissions' auto-approves every tool call
+// before the callback is consulted"). Hooks fire regardless of permission mode.
+
+test('commands whose whole job is to take minutes start backgrounded', () => {
+  for (const cmd of [
+    'npm install', 'npm ci', 'npm i --save-dev x', 'pnpm install', 'yarn install',
+    'docker build -t x .', 'docker compose up -d', 'make -j8', 'cargo build --release',
+    'gradle assemble', 'mvn package', 'pytest -q', 'go test ./...', 'terraform apply',
+  ]) {
+    assert.equal(shouldBackgroundBash({ command: cmd }), true, cmd);
+  }
+});
+
+test('ordinary commands are left exactly as the model wrote them', () => {
+  for (const cmd of ['ls -la', 'git status', 'echo hi', 'cat package.json', 'npm run lint', 'rg foo']) {
+    assert.equal(shouldBackgroundBash({ command: cmd }), false, cmd);
+  }
+});
+
+// The model stating either is a decision about its own command; overriding it
+// would be the harness second-guessing the agent.
+test('a model that already chose how to run it is not overridden', () => {
+  assert.equal(shouldBackgroundBash({ command: 'npm ci', run_in_background: true }), false);
+  assert.equal(shouldBackgroundBash({ command: 'npm ci', timeout: 30_000 }), false);
+  // …but a command that said neither is still eligible.
+  assert.equal(shouldBackgroundBash({ command: 'npm ci' }), true);
+});
+
+test('a malformed tool input is never acted on', () => {
+  for (const bad of [null, undefined, 'npm ci', 42, [], {}, { command: '' }, { command: 7 }]) {
+    assert.equal(shouldBackgroundBash(bad), false, JSON.stringify(bad));
+  }
 });

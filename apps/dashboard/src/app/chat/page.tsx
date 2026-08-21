@@ -1240,7 +1240,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // off our own in-flight signal. unread=false — we're looking at this session,
   // so it's read by definition (never the red "unread" dot in its own header).
   const status = pendingInteraction
-    ? { key: 'needs-you' as const, label: 'needs you', dot: 'bg-amber-400', pulse: true }
+    ? { key: 'needs-you' as const, label: 'needs you', dot: 'bg-amber-400', pulse: true, detail: undefined }
     : sessionStatusView(session, { liveWorking: isInFlight, unread: false });
 
   // Which backend runs this session, resolved server-side (a session's own
@@ -1598,7 +1598,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               {session && (
                 <>
                   <span className="shrink-0 text-muted-foreground/40">·</span>
-                  <span className="shrink-0">{status.label}</span>
+                  {/* The label is no longer always one word: a claude-sdk session
+                      says WHAT it is doing ("Bash · 47s", "retrying 2/5, 12s").
+                      Truncated rather than wrapped — the meta line is tight at
+                      390px — with the full command in the tooltip. */}
+                  <span className="min-w-0 max-w-[11rem] truncate" title={status.detail}>
+                    {status.label}
+                  </span>
                   {/* Status dot rides WITH the state word it describes, rather than
                       next to the title where it read as decoration. */}
                   <span

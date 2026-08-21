@@ -53,6 +53,11 @@ export interface SessionSnapshot {
   // pane, in MB. null when the pane is dead or ps is unavailable. Drives the
   // Host-health panel's per-session memory + the reaper's "biggest first" order.
   rssMb: number | null;
+  // What the session is doing right now, when its backend can say — the tool and
+  // how long it has been on it, the subagent, an API retry. Opaque here and
+  // rendered by the dashboard, exactly like loopState. Absent for the backends
+  // that only know "a child is alive".
+  activity?: unknown | null;
 }
 
 // One `ps` snapshot per collection → a pid→children + pid→rssKb map, so each
@@ -418,11 +423,14 @@ export async function probeClaudeSdk(
     sessionId, pid: null, alive: false, state: null,
     contextTokens: null, outputTokens: null, lastActivity: null,
     transcriptPath: null, lastUserPrompt: null, lastAssistantText: null,
-    loopState, rssMb: null,
+    loopState, rssMb: null, activity: null,
   };
 
   const handle = { sessionId, externalSessionId: claudeSessionId ?? '' };
   const usage = await runtime.usage(handle);
+  // Read it even when idle: `null` is the value that CLEARS a stale chip, so
+  // skipping the call would leave the last thing the session did on screen.
+  const activity = (await runtime.activity?.(handle).catch(() => null)) ?? null;
   // usage() returns null exactly when there is no live handle — an idle-but-open
   // or hibernated session, which is "not alive" rather than an error.
   const alive = usage !== null;
@@ -456,6 +464,7 @@ export async function probeClaudeSdk(
     lastUserPrompt: t.lastUserPrompt,
     lastAssistantText: t.lastAssistantText,
     rssMb: pid != null ? subtreeRssMb(pid, psTree) : null,
+    activity,
   };
 }
 

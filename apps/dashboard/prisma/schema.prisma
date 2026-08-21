@@ -481,6 +481,13 @@ model ChatSession {
   // `{ loops: [...], schedules: [...], updatedAt: <iso> }`. Dashboard renders
   // a small chip in the chat header from it.
   loopState         Json?
+  // What the session is doing right now, when its backend can say: the tool and
+  // how long it has been on it, a subagent, an API retry it is waiting out.
+  // Written by the same session-snapshot tick as `state`, and NULL the moment
+  // the session is idle — a stale chip is worse than no chip. Opaque JSON like
+  // loopState: the shape is the gateway's (RuntimeActivity), the dashboard only
+  // renders it. See docs/claude-sdk-runtime-design.md.
+  activity          Json?
   snapshotAt        DateTime?
   // Live preview mounted by the agent (`hermit-preview` CLI → gateway preview
   // module → /api/sync/live-preview). Shape: { url, mode: 'static'|'proxy',

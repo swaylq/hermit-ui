@@ -379,3 +379,145 @@ test('a hibernated session still reports its context from the transcript', async
   assert.ok(stored, 'a hibernated session lost its context reading');
   assert.equal(stored!.contextTokens, live!.contextTokens);
 });
+
+// ── what the session is doing, not just whether ─────────────────────────────
+
+test('a running tool is reported by name, with how long it has been running', async () => {
+  const s = await open();
+  // python3, not `sleep`: Claude Code moves a foreground `sleep` to the
+  // background on its own, which is a different (also correct) answer and would
+  // not exercise the foreground path.
+  assert.equal(await s.rt.submit(
+    s.handle,
+    'Run exactly this with the Bash tool: `python3 -c "import time; time.sleep(20)"` . Then say FINISHED.',
+    [],
+  ), true);
+
+  let seen: any = null;
+  const t0 = Date.now();
+  while (Date.now() - t0 < 60_000) {
+    const a: any = await (s.rt as any).activity(s.handle);
+    if (a?.kind === 'tool') { seen = a; break; }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  assert.ok(seen, 'the session never said what it was doing');
+  console.log(`      ↳ reported: ${JSON.stringify(seen)}`);
+  assert.equal(seen.label, 'Bash');
+  assert.match(String(seen.detail ?? ''), /time\.sleep/);
+  assert.ok(typeof seen.elapsedSec === 'number' && seen.elapsedSec >= 0);
+
+  await s.settle(240_000);
+  // Idle again → nothing to report. A chip that outlives the thing it describes
+  // is worse than no chip.
+  assert.equal(await (s.rt as any).activity(s.handle), null, 'activity did not clear when the turn ended');
+  await s.rt.stop(s.handle, 'kill');
+});
+
+// Background work OUTLIVES the turn that started it, so it must keep being
+// reported after the turn ends — and must clear itself when it finishes, which
+// it can only do because the CLI announces completion with an empty task list
+// (measured: `background_tasks_changed → 0 tasks` plus a task_notification).
+test('background work is reported past the end of its turn, then clears', async () => {
+  const s = await open();
+  assert.equal(await s.rt.submit(
+    s.handle,
+    'Run `sleep 8` with the Bash tool in the background, then say STARTED. Do not wait for it.',
+    [],
+  ), true);
+  await s.settle(120_000);
+
+  const during: any = await (s.rt as any).activity(s.handle);
+  assert.ok(during, 'a live background task was reported as nothing at all');
+  assert.ok((during.backgroundCount ?? 0) > 0, `expected a background count: ${JSON.stringify(during)}`);
+  console.log(`      ↳ after the turn: ${JSON.stringify(during)}`);
+
+  const t0 = Date.now();
+  while (Date.now() - t0 < 60_000) {
+    if ((await (s.rt as any).activity(s.handle)) === null) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  assert.equal(await (s.rt as any).activity(s.handle), null, 'the background chip never cleared');
+  await s.rt.stop(s.handle, 'kill');
+});
+
+test('a closed session reports no activity at all', async () => {
+  const s = await open();
+  await s.rt.stop(s.handle, 'kill');
+  assert.equal(await (s.rt as any).activity(s.handle), null);
+});
+
+// ── the long-Bash watchdog ──────────────────────────────────────────────────
+
+// The case the pane could not handle: a command that outlives the turn's
+// patience. Escape killed everything; this moves the command aside and lets the
+// turn carry on.
+test('a Bash that outlives the threshold is backgrounded, and the session survives', async () => {
+  const prevAfter = process.env.HERMIT_BASH_BACKGROUND_AFTER_MS;
+  const prevTick = process.env.HERMIT_BASH_WATCHDOG_TICK_MS;
+  process.env.HERMIT_BASH_BACKGROUND_AFTER_MS = '8000';
+  process.env.HERMIT_BASH_WATCHDOG_TICK_MS = '1000';
+  try {
+    const s = await open();
+    const from = s.items.length;
+    // python3, not `sleep`: Claude Code backgrounds a foreground `sleep` itself,
+    // so it would never reach the watchdog.
+    assert.equal(await s.rt.submit(
+      s.handle,
+      'Use the Bash tool to run exactly `python3 -c "import time; time.sleep(90)"` and nothing else first. ' +
+      'Do not run any other command before it.',
+      [],
+    ), true);
+
+    // Wait for the watchdog's own banner rather than for the model to phrase
+    // something a particular way — the banner is what this test is about, and
+    // the model's wording is not ours to assert on.
+    const t0 = Date.now();
+    let rescued = false;
+    while (Date.now() - t0 < 180_000) {
+      if (JSON.stringify(s.items.slice(from)).includes('转入后台')) { rescued = true; break; }
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+    assert.ok(rescued, 'the watchdog never moved the command');
+    console.log(`      ↳ rescued after ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+
+    // "The turn survives" means the session is still usable — not that the model
+    // said any particular word. That is the property worth holding.
+    await s.settle(240_000);
+    assert.match(await s.turn('Say ALIVE'), /ALIVE/i, 'the session was unusable after the rescue');
+    await s.rt.stop(s.handle, 'kill');
+  } finally {
+    if (prevAfter === undefined) delete process.env.HERMIT_BASH_BACKGROUND_AFTER_MS;
+    else process.env.HERMIT_BASH_BACKGROUND_AFTER_MS = prevAfter;
+    if (prevTick === undefined) delete process.env.HERMIT_BASH_WATCHDOG_TICK_MS;
+    else process.env.HERMIT_BASH_WATCHDOG_TICK_MS = prevTick;
+  }
+});
+
+// A known-long command should not have to wait for the watchdog at all.
+test('a known-long command starts in the background', async () => {
+  const s = await open();
+  const from = s.items.length;
+  // `npm ci` in a directory with no package.json fails fast — what is asserted
+  // is WHERE it ran, not that it succeeded.
+  assert.equal(await s.rt.submit(
+    s.handle,
+    'Use the Bash tool to run exactly `npm ci` and tell me what happened. Run no other command first.',
+    [],
+  ), true);
+  await s.settle(180_000);
+
+  // Find the npm call among however many the model made — it is free to look
+  // around first, and the assertion is about the one command that matters.
+  const blocks = s.items.slice(from).flatMap((i) => (Array.isArray(i.content) ? i.content : [])) as any[];
+  const npmCall = blocks.find((b) => b?.type === 'tool_use' && b?.name === 'Bash' && /npm ci/.test(String(b?.input?.command ?? '')));
+  assert.ok(npmCall, 'the model never ran npm ci');
+  const npmResult = blocks.find((b) => b?.type === 'tool_result' && b?.tool_use_id === npmCall.id);
+  assert.ok(npmResult, 'no result for the npm call');
+  console.log(`      ↳ npm ci result: ${JSON.stringify(String(npmResult.content).slice(0, 80))}`);
+  assert.match(
+    String(npmResult.content ?? ''),
+    /background/i,
+    'the hook did not move a known-long command to the background',
+  );
+  await s.rt.stop(s.handle, 'kill');
+});

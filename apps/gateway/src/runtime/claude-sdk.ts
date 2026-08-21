@@ -61,6 +61,10 @@ import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
 import { translateSdkMessage, contextTokensOf } from './claude-sdk-events';
+import {
+  newActivityState, applyActivityMessage, describeActivity, bashesRunningLongerThan,
+  type ActivityState, type RuntimeActivity,
+} from './claude-sdk-activity';
 import { buildMcpServers } from '../mcp-config';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from '../config';
 import { CcBlock } from '../claude-code';
@@ -77,6 +81,42 @@ const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
  * the 5 MB base64 ceiling with room to spare.
  */
 const MAX_INLINE_IMAGE_BYTES = 3_500_000;
+
+/**
+ * How long a FOREGROUND Bash may hold a turn before the watchdog moves it to the
+ * background.
+ *
+ * Not a kill: `backgroundTasks(toolUseId)` hands the model a "running in the
+ * background" result and the turn carries on, and the command keeps running and
+ * reports when it settles. Measured end-to-end: a 60s command backgrounded at
+ * 20s, the turn continued immediately, and the model collected the finished
+ * output itself 40s later.
+ *
+ * Three minutes is deliberately generous — an ordinary tool call is seconds, so
+ * this only ever fires on the pathological case it exists for. On the pane there
+ * was no equivalent: Escape killed the whole turn, and Ctrl+B was a keystroke
+ * into a TUI, i.e. the same channel that loses keys.
+ */
+function bashBackgroundAfterMs(): number {
+  // Read per call, not once at import: it makes the threshold testable without a
+  // module-loading dance, and it means an operator can retune a wedging machine
+  // by restarting the gateway rather than shipping a build.
+  const raw = Number(process.env.HERMIT_BASH_BACKGROUND_AFTER_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 180_000;
+}
+
+/** How often the watchdog looks. Cheap: it reads a Map. */
+const WATCHDOG_TICK_MS = Number(process.env.HERMIT_BASH_WATCHDOG_TICK_MS ?? 5_000);
+
+/**
+ * Commands worth backgrounding before they ever block a turn.
+ *
+ * Deliberately short and conservative — every entry is a command whose whole
+ * job is to take minutes, where waiting in the foreground buys nothing. Anything
+ * not on the list is left exactly as the model wrote it and falls to the
+ * watchdog if it turns out to be slow.
+ */
+const LONG_RUNNING_BASH = /\b(npm (?:i|ci|install)|pnpm install|yarn install|docker (?:build|compose up)|make\b|cargo build|gradle\b|mvn\b|pytest\b|go test|terraform apply)/;
 
 const MEDIA_TYPES: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
@@ -126,6 +166,12 @@ type SdkHandle = RuntimeHandle & {
   seq: number;
   /** Set once the model is known, so a pin change can be applied without a respawn. */
   model: string | null;
+  /** What the session is doing right now — see claude-sdk-activity.ts. */
+  activity: ActivityState;
+  /** Stops the long-Bash watchdog. */
+  stopWatchdog: () => void;
+  /** tool_use_ids the watchdog has already moved, so it acts once each. */
+  rescued: Set<string>;
 };
 
 const live = new Map<string, SdkHandle>();
@@ -275,6 +321,9 @@ function emitOnce(h: SdkHandle, item: SyncItem) {
 
 function onSdkMessage(h: SdkHandle, msg: SDKMessage) {
   const m = msg as any;
+  // Before anything else: every message is evidence about what the session is
+  // doing, including the ones that produce no chat row.
+  applyActivityMessage(h.activity, msg, Date.now());
 
   // The init frame is the authoritative answer to "which transcript is this".
   // On the pane this took a uuid reservation table, a resume sniffer, an argv
@@ -375,11 +424,109 @@ function retail(h: SdkHandle) {
   });
 }
 
+// ── The long-Bash watchdog ───────────────────────────────────────────────────
+
+/**
+ * Move a foreground Bash that has held the turn too long into the background.
+ *
+ * Deliberately not a kill. `backgroundTasks(toolUseId)` makes the blocking tool
+ * return "running in the background" immediately, the turn continues, and the
+ * command reports when it settles — verified end-to-end against a live CLI. The
+ * alternative on the pane was to interrupt the whole turn and lose everything
+ * the model had done up to that point.
+ *
+ * It says so in the chat, because a tool result changing shape underneath the
+ * model is exactly the kind of thing that should not happen invisibly.
+ */
+function startWatchdog(h: SdkHandle) {
+  const timer = setInterval(() => {
+    if (h.closed) return;
+    const after = bashBackgroundAfterMs();
+    if (after <= 0) return;   // 0 disables it outright
+    const now = Date.now();
+    for (const t of bashesRunningLongerThan(h.activity, after, now)) {
+      if (h.rescued.has(t.toolUseId)) continue;
+      h.rescued.add(t.toolUseId);
+      const secs = Math.round((now - t.startedAtMs) / 1000);
+      void h.q.backgroundTasks(t.toolUseId)
+        .then((moved) => {
+          if (!moved) return;
+          console.warn(
+            `[claude-sdk] session=${h.sessionId.slice(0, 8)}: backgrounded a Bash after ${secs}s ` +
+            `— ${t.detail ?? '(no command)'}`,
+          );
+          h.seq += 1;
+          emitOnce(h, systemItem(
+            h.sessionId,
+            `sdk-bg-${h.sessionId}-${t.toolUseId}`,
+            `[gateway] ⏱️ 一条命令跑了 ${secs}s 还没结束，已转入后台，这一轮继续。` +
+            (t.detail ? `\n\n\`${t.detail}\`` : ''),
+          ));
+        })
+        .catch(() => { /* the turn may have ended between the check and the call */ });
+    }
+  }, WATCHDOG_TICK_MS);
+  h.stopWatchdog = () => clearInterval(timer);
+}
+
+/**
+ * Give a known-long command a background run before it ever blocks a turn.
+ *
+ * A PreToolUse HOOK rather than `canUseTool`: under `bypassPermissions` — which
+ * every dashboard session uses — the SDK never consults canUseTool at all and
+ * says so ("permissionMode 'bypassPermissions' auto-approves every tool call
+ * before the callback is consulted. To gate every tool call, use a PreToolUse
+ * hook instead."). Hooks fire regardless of permission mode, and `updatedInput`
+ * genuinely rewrites the call — verified: a hook turned `echo ORIGINAL` into
+ * `echo REWRITTEN` and the shell ran the rewritten one.
+ *
+ * It only ever ADDS `run_in_background` to a command that asked for neither a
+ * background run nor its own timeout. A model that stated either has made a
+ * decision, and overriding it would be the harness second-guessing the agent.
+ */
+function preToolUseHooks() {
+  return {
+    PreToolUse: [{
+      matcher: 'Bash',
+      hooks: [async (input: any) => {
+        if (!shouldBackgroundBash(input?.tool_input)) return {};
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse' as const,
+            permissionDecision: 'allow' as const,
+            updatedInput: { ...input.tool_input, run_in_background: true },
+          },
+        };
+      }],
+    }],
+  };
+}
+
+/**
+ * Should this Bash call start in the background?
+ *
+ * Exported for the unit test: it decides what runs where, and the two ways to
+ * get it wrong are both bad — backgrounding a command whose output the turn
+ * needed, or leaving a ten-minute build to block the session.
+ */
+export function shouldBackgroundBash(toolInput: unknown): boolean {
+  const ti = toolInput as Record<string, unknown> | null | undefined;
+  if (!ti || typeof ti !== 'object') return false;
+  const cmd = typeof ti.command === 'string' ? ti.command : '';
+  if (!cmd) return false;
+  // The model already decided how this should run. Overriding either choice
+  // would be the harness second-guessing the agent about its own command.
+  if (ti.run_in_background === true) return false;
+  if (typeof ti.timeout === 'number') return false;
+  return LONG_RUNNING_BASH.test(cmd);
+}
+
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
 function teardown(h: SdkHandle, reason: string) {
   if (h.closed) return;
   h.closed = true;
+  try { h.stopWatchdog(); } catch { /* never started */ }
   try { h.stopTail(); } catch { /* already down */ }
   try { h.endInput(); } catch { /* already ended */ }
   try { h.q.close(); } catch { /* already closed */ }
@@ -494,6 +641,9 @@ export class ClaudeSdkRuntime implements AgentRuntime {
         // Nothing may park a session waiting for a human: an unrecognised dialog
         // is answered 'cancelled', which tells the CLI to apply its own default.
         onUserDialog: async () => ({ behavior: 'cancelled' as const }),
+        // Known-long commands go straight to the background — see
+        // preToolUseHooks for why this is a hook and not `canUseTool`.
+        hooks: preToolUseHooks(),
       },
     });
 
@@ -519,9 +669,13 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       closed: false,
       seq: 0,
       model: session.model?.trim() || null,
+      activity: newActivityState(),
+      stopWatchdog: () => {},
+      rescued: new Set<string>(),
     };
     live.set(session.id, h);
     retail(h);
+    startWatchdog(h);
 
     // The pump. Ends when the CLI exits — cleanly (we closed the input) or not
     // (crash, OOM, kill). Either way the handle is dropped so the next ensure()
@@ -596,6 +750,20 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     const h = handleOf(handle);
     if (!h) return false;
     return h.pending > 0 || h.statusBusy;
+  }
+
+  /**
+   * What this session is doing right now, or null when it is idle.
+   *
+   * The pane could answer "working or not" and nothing more, because a scraped
+   * spinner carries no other information. This is the difference between a
+   * session that looks hung and one that says "Bash · 47s" or "retrying 2/5,
+   * 12s" — the second is diagnosable without opening a terminal.
+   */
+  async activity(handle: RuntimeHandle): Promise<RuntimeActivity | null> {
+    const h = handleOf(handle);
+    if (!h) return null;
+    return describeActivity(h.activity, Date.now());
   }
 
   async interrupt(handle: RuntimeHandle): Promise<void> {

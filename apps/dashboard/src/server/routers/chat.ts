@@ -346,6 +346,13 @@ export const chatRouter = router({
           runtimeMode: true,
           snapshotAt: true,
           loopState: true,
+          // What the session is doing right now. getSession / sessionDetail
+          // only, NOT the 5s listSessions poll — same rule as loopState (P1-2)
+          // and for the same reason, even though this blob is two orders of
+          // magnitude smaller: the only reader is the session someone has open,
+          // so a per-session route is where it belongs. The sidebar dot needs
+          // `state`, which it already has.
+          activity: true,
           // Live preview registration — getSession only, same rule as loopState:
           // per-session payload never rides the 5s listSessions poll.
           livePreview: true,
@@ -409,7 +416,7 @@ export const chatRouter = router({
           closedAt: true, hiddenAt: true, hibernatedAt: true, groupId: true,
           runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true,
           claudeSessionId: true, transcriptPath: true,
-          pid: true, alive: true, state: true, rssMb: true,
+          pid: true, alive: true, state: true, rssMb: true, activity: true,
           contextTokens: true, outputTokens: true, snapshotAt: true,
         },
       });

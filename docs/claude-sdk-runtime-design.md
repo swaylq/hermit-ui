@@ -134,6 +134,79 @@ rather than by reading code. The first two were latent in the pane path too.
 Run the integration suite before shipping any change to this runtime. Every
 property it checks is one the unit tests cannot see.
 
+## Saying what the session is doing
+
+`isWorking` is a boolean because that is all a scraped terminal spinner can
+support. The SDK stream carries much more, and `claude-sdk-activity.ts` folds it
+into one small structure the dashboard renders in place of the word "working":
+
+| shown | from |
+| --- | --- |
+| `Bash · 47s` | the `tool_use` → `tool_result` pair, timed |
+| `code-reviewer` | `task_started` / `task_progress`, with its current tool |
+| `retrying 2/5, 12s` | `api_retry` — attempt, ceiling and the delay the API asked for |
+| `compacting` | the CLI's own `status` frame |
+| `Read · 3s +2 bg` | `background_tasks_changed`, alongside the foreground |
+
+The retry line is the one the pane could not produce at all: a rate-limited
+session simply looked hung, and nothing on screen distinguished waiting from
+wedged.
+
+**Not `tool_progress`.** The SDK has a message carrying `elapsed_time_seconds`
+that looks like the obvious input, and measured against 2.1.238 it does not
+arrive for an ordinary foreground Bash — a 20-second one produced none. The
+`tool_use`/`tool_result` pair is always there (it is what the transcript is made
+of, and what `pane.ts:transcriptToolRunning` already derives for the tmux path),
+so that is the primary signal; `tool_progress` sharpens the elapsed time when it
+does show up.
+
+It rides `getSession` / `sessionDetail`, deliberately NOT the 5s `listSessions`
+poll — the same rule loopState is held to (P1-2). The only reader is the session
+someone has open; the sidebar dot needs `state`, which it already has.
+
+## Long commands, and not wedging a turn on one
+
+Three layers, in the order they get a chance to act.
+
+**1 — start it in the background (`PreToolUse` hook).** A short list of commands
+whose whole job is to take minutes (`npm ci`, `docker build`, `pytest`, …) get
+`run_in_background: true` before they ever block. Only when the model asked for
+neither a background run nor its own timeout: either is a decision about its own
+command, and overriding it would be the harness second-guessing the agent.
+
+A hook, **not `canUseTool`** — under `bypassPermissions`, which every dashboard
+session uses, the SDK never consults canUseTool and says so:
+
+> canUseTool will not be invoked: permissionMode 'bypassPermissions'
+> auto-approves every tool call before the callback is consulted. To gate every
+> tool call, use a PreToolUse hook instead.
+
+Hooks fire regardless of permission mode, and `updatedInput` genuinely rewrites
+the call — verified: a hook turned `echo ORIGINAL` into `echo REWRITTEN` and the
+shell ran the rewritten one.
+
+**2 — notice (the activity tracker above).** A foreground Bash's elapsed time is
+known second by second, so "which command is holding this up" is answerable
+without opening a terminal.
+
+**3 — move it aside (`backgroundTasks(toolUseId)`).** Anything still in the
+foreground after `HERMIT_BASH_BACKGROUND_AFTER_MS` (default 180s) is backgrounded
+and announced in the chat. This is **not** a kill: the blocking tool returns
+"running in the background" immediately, **the turn continues**, and the command
+reports when it settles. Measured end-to-end — a 60s command backgrounded at
+20s, the turn carried straight on, and the model collected the finished output
+itself 40 seconds later.
+
+The pane had no equivalent. Escape killed the whole turn and lost everything the
+model had done; Ctrl+B existed but was a keystroke into a TUI, i.e. the same
+channel that loses keys.
+
+**pi is different, and cannot do this.** `pi-rpc` exposes `client.abort()` and
+nothing finer — whole-turn abort, the same granularity as Escape, with no
+per-tool backgrounding and no elapsed-time events. On pi the only defence is
+upstream: the mode's tool allowlist, or wrapping the command. That is a property
+of pi's harness, not of how the gateway talks to it.
+
 ## Completing the rollout
 
 Making claude-sdk the default changes what an agent with NO stored preference

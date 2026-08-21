@@ -30,6 +30,11 @@ const Item = z.object({
   // unvalidated on purpose (z.unknown(), not z.any()): the dashboard treats it as a
   // black box (count chip + expandable detail).
   loopState: z.unknown(),
+  // Opaque like loopState, and for the same reason: the shape belongs to the
+  // gateway's RuntimeActivity and this route has no opinion on it. Explicitly
+  // nullable — null is the value that clears a finished session's chip, so it
+  // has to survive the round trip rather than being treated as "absent".
+  activity: z.unknown(),
   // Process-tree RSS of the session's pane, MB (resource governance).
   rssMb: z.number().int().nullable().optional(),
 });
@@ -67,6 +72,10 @@ export async function POST(req: NextRequest) {
       // Prisma's Json? column needs Prisma.DbNull for SQL NULL; a bare
       // `null` literal is rejected by the generated client.
       loopState: it.loopState == null ? Prisma.DbNull : (it.loopState as Prisma.InputJsonValue),
+      // Unlike the sticky numeric fields below, this is written on EVERY tick
+      // including the null ones: the chip describes a moment, and a moment that
+      // has passed must clear rather than linger.
+      activity: it.activity == null ? Prisma.DbNull : (it.activity as Prisma.InputJsonValue),
       snapshotAt: now,
     };
     // ctx/output tokens are sticky: a probe that couldn't locate the usage block
