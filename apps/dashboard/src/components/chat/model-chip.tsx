@@ -24,6 +24,9 @@ import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { DEFAULT_MODEL_VALUE, modelChipLabel, modelPinOf } from '@/lib/claude-models';
 
+/** Menu width, in px. Needed as a number to keep the menu on screen. */
+const MENU_W = 256;
+
 export function ModelChip({
   sessionId,
   /** The RESOLVED model for this session — the pin, or what it inherits. */
@@ -37,6 +40,17 @@ export function ModelChip({
   const [open, setOpen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  // Viewport coordinates for the menu, measured when it opens.
+  //
+  // The menu is `fixed`, not `absolute`, because the header's meta line is
+  // `overflow-hidden` — it truncates the agent name and the activity label to
+  // keep the row on one line at 390px — and an absolutely-positioned popup
+  // inside it is CLIPPED: the markup is all there, focusable and screen-reader
+  // reachable, and a sighted user sees nothing. (Verified in the browser before
+  // and after: none of the ancestors carry a transform/filter/contain, so a
+  // fixed element escapes the clip instead of being contained by one of them.)
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const utils = trpc.useUtils();
 
   // Changed by installing a new Claude Code, not by anything on this page.
@@ -61,6 +75,9 @@ export function ModelChip({
     const onDown = (e: MouseEvent) => {
       if (!boxRef.current?.contains(e.target as Node)) setOpen(false);
     };
+    // Fixed coordinates are a snapshot; anything that moves the chip under them
+    // closes the menu rather than leaving it stranded beside nothing.
+    const onMove = () => setOpen(false);
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       // The chat page listens for Escape on `window` to stop the running turn.
@@ -70,21 +87,40 @@ export function ModelChip({
     };
     document.addEventListener('mousedown', onDown);
     window.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', onMove);
     return () => {
       document.removeEventListener('mousedown', onDown);
       window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('resize', onMove);
     };
   }, [open]);
 
   const current = (model ?? '').trim();
   const selected = current || DEFAULT_MODEL_VALUE;
 
+  function toggle() {
+    setErr(null);
+    if (open) { setOpen(false); return; }
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) {
+      // Kept on screen: the chip sits mid-header on a phone, and a 256px menu
+      // hung from its left edge would run off the right side.
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - MENU_W - 8));
+      setPos({ left, top: r.bottom + 4 });
+    }
+    setOpen(true);
+  }
+
+  // The wrapper is not `relative`: the menu is positioned against the viewport.
+  // It stays only so the outside-click test can ask "is this click in the chip
+  // or in its menu" — `fixed` moves the box, not the DOM parent.
   return (
-    <div ref={boxRef} className="relative shrink-0">
+    <div ref={boxRef} className="shrink-0">
       <button
+        ref={btnRef}
         type="button"
         disabled={disabled}
-        onClick={() => { setErr(null); setOpen((v) => !v); }}
+        onClick={toggle}
         aria-expanded={open}
         aria-label="switch model"
         title={
@@ -101,8 +137,11 @@ export function ModelChip({
         {modelChipLabel(current || null, models)}
       </button>
 
-      {open && (
-        <div className="absolute left-0 top-full z-30 mt-1 w-64 rounded-lg border border-border bg-popover p-1 shadow-lg">
+      {open && pos && (
+        <div
+          style={{ position: 'fixed', left: pos.left, top: pos.top, width: MENU_W }}
+          className="z-50 rounded-lg border border-border bg-popover p-1 shadow-lg"
+        >
           {models.map((m) => {
             const active = m.value === selected;
             return (
