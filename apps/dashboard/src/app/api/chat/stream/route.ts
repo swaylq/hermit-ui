@@ -84,6 +84,24 @@ export async function GET(req: NextRequest) {
       let lastSig = '';
       let lastEmit = Date.now();
 
+      // Open with a byte, before any await.
+      //
+      // Next.js does not send the response headers until the body's first chunk,
+      // so a stream that opens SILENTLY never completes its handshake. With
+      // skipInitial=1 the branch below primes `lastSig` and emits nothing, so the
+      // first chunk is the keep-alive ping — which only fires once a tick finds
+      // PING_MS elapsed. Measured against 2eb401f, both through Caddy and
+      // straight at the origin: fetch() resolved after 16.0s with 8 bytes (the
+      // ping), against 12ms when an initial emit was requested.
+      //
+      // Sixteen seconds of an unresolved handshake would be survivable on its
+      // own. It is not, because the browser marks itself connected the moment it
+      // STARTS connecting and switches its fallback poll off for the duration
+      // (see chat/page.tsx) — so that window had neither push nor poll, and a
+      // reply already in this table sat invisible while the session header,
+      // polled over a different query, had already gone back to "ready".
+      safeEnqueue(': open\n\n');
+
       const tick = async () => {
         if (closed) return;
         try {

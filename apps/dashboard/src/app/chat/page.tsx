@@ -479,6 +479,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     // freezing the chat AND suppressing the fallback poll. Abort → reconnect.
     const IDLE_DEAD_MS = 35_000;
     const BACKOFFS = [1_000, 2_000, 5_000];
+    // How long the optimism below is allowed to suppress the fallback poll. A
+    // healthy handshake resolves in ~10ms; anything past this is a stall, and a
+    // stall must hand the poll back rather than freeze the list.
+    const HANDSHAKE_GRACE_MS = 2_000;
 
     // Function decl (not const arrow) so the reconnect in `finally` can self-refer.
     function connect() {
@@ -496,6 +500,17 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       // fetches at open, server TTFB climbing 96→1059ms). Any failure/disconnect
       // resets it in the finally/disconnect below, re-enabling the real fallback.
       setStreamConnected(true);
+      // The optimism is a loan, not a gift. It is worth making while the
+      // handshake behaves; when the handshake does NOT complete, the poll is off
+      // and nothing is pushing, so the conversation stops updating with no
+      // symptom anywhere else on the page — the status chip keeps polling over
+      // its own query and cheerfully reads "ready" next to a reply that has not
+      // been fetched. That is exactly what a silent SSE open used to cause (see
+      // api/chat/stream's opening byte). Give the fallback back after the grace
+      // period; a late-but-successful connect turns it off again below.
+      const graceTimer = window.setTimeout(() => {
+        if (ctrl === myCtrl) setStreamConnected(false);
+      }, HANDSHAKE_GRACE_MS);
       (async () => {
         try {
           // Initial connect skips the initial emit — listMessages already loaded
@@ -506,6 +521,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             signal: myCtrl.signal,
           });
           if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
+          clearTimeout(graceTimer);
           setStreamConnected(true);
           lastActivity = Date.now();
           attempts = 0; // a good connect resets the backoff
@@ -532,6 +548,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         } catch {
           /* network error / abort / zombie-kill — reconnect below takes over */
         } finally {
+          clearTimeout(graceTimer);
           if (ctrl === myCtrl) ctrl = null;
           if (!cancelled) {
             setStreamConnected(false);
