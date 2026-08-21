@@ -4,6 +4,7 @@ import {
   BUILT_IN_BACKENDS, listBackends, availableBackends, backendById, backendsConfigOf,
   effectiveDefaultBackendId, isBackendEnabled, toggleBackend, uniqueBackendId,
   addBackendInstance, removeBackendInstance, updateBackendInstance, legacyHarnessOf,
+  backendPatchFrom,
   type BackendsConfig,
 } from './backends';
 
@@ -164,4 +165,44 @@ test('a missing or malformed column reads as unconfigured', () => {
   assert.equal(backendsConfigOf(null), null);
   assert.equal(backendsConfigOf({ backendsConfig: 'nope' }), null);
   assert.deepEqual(backendsConfigOf({ backendsConfig: {} })?.disabled, []);
+});
+
+// ── what the add/edit dialog stores ─────────────────────────────────────────
+
+const FORM = {
+  harness: 'pi-rpc' as const,
+  credentialId: 'hyqubit',
+  label: '',
+  suggestedLabel: 'pi · hyqubit',
+  model: '',
+  mode: 'omp',
+  defaultMode: 'omp',
+};
+
+test('a blank name falls back to the suggestion', () => {
+  assert.equal(backendPatchFrom(FORM).label, 'pi · hyqubit');
+  assert.equal(backendPatchFrom({ ...FORM, label: '  cheap pi ' }).label, 'cheap pi');
+});
+
+// An omitted key merges as "leave whatever was there", so clearing the field on
+// an EDIT would silently do nothing — which reads as the save not working.
+test('a cleared model is stored as null, not omitted', () => {
+  const patch = backendPatchFrom({ ...FORM, model: '   ' });
+  assert.ok('model' in patch);
+  assert.equal(patch.model, null);
+  assert.equal(backendPatchFrom({ ...FORM, model: ' kimi-k3 ' }).model, 'kimi-k3');
+  // And the merge actually takes: the old value must not survive.
+  const cfg = addBackendInstance(null, {
+    id: 'pi-hyqubit', harness: 'pi-rpc', credentialId: 'hyqubit', label: 'x', model: 'claude-opus-5',
+  });
+  const cleared = updateBackendInstance(cfg, 'pi-hyqubit', patch);
+  assert.equal(cleared.instances?.[0].model, null);
+});
+
+test('only pi stores a mode, and only one that differs from the default', () => {
+  assert.equal(backendPatchFrom(FORM).mode, null);                       // pi, default mode
+  assert.equal(backendPatchFrom({ ...FORM, mode: 'ops' }).mode, 'ops');  // pi, pinned
+  // Prime has exactly one built-in tool; a mode's tool allowlist means nothing.
+  assert.equal(backendPatchFrom({ ...FORM, harness: 'prime-rpc', mode: 'ops' }).mode, null);
+  assert.equal(backendPatchFrom({ ...FORM, harness: 'dsh-exec', mode: 'ops' }).mode, null);
 });

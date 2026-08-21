@@ -328,6 +328,37 @@ export function uniqueBackendId(
   return `${base}-${Date.now().toString(36)}`;
 }
 
+/**
+ * What the Backends dialog is about to store, from what the form holds.
+ *
+ * Pulled out of the component because these are the rules that can actually be
+ * wrong, and a rendered dialog is a poor place to pin them down:
+ *
+ *  - a blank name falls back to the suggestion, so the common case is one click;
+ *  - a blank model is stored as **null**, not omitted — an omitted key merges as
+ *    "leave whatever was there", so clearing the field on an edit would silently
+ *    do nothing, which reads as the save not working;
+ *  - only pi has modes, and only a mode that differs from the fleet default is
+ *    worth storing (see lib/pi-modes).
+ */
+export function backendPatchFrom(input: {
+  harness: CustomHarness;
+  credentialId: string;
+  label: string;
+  suggestedLabel: string;
+  model: string;
+  mode: string;
+  defaultMode: string;
+}): Omit<BackendInstance, 'id'> {
+  return {
+    harness: input.harness,
+    credentialId: input.credentialId,
+    label: input.label.trim() || input.suggestedLabel,
+    model: input.model.trim() || null,
+    mode: input.harness === 'pi-rpc' && input.mode !== input.defaultMode ? input.mode : null,
+  };
+}
+
 export function addBackendInstance(
   config: BackendsConfig | null | undefined,
   instance: BackendInstance,
