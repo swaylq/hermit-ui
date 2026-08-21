@@ -26,7 +26,7 @@ import { relTime } from '@/lib/format';
 import { sessionRecencyAt } from '@/lib/session-recency';
 import { sessionStatusView } from '@/lib/session-status';
 import { isSessionUnread } from '@/lib/session-read';
-import { useLiveWorking } from '@/lib/session-live';
+import { useLiveWorking, useLiveStatus, type LiveStatus } from '@/lib/session-live';
 import { usePins, togglePin } from '@/lib/session-pins';
 import { useSessionView, setSessionView, useAgentDrawers, setAgentDrawer, type SessionView } from '@/lib/session-view';
 import { useLongPress } from '@/lib/use-long-press';
@@ -310,14 +310,15 @@ export function RecentAgents() {
 }
 
 // One session row. memo'd: `session` is stable across a no-op poll (RQ structural
-// sharing), `active`/`liveAt`/`pinned` are primitives, and onPrefetch/onOpenMenu/
-// longPress are stable, so an unchanged row bails. The optimistic-working / unread /
-// status derivation runs INSIDE the row (only when it re-renders), and the per-row
-// handlers are built here from the stable callbacks — neither defeats the memo.
+// sharing), `active`/`liveAt`/`live`/`pinned` are primitives, and onPrefetch/
+// onOpenMenu/longPress are stable, so an unchanged row bails. The optimistic-working
+// / unread / status derivation runs INSIDE the row (only when it re-renders), and the
+// per-row handlers are built here from the stable callbacks — neither defeats the memo.
 const SessionRow = memo(function SessionRow({
   session: s,
   active,
   liveAt,
+  live,
   pinned,
   onPrefetch,
   onOpenMenu,
@@ -326,6 +327,7 @@ const SessionRow = memo(function SessionRow({
   session: SessionListItem;
   active: boolean;
   liveAt: number | null;
+  live: LiveStatus | null;
   pinned: boolean;
   onPrefetch: (id: string) => void;
   onOpenMenu: (id: string, x: number, y: number) => void;
@@ -337,9 +339,16 @@ const SessionRow = memo(function SessionRow({
   // snapshots the pane AFTER the send (snapshotAt > stamp), drop the optimism and
   // let the real `state` drive the dot.
   const optimisticWorking = liveAt != null && (!s.snapshotAt || new Date(s.snapshotAt).getTime() < liveAt);
+  // …but a chat page open on this session doesn't have to guess: it reads the
+  // message stream and the pending-interaction blocks, so when it is speaking
+  // (`live` non-null) its reading REPLACES the guess in both directions — it can
+  // say "working" ~13s before any snapshot could, and its 'idle' retires a send
+  // stamp whose turn quietly died. Same function, same row, same inputs as the
+  // header two inches to the right; that is the point. See lib/session-live.
   const status = sessionStatusView(s, {
     unread: isSessionUnread(s),
-    liveWorking: optimisticWorking,
+    liveWorking: live !== null ? live === 'working' : optimisticWorking,
+    needsYou: live === 'needs-you',
   });
   return (
     <li>
@@ -458,6 +467,8 @@ export function RecentSessions() {
   const confirm = useConfirm();
   const promptFor = usePrompt();
   const liveWorkingSince = useLiveWorking();
+  // What a chat page open on a session says about it, if one is (lib/session-live).
+  const liveStatus = useLiveStatus();
   const pins = usePins();
   // Which arrangement, and which agent drawers the user has opened/shut in the
   // by-agent one. Both are local view state (lib/session-view).
@@ -1016,6 +1027,7 @@ export function RecentSessions() {
                           session={s}
                           active={activeId === s.id}
                           liveAt={liveWorkingSince(s.id)}
+                          live={liveStatus(s.id)}
                           pinned={pins.has(s.id)}
                           onPrefetch={prefetchSession}
                           onOpenMenu={openMenuAt}
@@ -1067,6 +1079,7 @@ export function RecentSessions() {
                               session={s}
                               active={activeId === s.id}
                               liveAt={liveWorkingSince(s.id)}
+                              live={liveStatus(s.id)}
                               pinned={pins.has(s.id)}
                               onPrefetch={prefetchSession}
                               onOpenMenu={openMenuAt}
@@ -1086,6 +1099,7 @@ export function RecentSessions() {
                   session={s}
                   active={activeId === s.id}
                   liveAt={liveWorkingSince(s.id)}
+                  live={liveStatus(s.id)}
                   pinned={pins.has(s.id)}
                   onPrefetch={prefetchSession}
                   onOpenMenu={openMenuAt}

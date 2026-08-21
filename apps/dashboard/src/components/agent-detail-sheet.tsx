@@ -22,6 +22,7 @@ import { AgentKnowledgeSection } from './agent-knowledge-section';
 import { Overlay } from './overlay';
 import { type FileItem as SkillFileItem } from './file-detail';
 import { sessionStatusView } from '@/lib/session-status';
+import { useLiveStatus } from '@/lib/session-live';
 import { isSessionUnread } from '@/lib/session-read';
 import { removeAgentSkill } from '@/lib/optimistic-skills';
 import { useScope } from '@/lib/use-scope';
@@ -447,6 +448,8 @@ function SessionsSection({
 }) {
   const utils = trpc.useUtils();
   const confirm = useConfirm();
+  // What a chat page open on a session says about it, if one is (lib/session-live).
+  const liveStatus = useLiveStatus();
   // Recycle bin (docs/session-cleanup-design.md): recoverable, and it hibernates
   // the pane instead of leaving a ~500MB claude with no row able to kill it.
   const deleteSession = trpc.chat.trashSessions.useMutation({
@@ -472,7 +475,15 @@ function SessionsSection({
       ) : (
         <ul className="space-y-1.5">
           {sessions.map((s) => {
-            const status = sessionStatusView(s, { unread: isSessionUnread(s) });
+            // Prefer what a chat page open on this session reports, exactly as
+            // the sidebar does — this sheet sits over both of them, so a third
+            // opinion here would be the most visible disagreement of the lot.
+            const live = liveStatus(s.id);
+            const status = sessionStatusView(s, {
+              unread: isSessionUnread(s),
+              liveWorking: live === 'working',
+              needsYou: live === 'needs-you',
+            });
             // Only disable the row currently being deleted (isPending is shared
             // across rows, so narrow it by the in-flight variables' id).
             const deleting = deleteSession.isPending && deleteSession.variables?.ids?.includes(s.id);

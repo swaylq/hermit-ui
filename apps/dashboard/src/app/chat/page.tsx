@@ -19,7 +19,13 @@ import { contextWindowFor } from '@/lib/context-window';
 import { sessionStatusView } from '@/lib/session-status';
 import { useMarkSessionRead } from '@/lib/session-read';
 import { lastSessionId, rememberSession } from '@/lib/last-session';
-import { markSessionWorking } from '@/lib/session-live';
+import {
+  markSessionWorking,
+  publishSessionStatus,
+  clearSessionStatus,
+  STATUS_REFRESH_MS,
+  type LiveStatus,
+} from '@/lib/session-live';
 import { authedFetch } from '@/lib/asst-fetch';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { useScope } from '@/lib/use-scope';
@@ -1240,9 +1246,42 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // Status badge: gateway's pane-derived state, flipped to "working" instantly
   // off our own in-flight signal. unread=false — we're looking at this session,
   // so it's read by definition (never the red "unread" dot in its own header).
-  const status = pendingInteraction
-    ? { key: 'needs-you' as const, label: 'needs you', dot: 'bg-amber-400', pulse: true, detail: undefined }
-    : sessionStatusView(session, { liveWorking: isInFlight, unread: false });
+  //
+  // `activity` (the "Bash · 47s" / "retrying 2/5" refinement) rides ONLY on the
+  // single-row getSession poll — listSessions deliberately never carries it
+  // (chat.ts, the P1-2 payload rule) — while `session` above prefers the
+  // listSessions row. So it has to be read off sessionOne explicitly: taking it
+  // from `session` silently lost the rich label the moment the list resolved,
+  // i.e. always, leaving the header on a bare "working" it promises not to be.
+  const status = sessionStatusView(
+    session ? { ...session, activity: sessionOne.data?.activity ?? null } : session,
+    { liveWorking: isInFlight, unread: false, needsYou: !!pendingInteraction },
+  );
+
+  // Tell the sidebar what we can see, so its dot for THIS session is the same
+  // dot. Both sides run sessionStatusView over the same listSessions row; what
+  // differed was the fast local signal on top of it — the chat page reads the
+  // message stream (isInFlight, pendingInteraction), the sidebar only had a
+  // send stamp, so a turn we started elsewhere read "working" here and "ready"
+  // two inches to the left until the 8s snapshot and the 5s poll caught up.
+  // See lib/session-live. 'idle' is published deliberately: it is how a stale
+  // send stamp gets overruled.
+  const liveStatus: LiveStatus =
+    status.key === 'needs-you' ? 'needs-you' : status.key === 'working' ? 'working' : 'idle';
+  useEffect(() => {
+    if (!sessionId) return;
+    const publish = () => publishSessionStatus(sessionId, liveStatus);
+    publish();
+    // Re-stamp an unchanged value so it can't age past its TTL mid-turn. The
+    // write is a no-op for readers (publishSessionStatus only wakes them when
+    // the value actually changed), so this costs the sidebar nothing.
+    const t = setInterval(publish, STATUS_REFRESH_MS);
+    return () => clearInterval(t);
+  }, [sessionId, liveStatus]);
+  // Stop speaking for a session we've left. SessionPane is reused across session
+  // switches (no key), so this cleanup runs with the OUTGOING id — which is
+  // exactly the one that must fall silent.
+  useEffect(() => () => clearSessionStatus(sessionId), [sessionId]);
 
   // Which backend runs this session, resolved server-side (a session's own
   // runtime may be null = inherit the agent's). Shown next to ctx because both

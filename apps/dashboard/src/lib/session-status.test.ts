@@ -89,3 +89,60 @@ test('a client-side working signal picks up the label too', () => {
   );
   assert.equal(v.label, 'compacting');
 });
+
+// ── needs you ───────────────────────────────────────────────────────────────
+//
+// The one state only a view with the MESSAGES loaded can see: a turn parked on a
+// permission prompt. It used to be an object literal inlined in the chat header,
+// outside this union, which is why the sidebar could never show it — the same
+// session read "needs you" in the header and "working" in the row beside it.
+
+test('a turn waiting on a click says so, and outranks working', () => {
+  const v = sessionStatusView(
+    { alive: true, state: 'working', activity: { kind: 'tool', label: 'Bash', elapsedSec: 47 } },
+    { needsYou: true },
+  );
+  assert.equal(v.key, 'needs-you');
+  assert.equal(v.label, 'needs you');
+});
+
+// Whoever is blocked on you is blocked on you whatever else is true of the row —
+// including the local send signal, and including a closed/absent session.
+test('nothing outranks needs you', () => {
+  assert.equal(sessionStatusView(null, { needsYou: true }).key, 'needs-you');
+  assert.equal(
+    sessionStatusView({ closedAt: new Date(), restartRequestedAt: new Date() }, { needsYou: true }).key,
+    'needs-you',
+  );
+  assert.equal(
+    sessionStatusView({ alive: true, state: 'idle' }, { needsYou: true, liveWorking: true, unread: true }).key,
+    'needs-you',
+  );
+});
+
+test('an absent needsYou changes nothing', () => {
+  assert.equal(sessionStatusView({ alive: true, state: 'idle' }, { needsYou: false }).key, 'ready');
+  assert.equal(sessionStatusView({ alive: true, state: 'working' }, {}).key, 'working');
+});
+
+// The desync sway reported, as a test: the header and the sidebar run this same
+// function over the same listSessions row, and what used to differ was the fast
+// local signal layered on top — the chat page reads the message stream, the
+// sidebar only had a send stamp. Feed both sides the same signal and they agree.
+test('one row plus one signal is one answer, whoever is asking', () => {
+  const row = { alive: true, state: 'idle', snapshotAt: new Date() } as const;
+  for (const [live, expected] of [['working', 'working'], ['needs-you', 'needs-you'], ['idle', 'ready']] as const) {
+    const header = sessionStatusView(row, {
+      liveWorking: live === 'working',
+      unread: false,
+      needsYou: live === 'needs-you',
+    });
+    const sidebar = sessionStatusView(row, {
+      liveWorking: live === 'working',
+      unread: false, // the open session is read by definition — chat.markRead
+      needsYou: live === 'needs-you',
+    });
+    assert.equal(header.key, expected);
+    assert.deepEqual(header, sidebar, live);
+  }
+});

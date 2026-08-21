@@ -8,6 +8,9 @@
 //   grey   — down / not active: no session, dead pane, closed.
 //   sky    — coming up: claude is booting (starting) or the pane is being
 //            recycled by a restart (restarting). Transient; pulses.
+//   amber  — needs you: the turn is parked on a permission prompt or a
+//            question and will not move until you click. Same hue as working
+//            (the session is mid-turn), but it pulses at you, not for you.
 //   yellow — working: a turn is in flight.
 //   green  — ready: alive + idle + you've seen the latest (caught up).
 //   red    — unread: alive + idle + the agent finished work you haven't read yet
@@ -58,7 +61,7 @@ export interface SessionRuntimeLike {
 }
 
 export interface StatusView {
-  key: 'working' | 'unread' | 'ready' | 'starting' | 'restarting' | 'down';
+  key: 'needs-you' | 'working' | 'unread' | 'ready' | 'starting' | 'restarting' | 'down';
   label: string;
   dot: string;   // Tailwind bg-* for the status dot
   pulse: boolean; // animate the dot (working / starting)
@@ -112,9 +115,20 @@ export function activityLabel(raw: unknown): { label: string; detail?: string } 
 
 export function sessionStatusView(
   s: SessionRuntimeLike | null | undefined,
-  opts: { liveWorking?: boolean; unread?: boolean } = {},
+  opts: { liveWorking?: boolean; unread?: boolean; needsYou?: boolean } = {},
 ): StatusView {
-  // yellow — working wins over everything.
+  // amber — blocked ON YOU. Only a view that has the session's messages loaded
+  // can see this (a {type:'interaction'} block still pending), which is why it
+  // used to be an object literal inlined in the chat header, outside this
+  // union — and therefore something the sidebar could never render. It lives
+  // here now, and the chat page hands the fact to the sidebar through
+  // lib/session-live so both sides run this same function.
+  //
+  // Outranks working: the turn is not advancing, it is parked until you click.
+  if (opts.needsYou) {
+    return { key: 'needs-you', label: 'needs you', dot: 'bg-amber-400', pulse: true };
+  }
+  // yellow — working wins over everything else.
   if (opts.liveWorking || s?.state === 'working') {
     // A backend that can say WHAT it is doing gets to say it here; one that
     // cannot keeps the label it always had.
