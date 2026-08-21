@@ -16,4 +16,8 @@ When the budget is hit, don't delete: merge lessons that share a root cause, tig
 `## Possibly stale — needs a human ruling` for a human to rule on. A lesson you delete is one you get to learn
 again the hard way.
 
+**The title is the join key.** Rename or translate a lesson here and you must rename its
+archive heading (and its `<a id="…">` anchor) in the same edit, or the two halves stop
+finding each other. Position is not a fallback — entries get merged and reordered.
+
 _(empty — your first lesson lands here when you have one to write.)_

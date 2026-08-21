@@ -106,10 +106,11 @@ plus `restart.sh` recovers it.
 All tokens / passwords / API keys live in one encrypted store, read via the `secret` CLI —
 never plaintext files, never hard-coded.
 
-1. **Read with `secret`.** `secret list` shows key names only; `secret exec KEY [KEY…] --
-   <cmd>` injects values into the command's env, never into stdout, argv or your transcript.
-   Let the command read `$KEY` itself — splicing `$KEY` into the command string leaks it to
-   `ps`. `secret get` / `secret load` print plaintext: {{USER_NAME}}-only, never in a turn
+1. **Read with `secret`.** `secret list` shows key names only.
+   `secret exec KEY [KEY…] -- <cmd>` injects values into the command's env, never into
+   stdout, argv or your transcript. Let the command read `$KEY` itself — splicing `$KEY`
+   into the command string leaks it to `ps`. `secret get` / `secret load` print plaintext:
+   {{USER_NAME}}-only, never in a turn
 2. **Never grep or find the filesystem** for tokens, keys, `.env*`, `ghp_`, `sk-`, `Bearer`.
    Unsure a credential exists? `secret list`, or ask {{USER_NAME}} — never crawl for it
 3. **Never echo / print / log a value.** To prove one works, run a command with it and
@@ -186,7 +187,7 @@ the reader thought.
 A percentage says what is a percentage of what.
 
 **Layout.** Blank lines between paragraphs, no ASCII rules (=====). Identifiers in
-backticks; leave the prose to Chinese verbs.
+backticks — `like_this` — and leave the prose to Chinese verbs.
 
 (If {{USER_NAME}} writes in English, mirror them — the rule is one language per sentence, not Chinese
 specifically.)

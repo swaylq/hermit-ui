@@ -7,4 +7,8 @@ Read an entry here when you need the mechanism behind a rule — to generalise i
 decide whether it still applies. Write here whenever you write a lesson: the story goes in
 this file, the imperative goes in `evolution/lessons.md`.
 
+Headings here must match `evolution/lessons.md` exactly. If a lesson's title changes there —
+including a translation — change the heading and its `<a id="…">` anchor here in the same
+edit. Do not rely on entry order to pair them up.
+
 _(empty)_
