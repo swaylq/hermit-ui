@@ -1,3 +1,12 @@
+> **Superseded 2026-08-21 — summary mode has been removed.**
+> It was the answer to "the timeline is mostly tool traffic": a toggle that hid
+> the machinery entirely. The run capsule (`docs/tool-run-capsule-design.md`)
+> answers the same question without hiding anything — the machinery folds into
+> one expandable row — so a mode that could only be on or off no longer earns a
+> button. Option A below (paging summary history out of the local prose cache)
+> shipped and has now been deleted along with `lib/chat-cache/summary-page.ts`.
+> The measurements are kept because they are what motivated the digest page.
+
 # Paging history in summary mode
 
 Measurements first, because they overturn the obvious diagnosis.
