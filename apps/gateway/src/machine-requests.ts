@@ -5,7 +5,7 @@
 
 import { api } from './api';
 import { execCapture } from './exec';
-import { paneIsWorking } from './pane';
+import { sessionIsBusy } from './session-busy';
 import { restartOneSession } from './chat-runner';
 
 const RESTART_GAP_MS = 4_000; // stagger restarts — never all at once
@@ -36,11 +36,14 @@ async function runUpgrade(id: string): Promise<void> {
 }
 
 async function runRestartAll(id: string): Promise<void> {
-  let ids: string[];
+  // The whole row, not just the id: which backend runs a session is what decides
+  // who can answer "is it mid-turn?", and the answer used to be asked of a pane
+  // that claude-sdk sessions do not have (see ./session-busy).
+  let sessions: Awaited<ReturnType<typeof api.pollChatPending>>['sessions'];
   try {
     // pollChatPending returns this machine's live (closedAt:null) sessions.
     const pending = await api.pollChatPending();
-    ids = pending.sessions.map((s) => s.id);
+    sessions = pending.sessions;
   } catch (e) {
     await api.ackMachineRequest({
       id,
@@ -53,18 +56,12 @@ async function runRestartAll(id: string): Promise<void> {
   const stamp = Date.now();
   let restarted = 0;
   let skipped = 0;
-  for (const sid of ids) {
-    let working = false;
-    try {
-      working = await paneIsWorking(sid);
-    } catch {
-      working = false;
-    }
-    if (working) {
+  for (const s of sessions) {
+    if (await sessionIsBusy(s)) {
       skipped++; // don't interrupt an in-flight turn
       continue;
     }
-    const did = await restartOneSession(sid, stamp);
+    const did = await restartOneSession(s.id, stamp);
     if (did) {
       restarted++;
       await sleep(RESTART_GAP_MS); // one at a time, staggered
