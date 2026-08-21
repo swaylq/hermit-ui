@@ -55,17 +55,18 @@ An image with long edge > 2000px, or one the machine can't parse, wedges the ses
 API call afterwards returns 400 "Could not process image" — **including the reply path**, so
 you go dark with no way to say so. Only a restart or `/compact` clears it.
 
-**Layer 1 — mechanical.** `scripts/hooks/pre-read-image.sh` runs before every `Read`
-(wired in `.claude/settings.local.json`). It measures images with whatever backend exists
-(`sips`, ImageMagick, or Python PIL — see `scripts/lib/image.sh`), resizes oversized ones to
-a sidecar, and blocks the Read pointing you at the sidecar. Unmeasurable file, or no backend
-installed at all → it blocks outright. Fail-closed both ways.
+**Layer 1 — mechanical.** `scripts/hooks/pre-read-image.sh` runs before every `Read`: it
+measures the image, resizes an oversized one to a sidecar, and blocks the Read pointing you
+at the sidecar. Can't measure the file at all → it blocks outright. Fail-closed both ways —
+but it only protects you if it is actually wired into `.claude/settings.local.json`, so
+check that before relying on it.
 
 **Layer 2 — the rule.** Outside the hook's coverage, run `scripts/safe-image.sh <path>`
-yourself before Reading any png/jpg/jpeg/gif/webp/bmp/tiff. **Non-zero exit → STOP. Never
-Read the original as a fallback.** Exit 1 = unparseable image. Exit 2 = this machine has no
-image backend — that's a machine problem: say so and ask for `imagemagick`, don't work
-around it. (`references/incidents.md#image`)
+yourself before Reading any png/jpg/jpeg/gif/webp/bmp/tiff, and Read the path it prints —
+not the original. **Non-zero exit → STOP and report it. Never Read the original as a
+fallback.** A non-zero exit means this machine cannot safely measure or resize that image;
+working around it is exactly how the session gets wedged.
+(`references/incidents.md#image`)
 
 ## MCP Registry Safety — HARD RULE
 
