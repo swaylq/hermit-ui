@@ -129,15 +129,25 @@ live_sessions() {
 }
 
 # Sibling sessions: same agent directory, not me. Prints their names.
+#
+# The directory is an argument so a caller can ask about a directory that is not its
+# own — without it, `siblings` silently answers for whatever agent the CALLER belongs
+# to, which is exactly how a cross-agent check looks correct while being wrong.
+# Defaults to my own session's directory, then to $PWD.
 siblings() {
-  local me mine
+  local me mine dir name d
   me=$(self_session)
-  mine=$(live_sessions | awk -F: -v me="$me" '$1 == me { print $2; exit }')
+  mine=${1:-}
+  [ -n "$mine" ] || mine=$(live_sessions | awk -F: -v me="$me" '$1 == me { print $2; exit }')
   # Not in the list (hook running before registration, or a test): fall back to cwd.
   [ -n "$mine" ] || mine=$PWD
+  # Compare PHYSICAL paths: lsof and /proc report resolved ones, and on macOS /var is
+  # a symlink to /private/var — the same trap that once made `sweep` match nothing.
+  mine=$(cd "$mine" 2>/dev/null && pwd -P) || return 0
   live_sessions | while IFS=: read -r name dir; do
     [ "$name" = "$me" ] && continue
-    [ "$dir" = "$mine" ] && echo "$name"
+    d=$(cd "$dir" 2>/dev/null && pwd -P) || d=$dir
+    [ "$d" = "$mine" ] && echo "$name"
   done
 }
 
@@ -319,6 +329,6 @@ case "${1:-}" in
   enter) shift; cmd_enter "$@" ;;
   land)  shift; cmd_land  "$@" ;;
   sweep) shift; cmd_sweep "$@" ;;
-  siblings) siblings ;;
+  siblings) shift; siblings "$@" ;;
   *) die "usage: wt.sh {check|enter|land|sweep|siblings} [path]" ;;
 esac

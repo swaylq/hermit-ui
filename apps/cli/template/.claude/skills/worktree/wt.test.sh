@@ -133,6 +133,15 @@ out=$(HERMIT_SESSION_ID=short1 HERMIT_WT_SESSIONS="hermit-short1:$AGENT_DIR herm
       "$WT" siblings 2>&1)
 check "a sub-12-char id is used as-is" "$out" "hermit-bbb"
 
+echo "== siblings answers about the directory it is ASKED about =="
+# Without this the answer silently belongs to whichever agent exported
+# HERMIT_SESSION_ID into the environment — a cross-agent check that looks right.
+mkdir -p "$TMP/other"
+out=$(HERMIT_SESSION_ID=cmt28m7ot07s7pvdhyurhya3k \
+      HERMIT_WT_SESSIONS="hermit-pvdhyurhya3k:$AGENT_DIR hermit-bbb:$AGENT_DIR hermit-ccc:$TMP/other" \
+      "$WT" siblings "$TMP/other" 2>&1)
+check "explicit dir wins over the caller's own" "$out" "hermit-ccc"
+
 # An explicitly empty session list means "nobody", not "go read the real machine".
 out=$(HERMIT_SESSION_ID=cmt28m7ot07s7pvdhyurhya3k HERMIT_WT_SESSIONS="" \
       "$WT" siblings 2>&1)

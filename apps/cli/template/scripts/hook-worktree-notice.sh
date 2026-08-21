@@ -34,7 +34,9 @@ dir=${CLAUDE_PROJECT_DIR:-}
 wt="$dir/.claude/skills/worktree/wt.sh"
 [ -f "$wt" ] || exit 0
 
-sibs=$(cd "$dir" 2>/dev/null && bash "$wt" siblings 2>/dev/null | grep . ) || exit 0
+# Pass $dir explicitly: the answer must be about THIS agent directory, never about
+# whichever session happens to have exported HERMIT_SESSION_ID into this environment.
+sibs=$(cd "$dir" 2>/dev/null && bash "$wt" siblings "$dir" 2>/dev/null | grep . ) || exit 0
 count=$(printf '%s\n' "$sibs" | grep -c . || true)
 [ "${count:-0}" -gt 0 ] || exit 0
 
