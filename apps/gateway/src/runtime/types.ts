@@ -152,7 +152,7 @@ export interface AgentRuntime {
    * rollout after a gateway restart). Collectors may use this to repair token
    * fields, but it does not make the session alive or wake a hibernated one.
    */
-  storedUsage?(handle: RuntimeHandle): Promise<RuntimeUsage | null>;
+  storedUsage?(handle: RuntimeHandle, transcriptPath?: string | null): Promise<RuntimeUsage | null>;
 
   /** Stop the session; `hibernate` keeps durable state for later resume. */
   stop(handle: RuntimeHandle, mode: 'hibernate' | 'kill'): Promise<void>;

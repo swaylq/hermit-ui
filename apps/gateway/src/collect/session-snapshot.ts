@@ -398,6 +398,31 @@ async function readTranscriptState(tp: string, lines: string[]): Promise<Transcr
 }
 
 /**
+ * Is the durable-usage fallback worth reading?
+ *
+ * Exported and pure because the answer decides whether an 8-second tick touches
+ * the filesystem N extra times, and "we only call it when we need it" is the
+ * kind of claim that quietly stops being true. Returns false whenever the
+ * numbers are already in hand, which is the overwhelmingly common case: the
+ * transcript tail the collector reads anyway carries the same `usage` record.
+ *
+ * Context and output tokens come off the SAME transcript event, so they are
+ * both present or both absent — but this asks about each of them rather than
+ * assuming that, so the fallback still fires if the two ever come apart. That
+ * keeps the snapshot byte-identical to the unconditional version it replaces.
+ */
+export function needsStoredUsage(
+  alive: boolean,
+  t: { contextTokens: number | null; outputTokens: number | null },
+  usage: { contextTokens: number | null; outputTokens: number | null } | null,
+): boolean {
+  // A live session has a handle, and the handle's own usage outranks the disk.
+  if (alive) return false;
+  return (t.contextTokens ?? usage?.contextTokens ?? null) === null
+    || (t.outputTokens ?? usage?.outputTokens ?? null) === null;
+}
+
+/**
  * Snapshot for a claude-sdk session.
  *
  * The middle ground between the two probes that already exist, and the reason
@@ -441,11 +466,19 @@ export async function probeClaudeSdk(
     return { ...base, alive, state: alive ? 'starting' : null };
   }
 
-  const [lines, stored] = await Promise.all([
-    tailLines(tp),
-    alive ? Promise.resolve(null) : (runtime.storedUsage?.(handle) ?? Promise.resolve(null)),
-  ]);
+  const lines = await tailLines(tp);
   const t = await readTranscriptState(tp, lines);
+  // Ask for stored usage only when the two cheaper sources came up empty, and
+  // hand over the transcript path when we do. Both halves matter: the call used
+  // to run for every non-alive session on every 8s tick and trigger a readdir of
+  // the agent root plus up to one open per agent (48 here) — to produce the LAST
+  // of three fallbacks, which the tail above had almost always already supplied.
+  // It no longer runs at all in that case, and when it does it reads one known
+  // file. The two were parallel before; serialising them costs nothing, because
+  // the second one now almost never happens.
+  const stored = needsStoredUsage(alive, t, usage)
+    ? await (runtime.storedUsage?.(handle, tp) ?? Promise.resolve(null))
+    : null;
 
   // The SDK child is a gateway subprocess, so its RSS is findable the same way
   // the pane's was — by the session uuid on its argv. Resource governance ranks

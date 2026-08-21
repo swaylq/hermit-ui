@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { encodedProjectDir } from '@hermit-ui/tmux-driver';
-import { buildUserContent, resumableUuid, shouldBackgroundBash } from './claude-sdk';
+import { buildUserContent, resumableUuid, shouldBackgroundBash, ClaudeSdkRuntime } from './claude-sdk';
 
 // A 1x1 PNG, so the base64 path is exercised on real bytes rather than a stub.
 const PNG_1PX = Buffer.from(
@@ -205,4 +205,61 @@ test('a malformed tool input is never acted on', () => {
   for (const bad of [null, undefined, 'npm ci', 42, [], {}, { command: '' }, { command: 7 }]) {
     assert.equal(shouldBackgroundBash(bad), false, JSON.stringify(bad));
   }
+});
+
+// ── storedUsage: read the path you were given, do not go looking ────────────
+// The snapshot collector calls this for every non-alive session on an 8-second
+// tick. Without a path it has to FIND the transcript, which is a readdir of the
+// agent root plus up to one open per agent (48 on this machine) — for a number
+// the collector's own transcript tail had almost always already supplied. The
+// path argument is the fix; these pin that it is actually honoured.
+
+function writeTranscript(dir: string, name: string, events: unknown[]): string {
+  fs.mkdirSync(dir, { recursive: true });
+  const p = path.join(dir, name);
+  fs.writeFileSync(p, events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  return p;
+}
+
+const assistantUsage = (input: number, cacheRead: number, output: number) => ({
+  type: 'assistant',
+  message: { usage: { input_tokens: input, cache_read_input_tokens: cacheRead, output_tokens: output } },
+});
+
+test('storedUsage reads the transcript it is handed', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stored-usage-'));
+  const uuid = randomUUID();
+  const p = writeTranscript(dir, `${uuid}.jsonl`, [
+    assistantUsage(10, 20, 5),
+    assistantUsage(1_000, 24_000, 700),   // newest wins
+  ]);
+  const rt = new ClaudeSdkRuntime();
+  const u = await rt.storedUsage({ sessionId: 'sess-stored-1', externalSessionId: uuid }, p);
+  assert.equal(u?.contextTokens, 25_000);
+  assert.equal(u?.outputTokens, 700);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// The uuid gate exists only to BUILD a filename for the search. A caller that
+// hands over the file has already answered the question the gate asks, so the
+// path must be honoured ahead of it — otherwise the fast path silently falls
+// through to the slow one for exactly the sessions that pass a path.
+test('a handed path is honoured before the uuid gate the search needs', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stored-usage-'));
+  const p = writeTranscript(dir, 'not-a-uuid.jsonl', [assistantUsage(500, 0, 12)]);
+  const rt = new ClaudeSdkRuntime();
+  const u = await rt.storedUsage({ sessionId: 'sess-stored-2', externalSessionId: 'not-a-uuid' }, p);
+  assert.equal(u?.contextTokens, 500);
+  assert.equal(u?.outputTokens, 12);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a transcript with no usage record, and a path that is not there, both read null', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stored-usage-'));
+  const rt = new ClaudeSdkRuntime();
+  const empty = writeTranscript(dir, 'empty.jsonl', [{ type: 'user', message: { content: 'hi' } }]);
+  assert.equal(await rt.storedUsage({ sessionId: 'sess-stored-3', externalSessionId: 'x' }, empty), null);
+  const missing = path.join(dir, 'gone.jsonl');
+  assert.equal(await rt.storedUsage({ sessionId: 'sess-stored-4', externalSessionId: 'x' }, missing), null);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

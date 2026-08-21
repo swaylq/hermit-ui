@@ -1055,10 +1055,21 @@ export class ClaudeSdkRuntime implements AgentRuntime {
    * The transcript is on disk and holds the same numbers, so a sleeping session
    * still renders its context bar instead of a blank one. Must not create a
    * handle: recovering usage may never wake a session.
+   *
+   * `transcriptPath` is an answer, not a hint: a caller that already knows where
+   * the transcript is skips the directory search entirely. The snapshot
+   * collector does know — it computed the path a few lines earlier to tail it —
+   * and it is the caller that runs every 8 seconds for every session on the
+   * machine, so the search it used to trigger was the expensive half of a call
+   * whose result is the LAST of three fallbacks.
    */
-  async storedUsage(handle: RuntimeHandle): Promise<RuntimeUsage | null> {
+  async storedUsage(handle: RuntimeHandle, transcriptPath?: string | null): Promise<RuntimeUsage | null> {
     const cached = lastKnownUsage.get(handle.sessionId);
     if (cached) return cached;
+    if (transcriptPath) {
+      const u = readLastUsage(transcriptPath);
+      return u ? { contextTokens: u.contextTokens, outputTokens: u.outputTokens, totalTokens: 0, costUsd: null } : null;
+    }
     const id = handle.externalSessionId?.trim();
     if (!id || !UUID_RE.test(id)) return null;
     for (const root of agentDirsToSearch()) {
@@ -1114,9 +1125,12 @@ export class ClaudeSdkRuntime implements AgentRuntime {
 /**
  * Where to look for a transcript when we only hold a session id.
  *
- * `storedUsage` is called with a bare handle — no agent dir — so the project
- * directory has to be found rather than computed. Only the agent roots are
- * scanned, and only for an exact `<uuid>.jsonl`, so this is a handful of stats.
+ * Only reached when `storedUsage` is called WITHOUT a transcript path — a caller
+ * holding a bare handle and no agent dir, so the project directory has to be
+ * found rather than computed. Only the agent roots are scanned, and only for an
+ * exact `<uuid>.jsonl`. That is a readdir plus up to one open per agent on this
+ * machine (48 of them here), which is cheap once and ruinous on an 8-second tick
+ * — hence the path parameter.
  */
 function agentDirsToSearch(): string[] {
   try {
