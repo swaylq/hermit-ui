@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # wt.sh — git worktree isolation for one agent's concurrent dashboard sessions.
 #
-# Every session of an agent is a tmux pane in the SAME directory, so they share every
-# repo in it. This gives each session its own worktree when — and only when — another
-# session is live, and lands the work without anybody ever checking out the base branch.
+# Every session of an agent runs in the SAME directory, so they share every repo in it.
+# This gives each session its own worktree when — and only when — another session is
+# live, and lands the work without anybody ever checking out the base branch.
 #
 # Subcommands (all idempotent):
 #   check <repo>   is isolation needed here, and why
@@ -11,8 +11,11 @@
 #   land  <wt>     rebase onto base, push HEAD:base, remove the worktree
 #   sweep <repo>   report/remove worktrees whose session is gone
 #
-# Session identity comes from tmux (`#S` = hermit-<id>). HERMIT_WT_SELF and
-# HERMIT_WT_SESSIONS override it, which is what makes the logic testable without tmux:
+#   siblings       who else is live in this agent directory (used by the SessionStart hook)
+#
+# Session identity comes from HERMIT_SESSION_ID, with tmux `#S` as a fallback — see
+# the block below. HERMIT_WT_SELF and HERMIT_WT_SESSIONS override both, which is what
+# makes the logic testable without tmux or a gateway:
 #   HERMIT_WT_SELF=hermit-aaaa HERMIT_WT_SESSIONS='hermit-aaaa:/dir hermit-bbbb:/dir'
 #
 # Design: hermit-ui/docs/worktree-skill-design.md
@@ -30,26 +33,83 @@ mkdir -p "$WT_ROOT" 2>/dev/null || die "cannot create $WT_ROOT"
 WT_ROOT=$(cd "$WT_ROOT" && pwd -P)
 
 # ── session identity ─────────────────────────────────────────────────────────
+#
+# A dashboard session is `hermit-<last 12 chars of its session id>` — the name the
+# gateway gives its tmux session (tmux-driver: sanitise, then `.slice(-12)`), and the
+# id every worktree path and `wt/` branch is derived from. Two backends produce one:
+#
+#   claude-sdk  claude is a plain child of the gateway. No tmux exists at all. The
+#               session id arrives as HERMIT_SESSION_ID in the environment, and is
+#               repeated on argv inside --mcp-config.
+#   tmux pane   the pane IS tmux session `hermit-<id>`; the env var is set as well.
+#
+# So: identity from the env var (both backends), enumeration from the process table
+# (both backends), tmux only as a fallback. `claude` never chdirs, so a session's cwd
+# IS its agent directory.
+#
+# Before 2026-08-21 both came from tmux alone. When claude-sdk replaced the pane with
+# a gateway subprocess that broke silently and in the worst possible direction:
+# `enter`/`land` died outright, `check` said "sole session" to every one of 10
+# concurrent sessions, and `sweep` classified every LIVE worktree as an orphan.
 
-# This session's tmux name (hermit-pv2096yok0i0), or empty when not under tmux.
+# `hermit-<short id>`, exactly as the gateway names a tmux session.
+session_name() {
+  printf 'hermit-%s\n' "$(printf '%s' "$1" | sed 's/[^a-zA-Z0-9_-]/_/g' \
+    | awk '{ n = length($0); print substr($0, n > 12 ? n - 11 : 1) }')"
+}
+
 self_session() {
   if [ -n "${HERMIT_WT_SELF:-}" ]; then echo "$HERMIT_WT_SELF"; return; fi
+  if [ -n "${HERMIT_SESSION_ID:-}" ]; then session_name "$HERMIT_SESSION_ID"; return; fi
   tmux display-message -p '#S' 2>/dev/null || true
 }
 
 # The short id used for paths and branch names.
 self_id() {
   local s; s=$(self_session)
-  [ -n "$s" ] || die "no tmux session — can't tell which session this is"
+  [ -n "$s" ] || die "no session id — HERMIT_SESSION_ID is unset and there is no tmux session"
   echo "${s#hermit-}"
 }
 
-# "<session>:<agent dir>" per live dashboard session. Injectable for tests.
-live_sessions() {
-  if [ -n "${HERMIT_WT_SESSIONS:-}" ]; then
-    printf '%s\n' $HERMIT_WT_SESSIONS
-    return
+# "<session>:<agent dir>" for every claude the gateway spawned. One ps, one lsof —
+# no per-process fan-out, because this runs on every SessionStart.
+live_sessions_proc() {
+  local pairs pids cwds
+  pairs=$(ps -axww -o pid= -o args= 2>/dev/null | awk '
+    { exe = $2 }
+    exe !~ /(^|\/)claude$/ { next }
+    match($0, /HERMIT_SESSION_ID[^A-Za-z0-9]+[A-Za-z0-9_-]+/) {
+      s = substr($0, RSTART, RLENGTH)
+      sub(/^HERMIT_SESSION_ID[^A-Za-z0-9]+/, "", s)
+      print $1, s
+    }')
+  [ -n "$pairs" ] || return 0
+
+  if [ -r /proc/self/cwd ]; then                       # Linux
+    cwds=$(printf '%s\n' "$pairs" | awk '{print $1}' | while read -r pid; do
+      d=$(readlink "/proc/$pid/cwd" 2>/dev/null) && printf '%s %s\n' "$pid" "$d"
+    done)
+  else                                                  # macOS
+    command -v lsof >/dev/null 2>&1 || return 0
+    pids=$(printf '%s\n' "$pairs" | awk '{print $1}' | paste -sd, -)
+    cwds=$(lsof -a -d cwd -p "$pids" -Fpn 2>/dev/null \
+      | awk '/^p/ { p = substr($0, 2) } /^n/ { print p, substr($0, 2) }')
   fi
+  [ -n "$cwds" ] || return 0
+
+  # Both tables into ONE awk, tagged — `-v` cannot carry a multi-line value, and
+  # process substitution is not worth requiring here.
+  { printf '%s\n' "$pairs" | sed 's/^/P /'
+    printf '%s\n' "$cwds"  | sed 's/^/C /'; } | awk '
+    function short(s,   n) { gsub(/[^a-zA-Z0-9_-]/, "_", s); n = length(s)
+                             return substr(s, n > 12 ? n - 11 : 1) }
+    { rest = $0; sub(/^[PC][ \t]+[0-9]+[ \t]+/, "", rest) }
+    $1 == "P" { sid[$2] = rest; next }
+    $1 == "C" && ($2 in sid) { print "hermit-" short(sid[$2]) ":" rest }'
+}
+
+# Fallback for a pane-backed session on a box where the process table is unreadable.
+live_sessions_tmux() {
   local s p
   for s in $(tmux ls -F '#{session_name}' 2>/dev/null | grep '^hermit-' || true); do
     p=$(tmux display-message -p -t "$s" '#{pane_current_path}' 2>/dev/null) || continue
@@ -57,11 +117,22 @@ live_sessions() {
   done
 }
 
+# "<session>:<agent dir>" per live dashboard session. Injectable for tests — note
+# `+set`, so an explicitly EMPTY HERMIT_WT_SESSIONS means "no sessions" rather than
+# falling through to the real machine.
+live_sessions() {
+  if [ -n "${HERMIT_WT_SESSIONS+set}" ]; then
+    printf '%s\n' $HERMIT_WT_SESSIONS
+    return
+  fi
+  { live_sessions_proc; live_sessions_tmux; } | awk -F: 'NF >= 2 && !seen[$1]++'
+}
+
 # Sibling sessions: same agent directory, not me. Prints their names.
 siblings() {
-  local me mine rest
+  local me mine
   me=$(self_session)
-  mine=$(live_sessions | awk -F: -v me="$me" '$1==me {print $2; exit}')
+  mine=$(live_sessions | awk -F: -v me="$me" '$1 == me { print $2; exit }')
   # Not in the list (hook running before registration, or a test): fall back to cwd.
   [ -n "$mine" ] || mine=$PWD
   live_sessions | while IFS=: read -r name dir; do
@@ -248,5 +319,6 @@ case "${1:-}" in
   enter) shift; cmd_enter "$@" ;;
   land)  shift; cmd_land  "$@" ;;
   sweep) shift; cmd_sweep "$@" ;;
-  *) die "usage: wt.sh {check|enter|land|sweep} [path]" ;;
+  siblings) siblings ;;
+  *) die "usage: wt.sh {check|enter|land|sweep|siblings} [path]" ;;
 esac

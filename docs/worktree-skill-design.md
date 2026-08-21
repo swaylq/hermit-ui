@@ -16,14 +16,18 @@
 
 **不需要登记表、不需要锁、没有共享状态。** 先到的会话留在主 checkout（它当时没有兄弟，规则没触发），后来的各自进 worktree。两个会话同时开、互相看见、双双进 worktree 也正确——主 checkout 空着，比任何一方占着都安全。没有状态就没有可损坏的状态，也没有需要清理的陈旧条目。
 
-活性判定走 tmux：
+**活性判定不能依赖 tmux**（2026-08-21 更正，见文末）。会话名 `hermit-<会话 id 后 12 位>` 两个底座都成立，判定分两步：
 
 ```
-tmux ls -F '#{session_name}'                    # hermit-* 即 dashboard 会话
-tmux display-message -p -t <name> '#{pane_current_path}'   # 该会话的 agent 目录
+# 我是谁：两个底座都往 claude 进程的环境里塞了 HERMIT_SESSION_ID
+hermit-$(短id "$HERMIT_SESSION_ID")            # tmux 的 #S 只作兜底
+
+# 还有谁活着：网关起的每个 claude，argv 的 --mcp-config 里都带着 HERMIT_SESSION_ID
+ps -axww -o pid= -o args=                      # pid → 会话 id
+lsof -a -d cwd -p <pids> -Fpn                  # pid → cwd（Linux 走 /proc/<pid>/cwd）
 ```
 
-与自己同一个 agent 目录、且不是自己的，就是兄弟会话。claude 进程不 chdir，所以 `pane_current_path` 稳定等于 agent 目录。
+与自己同一个 agent 目录、且不是自己的，就是兄弟会话。claude 进程不 chdir，所以**进程的 cwd 稳定等于 agent 目录**——这条在 pane 时代表现为 `pane_current_path`，换底座后依然成立，所以判定换的只是读法。一次 `ps` 加一次 `lsof`，没有 per-process 扇出，因为它挂在每次 SessionStart 上。
 
 ## 2. 路径与分支
 
@@ -59,7 +63,7 @@ rebase 冲突则**停下来交给人**：不自动解冲突，worktree 和分支
 
 ## 5. 清理
 
-skill 每次运行顺带扫一遍：worktree 路径里的会话 id 已不在 tmux 中 = 孤儿。
+skill 每次运行顺带扫一遍：worktree 路径里的会话 id 已不在活会话列表里 = 孤儿。
 
 - 工作区干净 **且** 分支已并入 base → 自动删除 worktree + 分支。
 - 其余（有未提交改动、或有未合并提交）→ **保留并报告**。
@@ -68,7 +72,7 @@ skill 每次运行顺带扫一遍：worktree 路径里的会话 id 已不在 tmu
 
 ## 6. 触发
 
-`scripts/hook-worktree-notice.sh` 挂 `SessionStart`：检测到兄弟会话就往上下文注入一句「本 agent 还有 N 个活会话，改 repo 前先走 worktree skill」；独苗时零输出。**不拦截任何工具调用**——PreToolUse 硬拦虽然更保险，但每次编辑都多一道检查、误拦还会卡住干活，代价不值。
+`scripts/hook-worktree-notice.sh` 挂 `SessionStart`：它自己不做任何活性判定，直接调 `wt.sh siblings`——提示和 skill 用同一个判定，永远不会各说各话。检测到兄弟会话就往上下文注入一句「本 agent 还有 N 个活会话，改 repo 前先走 worktree skill」；独苗时零输出。**不拦截任何工具调用**——PreToolUse 硬拦虽然更保险，但每次编辑都多一道检查、误拦还会卡住干活，代价不值。
 
 ## 7. 代价（明说）
 
@@ -81,7 +85,7 @@ skill 每次运行顺带扫一遍：worktree 路径里的会话 id 已不在 tmu
 | 文件 | 职责 |
 |---|---|
 | `.claude/skills/worktree/SKILL.md` | 什么时候用、进去之后的规矩、落地流程 |
-| `.claude/skills/worktree/wt.sh` | `check` / `enter` / `land` / `sweep` 四个子命令，全部幂等 |
+| `.claude/skills/worktree/wt.sh` | `check` / `enter` / `land` / `sweep` / `siblings` 五个子命令，全部幂等；活性判定的唯一出处 |
 | `.claude/skills/worktree/wt.test.sh` | 针对一次性临时仓库的自测，会话列表用环境变量注入，不依赖真 tmux |
 | `scripts/hook-worktree-notice.sh` | SessionStart 探测 + 注入提示 |
 | `.claude/settings.json` | 注册上面这个 hook |
@@ -98,3 +102,21 @@ skill 每次运行顺带扫一遍：worktree 路径里的会话 id 已不在 tmu
 2. **「已合并」不能拿本地 base 比**：本设计刻意不更新本地 `main`（没人 checkout 它），所以拿它当基准会把已经落地的 worktree 判成「有未合并提交」而永远保留。修：`sweep` 比对 `origin/<base>`，并先 fetch。
 
 真实全流程（就在这个 repo 上）：`check` 认出 5 个兄弟会话 → `enter` 建出 `~/.hermit/worktrees/hermit-ui/pv2096yok0i0`（分支 `wt/pv2096yok0i0`，基于 `origin/main`）→ 主 checkout 期间分支和 HEAD 一动没动 → 在 worktree 里改文档、提交 → `land` 完成 rebase + `push HEAD:main` + 删除 worktree 和分支。**全程无人 checkout main。**
+
+
+---
+
+## 回归与修复（2026-08-21，claude-sdk 换底座之后）
+
+`330c591` 把 dashboard 会话从 tmux pane 换成网关直接起的 Agent SDK 子进程。本设计的活性判定当时**整个建立在 tmux 上**，于是三处同时失效，而且一声不响：
+
+| 位置 | 换底座后的行为 |
+|---|---|
+| `hook-worktree-notice.sh` | 第一行 `[ -n "$TMUX" ] \|\| exit 0` 直接退出——asst 当时 10 个并发会话，提示一次没出过 |
+| `wt.sh check` | `live_sessions` 空 → 对每个会话都回答 `sole-session` |
+| `wt.sh enter` / `land` | `self_id` 拿不到 `#S`，直接 `die`——skill 完全不可用 |
+| `wt.sh sweep` | 活会话一个都不在列表里 → **每个活着的 worktree 都被判成孤儿**，干净且已合并的会被自动删掉 |
+
+最后一条是数据风险，不只是失灵。修法是把「我是谁」和「谁还活着」换成两个底座都成立的信号（`HERMIT_SESSION_ID` + 进程表），tmux 降级为兜底，并把 hook 的判定合并进 `wt.sh siblings`，从此只有一处实现。
+
+教训记一条：**这类判定必须绑在「进程/目录」这种底座无关的事实上，不能绑在某个运行方式的外壳上。** cwd 一直是那个稳定事实，`pane_current_path` 只是它在 tmux 时代的一种读法——当初写成后者，才让换底座变成了静默回归。

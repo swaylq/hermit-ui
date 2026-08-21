@@ -5,9 +5,10 @@ description: Use BEFORE editing files in any git repo when another live session 
 
 # worktree — one repo, several sessions, no collisions
 
-Every session of this agent is a tmux pane in the **same directory**. They share every
-git repo in it. So a `git switch` in one session moves the working tree under another,
-and two sessions editing the same file overwrite each other — both have happened here.
+Every session of this agent runs in the **same directory** — whichever backend drives
+it (a `claude-sdk` subprocess of the gateway, or a tmux pane). They share every git
+repo in it. So a `git switch` in one session moves the working tree under another, and
+two sessions editing the same file overwrite each other — both have happened here.
 
 This skill hands you your own worktree when, and only when, that risk is real.
 

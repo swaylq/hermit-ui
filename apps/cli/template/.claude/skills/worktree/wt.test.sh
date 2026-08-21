@@ -3,6 +3,11 @@
 # injected through HERMIT_WT_SELF / HERMIT_WT_SESSIONS, which is the whole reason
 # those overrides exist.
 #
+# The last block is the exception, and deliberately so: it drops HERMIT_WT_SELF and
+# makes wt.sh derive its own identity from HERMIT_SESSION_ID. That is the path the
+# claude-sdk backend actually takes, and the one whose absence let a tmux-only
+# implementation report "sole session" to ten concurrent sessions (2026-08-21).
+#
 # Run: bash wt.test.sh
 set -uo pipefail
 
@@ -108,6 +113,30 @@ echo "== a live session's worktree is never swept =="
 out=$(HERMIT_WT_SELF=hermit-aaa HERMIT_WT_SESSIONS="hermit-aaa:$AGENT_DIR hermit-bbb:$AGENT_DIR" \
       "$WT" sweep "$AGENT_DIR/proj" 2>&1)
 [ -d "$wt3" ] && ok "live session's worktree survives sweep" || bad "live session's worktree survives sweep" "removed!"
+
+echo "== identity comes from HERMIT_SESSION_ID when there is no tmux (claude-sdk) =="
+# The gateway names a session `hermit-<last 12 chars>`; wt.sh must derive the same
+# name from the env var alone, or it counts ITSELF as a sibling and never stops.
+unset HERMIT_WT_SELF
+out=$(HERMIT_SESSION_ID=cmt28m7ot07s7pvdhyurhya3k \
+      HERMIT_WT_SESSIONS="hermit-pvdhyurhya3k:$AGENT_DIR hermit-bbb:$AGENT_DIR" \
+      "$WT" siblings 2>&1)
+check "self is identified from the env var" "$out" "hermit-bbb"
+
+out=$(HERMIT_SESSION_ID=cmt28m7ot07s7pvdhyurhya3k \
+      HERMIT_WT_SESSIONS="hermit-pvdhyurhya3k:$AGENT_DIR" \
+      "$WT" check "$AGENT_DIR/proj" 2>&1)
+has "sole sdk session is not isolated" "$out" "isolated=no"
+
+# A short id must survive verbatim, not be padded or truncated into something else.
+out=$(HERMIT_SESSION_ID=short1 HERMIT_WT_SESSIONS="hermit-short1:$AGENT_DIR hermit-bbb:$AGENT_DIR" \
+      "$WT" siblings 2>&1)
+check "a sub-12-char id is used as-is" "$out" "hermit-bbb"
+
+# An explicitly empty session list means "nobody", not "go read the real machine".
+out=$(HERMIT_SESSION_ID=cmt28m7ot07s7pvdhyurhya3k HERMIT_WT_SESSIONS="" \
+      "$WT" siblings 2>&1)
+check "empty session list means no siblings" "$out" ""
 
 rm -rf "$TMP"
 echo
