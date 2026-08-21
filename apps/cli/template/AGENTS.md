@@ -125,7 +125,8 @@ dashboard `/cron` page, and the gateway's cron-runner fires each one as a fresh 
 Claude turn in your directory. For an in-conversation loop, use the `loop` skill.
 
 **Never hand-roll an OS scheduler**: no LaunchAgents, no launchd `.plist`s, no systemd-user
-timers, no system `crontab`. Those are invisible to the dashboard and bypass quota routing.
+timers, no system `crontab`, no `scripts/launchd-sync.sh` (it ships in this workspace and is
+retired — its presence on disk is not permission to run it). Those are invisible to the dashboard and bypass quota routing.
 If you catch yourself about to write a `.plist`, stop and use the `cron` skill.
 
 1. **Stay strictly on-prompt.** Cron has no human in the loop — do what the prompt says, no
