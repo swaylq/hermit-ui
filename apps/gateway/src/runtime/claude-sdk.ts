@@ -790,6 +790,8 @@ export class ClaudeSdkRuntime implements AgentRuntime {
           HERMIT_DASHBOARD_URL: DASHBOARD_URL,
           HERMIT_KEY: ASST_KEY,
           HERMIT_SESSION_ID: session.id,
+          // Built-in auto-memory is retired fleet-wide; agents keep their own
+          // <agent>/memory/. Authoritative switch is ~/.claude/settings.json.
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
           // Turn on `system/session_state_changed` — the CLI's authoritative
           // turn-over signal, gated behind this variable and off by default.

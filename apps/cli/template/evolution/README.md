@@ -2,9 +2,12 @@
 
 Your slowly-accreted knowledge — what you've learned, what to avoid, what works.
 
-This is **your** narrative, not a key-value store. The key-value store is Claude Code's auto-memory (`~/.claude/projects/<encoded-cwd>/memory/MEMORY.md`). Use both:
+This is **your** narrative, not a key-value store. The key-value store is `memory/`, in this
+same workspace. Use both:
 
-- **auto-memory** for indexed facts: user preferences, project shape, library quirks. Searchable, fetched on demand.
+- **`memory/`** for facts: the daily log `memory/YYYY-MM-DD.md`, and one note per topic at
+  `memory/notes/<slug>.md` listed in `memory/notes/INDEX.md`. Grepped and read on demand.
+  (Claude Code's own auto-memory is off machine-wide — nothing is recorded for you.)
 - **evolution/** for narrative: failures you don't want to repeat, weekly reflections on how you're doing. (Codified *procedures* go in `.claude/skills/` — see below.)
 
 ## Files

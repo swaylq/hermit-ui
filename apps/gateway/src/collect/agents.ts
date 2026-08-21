@@ -15,7 +15,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { encodedProjectDir } from '@hermit-ui/tmux-driver';
 
 const MAX_TEXT_BYTES = 16 * 1024;       // 16 KB per markdown — anything bigger gets truncated
 const SKILL_MAX_BYTES = 64 * 1024;      // SKILL.md gets 64 KB — matches global skills + the 64 KB
@@ -137,9 +136,11 @@ function memorySummary(agentDir: string): string | null {
   return `${entries.length} files in memory/: ${top}${tail}`;
 }
 
-// ── Folder collection: evolution/ (workspace) + memory/ (Claude Code auto-memory
-// at ~/.claude/projects/<encoded-cwd>/memory/) for the detail sheet's expandable
-// folder view. Walks recursively (newest-first), caps content so a big auto-memory
+// ── Folder collection: evolution/ + memory/, both workspace folders, for the
+// detail sheet's expandable folder view. memory/ used to be read from Claude
+// Code's auto-memory at ~/.claude/projects/<encoded-cwd>/memory/; that store is
+// retired (off machine-wide) and its contents now live in the workspace.
+// Walks recursively (newest-first), caps content so a big memory/
 // dir doesn't bloat the 5-min push; files past the cap — or non-text — are listed
 // with content:null so the tree is complete but the payload bounded.
 const EVOLUTION_MAX_CONTENT = 60;
@@ -213,8 +214,8 @@ function probe(agentDir: string, name: string): AgentRow | null {
     toolsText: safeRead(path.join(agentDir, 'TOOLS.md')),
     evolutionLessons: safeRead(path.join(agentDir, 'evolution', 'lessons.md')),
     evolutionFiles: walkFolder(path.join(agentDir, 'evolution'), EVOLUTION_MAX_CONTENT),
-    // memory = Claude Code auto-memory, NOT a workspace folder.
-    memoryFiles: walkFolder(path.join(encodedProjectDir(agentDir), 'memory'), MEMORY_MAX_CONTENT),
+    // memory/ is the agent's own store — daily log + notes/ + notes/INDEX.md.
+    memoryFiles: walkFolder(path.join(agentDir, 'memory'), MEMORY_MAX_CONTENT),
     skillNames: skills.map((s) => s.name),
     skills,
     memorySummary: memorySummary(agentDir),

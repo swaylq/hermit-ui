@@ -1133,9 +1133,11 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     claudeSessionUuid: waitForResumeUuid ? undefined : claudeUuid || undefined,
     // Pane env inherited by claude's PreToolUse permission hook so it can reach
     // the dashboard (URL + key) and resolve this session — never on argv.
-    // CLAUDE_CODE_DISABLE_AUTO_MEMORY=1: unify memory behavior with the pi
-    // backend — no automatic index injection / auto-extract in cc either; both
-    // backends read memory on demand via the workspace <agent>/memory/auto/ link.
+    // CLAUDE_CODE_DISABLE_AUTO_MEMORY=1: Claude Code's built-in auto-memory is
+    // retired fleet-wide — agents keep their own <agent>/memory/ instead. The
+    // authoritative switch is `env` in ~/.claude/settings.json (it covers
+    // sessions we don't spawn, e.g. start.sh); this is the belt to that braces,
+    // so a machine that never got the setting still behaves the same.
     env: {
       HERMIT_DASHBOARD_URL: DASHBOARD_URL,
       HERMIT_KEY: ASST_KEY,

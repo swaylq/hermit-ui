@@ -16,9 +16,10 @@ browser/chrome.log
 # Secrets — never commit
 .claude/settings.local.json
 
-# Daily memory is personal — gitignore by default; uncomment to share
-memory/*.md
-!memory/.gitkeep
+# memory/ is this agent's own store and is personal — gitignore by default.
+# It is created by the scaffolder, not shipped in the template, precisely
+# because everything in it is ignored here. Uncomment to share.
+memory/
 
 # ACCOUNTS.md often has logged-in account identifiers.
 # It ships as a stub, but uncomment the line below if you don't want

@@ -282,9 +282,9 @@ async function fireInner(c: Cron): Promise<void> {
       cwd,
       claudeArgs,
       claudeSessionUuid: claudeUuid,
-      // Same memory-unification env as chat-runner: cc must not auto-inject or
-      // auto-extract auto-memory; both backends read memory on demand via
-      // <agent>/memory/auto/.
+      // Same as chat-runner: Claude Code's built-in auto-memory is retired
+      // fleet-wide (authoritative switch is ~/.claude/settings.json); agents
+      // read and write their own <agent>/memory/.
       env: {
         CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
       },

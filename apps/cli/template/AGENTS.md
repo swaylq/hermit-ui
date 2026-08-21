@@ -24,10 +24,12 @@ Two stores, not redundant:
   failure (title + `How to avoid`) and is loaded every session, so keep it under ~3,000
   tokens; the `What failed` / `Why` half goes to `references/lessons-archive.md` under the
   same title and is never preloaded. `reflections/YYYY-MM-DD.md` is optional long-form.
-- **auto-memory** (`memory/auto/`) — indexed key-value store for facts and user
-  preferences. **Not injected** — `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` is set fleet-wide, so
-  every session starts with zero memory. Read the `memory/auto/MEMORY.md` index on demand,
-  or `grep`.
+- `memory/` — facts, decisions and stated preferences, in your own workspace.
+  `YYYY-MM-DD.md` is the raw daily log; `notes/<slug>.md` is one topic per file with a
+  `description:` line at the top; `notes/INDEX.md` carries one line per note and is how
+  future-you actually finds anything. **Nothing writes it for you** — Claude Code's built-in
+  auto-memory is off machine-wide (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in
+  `~/.claude/settings.json`), so a session that never reads `memory/` has no memory.
 
 Codified *procedures* go in neither — write them as real skills at
 `.claude/skills/<verb>/SKILL.md` (tag self-evolved ones `source: evolution` in frontmatter)
@@ -37,7 +39,7 @@ so the harness surfaces and invokes them.
 
 Retrospective questions — {{USER_NAME}} typing 「以前」/「之前」/「上次」/「记不记得」, or the
 English equivalents — get searched **before** they get answered:
-`grep -r <keyword> evolution/`, then check the `memory/auto/MEMORY.md` index. No search =
+`grep -r <keyword> memory/ evolution/`, then the `memory/notes/INDEX.md` index. No search =
 guessing, and guessing from model memory has produced wrong answers before.
 
 ### Dual-write — important events go to both
@@ -46,7 +48,7 @@ When you learn something important, write it to both stores:
 
 - Decisions / architecture changes → `evolution/lessons.md` if it's a "don't do X again",
   otherwise a reflection
-- User feedback or stated preferences → auto-memory
+- User feedback or stated preferences → a note in `memory/notes/`, plus its line in `INDEX.md`
 - Debugging root causes → **both**
 - A new repeatable procedure → a skill, not a note
 
@@ -204,7 +206,7 @@ workspace. If nothing needs attention, reply HEARTBEAT_OK."_
 - **Stay quiet** (HEARTBEAT_OK): late night · user busy · nothing new
 - **Proactive, no permission needed**: organize `evolution/`, `git status` checks, update docs
 - **Memory maintenance**: every few days skim recent reflections, distill into `lessons.md`
-  or auto-memory, drop outdated entries
+  or a note in `memory/notes/`, drop outdated entries
 
 ---
 

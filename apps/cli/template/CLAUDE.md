@@ -20,11 +20,12 @@ Silently. Don't ask permission, don't announce it.
 | Touching local services, accounts, network, APIs | `TOOLS.md` |
 | Challenging a HARD RULE, or reviewing a past failure | `references/incidents.md` |
 | Retrospective question ("earlier", "last time") | `grep -r <keyword> evolution/ memory/` |
-| Long-term recall | `memory/auto/MEMORY.md` index, then the file it names |
+| Long-term recall | `memory/notes/INDEX.md`, then the note it names |
 
-Auto-memory injection is **off** fleet-wide (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`) — both
-backends behave identically: zero memory at startup, everything on demand. Skills are
-surfaced by the harness; no need to skim them.
+Nothing is injected at startup and nothing records itself: Claude Code's built-in
+auto-memory is off machine-wide (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in
+`~/.claude/settings.json`). Your memory is the files under `memory/` that you write.
+Skills are surfaced by the harness; no need to skim them.
 
 ## Before you add anything to the startup command
 

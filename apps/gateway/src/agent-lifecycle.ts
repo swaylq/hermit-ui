@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { AGENTS_ROOT, DASHBOARD_URL } from './config';
+import { seedMemoryStore } from './memory-scaffold';
 import { api } from './api';
 import { readAgent, isAgentDir } from './collect/agents';
 
@@ -142,6 +143,12 @@ function scaffold(name: string, persona: string, templateFiles?: unknown): strin
     path.join(tmp, '.claude', 'settings.local.json'),
     JSON.stringify({ env: { HERMIT_DASHBOARD_URL: DASHBOARD_URL } }, null, 2) + '\n',
   );
+  // memory/ likewise: it's the agent's own store, and the template's .gitignore
+  // ignores the whole folder, so it cannot ship as template content. Seed the
+  // index — AGENTS.md tells a fresh agent to write notes here, and pointing it
+  // at a folder that doesn't exist is how "search before you answer" quietly
+  // degrades into guessing.
+  seedMemoryStore(tmp);
   fs.renameSync(tmp, targetDir);
   if (templateFiles) overlayTemplate(targetDir, templateFiles, subs);
   trustProject(targetDir); // pre-trust so the first gateway-spawned claude doesn't hang on trust/onboarding
@@ -230,7 +237,7 @@ function targetToRelPath(target: string): string {
   }
   // evolution/<relpath> — any file in the agent's workspace evolution/ folder.
   // editAgentFile's containment guard blocks `..` traversal; reject obvious cases
-  // here too. (memory/ is NOT editable — it's Claude Code's auto-memory.)
+  // here too. (memory/ is not in the allow-list — the agent writes it itself.)
   const ev = target.match(/^evolution\/(.+)$/);
   if (ev && !ev[1].includes('..') && !ev[1].startsWith('/')) {
     return path.join('evolution', ev[1]);
