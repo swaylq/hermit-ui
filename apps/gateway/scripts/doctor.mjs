@@ -88,19 +88,6 @@ console.log(`hermit-ui gateway doctor — ${process.platform} ${os.arch()} · no
 // ── the things chat cannot run without ───────────────────────────────────────
 section('core');
 
-const tmuxBin = needBin('tmux', 'chat runs claude in a tmux pane', 'tmux');
-if (tmuxBin) {
-  const v = capture('tmux', ['-V']) ?? '';
-  const num = Number.parseFloat((v.match(/(\d+\.\d+)/) ?? [])[1] ?? '0');
-  // `new-session -e KEY=VAL` is 3.2+. Below that the env silently does not
-  // reach the pane, so the permission hook never receives the dashboard key —
-  // a failure that looks like the agent ignoring web-permission requests
-  // rather than like an old tmux. Debian 11 ships 3.1c and is NOT enough.
-  if (num >= 3.2) line('ok', 'tmux ≥ 3.2', v);
-  else line('bad', 'tmux ≥ 3.2', `${v} — new-session -e is 3.2+; pane env is dropped silently`,
-    isLinux ? 'use Ubuntu 22.04+ (3.2a) or build tmux from source' : 'brew upgrade tmux');
-}
-
 // The BSD/procps split that made the Chrome census silently null on Linux.
 const psOk = spawnSync('ps', ['-axo', 'rss,command'], { encoding: 'utf8', timeout: 5000 });
 if (psOk.status === 0 && (psOk.stdout ?? '').split('\n').length > 5) {
@@ -128,8 +115,48 @@ const claudeAt = claudeCandidates.find((p) => { try { return fs.existsSync(p); }
 if (claudeAt) {
   line('ok', 'claude', `${claudeAt}${capture(claudeAt, ['--version']) ? ` (${capture(claudeAt, ['--version'])})` : ''}`);
 } else {
-  line('bad', 'claude', 'not found — the claude-tmux backend cannot start a session',
+  line('bad', 'claude', 'not found — no claude backend, SDK or pane, can start a session',
     'install Claude Code, then set HERMIT_CLAUDE_BIN if it lands somewhere unusual');
+}
+
+// claude-sdk: the DEFAULT backend, and until now the one thing this script
+// never looked at. It drives the same `claude` binary found above through the
+// Agent SDK instead of through a terminal, so the binary being present is only
+// half the answer — the package that speaks to it has to be installed too, and
+// a doctor that says "everything checks out" without checking the thing every
+// session actually runs on is worse than one that says nothing.
+const sdkPkg = (() => {
+  for (const base of [path.join(GATEWAY_DIR, 'node_modules'), path.join(GATEWAY_DIR, '..', '..', 'node_modules')]) {
+    const p = path.join(base, '@anthropic-ai', 'claude-agent-sdk', 'package.json');
+    try { return { at: p, version: JSON.parse(fs.readFileSync(p, 'utf8')).version }; } catch { /* next */ }
+  }
+  return null;
+})();
+if (sdkPkg) {
+  line('ok', 'claude-sdk', `@anthropic-ai/claude-agent-sdk ${sdkPkg.version}`);
+} else {
+  line('bad', 'claude-sdk', 'the Agent SDK package is not installed — the DEFAULT backend cannot start a session',
+    'npm install in the repo root (a worktree needs its own install)');
+}
+
+// tmux: no longer core. Chat runs claude as a child process of the gateway;
+// what still needs a pane is the claude-tmux backend, the cron runner's
+// throwaway sessions, the /usage scrape in collect/plan-usage.ts, and the
+// browser terminal. A machine that runs none of those does not need tmux, so a
+// missing one degrades rather than blocks — see the exit code at the bottom.
+const tmuxBin = which('tmux');
+if (tmuxBin) {
+  const v = capture('tmux', ['-V']) ?? '';
+  const num = Number.parseFloat((v.match(/(\d+\.\d+)/) ?? [])[1] ?? '0');
+  // `new-session -e KEY=VAL` is 3.2+. Below that the env silently does not
+  // reach the pane, so the permission hook never receives the dashboard key —
+  // a failure that looks like the agent ignoring web-permission requests
+  // rather than like an old tmux. Debian 11 ships 3.1c and is NOT enough.
+  if (num >= 3.2) line('ok', 'tmux', `${tmuxBin} (${v})`);
+  else line('warn', 'tmux ≥ 3.2', `${v} — new-session -e is 3.2+; pane env is dropped silently, so pane-backed sessions lose the dashboard key`,
+    isLinux ? 'use Ubuntu 22.04+ (3.2a) or build tmux from source' : 'brew upgrade tmux');
+} else {
+  line('warn', 'tmux', 'missing — no claude-tmux sessions, cron panes, /usage scrape or browser terminal', install('tmux'));
 }
 
 // codex: optional. Only sessions on the codex-exec backend need it.
