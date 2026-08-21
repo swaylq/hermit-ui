@@ -48,6 +48,7 @@ import { startControlChannel, shutdownControlChannel } from './control-channel';
 import { startPreviewServers, previewSweepTick } from './preview';
 import { installDispatcher, dashboardBackedOff } from './dashboard-http';
 import { assertRequiredConfig } from './config';
+import { TickLog } from './tick-log';
 
 // This process DRIVES tmux; it is never inside it. Scrub any inherited TMUX vars
 // before anything can shell out.
@@ -82,15 +83,30 @@ assertRequiredConfig();
 
 console.log('[gateway] starting');
 
+// What the ~20 periodic loops are allowed to say. A routine success is silent;
+// slow, failed and recovered each keep their line, and a rollup every few
+// minutes reports the rest. See ./tick-log for the 17.5MB/day this replaces.
+const tickLog = new TickLog(Date.now());
+
 async function safe(label: string, fn: () => Promise<void>) {
+  const t0 = Date.now();
   try {
-    const t0 = Date.now();
     await fn();
-    console.log(`[${label}] ok in ${Date.now() - t0}ms`);
+    const line = tickLog.ok(label, Date.now() - t0, Date.now());
+    if (line) console.log(line);
   } catch (e) {
-    console.error(`[${label}] error:`, e instanceof Error ? e.message : e);
+    const line = tickLog.error(label, e instanceof Error ? e.message : String(e), Date.now());
+    if (line) console.error(line);
   }
 }
+
+// Deliberately NOT through loop(): that skips a tick while the dashboard is
+// backed off, which is precisely the window in which "nothing ran" is the line
+// worth having. Checked often, prints only when a window is up.
+setInterval(() => {
+  const line = tickLog.rollup(Date.now());
+  if (line) console.log(line);
+}, 30_000);
 
 async function pushAgents() {
   await safe('agents', async () => {
@@ -306,7 +322,7 @@ loop(() => safe('cleanup-sweep', async () => {
 }), 10 * 60_000); // archive long-idle sessions — out of the sidebar AND asleep. Replaced the
 // separate idle-reaper tick: same 10 min beat, but one mechanism instead of two with
 // different thresholds. No-op unless the machine has cleanupIdleDays set.
-loop(() => safe('session-purge', sessionPurgeTick), 10 * 60_000); // delete recycle-bin sessions past retention (pane confirmed dead first)
+loop(() => safe('session-purge', sessionPurgeTick), 10 * 60_000); // delete recycle-bin sessions past retention (confirmed released by every backend first)
 loop(() => safe('orphan-pane', orphanPaneReaperTick), 10 * 60_000); // kill hermit-* panes no DB row accounts for (deleted sessions leak ~500MB each)
 loop(() => safe('agent-requests', agentRequestTick), 3_000);
 loop(() => safe('machine-requests', machineRequestTick), 3_000);
