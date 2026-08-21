@@ -688,7 +688,26 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // growth does not land in one step: the stick takes, and then the browser
   // pulls scrollTop back by the exact height the composer gained — which is
   // indistinguishable, event-by-event, from the user scrolling up.
-  const settleUntilRef = useRef(0);
+  //
+  // Two different questions were being asked of one timestamp, and only one of
+  // them is about the pane changing size:
+  //
+  //   · paneResizedUntilRef — "the viewport just changed height under us, so
+  //     nothing that arrives right now is a statement of intent". Refreshed ONLY
+  //     by a viewport resize.
+  //   · contentMovingUntilRef — "the conversation is still growing". Refreshed
+  //     by ANY height change, and used to decide whether a scroll-to-bottom has
+  //     to chase an end that keeps moving.
+  //
+  // Sharing one ref made every streaming reply look like a pane resize. A reply
+  // grows the content several times a second, each growth pushed the window
+  // 400ms further out, so the window stood open from the first token to the
+  // last — and inside it the scroll handler returns early, re-pinning a pinned
+  // reader on every scroll event and never reading their intent. The user
+  // scrolled up during a reply and was put back at the bottom, every time,
+  // for as long as the reply lasted.
+  const paneResizedUntilRef = useRef(0);
+  const contentMovingUntilRef = useRef(0);
   // Treat the very first paint as a "scroll to bottom" regardless of position.
   const firstScrollRef = useRef(true);
   // Installed by the sticky-bottom effect below: "re-assert the bottom for the
@@ -716,8 +735,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     // animation, but only when the content is known to be moving (the
     // sticky-bottom observer refreshed this window within the last
     // SETTLE_AFTER_RESIZE_MS) — an idle conversation keeps its smooth glide.
-    if (Date.now() <= settleUntilRef.current) {
-      settleUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
+    if (Date.now() <= contentMovingUntilRef.current) {
+      contentMovingUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
       settleKickRef.current?.(SETTLE_CHASE_FRAMES);
     }
     requestAnimationFrame(() => { autoScrollRef.current = false; });
@@ -873,7 +892,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     // It is a short burst per change, NOT a poll of the whole settling window,
     // so the work is 1 + SETTLE_FRAMES asserts per height change on any display
     // instead of one per frame for as long as the height keeps changing. It used
-    // to run every frame until settleUntilRef expired — and since every resize
+    // to run every frame until the window expired — and since every resize
     // pushed that 400ms out again, a streaming turn (this observer fires ~4×/s
     // while a reply grows) kept it spinning at frame rate from the first token to
     // the last: measured over a 10s stream, ~210 `scrollHeight` reads and ~370 rAF
@@ -881,13 +900,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     // hottest app frame in the whole streaming state. Anything that moves the
     // content later fires the observer again and gets its own burst, and a
     // browser-side scroll adjustment is caught by the scroll listener (which
-    // still re-pins for the full settleUntilRef window — untouched below).
+    // still re-pins for the full pane-resize window — untouched below).
     const SETTLE_FRAMES = 2;
     let framesLeft = 0;     // re-asserts still owed to the last height change
     let raf = 0;            // live settle chain, 0 when idle
     const settle = () => {
       raf = 0;
-      if (framesLeft <= 0 || Date.now() > settleUntilRef.current) return;
+      if (framesLeft <= 0 || Date.now() > contentMovingUntilRef.current) return;
       framesLeft -= 1;
       if (pinnedRef.current && !prependAnchorRef.current?.isHolding() && !anchoredActiveRef.current) toBottom();
       raf = requestAnimationFrame(settle);
@@ -897,10 +916,17 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       if (!raf) raf = requestAnimationFrame(settle);
     };
     settleKickRef.current = kick;
-    const ro = new ResizeObserver(() => {
+    const ro = new ResizeObserver((entries) => {
       if (prependAnchorRef.current?.isHolding()) return; // holding a read position after a prepend
       if (anchoredActiveRef.current) return;   // reading history at a fixed anchor
-      settleUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
+      // Any height change means the end is moving, and the burst below chases it.
+      contentMovingUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
+      // Only the VIEWPORT changing height suspends the reading of intent. A
+      // reply growing is not the pane moving under anyone, and treating it as
+      // one is what made the timeline unscrollable for the length of a turn.
+      if (entries.some((e) => e.target === el)) {
+        paneResizedUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
+      }
       if (pinnedRef.current) toBottom();
       kick(SETTLE_FRAMES);
     });
@@ -940,10 +966,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
       // The pane changed size under us — growing the composer shrinks this
       // viewport from the bottom. That's layout, not a decision to read history.
-      if (resized) settleUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
+      if (resized) paneResizedUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
       // Inside the settling window nothing is a verdict on intent; the rAF loop
       // started by the ResizeObserver is holding the bottom.
-      if (Date.now() < settleUntilRef.current) {
+      if (Date.now() < paneResizedUntilRef.current) {
         if (pinnedRef.current) {
           autoScrollRef.current = true;
           el.scrollTop = el.scrollHeight;
