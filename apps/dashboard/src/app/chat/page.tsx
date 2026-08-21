@@ -1308,6 +1308,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const backendLabel = runtimeShortLabel(session?.runtime);
   const backendTitle = `${runtimeDetail(session?.runtime, session?.runtimeProvider, session?.runtimeModel)} — click for session details`;
 
+  // What the state chip says when it can no longer say it in full. The chip is
+  // the meta row's shrinking item now (see the header), so on a phone
+  // "general-purpose +2 bg" arrives as "general-pur…" — and `detail` on its own
+  // never carried the label, so the elided half had nowhere left to be read.
+  // Label first, detail after it when the activity supplied one.
+  const statusTitle = status.detail ? `${status.label} — ${status.detail}` : status.label;
+
   // The in-dialog "thinking" dots are driven by the SAME status as the header
   // dot, so the two can never disagree. The old code keyed the dots off local
   // SSE signals (isWaitingAssistant / streamingTailId), which settle out of step
@@ -1636,9 +1643,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground truncate">
               {/* Agent name leads the status line on every width — on a phone the
                   sidebar is collapsed away, so this was the only thing telling you
-                  WHICH agent you're talking to. It's the ONLY shrinkable item on the
-                  row (capped + truncating), so a long name yields instead of pushing
-                  the state or the context bar off the edge. */}
+                  WHICH agent you're talking to. Capped and truncating: it shares the
+                  row's shrinking with the state chip below, and everything after the
+                  two of them is shrink-0, so those two are what yield instead of the
+                  backend or the context bar being pushed off the edge. */}
               {session?.agentName ? (
                 // …and it's the way INTO the agent: /agents?name=<agent> is the
                 // detail sheet's deep link (same one the sidebar's Agents entry uses).
@@ -1660,14 +1668,24 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                       first, so it leads the item it describes instead of trailing
                       it as decoration — the same reading order as the sidebar row.
 
-                      shrink-0 with its own truncate cap, because the agent name is
-                      this row's one shrinkable item; the label is no longer always
-                      one word (a claude-sdk session says "Bash · 47s" or "retrying
-                      2/5, 12s"), so it truncates rather than wraps, with the full
-                      command in the tooltip on the wrapper. */}
+                      It SHRINKS (min-w-0, not shrink-0). It is the one item here
+                      that grows without bound — a claude-sdk session says "Bash ·
+                      47s", "retrying 2/5, 12s", "general-purpose +2 bg" — and
+                      everything to its right is shrink-0, so holding its full
+                      width simply ran the row off the edge. Not harmlessly: this
+                      row's `truncate` is on a FLEX container, where text-overflow
+                      does nothing, so the overflow was amputated without an
+                      ellipsis and the ctx bar was the first thing to go.
+
+                      Flex distributes the shortfall in proportion to width, so
+                      the longest item concedes the most: a long state yields to a
+                      short agent name, which is the order you want — the name is
+                      four letters of identity, the state is a sentence. The full
+                      text is in the tooltip, which now carries the LABEL and not
+                      just the detail, since the label is the half that gets cut. */}
                   <span
-                    className="shrink-0 inline-flex items-center gap-1.5"
-                    title={status.detail}
+                    className="min-w-0 inline-flex items-center gap-1.5"
+                    title={statusTitle}
                   >
                     <span
                       className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot, status.pulse && 'animate-pulse')}
