@@ -137,10 +137,16 @@ export function ModelChip({
         {modelChipLabel(current || null, models)}
       </button>
 
+      {/* `whitespace-normal font-sans` on the menu are not decoration: the
+          header's meta line is nowrap + font-mono to keep itself on one line,
+          and the menu is a DOM descendant of it however it is positioned, so
+          both inherit. Without the reset the four options laid themselves out
+          on ONE line, 1000px wide, three of them past the right edge of the
+          window. */}
       {open && pos && (
         <div
           style={{ position: 'fixed', left: pos.left, top: pos.top, width: MENU_W }}
-          className="z-50 rounded-lg border border-border bg-popover p-1 shadow-lg"
+          className="z-50 rounded-lg border border-border bg-popover p-1 shadow-lg whitespace-normal font-sans"
         >
           {models.map((m) => {
             const active = m.value === selected;
@@ -151,7 +157,9 @@ export function ModelChip({
                 disabled={setModel.isPending}
                 onClick={() => setModel.mutate({ id: sessionId, model: modelPinOf(m.value) })}
                 className={cn(
-                  'w-full rounded-md px-2 py-1.5 text-left transition-colors',
+                  // `block`: a <button> is inline-block, and four of those in a
+                  // row is what the nowrap above produced.
+                  'block w-full rounded-md px-2 py-1.5 text-left transition-colors',
                   active ? 'bg-accent' : 'hover:bg-accent/50',
                   setModel.isPending ? 'cursor-wait opacity-60' : 'cursor-pointer',
                 )}
