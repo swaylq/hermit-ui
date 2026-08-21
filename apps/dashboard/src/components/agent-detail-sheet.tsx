@@ -22,6 +22,7 @@ import { AgentKnowledgeSection } from './agent-knowledge-section';
 import { Overlay } from './overlay';
 import { type FileItem as SkillFileItem } from './file-detail';
 import { sessionStatusView } from '@/lib/session-status';
+import { dashboardReach } from '@/lib/dashboard-reach';
 import { useLiveStatus } from '@/lib/session-live';
 import { isSessionUnread } from '@/lib/session-read';
 import { removeAgentSkill } from '@/lib/optimistic-skills';
@@ -488,6 +489,7 @@ function SessionsSection({
               unread: isSessionUnread(s),
               liveWorking: live === 'working',
               needsYou: live === 'needs-you',
+              ...dashboardReach(),
             });
             // Only disable the row currently being deleted (isPending is shared
             // across rows, so narrow it by the in-flight variables' id).

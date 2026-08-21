@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionStatusView, activityLabel, isRestingState, SNAPSHOT_STALE_MS } from './session-status';
+import {
+  sessionStatusView,
+  activityLabel,
+  isRestingState,
+  snapshotSilenceMs,
+  SNAPSHOT_STALE_MS,
+} from './session-status';
 
 // ── the label a working session shows ───────────────────────────────────────
 //
@@ -238,4 +244,89 @@ test('only the resting states go unlabelled', () => {
   for (const k of ['working', 'needs-you', 'unread', 'starting', 'restarting', 'down', 'stale'] as const) {
     assert.equal(isRestingState(k), false, k);
   }
+});
+
+// ── whose silence is it ─────────────────────────────────────────────────────
+//
+// `stale` answers "has the gateway gone quiet". The age it reads that off is
+// also large when the BROWSER went quiet — a poll queued behind a busy
+// dashboard, a backgrounded tab, a dropped connection — and that second case is
+// the common one. Reported 2026-08-21: an agent partway through a long task
+// flipped to grey "stale" for a few seconds every time a tool finished. Both
+// halves of that are the same event. A finishing tool is a large sync POST that
+// stalls the dashboard's event loop, so the browser's own 5s polls queue behind
+// it; and it only SHOWS at a tool boundary because that is when the chat page's
+// fast local `working` signal lapses and the dot falls back to the snapshot it
+// has been failing to refresh. See lib/dashboard-reach.
+
+test('a poll that never came back is not the gateway going quiet', () => {
+  // 90s of wall clock since the snapshot, but only 10s since we last got an
+  // answer: the other 80s are ours. Under the old subtraction this was `stale`.
+  const v = sessionStatusView(
+    { alive: true, state: 'working', snapshotAt: new Date(NOW - 90_000) },
+    { now: NOW, observedAt: NOW - 80_000, reachableSince: 0 },
+  );
+  assert.equal(v.key, 'working');
+});
+
+test('a gateway that really has gone quiet is still called out', () => {
+  // The other half: our polls keep landing, and each one hands back the same old
+  // snapshot. That IS evidence, and it must still grey the dot.
+  const v = sessionStatusView(
+    { alive: true, state: 'working', snapshotAt: new Date(NOW - 60_000) },
+    { now: NOW, observedAt: NOW, reachableSince: 0 },
+  );
+  assert.equal(v.key, 'stale');
+});
+
+test('silence shared with the dashboard is not charged to the gateway', () => {
+  // When the DASHBOARD is what went down, the gateway could not write either, so
+  // the first read after recovery legitimately carries an ancient snapshot. It
+  // is about to be replaced within a tick or two; greying every session in the
+  // fleet on the way past is the flicker, not a diagnosis.
+  const v = sessionStatusView(
+    { alive: true, state: 'working', snapshotAt: new Date(NOW - 120_000) },
+    { now: NOW, observedAt: NOW, reachableSince: NOW - 3_000 },
+  );
+  assert.equal(v.key, 'working');
+});
+
+test('…and once contact has held long enough, the clock runs again', () => {
+  // The forgiveness above is bounded by the same threshold as everything else:
+  // contact restored a minute ago and still no snapshot means the gateway, not
+  // the outage.
+  const v = sessionStatusView(
+    { alive: true, state: 'working', snapshotAt: new Date(NOW - 120_000) },
+    { now: NOW, observedAt: NOW, reachableSince: NOW - SNAPSHOT_STALE_MS - 1_000 },
+  );
+  assert.equal(v.key, 'stale');
+});
+
+test('a row we have never had an answer about claims nothing', () => {
+  // First paint: the sidebar renders from its IndexedDB cache, whose rows can be
+  // hours old, before any poll has landed. Nothing has been observed, so there
+  // is nothing to call stale — a whole sidebar of grey on open would be a lie
+  // about every session at once.
+  const v = sessionStatusView(
+    { alive: true, state: 'working', snapshotAt: new Date(NOW - 6 * 3_600_000) },
+    { now: NOW, observedAt: 0, reachableSince: 0 },
+  );
+  assert.equal(v.key, 'working');
+});
+
+test('a caller with no reach information behaves exactly as before', () => {
+  // Every other caller, and every test above, passes neither stamp.
+  assert.equal(
+    sessionStatusView({ alive: true, state: 'working', snapshotAt: ancient }, { now: NOW }).key,
+    'stale',
+  );
+});
+
+test('silence is never negative', () => {
+  // The browser's clock and the dashboard's are independent. One running behind
+  // the other would otherwise produce a negative age, which is meaningless.
+  assert.equal(snapshotSilenceMs(new Date(NOW + 30_000), { observedAt: NOW }), 0);
+  assert.equal(snapshotSilenceMs(new Date(NOW - 5_000), { observedAt: NOW }), 5_000);
+  assert.equal(snapshotSilenceMs(null, { observedAt: NOW }), null);
+  assert.equal(snapshotSilenceMs('not a date', { observedAt: NOW }), null);
 });

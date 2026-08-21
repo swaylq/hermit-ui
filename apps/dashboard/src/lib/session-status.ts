@@ -18,7 +18,9 @@
 //   red    — unread: alive + idle + the agent finished work you haven't read yet
 //            ("上一个对话的任务都处理完了，等待阅读").
 //   grey   — stale: the gateway has not reported on this session recently, so the
-//            last `state` it wrote is a memory, not an observation.
+//            last `state` it wrote is a memory, not an observation. "Recently"
+//            is counted in time this BROWSER could see the dashboard — see
+//            snapshotSilenceMs.
 //
 // `liveWorking` lets a caller with a faster client-side signal (the chat page
 // knows a turn started via its SSE stream before the next ~15s gateway snapshot)
@@ -160,15 +162,75 @@ export function isRestingState(key: StatusView['key']): boolean {
   return key === 'ready' || key === 'asleep';
 }
 
-function msSince(at: Date | string | null | undefined, now: number): number | null {
+function toMs(at: Date | string | null | undefined): number | null {
   if (at == null) return null;
   const t = at instanceof Date ? at.getTime() : new Date(at).getTime();
-  return Number.isFinite(t) ? now - t : null;
+  return Number.isFinite(t) ? t : null;
+}
+
+/**
+ * How long the gateway has been silent about this session — counting only time
+ * this browser could actually see the dashboard.
+ *
+ * The distinction is the whole point. `now - snapshotAt` answers "how old is the
+ * number in my hand", which is ALSO large when the browser is the thing that
+ * stopped asking: a poll queued behind a stalled dashboard, a backgrounded tab,
+ * a dropped connection. Charging that to the gateway is what made a session
+ * mid-long-task flicker grey every time a tool finished — the big sync POST that
+ * a finishing tool produces is exactly what stalls the polls. See
+ * lib/dashboard-reach for the full trace.
+ *
+ * Two corrections, both from `dashboardReach()`:
+ *
+ *   `observedAt` — measure from the last answer we actually GOT, not from the
+ *   wall clock. A poll that never came back says nothing about the gateway, so
+ *   it must not age anything. 0 means we have never had an answer (first paint
+ *   off the local cache), which is no basis to judge: `null`, not stale.
+ *
+ *   `reachableSince` — start the clock no earlier than the moment our current
+ *   run of contact began. When the DASHBOARD is the thing that went down, the
+ *   gateway could not write either, so on recovery the snapshot is legitimately
+ *   ancient through no fault of the gateway's. That silence was shared; it is
+ *   not evidence, and it is not charged. The grace it buys is bounded by this
+ *   same threshold — 45s after contact resumes, a gateway that is still quiet
+ *   is called out.
+ *
+ * Omitting both (a caller with no reach information, and every existing test)
+ * keeps the original wall-clock behaviour.
+ *
+ * Clamped at 0: the browser's clock and the dashboard's are independent, and a
+ * browser running behind the server would otherwise report negative silence.
+ * Skew the other way still inflates this — nothing client-side can see it, and
+ * it is no worse than what this replaced.
+ */
+export function snapshotSilenceMs(
+  snapshotAt: Date | string | null | undefined,
+  opts: { now?: number; observedAt?: number; reachableSince?: number } = {},
+): number | null {
+  const snap = toMs(snapshotAt);
+  if (snap == null) return null;
+  const observedAt = opts.observedAt === undefined ? opts.now ?? Date.now() : opts.observedAt;
+  if (!observedAt) return null; // never heard from the dashboard — nothing to judge on
+  const silentSince = Math.max(snap, opts.reachableSince ?? 0);
+  return Math.max(0, observedAt - silentSince);
 }
 
 export function sessionStatusView(
   s: SessionRuntimeLike | null | undefined,
-  opts: { liveWorking?: boolean; unread?: boolean; needsYou?: boolean; now?: number } = {},
+  opts: {
+    liveWorking?: boolean;
+    unread?: boolean;
+    needsYou?: boolean;
+    now?: number;
+    /**
+     * This browser's contact with the dashboard, from `dashboardReach()` —
+     * spread it in (`...dashboardReach()`) and snapshotSilenceMs does the rest.
+     * Without it the staleness clock runs on the wall clock and blames the
+     * gateway for the browser's own blind spells.
+     */
+    observedAt?: number;
+    reachableSince?: number;
+  } = {},
 ): StatusView {
   // amber — blocked ON YOU. Only a view that has the session's messages loaded
   // can see this (a {type:'interaction'} block still pending), which is why it
@@ -210,7 +272,11 @@ export function sessionStatusView(
   // while a session was 'working', where the row says "working" indefinitely and
   // nothing in the pipeline ever contradicts it. Everything below this line
   // reads `state` or `alive`, and neither is evidence once it is this old.
-  const age = msSince(s.snapshotAt, opts.now ?? Date.now());
+  //
+  // What it must NOT do is fire when the browser is the quiet one. That is a
+  // different fault with the same symptom, it is the common one, and it is the
+  // reason the age is snapshotSilenceMs rather than a subtraction from now.
+  const age = snapshotSilenceMs(s.snapshotAt, opts);
   if (age != null && age > SNAPSHOT_STALE_MS) {
     return {
       key: 'stale',

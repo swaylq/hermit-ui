@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { sessionRecencyAt } from '@/lib/session-recency';
 import { isRestingState, sessionStatusView } from '@/lib/session-status';
+import { dashboardReach } from '@/lib/dashboard-reach';
 import { isSessionUnread } from '@/lib/session-read';
 import { useLiveWorking, useLiveStatus, type LiveStatus } from '@/lib/session-live';
 import { usePins, togglePin } from '@/lib/session-pins';
@@ -345,10 +346,16 @@ const SessionRow = memo(function SessionRow({
   // say "working" ~13s before any snapshot could, and its 'idle' retires a send
   // stamp whose turn quietly died. Same function, same row, same inputs as the
   // header two inches to the right; that is the point. See lib/session-live.
+  // Read inside the row, not passed in: contact with the dashboard is a fact
+  // about the tab, and a prop that changed on every 5s poll would re-render
+  // every row in the sidebar — the exact cost this memo exists to avoid. A
+  // synchronous read costs nothing extra in a render that already calls
+  // Date.now(), and the row's status only has to be right when it renders.
   const status = sessionStatusView(s, {
     unread: isSessionUnread(s),
     liveWorking: live !== null ? live === 'working' : optimisticWorking,
     needsYou: live === 'needs-you',
+    ...dashboardReach(),
   });
   return (
     <li>

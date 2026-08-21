@@ -17,6 +17,7 @@ import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { CtxBar } from '@/components/ctx-bar';
 import { contextWindowFor } from '@/lib/context-window';
 import { sessionStatusView } from '@/lib/session-status';
+import { dashboardReach } from '@/lib/dashboard-reach';
 import { useMarkSessionRead } from '@/lib/session-read';
 import { lastSessionId, rememberSession } from '@/lib/last-session';
 import {
@@ -1291,7 +1292,12 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // i.e. always, leaving the header on a bare "working" it promises not to be.
   const status = sessionStatusView(
     session ? { ...session, activity: sessionOne.data?.activity ?? null } : session,
-    { liveWorking: isInFlight, unread: false, needsYou: !!pendingInteraction },
+    // …and the reach record, so a poll of ours that stalled behind a busy
+    // dashboard cannot be read as the gateway having gone quiet. That mattered
+    // most here: `isInFlight` lapses in the gaps a long tool call leaves, so the
+    // header falls back to the snapshot at exactly the moment a finishing tool
+    // is stalling the polls that refresh it. See lib/dashboard-reach.
+    { liveWorking: isInFlight, unread: false, needsYou: !!pendingInteraction, ...dashboardReach() },
   );
 
   // What the live run capsule puts in its header. Read off the raw activity

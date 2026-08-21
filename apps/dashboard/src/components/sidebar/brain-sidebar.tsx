@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { sessionRecencyAt, sessionRecencyMs } from '@/lib/session-recency';
 import { sessionStatusView } from '@/lib/session-status';
+import { dashboardReach } from '@/lib/dashboard-reach';
 import { SquarePen } from 'lucide-react';
 
 // ── Brain mode: the orchestrator's own chat system in the sidebar ─────────────
@@ -90,7 +91,7 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
           <ul className="space-y-px">
             {rows.map((s) => {
               const active = activeId === s.id;
-              const status = sessionStatusView(s, {});
+              const status = sessionStatusView(s, dashboardReach());
               return (
                 <li key={s.id}>
                   <Link
@@ -180,7 +181,7 @@ export function RecentDispatchSessions() {
               // last restart read green "done" while its turn was unfinished.
               // Same verdict as every other session dot now; only the wording
               // stays dispatch-shaped.
-              const status = sessionStatusView(s, {});
+              const status = sessionStatusView(s, dashboardReach());
               const phase =
                 status.key === 'working' ? 'running' : status.key === 'stale' ? 'unknown' : 'done';
               return (

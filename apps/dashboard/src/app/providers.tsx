@@ -12,20 +12,27 @@ import { KeyboardShortcuts } from '@/components/keyboard-shortcuts';
 import { ChatCacheRoot } from '@/components/chat-cache-root';
 import { installNativeBridge } from '@/lib/native-bridge';
 import { installImeDebug } from '@/lib/ime-debug';
+import { watchDashboardReach } from '@/lib/dashboard-reach';
 
 // Key storage moved to lib/keyring (multi-machine browser keyring). Re-export
 // the active-key getter so any importer of `@/app/providers` keeps working.
 export { getActiveKey } from '@/lib/keyring';
 
 export default function Providers({ children }: { children: React.ReactNode }) {
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: { staleTime: 4000, refetchOnWindowFocus: false },
-        },
-      }),
-  );
+  const [queryClient] = useState(() => {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { staleTime: 4000, refetchOnWindowFocus: false },
+      },
+    });
+    // Record whether this tab can currently reach the dashboard, so a status dot
+    // can tell "the gateway went quiet" from "my own poll never came back". Here
+    // rather than in a component because it must see every fetch, including the
+    // ones issued by views that are not mounted right now. Never unsubscribed —
+    // it lives exactly as long as the client does. See lib/dashboard-reach.
+    watchDashboardReach(client.getQueryCache());
+    return client;
+  });
 
   const [trpcClient] = useState(() =>
     trpc.createClient({
