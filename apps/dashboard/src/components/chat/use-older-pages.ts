@@ -18,7 +18,7 @@
 // in-place upserts the gateway performs only ever touch the live tail (the row
 // it is currently streaming), never rows this far back.
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { currentScope } from '@/lib/chat-cache/sync';
 import { getFullRows, getDigestRows, putDigestRows } from '@/lib/chat-cache/db';
@@ -37,11 +37,24 @@ import type { CachedFullRow } from '@/lib/chat-cache/types';
 export const OLDER_PAGE = 120;
 
 /**
+ * How long after a session opens the next page is fetched in the background.
+ *
+ * Not immediate: the sidebar's own prefetch was once eager for eight sessions
+ * and inflated server TTFB to ~1s by competing with the load of the session the
+ * user was actually opening. This is one page, for the session already open,
+ * and it waits until that first paint is done.
+ */
+const WARM_DELAY_MS = 1_500;
+
+/**
  * The last `size` rows strictly before `edge`, or null when the store does not
  * hold a whole page — see the call site for why a partial hit is refused.
  * `(createdAt, id)` is the same total order the server pages by.
+ *
+ * Exported for its tests: a seam that duplicates or skips a message is invisible
+ * until someone reads back through history and finds a turn twice.
  */
-function pageBefore<T extends { id: string; createdAt: string | Date }>(
+export function pageBefore<T extends { id: string; createdAt: string | Date }>(
   rows: T[],
   edge: { createdAt: string; id: string },
   size: number
@@ -180,10 +193,69 @@ export function useOlderPages(
     })();
   }, [anchorId, anchorAt, sessionId, utils]);
 
+  // ── Warm the next page ──────────────────────────────────────────────────
+  //
+  // Opening a session paints the live window and nothing else, and the live
+  // window is 60 raw messages — which since tool chains started folding is far
+  // less conversation than it used to be. Measured across eight real sessions
+  // on this machine: 82% of messages are machinery, and the newest 60 lay out
+  // 18.8 rows on average, as few as 4 in a tool-heavy stretch. So the first
+  // scroll up almost always lands on a fetch, and the reader waits.
+  //
+  // A page is already prepended with zero network when the local store holds it
+  // (see loadMore's cache-first branch). This just makes that the common case
+  // for a session's FIRST scroll back too: fetch one digested page into
+  // IndexedDB, on idle, once per session — and touch nothing on screen. What
+  // the user sees is unchanged; what changes is that scrolling up finds it
+  // already there.
+  const warmed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!anchorId || !anchorAt) return;
+    if (rows.length > 0) return;             // already reading back; loadMore owns it
+    if (!(saysMore ?? mayHaveMore)) return;  // nothing behind this session
+    if (warmed.current === sessionId) return;
+    warmed.current = sessionId;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const scope = currentScope();
+          if (cancelled || inFlight.current) return;
+          const edge = { createdAt: anchorAt, id: anchorId };
+          // Already held? Then the scroll back is already free — don't spend a
+          // request proving it.
+          if (scope) {
+            for (const read of [getFullRows, getDigestRows]) {
+              if (pageBefore(await read(scope, sessionId), edge, OLDER_PAGE)) return;
+            }
+          }
+          if (cancelled || inFlight.current) return;
+          const res = await utils.client.chat.listMessagesBefore.query({
+            sessionId, beforeId: anchorId, limit: OLDER_PAGE, digest: true,
+          });
+          if (cancelled || res.rows.length === 0 || !scope) return;
+          // Into the store only. Prepending here would move the timeline under a
+          // reader who did nothing, which is the one thing this whole subsystem
+          // exists to prevent.
+          await putDigestRows(scope, sessionId, res.rows.map((r) => ({
+            id: r.id,
+            sessionId,
+            role: r.role,
+            content: r.content,
+            createdAt: typeof r.createdAt === 'string' ? r.createdAt : r.createdAt.toISOString(),
+            authoredBy: r.authoredBy ?? null,
+          })) as CachedFullRow[]);
+        } catch { /* a warm page is an optimisation; failing to get one is not an error */ }
+      })();
+    }, WARM_DELAY_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [sessionId, anchorId, anchorAt, rows.length, saysMore, mayHaveMore, utils]);
+
   const reset = useCallback(() => {
     setRows([]);
     setSaysMore(null);
     setServedFromCache(false);
+    warmed.current = null;
   }, []);
 
   return {

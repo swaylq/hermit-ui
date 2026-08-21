@@ -1,0 +1,68 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { pageBefore, OLDER_PAGE } from './use-older-pages';
+
+// The seam between a cached page and the rest of history. Getting it wrong does
+// not throw — it shows a turn twice, or drops one, the next time someone reads
+// back through a conversation they have already read.
+
+const row = (id: string, createdAt: string) => ({ id, createdAt });
+
+// (createdAt, id) is the total order the server pages by. Ties on the timestamp
+// are real: a turn's rows land in the same millisecond often enough that
+// ordering by time alone loops forever on the same page.
+const HISTORY = [
+  row('a', '2026-08-21T10:00:00.000Z'),
+  row('b', '2026-08-21T10:00:01.000Z'),
+  row('c', '2026-08-21T10:00:02.000Z'),
+  row('d', '2026-08-21T10:00:02.000Z'), // same ms as c
+  row('e', '2026-08-21T10:00:03.000Z'),
+];
+
+test('a whole page comes back, newest-last', () => {
+  const page = pageBefore(HISTORY, { createdAt: '2026-08-21T10:00:03.000Z', id: 'e' }, 2);
+  assert.deepEqual(page?.map((r) => r.id), ['c', 'd']);
+});
+
+test('the edge row itself is never included — that is the duplicate', () => {
+  const page = pageBefore(HISTORY, { createdAt: '2026-08-21T10:00:02.000Z', id: 'd' }, 3);
+  assert.deepEqual(page?.map((r) => r.id), ['a', 'b', 'c']);
+});
+
+test('a tie on the timestamp is broken by id, not ignored', () => {
+  // Edge is `d`; `c` shares its millisecond and must still count as older.
+  const page = pageBefore(HISTORY, { createdAt: '2026-08-21T10:00:02.000Z', id: 'd' }, 1);
+  assert.deepEqual(page?.map((r) => r.id), ['c']);
+  // ...and from `c`, `d` is NOT older, so the page stops before it.
+  const fromC = pageBefore(HISTORY, { createdAt: '2026-08-21T10:00:02.000Z', id: 'c' }, 2);
+  assert.deepEqual(fromC?.map((r) => r.id), ['a', 'b']);
+});
+
+// A partial hit would have to be stitched to a server page, and that seam is
+// exactly what this refuses to get wrong.
+test('less than a whole page is refused rather than half-served', () => {
+  assert.equal(pageBefore(HISTORY, { createdAt: '2026-08-21T10:00:01.000Z', id: 'b' }, 2), null);
+  assert.equal(pageBefore([], { createdAt: '2026-08-21T10:00:00.000Z', id: 'a' }, 1), null);
+});
+
+test('Date and string timestamps are the same order', () => {
+  const mixed = [
+    { id: 'a', createdAt: new Date('2026-08-21T10:00:00.000Z') },
+    { id: 'b', createdAt: '2026-08-21T10:00:01.000Z' },
+  ];
+  const page = pageBefore(mixed, { createdAt: '2026-08-21T10:00:02.000Z', id: 'z' }, 2);
+  assert.deepEqual(page?.map((r) => r.id), ['a', 'b']);
+});
+
+// The size the warm-ahead fetch and the cache read must agree on: warming one
+// page and then refusing to serve it because the reader wants a bigger one
+// would spend the request and keep the wait.
+test('a page is one size, and the warm fetch uses it', () => {
+  assert.equal(OLDER_PAGE, 120);
+  const many = Array.from({ length: OLDER_PAGE + 1 }, (_, i) =>
+    row(`m${String(i).padStart(4, '0')}`, new Date(1_700_000_000_000 + i * 1000).toISOString()));
+  const edge = many[many.length - 1];
+  const page = pageBefore(many, { createdAt: edge.createdAt, id: edge.id }, OLDER_PAGE);
+  assert.equal(page?.length, OLDER_PAGE);
+  assert.equal(page?.[page.length - 1].id, many[many.length - 2].id);
+});
