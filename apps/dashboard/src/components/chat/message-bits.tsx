@@ -33,11 +33,15 @@ export function TypingIndicator({ dot }: { dot: string }) {
   );
 }
 
-// Typewriter reveal for the streaming tail's assistant text. The server sends
-// whole content blocks (no token deltas — see the SSE route), so the "typing"
-// is synthesized client-side: reveal plain text char-by-char (cheap, no
-// markdown re-parse mid-type), then settle into rendered Markdown once the
-// block is fully shown. Honors prefers-reduced-motion.
+// Typewriter reveal for the streaming tail's assistant text.
+//
+// `shown` chases `text` rather than restarting, which is what makes this work
+// for both of the ways text arrives. A claude-sdk turn now streams: the row
+// grows every ~250ms and the reveal simply keeps chasing a moving target. Every
+// other backend still hands over whole blocks, and there the reveal is entirely
+// synthesised — an ease-out over ~0.85s so a finished paragraph does not appear
+// as a slab. Plain text while revealing (cheap: no markdown re-parse per frame),
+// rendered Markdown once it has caught up. Honors prefers-reduced-motion.
 function useTypewriter(text: string, enabled: boolean): number {
   const [shown, setShown] = useState(enabled ? 0 : text.length);
   useEffect(() => {

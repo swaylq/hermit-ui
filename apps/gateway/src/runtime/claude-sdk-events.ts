@@ -206,3 +206,106 @@ export function contextTokensOf(msg: SDKMessage): { contextTokens: number; outpu
   if (contextTokens === 0) return null;
   return { contextTokens, outputTokens: u.output_tokens || 0 };
 }
+
+// ── The live block ───────────────────────────────────────────────────────────
+//
+// With `includePartialMessages` on, the CLI narrates each content block as it is
+// generated: content_block_start, a run of content_block_delta, content_block_stop.
+// The finished block then arrives as an ordinary `assistant` record with its own
+// uuid — one record PER BLOCK, sharing the message's `msg_…` id (measured against
+// 2.1.238: a thinking block and a text block came through as two records, two
+// uuids, one message id).
+//
+// That shape is why the partial cannot simply be the eventual row arriving early.
+// The row identity used everywhere else — chat rows, the `seen` set, the JSONL
+// backstop — is the record's uuid, and the uuid does not exist until the block is
+// finished. Every partial frame carries its OWN uuid instead, so keying the
+// growing row on one would produce a row per token.
+//
+// So the growth goes into a placeholder that is explicitly retracted. The
+// placeholder's id is per session, not per block, so at most one exists at a
+// time and cleaning up after a crashed gateway is a single delete.
+
+export type LiveBlock = { index: number; kind: 'text' | 'thinking'; text: string };
+export type LiveState = { block: LiveBlock | null };
+
+export function newLiveState(): LiveState {
+  return { block: null };
+}
+
+/** The one row a session streams into. Per session, so it cannot accumulate. */
+export function liveExternalId(sessionId: string): string {
+  return `sdk-live-${sessionId}`;
+}
+
+/**
+ * Fold one SDK message into the live block.
+ *
+ * 'grew'  — the block has more text; the caller should schedule a push.
+ * 'ended' — there is nothing live any more; the caller should retract.
+ * null    — not a partial frame, or a frame that changes nothing.
+ */
+export function applyStreamEvent(state: LiveState, msg: SDKMessage): 'grew' | 'ended' | null {
+  const m = msg as any;
+  if (m?.type !== 'stream_event') return null;
+  const ev = m.event;
+  if (!ev) return null;
+
+  if (ev.type === 'content_block_start') {
+    const kind = ev.content_block?.type;
+    // Only prose streams. A tool_use block arrives as input_json_delta — half a
+    // JSON object is not something to show anyone, and the finished tool call
+    // lands as its own record moments later anyway.
+    state.block = kind === 'text' || kind === 'thinking'
+      ? { index: typeof ev.index === 'number' ? ev.index : 0, kind, text: '' }
+      : null;
+    return state.block ? null : 'ended';
+  }
+
+  if (ev.type === 'content_block_delta') {
+    const b = state.block;
+    if (!b) return null;
+    if (typeof ev.index === 'number' && ev.index !== b.index) return null;
+    const d = ev.delta;
+    const piece = d?.type === 'text_delta' ? d.text
+      : d?.type === 'thinking_delta' ? d.thinking
+      : null;
+    if (typeof piece !== 'string' || piece === '') return null;
+    b.text += piece;
+    return 'grew';
+  }
+
+  if (ev.type === 'content_block_stop' || ev.type === 'message_stop') {
+    if (!state.block) return null;
+    state.block = null;
+    return 'ended';
+  }
+
+  return null;
+}
+
+/** The placeholder row, as the chat surface should currently render it. */
+export function liveItem(sessionId: string, block: LiveBlock): SyncItem {
+  return {
+    sessionId,
+    role: 'assistant',
+    content: block.kind === 'thinking'
+      ? [{ type: 'thinking', thinking: block.text }]
+      : [{ type: 'text', text: block.text }],
+    externalId: liveExternalId(sessionId),
+    claudeSessionId: null,
+    transient: true,
+  };
+}
+
+/** Take the placeholder away. Idempotent at the dashboard: a miss writes nothing. */
+export function liveRetraction(sessionId: string): SyncItem {
+  return {
+    sessionId,
+    role: 'assistant',
+    content: [],
+    externalId: liveExternalId(sessionId),
+    claudeSessionId: null,
+    deleted: true,
+  };
+}

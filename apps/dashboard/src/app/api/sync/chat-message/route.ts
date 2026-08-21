@@ -30,6 +30,10 @@ const Item = z.object({
   // real one in a single push rather than being briefly duplicated. `content` is
   // ignored on a retraction; it stays required so the item shape does not fork.
   deleted: z.boolean().optional(),
+  // A preview of a reply still being written: write it, wake the open stream,
+  // but do not call it an arrival. Marking the session unread and buzzing a
+  // phone belong to the finished message, which lands moments later.
+  transient: z.boolean().optional(),
 });
 const Body = z.object({ items: z.array(Item) });
 
@@ -140,7 +144,7 @@ export async function POST(req: NextRequest) {
     // /api/sync/chat-message 502/timeout storms in the gateway err.log).
     // New arrival = no externalId (rare system row, always new) OR an externalId
     // we didn't find pre-existing. Re-pushed (already-existing) rows are updates.
-    const isNew = !m.externalId || !existed.has(`${m.sessionId}|${m.externalId}`);
+    const isNew = (!m.externalId || !existed.has(`${m.sessionId}|${m.externalId}`)) && !m.transient;
     if (isNew) freshSessions.add(m.sessionId);
     // Overwrite, don't accumulate: a turn's LAST assistant message is the one
     // worth putting on the lock screen (earlier ones are usually preamble before

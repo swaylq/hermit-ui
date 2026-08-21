@@ -14,6 +14,26 @@ export type SyncItem = {
   content: unknown;
   externalId: string;
   claudeSessionId: string | null;
+  /**
+   * Retract the row this externalId names instead of writing it.
+   *
+   * A turn streams into a placeholder row and retracts it in the same batch that
+   * writes the finished message, so the growing bubble BECOMES the real one in a
+   * single push. Without the retraction the placeholder would have to be keyed
+   * the same as the finished row — and the only id available while a block is
+   * still arriving is one we invent, which the JSONL backstop would not
+   * recognise and would therefore duplicate on the next attach.
+   */
+  deleted?: boolean;
+  /**
+   * A preview, not an arrival.
+   *
+   * The dashboard writes the row and wakes the open chat stream, but does not
+   * treat it as a new message: no unread mark, and no push notification. A
+   * phone should buzz once, when the reply is finished — not at whatever the
+   * first twenty characters happened to be.
+   */
+  transient?: boolean;
 };
 
 export type RuntimeKind =

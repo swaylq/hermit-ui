@@ -73,7 +73,7 @@ async function open(externalSessionId: string | null = null, id?: string): Promi
     const t0 = Date.now();
     for (;;) {
       const fresh = items.slice(from);
-      const said = fresh.some((i) => i.role === 'assistant');
+      const said = fresh.some((i) => i.role === 'assistant' && !isLive(i));
       if (said && !(await rt.isWorking(handle))) break;
       if (Date.now() - t0 > ms) throw new Error(`turn did not complete in ${ms}ms: ${JSON.stringify(text)}`);
       await new Promise((r) => setTimeout(r, 150));
@@ -84,9 +84,16 @@ async function open(externalSessionId: string | null = null, id?: string): Promi
   return { rt, handle, items, settle, turn };
 }
 
+/**
+ * The row a turn streams into. Deliberately re-sent under one externalId,
+ * deliberately absent from the transcript, deliberately retracted — so every
+ * assertion about "the rows a turn produced" has to step around it.
+ */
+const isLive = (i: SyncItem) => i.externalId.startsWith('sdk-live-');
+
 const textOf = (items: SyncItem[]) =>
   items
-    .filter((i) => i.role === 'assistant')
+    .filter((i) => i.role === 'assistant' && !isLive(i))
     .flatMap((i) => (Array.isArray(i.content) ? i.content : []))
     .filter((b: any) => b?.type === 'text')
     .map((b: any) => b.text)
@@ -105,8 +112,9 @@ test('a turn round-trips, with the agent\'s CLAUDE.md loaded', async () => {
   const assistantRows = s.items.filter((i) => i.role === 'assistant');
   assert.ok(assistantRows.length >= 1);
   // The first row carries the stamp so the DB learns which transcript this is.
-  assert.equal(s.items[0].claudeSessionId, s.handle.externalSessionId);
-  assert.equal(s.items[1]?.claudeSessionId ?? null, null, 'the stamp rides exactly one row');
+  const stamped = s.items.filter((i) => i.claudeSessionId != null);
+  assert.equal(stamped.length, 1, 'the stamp rides exactly one row');
+  assert.equal(stamped[0].claudeSessionId, s.handle.externalSessionId);
 
   await s.rt.stop(s.handle, 'kill');
 });
@@ -129,7 +137,7 @@ test('the session id it reports is the transcript it actually writes', async () 
       .map((l) => { try { return JSON.parse(l).uuid; } catch { return null; } })
       .filter(Boolean),
   );
-  for (const item of s.items.filter((i) => i.role !== 'system')) {
+  for (const item of s.items.filter((i) => i.role !== 'system' && !isLive(i))) {
     assert.ok(uuids.has(item.externalId), `row ${item.externalId} is not in the transcript`);
   }
 
@@ -142,7 +150,7 @@ test('no row is ever emitted twice, even with both sources running', async () =>
   await s.settle();
   // The SDK stream and the JSONL tail both carry every record. If the dedup
   // funnel were wrong, the chat would show each reply twice.
-  const ids = s.items.map((i) => i.externalId);
+  const ids = s.items.filter((i) => !isLive(i)).map((i) => i.externalId);
   assert.equal(new Set(ids).size, ids.length, `duplicate rows: ${ids.join(', ')}`);
   await s.rt.stop(s.handle, 'kill');
 });
@@ -193,7 +201,7 @@ test('the JSONL backstop replays what the live stream missed', async () => {
   await s.rt.submit(s.handle, 'Say PINEAPPLE', []);
   await s.settle();
   const uuid = s.handle.externalSessionId;
-  const before = s.items.filter((i) => i.role === 'assistant').map((i) => i.externalId);
+  const before = s.items.filter((i) => i.role === 'assistant' && !isLive(i)).map((i) => i.externalId);
   assert.ok(before.length > 0);
   await s.rt.stop(s.handle, 'kill');
 
@@ -201,7 +209,7 @@ test('the JSONL backstop replays what the live stream missed', async () => {
   // arrives came from the transcript.
   const again = await open(uuid);
   await new Promise((r) => setTimeout(r, 4_000));
-  const replayed = again.items.filter((i) => i.role === 'assistant').map((i) => i.externalId);
+  const replayed = again.items.filter((i) => i.role === 'assistant' && !isLive(i)).map((i) => i.externalId);
   for (const id of before) {
     assert.ok(replayed.includes(id), `row ${id} was not recovered from the transcript`);
   }
@@ -558,5 +566,57 @@ test('a known-long command starts in the background', async () => {
     /background/i,
     'the hook did not move a known-long command to the background',
   );
+  await s.rt.stop(s.handle, 'kill');
+});
+
+// ── streaming ───────────────────────────────────────────────────────────────
+
+test('a reply streams into a placeholder, and the finished row replaces it', async () => {
+  const s = await open();
+  const from = s.items.length;
+  const said = await s.turn('Write one paragraph of about sixty words about the colour blue. Prose only — no tools, no lists, no headings.');
+  const fresh = s.items.slice(from);
+  const lives = fresh.filter(isLive);
+
+  assert.ok(lives.length >= 3, `expected several placeholder pushes, got ${lives.length}`);
+  assert.equal(new Set(lives.map((i) => i.externalId)).size, 1, 'one placeholder id for the whole turn');
+  assert.ok(lives.every((i) => i.claudeSessionId === null), 'a row about to be deleted must not carry the stamp');
+
+  // Growth: somewhere in there, one push strictly extends the one before it.
+  // Not every consecutive pair — the accumulator restarts at each block, so a
+  // thinking block giving way to a text block legitimately gets SHORTER.
+  const texts = lives
+    .filter((i) => !i.deleted)
+    .map((i) => (Array.isArray(i.content) ? i.content : []).map((b: any) => b?.text ?? b?.thinking ?? '').join(''));
+  assert.ok(
+    texts.some((t, i) => i > 0 && t.length > texts[i - 1].length && t.startsWith(texts[i - 1])),
+    `no push extended its predecessor: ${JSON.stringify(texts.map((t) => t.length))}`,
+  );
+
+  // And it is taken away rather than left sitting in the conversation.
+  assert.equal(lives[lives.length - 1].deleted, true, 'the turn ended with the placeholder still up');
+  assert.match(said, /blue/i, 'the finished text still arrives as an ordinary row');
+
+  await s.rt.stop(s.handle, 'kill');
+});
+
+test('a placeholder never reaches the transcript, so the backstop cannot duplicate it', async () => {
+  const s = await open();
+  await s.turn('Say STREAMTEST and nothing else.');
+  const p = path.join(encodedProjectDir(AGENT_DIR), `${s.handle.externalSessionId}.jsonl`);
+  const uuids = new Set(
+    fs.readFileSync(p, 'utf8').split('\n').filter(Boolean)
+      .map((l) => { try { return JSON.parse(l).uuid; } catch { return null; } })
+      .filter(Boolean),
+  );
+  const liveIds = new Set(s.items.filter(isLive).map((i) => i.externalId));
+  assert.ok(liveIds.size > 0, 'this turn did not stream at all');
+  for (const id of liveIds) assert.ok(!uuids.has(id), `${id} turned up in the transcript`);
+  // The reverse of the guarantee: every row that IS in the transcript is one the
+  // backstop will re-emit under the same id, so a re-attach upserts rather than
+  // doubling. That is the property the placeholder scheme had to preserve.
+  for (const item of s.items.filter((i) => i.role !== 'system' && !isLive(i))) {
+    assert.ok(uuids.has(item.externalId), `row ${item.externalId} is not in the transcript`);
+  }
   await s.rt.stop(s.handle, 'kill');
 });

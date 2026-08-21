@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { translateSdkMessage, contextTokensOf } from './claude-sdk-events';
+import {
+  translateSdkMessage, contextTokensOf,
+  applyStreamEvent, newLiveState, liveItem, liveRetraction, liveExternalId,
+} from './claude-sdk-events';
 
 const ctx = { sessionId: 'chat1', stampUuid: null, seq: 0 };
 
@@ -194,4 +197,79 @@ test('a compaction boundary reports the post-compaction size', () => {
     contextTokensOf({ type: 'system', subtype: 'compact_boundary', compact_metadata: {} } as any),
     null,
   );
+});
+
+// ── The live block ───────────────────────────────────────────────────────────
+
+function blockStart(index: number, type: string) {
+  return { type: 'stream_event', event: { type: 'content_block_start', index, content_block: { type } } } as any;
+}
+function textDelta(index: number, text: string) {
+  return { type: 'stream_event', event: { type: 'content_block_delta', index, delta: { type: 'text_delta', text } } } as any;
+}
+function thinkingDelta(index: number, thinking: string) {
+  return { type: 'stream_event', event: { type: 'content_block_delta', index, delta: { type: 'thinking_delta', thinking } } } as any;
+}
+
+test('a text block accumulates across deltas', () => {
+  const st = newLiveState();
+  assert.equal(applyStreamEvent(st, blockStart(0, 'text')), null);
+  assert.equal(applyStreamEvent(st, textDelta(0, 'The colo')), 'grew');
+  assert.equal(applyStreamEvent(st, textDelta(0, 'ur blue')), 'grew');
+  assert.equal(st.block?.text, 'The colour blue');
+  assert.deepEqual(liveItem('s1', st.block!).content, [{ type: 'text', text: 'The colour blue' }]);
+});
+
+test('a thinking block streams as a thinking block, not as text', () => {
+  const st = newLiveState();
+  applyStreamEvent(st, blockStart(0, 'thinking'));
+  applyStreamEvent(st, thinkingDelta(0, 'weighing it up'));
+  assert.deepEqual(liveItem('s1', st.block!).content, [{ type: 'thinking', thinking: 'weighing it up' }]);
+});
+
+test('a tool_use block does not stream — half a JSON object is not a message', () => {
+  const st = newLiveState();
+  applyStreamEvent(st, blockStart(0, 'text'));
+  applyStreamEvent(st, textDelta(0, 'hi'));
+  assert.equal(applyStreamEvent(st, blockStart(1, 'tool_use')), 'ended', 'and the previous block is retracted');
+  assert.equal(st.block, null);
+  assert.equal(applyStreamEvent(st, { type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"a"' } } } as any), null);
+});
+
+test('a delta for another block index is ignored', () => {
+  const st = newLiveState();
+  applyStreamEvent(st, blockStart(1, 'text'));
+  assert.equal(applyStreamEvent(st, textDelta(0, 'stale')), null);
+  assert.equal(st.block?.text, '');
+});
+
+test('block stop and message stop end the live block exactly once', () => {
+  const st = newLiveState();
+  applyStreamEvent(st, blockStart(0, 'text'));
+  applyStreamEvent(st, textDelta(0, 'done'));
+  assert.equal(applyStreamEvent(st, { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } } as any), 'ended');
+  assert.equal(st.block, null);
+  assert.equal(applyStreamEvent(st, { type: 'stream_event', event: { type: 'message_stop' } } as any), null, 'nothing live, nothing to end');
+});
+
+test('an empty delta is not growth', () => {
+  const st = newLiveState();
+  applyStreamEvent(st, blockStart(0, 'text'));
+  assert.equal(applyStreamEvent(st, textDelta(0, '')), null);
+});
+
+test('a non-partial message is not the live block’s business', () => {
+  const st = newLiveState();
+  applyStreamEvent(st, blockStart(0, 'text'));
+  applyStreamEvent(st, textDelta(0, 'kept'));
+  assert.equal(applyStreamEvent(st, { type: 'assistant', uuid: 'u1', message: { content: [{ type: 'text', text: 'kept' }] } } as any), null);
+  assert.equal(st.block?.text, 'kept', 'the caller retracts on the assistant record; the reducer does not');
+});
+
+test('the placeholder is one row per session, and its retraction says so', () => {
+  assert.equal(liveExternalId('sess-1'), 'sdk-live-sess-1');
+  const r = liveRetraction('sess-1');
+  assert.equal(r.externalId, 'sdk-live-sess-1');
+  assert.equal(r.deleted, true);
+  assert.deepEqual(r.content, []);
 });

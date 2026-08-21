@@ -60,7 +60,10 @@ import {
 import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
-import { translateSdkMessage, contextTokensOf } from './claude-sdk-events';
+import {
+  translateSdkMessage, contextTokensOf,
+  applyStreamEvent, liveItem, liveRetraction, newLiveState, type LiveState,
+} from './claude-sdk-events';
 import {
   newActivityState, applyActivityMessage, describeActivity, bashesRunningLongerThan, sessionBusy,
   type ActivityState, type RuntimeActivity,
@@ -119,6 +122,16 @@ const WATCHDOG_TICK_MS = Number(process.env.HERMIT_BASH_WATCHDOG_TICK_MS ?? 5_00
  */
 const LONG_RUNNING_BASH = /\b(npm (?:i|ci|install)|pnpm install|yarn install|docker (?:build|compose up)|make\b|cargo build|gradle\b|mvn\b|pytest\b|go test|terraform apply)/;
 
+/**
+ * How often a streaming block may repaint the placeholder row.
+ *
+ * Each push is a POST to the dashboard, an upsert, and an SSE frame to every
+ * open tab, so this is the knob that decides what streaming COSTS. At 250ms a
+ * two-thousand-character reply is about thirty pushes; the frames are deltas
+ * now, so the whole turn stays well under what ONE pre-delta frame used to be.
+ */
+const LIVE_PUSH_MS = 250;
+
 const MEDIA_TYPES: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
   gif: 'image/gif', webp: 'image/webp',
@@ -165,6 +178,14 @@ type SdkHandle = RuntimeHandle & {
   closed: boolean;
   /** Monotonic counter behind the deterministic ids in claude-sdk-events. */
   seq: number;
+  /** The content block currently arriving, token by token. */
+  live: LiveState;
+  /** Trailing-edge throttle for the placeholder row's pushes. */
+  liveTimer: ReturnType<typeof setTimeout> | null;
+  /** When the placeholder was last pushed, so the throttle can pace itself. */
+  liveAt: number;
+  /** Is a placeholder row currently on the dashboard, needing retraction? */
+  liveOn: boolean;
   /**
    * The model the CLI reports running (init frame) — a resolved id like
    * `claude-sonnet-5`, not the alias we asked for.
@@ -370,11 +391,79 @@ function emitOnce(h: SdkHandle, item: SyncItem) {
   h.emit(stamped);
 }
 
+/**
+ * Push the placeholder, at most once every LIVE_PUSH_MS.
+ *
+ * Trailing edge, not leading: a block's deltas arrive in a burst and the useful
+ * thing to show is the newest accumulation, not the first one. The timer also
+ * means a block that stalls mid-sentence still gets its last words on screen.
+ *
+ * Straight to `emit`, deliberately bypassing emitOnce — this row is MEANT to be
+ * re-sent under the same externalId. Everything downstream is built for it: the
+ * sync route upserts on (sessionId, externalId), and the SSE stream ships the
+ * growth as a delta.
+ */
+/**
+ * The placeholder's own exit from the runtime.
+ *
+ * Never carries the claudeSessionId stamp: that is a one-shot correction the DB
+ * needs, and it has no business riding a row that is about to be deleted. It
+ * stays on the first row emitOnce lets through.
+ */
+function emitLive(h: SdkHandle, item: SyncItem) {
+  h.emit({ ...item, claudeSessionId: null });
+}
+
+function scheduleLivePush(h: SdkHandle) {
+  if (h.liveTimer || h.closed) return;
+  h.liveTimer = setTimeout(() => {
+    h.liveTimer = null;
+    const b = h.live.block;
+    if (!b || h.closed || !b.text) return;
+    h.liveAt = Date.now();
+    h.liveOn = true;
+    emitLive(h, liveItem(h.sessionId, b));
+  }, Math.max(0, LIVE_PUSH_MS - (Date.now() - h.liveAt)));
+}
+
+/**
+ * Take the placeholder away, if one is out.
+ *
+ * Called the moment the finished record is emitted, so both land in the same
+ * sync batch and the dashboard applies them in one push: the growing bubble
+ * becomes the real message without ever being visible twice.
+ */
+function retractLive(h: SdkHandle) {
+  if (h.liveTimer) { clearTimeout(h.liveTimer); h.liveTimer = null; }
+  h.live.block = null;
+  if (!h.liveOn) return;
+  h.liveOn = false;
+  emitLive(h, liveRetraction(h.sessionId));
+}
+
 function onSdkMessage(h: SdkHandle, msg: SDKMessage) {
   const m = msg as any;
   // Before anything else: every message is evidence about what the session is
   // doing, including the ones that produce no chat row.
   applyActivityMessage(h.activity, msg, Date.now());
+
+  // Partial frames drive the placeholder row and produce nothing else — no chat
+  // row of their own, no usage reading, no uuid worth remembering.
+  if ((msg as any).type === 'stream_event') {
+    const moved = applyStreamEvent(h.live, msg);
+    if (moved === 'grew') scheduleLivePush(h);
+    else if (moved === 'ended') retractLive(h);
+    return;
+  }
+
+  // The CLI's own turn-over signal also settles `statusBusy`, which partials
+  // brought back to life: `status` does not reliably clear on its own, and
+  // isWorking ORs it in, so without this a stray frame could hold a finished
+  // session at "working" until the next turn ended.
+  if ((msg as any).type === 'system' && (msg as any).subtype === 'session_state_changed'
+      && (msg as any).state === 'idle') {
+    h.statusBusy = false;
+  }
 
   // The init frame is the authoritative answer to "which transcript is this".
   // On the pane this took a uuid reservation table, a resume sniffer, an argv
@@ -411,6 +500,9 @@ function onSdkMessage(h: SdkHandle, msg: SDKMessage) {
   if (m.type === 'result') {
     h.pending = Math.max(0, h.pending - 1);
     h.statusBusy = false;
+    // A turn cannot end with a block still arriving. Belt and braces: the
+    // assistant record below normally retracts it first.
+    retractLive(h);
     if (h.interrupting) {
       h.interrupting = false;
       h.seq += 1;
@@ -459,6 +551,10 @@ function onSdkMessage(h: SdkHandle, msg: SDKMessage) {
   })) {
     emitOnce(h, item);
   }
+
+  // The finished block is now in the batch; the placeholder that stood for it
+  // goes out in the same one.
+  if (m.type === 'assistant') retractLive(h);
 }
 
 /**
@@ -589,6 +685,10 @@ export function shouldBackgroundBash(toolInput: unknown): boolean {
 
 function teardown(h: SdkHandle, reason: string) {
   if (h.closed) return;
+  // Before `closed` is set, while emitting is still allowed: take the
+  // placeholder away. A gateway that dies without this leaves half a sentence
+  // sitting in the conversation looking like a finished reply.
+  retractLive(h);
   h.closed = true;
   try { h.stopWatchdog(); } catch { /* never started */ }
   try { h.stopTail(); } catch { /* already down */ }
@@ -706,9 +806,20 @@ export class ClaudeSdkRuntime implements AgentRuntime {
         // forward it here too — otherwise a Task's work would vanish from chat
         // on the backends' only visible difference.
         forwardSubagentText: true,
-        // Complete blocks only. The dashboard renders whole rows; partial chunks
-        // would make every row rewrite itself token by token.
-        includePartialMessages: false,
+        // Narrate each block as it is generated. The dashboard does NOT rewrite a
+        // row token by token off the back of this — the partials go into one
+        // placeholder row per session that is retracted when the finished record
+        // arrives (see claude-sdk-events' live block, and the `deleted` item the
+        // sync route understands). Without this the whole of a long reply landed
+        // in one piece, after however many seconds it took to write.
+        //
+        // It has one documented side effect: `system/status` frames only exist
+        // with partials on, and measured against 2.1.238 `status` stays
+        // 'requesting' for the whole of a long foreground Bash rather than
+        // clearing. `statusBusy` therefore now says "busy" for most of a turn,
+        // which is the direction isWorking is allowed to be wrong in — and the
+        // idle frame below clears it, so it cannot latch past the turn's end.
+        includePartialMessages: true,
         // `settingSources` and `systemPrompt` are deliberately unset: omitted
         // means "all sources, Claude Code's own prompt", i.e. byte-identical to
         // what the pane's `claude` loads — CLAUDE.md, skills, hooks, plugins.
@@ -744,6 +855,10 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       stopTail: () => {},
       closed: false,
       seq: 0,
+      live: newLiveState(),
+      liveTimer: null,
+      liveAt: 0,
+      liveOn: false,
       model: null,
       modelPin: session.model?.trim() || null,
       activity: newActivityState(),
@@ -753,6 +868,11 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     live.set(session.id, h);
     retail(h);
     startWatchdog(h);
+
+    // A gateway that died mid-block left its placeholder behind. This process
+    // has no memory of it, so clear it unconditionally on every fresh child; the
+    // dashboard writes nothing when there is nothing to delete.
+    emit(liveRetraction(session.id));
 
     // The pump. Ends when the CLI exits — cleanly (we closed the input) or not
     // (crash, OOM, kill). Either way the handle is dropped so the next ensure()
@@ -840,13 +960,14 @@ export class ClaudeSdkRuntime implements AgentRuntime {
    *     task completing. Measured: a backgrounded Bash finished at 28s, the
    *     model woke and ran a full turn (fresh `init`, a tool call, a reply, its
    *     own `result`) and `pending` was 0 for every second of it.
-   *   - `statusBusy` never fires at all under the options this runtime uses.
-   *     `system/status` frames only arrive with `includePartialMessages: true`,
-   *     which is deliberately off (whole rows, not token-by-token rewrites), so
-   *     two full probe runs saw zero of them. Turning partials on would not
-   *     rescue it either: with them on, `status` stayed `'requesting'` for the
-   *     whole of a 35s foreground Bash instead of clearing, so it is imprecise
-   *     in both directions.
+   *   - `statusBusy` was dead code when this was written: `system/status`
+   *     frames only arrive with `includePartialMessages: true`, which was off,
+   *     and two full probe runs saw zero of them. Partials are on now, for
+   *     streaming, so the frames do arrive — but they are imprecise in the other
+   *     direction: measured, `status` stayed `'requesting'` for the whole of a
+   *     35s foreground Bash instead of clearing. It is a coarse "a turn is
+   *     happening" flag, which is all this OR asks of it, and the CLI's own idle
+   *     frame clears it so it cannot outlive the turn.
    *
    * Together that made a session report READY in the dashboard while it was
    * demonstrably mid-turn — the bug this ordering fixes.
