@@ -1,16 +1,22 @@
-// Should this event actually reach the phone? Pure decision logic, kept separate
-// from delivery so the noise rules are unit-testable without APNs, a DB, or a clock.
+// Should this event actually reach the phone, and is now the moment? Pure decision
+// logic, kept separate from delivery so the noise rules are unit-testable without
+// APNs, a DB, or a clock.
 //
-// One rule (collapsing isn't a decision — it's the collapse key every push carries,
+// Two rules (collapsing isn't a decision — it's the collapse key every push carries,
 // so a session/cron/machine occupies one lock-screen slot):
 //
 //   VIEWING — the session's read marker moved within the last minute, i.e. you have
 //   the chat open right now. Pushing what's already on your screen is the fastest
-//   way to make someone disable notifications.
+//   way to make someone disable notifications. Answered by `shouldPush`.
 //
-// Evaluated at DELIVERY time, not enqueue time — which matters for the debounced
-// chat events in ./index.ts: opening the session during the debounce window
-// retroactively cancels its push.
+//   MID-TURN — the agent is still working. A notification is worth having when the
+//   task is DONE and the agent has answered you; the things it says on the way
+//   there are thinking out loud. Answered by `turnStillRunning`.
+//
+// Both are evaluated at DELIVERY time, not enqueue time — which matters for the
+// debounced chat events in ./index.ts: opening the session during the debounce
+// window retroactively cancels its push, and a turn that is still going postpones
+// it.
 //
 // There used to be a second rule here, QUIET HOURS: 23:00–08:00 local, everything
 // but `blocked` / `host` / `stall` held back. It was removed — silently dropping a
@@ -44,7 +50,10 @@ export function isUrgentKind(kind: PushKind): boolean {
 
 // `kind` deliberately does NOT appear here any more. It was only ever read by the
 // quiet-hours rule; leaving it in the input would imply the event's kind still
-// affects whether it is delivered, which is exactly what stopped being true.
+// affects whether it is delivered, which is exactly what stopped being true. The
+// mid-turn rule below does apply to one kind only — but it is a separate function
+// that only the chat debounce calls, precisely so that this one keeps its promise:
+// nothing here decides differently because of what an event is about.
 export interface SuppressInput {
   /** Delivery-time clock, ms. */
   now: number;
@@ -59,4 +68,62 @@ export function shouldPush(i: SuppressInput): SuppressResult {
     return { send: false, reason: 'viewing' };
   }
   return { send: true };
+}
+
+/**
+ * How long a session's `state` is still evidence about what it is doing.
+ *
+ * The gateway snapshots every 8s, so this is ~5 missed ticks — the same number,
+ * and for the same reason, as the dashboard's SNAPSHOT_STALE_MS: nothing else in
+ * the pipeline ever clears a `state` of 'working', so past this it is a memory
+ * rather than an observation. Not imported from lib/session-status because that
+ * file is the browser's copy of this judgement and this one runs on the server's
+ * own clock against the server's own column; sharing the constant would couple a
+ * push decision to a rendering decision that is free to move.
+ */
+export const STATE_TRUSTED_MS = 45_000;
+
+export interface TurnInput {
+  /** ChatSession.state as the gateway last wrote it. */
+  state?: string | null;
+  /** ChatSession.snapshotAt — when it wrote it. */
+  snapshotAt?: Date | null;
+  /** Delivery-time clock, ms. Server-side, so the same clock that wrote snapshotAt. */
+  now: number;
+}
+
+/**
+ * Is the agent still mid-turn, on evidence fresh enough to act on?
+ *
+ * sway: "agent 要当前任务都结束回复用户了再推送消息，中间过程不用推送". A trailing
+ * debounce alone cannot do that. It assumes a turn is a burst of messages, which
+ * is true of a two-line answer and false of the work this fleet actually does: an
+ * agent on a long task says "let me look at X", then sits in a tool for two
+ * minutes. The quiet the debounce is waiting for arrives in the MIDDLE, and the
+ * preamble goes to the lock screen — then the next one does, and the next.
+ *
+ * So the debounce becomes a floor rather than the whole rule, and the flush waits
+ * for this to go false. `state` is trustworthy enough to gate on since the
+ * claude-sdk runtime started reading the CLI's own `session_state_changed` frame
+ * (runtime/claude-sdk-activity.ts) — it is the turn boundary itself, not a guess
+ * from output that stopped moving.
+ *
+ * Two ways this says "no" that are not "the turn ended", both deliberate:
+ *
+ *   - no snapshot at all, or one older than STATE_TRUSTED_MS. A gateway that has
+ *     stopped reporting would otherwise hold the notification for ever on the
+ *     strength of the last thing it happened to say.
+ *   - no session row (`state` undefined). Nothing to wait for.
+ *
+ * A session whose `state` is stuck at 'working' for ever — a bug in the working
+ * signal, not in this rule — holds its push indefinitely. That is survivable and
+ * on purpose: the message itself is not lost, it still marks the session unread
+ * in the sidebar and in the notifications inbox. Adding a clock ceiling here
+ * would mean a long enough task gets its preamble pushed anyway, which is the
+ * exact complaint this exists to answer.
+ */
+export function turnStillRunning(i: TurnInput): boolean {
+  if (i.state !== 'working') return false;
+  if (!i.snapshotAt) return false;
+  return i.now - i.snapshotAt.getTime() < STATE_TRUSTED_MS;
 }

@@ -10,28 +10,58 @@
 // anything the caller can see. Every trigger point sits inside a /api/sync write
 // that must not slow down or fail because a notification didn't go out.
 //
-// Chat events are DEBOUNCED. One agent turn writes many ChatMessage rows (text
-// block, tool_use, tool_result, more text…), and pushing each would fire a dozen
-// notifications for a single reply. A trailing 20 s debounce per session collapses
-// the turn into exactly one push carrying the LAST thing the agent said — which is
-// also the part worth reading. The other three kinds are discrete events and go
-// out immediately.
+// Chat events are HELD UNTIL THE TURN ENDS. One agent turn writes many ChatMessage
+// rows (text block, tool_use, tool_result, more text…), and pushing each would fire
+// a dozen notifications for a single reply. Two conditions have to hold before one
+// goes out: the agent has been quiet for 20 s, AND it is no longer working.
 //
-// State (debounce timers) is process-local. That's sound here: the dashboard runs
+// The second half is not redundant. A trailing debounce on its own assumes a turn
+// is a burst of messages — true of a two-line answer, false of the work this fleet
+// actually does. An agent on a long task says "let me look at X", then sits in a
+// tool for two minutes; the 20 s of quiet arrives in the MIDDLE of the turn and the
+// preamble goes to the lock screen, then the next one does, and the next. sway,
+// 2026-08-21: "agent 要当前任务都结束回复用户了再推送消息，中间过程不用推送".
+//
+// So the debounce is the floor and `turnStillRunning` is the gate: while the
+// session is working the timer re-arms instead of delivering, and the event it is
+// holding keeps being replaced by whatever the agent says next — so what finally
+// lands is the LAST thing it said, which is the answer. The other three kinds are
+// discrete events and go out immediately; `blocked` in particular must, since that
+// one means the turn has stopped and is waiting on you.
+//
+// State (the held events) is process-local. That's sound here: the dashboard runs
 // as a single pm2 fork (`ecosystem.config.cjs` — no `instances`/cluster), and the
-// worst case on restart is one duplicate notification.
+// worst case on restart is one duplicate notification — or, now that a hold can
+// outlive a deploy, one missed one. The message itself is never lost either way:
+// it still marks the session unread in the sidebar and in the inbox.
 
 import { prisma } from '@/server/db';
-import { shouldPush, isUrgentKind } from './suppress';
+import { shouldPush, isUrgentKind, turnStillRunning } from './suppress';
 import { anyTransportConfigured, transportFor } from './transport';
 import type { PushEvent } from './types';
 
 export type { PushEvent, PushKind } from './types';
 
-/** Wait this long after an agent's last message before pushing the turn. */
+/**
+ * Quiet floor: wait this long after an agent's last message before even asking
+ * whether the turn is over. Keeps a burst of rows from costing a query each, and
+ * is what makes the held event the agent's LAST word rather than its first.
+ */
 const CHAT_DEBOUNCE_MS = 20_000;
 
-const pending = new Map<string, { timer: NodeJS.Timeout; event: PushEvent }>();
+/**
+ * How long a hold can run before it is worth a log line.
+ *
+ * Not a ceiling — the hold continues. It exists so that "I never got a
+ * notification for that reply" has somewhere to be looked up, since a session
+ * whose `state` never leaves 'working' would otherwise wait silently for ever.
+ */
+const HOLD_REPORT_MS = 30 * 60_000;
+
+const pending = new Map<
+  string,
+  { timer: NodeJS.Timeout; event: PushEvent; heldSince: number; reported: boolean }
+>();
 
 let warnedUnconfigured = false;
 
@@ -51,20 +81,62 @@ export function enqueuePush(event: PushEvent): void {
   if (event.kind === 'chat') {
     const existing = pending.get(event.collapseKey);
     if (existing) clearTimeout(existing.timer);
-    const timer = setTimeout(() => {
-      pending.delete(event.collapseKey);
-      void deliver(event).catch((e) => console.error('[push] deliver failed', e));
-    }, CHAT_DEBOUNCE_MS);
-    // Don't keep the process alive just to flush a notification.
-    timer.unref?.();
-    pending.set(event.collapseKey, { timer, event });
+    // A newer message replaces the held one but does NOT restart the hold clock —
+    // that clock only exists for the report line, and it is measuring the turn.
+    arm(event, existing?.heldSince ?? Date.now(), existing?.reported ?? false);
     return;
   }
 
   void deliver(event).catch((e) => console.error('[push] deliver failed', e));
 }
 
-/** Flush any debounced pushes now (tests / graceful shutdown). */
+/**
+ * Park a chat event for CHAT_DEBOUNCE_MS, then either deliver it or park it again
+ * because the turn is still going.
+ *
+ * Re-arming rather than polling on a fixed interval keeps the cost proportional:
+ * one primary-key lookup per 20 s per session that is BOTH holding a reply and
+ * still working, which is a handful even on a busy machine, and zero for every
+ * session that is idle.
+ */
+function arm(event: PushEvent, heldSince: number, reported: boolean): void {
+  const timer = setTimeout(() => {
+    void (async () => {
+      const session = event.sessionId ? await readSession(event.sessionId) : null;
+      if (turnStillRunning({ state: session?.state, snapshotAt: session?.snapshotAt, now: Date.now() })) {
+        const held = Date.now() - heldSince;
+        const worthReporting = !reported && held >= HOLD_REPORT_MS;
+        if (worthReporting) {
+          console.warn(
+            `[push] chat notification for session ${event.sessionId} held ${Math.round(held / 60_000)} min — still working`,
+          );
+        }
+        arm(event, heldSince, reported || worthReporting);
+        return;
+      }
+      pending.delete(event.collapseKey);
+      await deliver(event, session);
+    })().catch((e) => console.error('[push] deliver failed', e));
+  }, CHAT_DEBOUNCE_MS);
+  // Don't keep the process alive just to flush a notification.
+  timer.unref?.();
+  pending.set(event.collapseKey, { timer, event, heldSince, reported });
+}
+
+type SessionState = { lastReadAt: Date | null; state: string | null; snapshotAt: Date | null };
+
+async function readSession(sessionId: string): Promise<SessionState | null> {
+  return prisma.chatSession.findUnique({
+    where: { id: sessionId },
+    select: { lastReadAt: true, state: true, snapshotAt: true },
+  });
+}
+
+/**
+ * Flush any held pushes now (tests / graceful shutdown). Deliberately bypasses the
+ * turn gate: on the way down, a notification that arrives a little early beats one
+ * that dies with the process.
+ */
 export function flushPending(): void {
   for (const [key, p] of pending) {
     clearTimeout(p.timer);
@@ -92,18 +164,18 @@ export async function deliverNow(event: PushEvent): Promise<DeliveryResult[]> {
   return deliver(event);
 }
 
-async function deliver(event: PushEvent): Promise<DeliveryResult[]> {
+async function deliver(event: PushEvent, known?: SessionState | null): Promise<DeliveryResult[]> {
   const now = Date.now();
 
-  // Read state at DELIVERY time: during a chat debounce the user may have opened
-  // the session, which should cancel the push.
+  // Read state at DELIVERY time: during a chat hold the user may have opened the
+  // session, which should cancel the push. `known` is the row the chat flush has
+  // already fetched to answer "is the turn over" — re-reading it here would be a
+  // second query for the same row in the same tick.
   let lastReadAt: Date | null | undefined;
-  if (event.sessionId) {
-    const s = await prisma.chatSession.findUnique({
-      where: { id: event.sessionId },
-      select: { lastReadAt: true },
-    });
-    lastReadAt = s?.lastReadAt ?? null;
+  if (known !== undefined) {
+    lastReadAt = known?.lastReadAt ?? null;
+  } else if (event.sessionId) {
+    lastReadAt = (await readSession(event.sessionId))?.lastReadAt ?? null;
   }
 
   const decision = shouldPush({ now, lastReadAt });
