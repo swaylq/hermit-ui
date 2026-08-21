@@ -39,13 +39,17 @@ export function modelPinOf(value: string | null | undefined): string | null {
 /**
  * What a machine offers before its gateway has ever reported.
  *
- * Copied from `supportedModels()` on claude 2.1.238, 2026-08-21. It is a
- * fallback, not a source of truth — the moment one claude-sdk session runs, the
- * machine's own answer replaces it.
+ * Copied verbatim from `supportedModels()` on claude 2.1.238, 2026-08-21 — the
+ * version this fleet installs everywhere. It is a fallback, not a source of
+ * truth: the moment one claude-sdk session takes a turn, that machine's own
+ * answer replaces it. A row a given CLI does not know is refused by `setModel`
+ * and logged, which is the failure this list can produce and the reason it is
+ * copied from a real answer rather than composed by hand.
  */
 export const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
   { value: 'default', displayName: 'Default (recommended)', description: "The CLI's own default on this machine" },
   { value: 'opus[1m]', displayName: 'Opus (1M context)', description: 'Best for everyday, complex tasks' },
+  { value: 'claude-fable-5[1m]', displayName: 'Fable', description: 'Most capable, for the hardest and longest-running tasks' },
   { value: 'sonnet', displayName: 'Sonnet', description: 'Efficient for routine tasks' },
   { value: 'haiku', displayName: 'Haiku', description: 'Fastest for quick answers' },
 ];
