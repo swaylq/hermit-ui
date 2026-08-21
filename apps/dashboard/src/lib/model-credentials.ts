@@ -120,6 +120,66 @@ export function defaultModelOf(c: ModelCredential | null | undefined): string | 
   return c.models[0]?.trim() || null;
 }
 
+/** What the add-credential dialog holds, before it becomes a credential. */
+export type CredentialForm = {
+  label: string;
+  provider: string;
+  api: string;
+  baseUrl: string;
+  /** Comma-separated, as typed. */
+  models: string;
+  defaultModel: string;
+  secretKey: string;
+};
+
+export const EMPTY_CREDENTIAL_FORM: CredentialForm = {
+  label: '', provider: '', api: DEFAULT_API, baseUrl: '', models: '', defaultModel: '', secretKey: '',
+};
+
+/** A preset as form state, so the dialog and its test agree on what a preset is. */
+export function formFromPreset(key: string): CredentialForm {
+  const p = CREDENTIAL_PRESETS.find((x) => x.key === key) ?? CREDENTIAL_PRESETS[0];
+  return {
+    ...EMPTY_CREDENTIAL_FORM,
+    label: p.fill.label ?? '',
+    provider: p.fill.provider ?? '',
+    api: p.fill.api ?? DEFAULT_API,
+    baseUrl: p.fill.baseUrl ?? '',
+    models: (p.fill.models ?? []).join(', '),
+    secretKey: p.fill.secretKey ?? '',
+  };
+}
+
+/**
+ * What the dialog is about to append, from what the form holds.
+ *
+ * The rules that can actually be wrong, in one testable place:
+ *
+ *  - a blank label falls back to the provider id, so a preset needs no typing;
+ *  - the id is derived from the label and made unique against what is already
+ *    there — backends reference it, so two credentials sharing one would point
+ *    a backend at the wrong endpoint;
+ *  - the model list is split on commas and trimmed, dropping the empties a
+ *    trailing comma leaves behind;
+ *  - a blank defaultModel is OMITTED rather than stored as '', because
+ *    defaultModelOf falls through to models[0] only when it is absent.
+ */
+export function credentialFrom(form: CredentialForm, existingIds: readonly string[]): ModelCredential {
+  const label = form.label.trim() || form.provider.trim();
+  const models = form.models.split(',').map((m) => m.trim()).filter(Boolean);
+  const defaultModel = form.defaultModel.trim();
+  return {
+    id: uniqueCredentialId(label, existingIds),
+    label,
+    provider: form.provider.trim(),
+    api: form.api.trim() || DEFAULT_API,
+    baseUrl: form.baseUrl.trim(),
+    models,
+    ...(defaultModel ? { defaultModel } : {}),
+    secretKey: form.secretKey.trim() || null,
+  };
+}
+
 /**
  * One-click endpoint presets.
  *

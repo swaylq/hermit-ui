@@ -25,8 +25,11 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { SettingsTabs } from '@/components/settings-tabs';
 import {
-  API_CHOICES, CREDENTIAL_PRESETS, DEFAULT_API, uniqueCredentialId,
-  type ModelCredential,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose,
+} from '@/components/ui/dialog';
+import {
+  API_CHOICES, CREDENTIAL_PRESETS, DEFAULT_API, credentialFrom, formFromPreset,
+  type CredentialForm, type ModelCredential,
 } from '@/lib/model-credentials';
 
 type ImageProvider = 'dashscope' | 'openrouter' | 'none';
@@ -60,6 +63,7 @@ export default function ModelsSettingsPage() {
   const [creds, setCreds] = useState<ModelCredential[] | null>(null);
   const [stamped, setStamped] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const save = trpc.machines.setModelCredentials.useMutation({
@@ -88,22 +92,13 @@ export default function ModelsSettingsPage() {
     setSaved(false);
   }
 
-  function add(presetKey: string) {
-    const preset = CREDENTIAL_PRESETS.find((p) => p.key === presetKey) ?? CREDENTIAL_PRESETS[0];
-    const label = preset.fill.label ?? 'New endpoint';
+  function add(form: CredentialForm) {
     setCreds((cur) => {
       const next = cur ?? [];
-      return [...next, {
-        id: uniqueCredentialId(label, next.map((c) => c.id)),
-        label,
-        provider: preset.fill.provider ?? '',
-        api: preset.fill.api ?? DEFAULT_API,
-        baseUrl: preset.fill.baseUrl ?? '',
-        models: preset.fill.models ?? [],
-        secretKey: preset.fill.secretKey ?? '',
-      }];
+      return [...next, credentialFrom(form, next.map((c) => c.id))];
     });
     setSaved(false);
+    setAdding(false);
   }
 
   return (
@@ -126,12 +121,26 @@ export default function ModelsSettingsPage() {
             loading={subs.isLoading}
           />
 
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+              模型来源 · credentials
+            </h2>
+            <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+              <Plus className="mr-1 h-3.5 w-3.5" /> 添加模型来源
+            </Button>
+          </div>
+
           {credsQ.isLoading ? (
             <div className="rounded-lg border border-border bg-card p-6 text-center text-xs text-muted-foreground">
               <Loader2 className="mx-auto mb-2 h-4 w-4 animate-spin" /> loading…
             </div>
           ) : (
-            list.map((c) => (
+            list.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border p-4 text-xs leading-relaxed text-muted-foreground">
+                None yet. Everything except the two subscriptions above needs one — a backend is a harness paired
+                with a credential.
+              </p>
+            ) : list.map((c) => (
               <CredentialCard
                 key={c.id}
                 credential={c}
@@ -141,8 +150,6 @@ export default function ModelsSettingsPage() {
               />
             ))
           )}
-
-          <AddCredential onAdd={add} />
 
           <div className="flex items-center gap-3">
             <Button onClick={() => save.mutate({ credentials: list })} disabled={save.isPending || creds === null}>
@@ -164,6 +171,15 @@ export default function ModelsSettingsPage() {
           <VisionCard config={(piQ.data?.image ?? null) as ImageConfig | null} secretNames={secretNames} />
         </div>
       </div>
+
+      {adding && (
+        <CredentialDialog
+          existingIds={list.map((c) => c.id)}
+          secretNames={secretNames}
+          onClose={() => setAdding(false)}
+          onAdd={add}
+        />
+      )}
     </div>
   );
 }
@@ -322,29 +338,131 @@ function CredentialCard({
   );
 }
 
-function AddCredential({ onAdd }: { onAdd: (presetKey: string) => void }) {
-  const [key, setKey] = useState('hyqubit');
-  const preset = CREDENTIAL_PRESETS.find((p) => p.key === key) ?? CREDENTIAL_PRESETS[0];
+/**
+ * Compose a credential.
+ *
+ * Adds to the list on this page; the page's 保存 is what writes it to the
+ * machine. That is deliberately the same as every other edit here — delete and
+ * every field already work that way, and making ONLY add write immediately
+ * would be the odd one out, and would commit half-finished edits sitting in
+ * the cards above.
+ */
+function CredentialDialog({
+  existingIds, secretNames, onClose, onAdd,
+}: {
+  existingIds: string[];
+  secretNames: string[];
+  onClose: () => void;
+  onAdd: (form: CredentialForm) => void;
+}) {
+  const [presetKey, setPresetKey] = useState('hyqubit');
+  const [form, setForm] = useState<CredentialForm>(() => formFromPreset('hyqubit'));
+  const [reveal, setReveal] = useState(false);
+  const set = (p: Partial<CredentialForm>) => setForm((cur) => ({ ...cur, ...p }));
+
+  const preset = CREDENTIAL_PRESETS.find((p) => p.key === presetKey) ?? CREDENTIAL_PRESETS[0];
+  // The provider id is the one field nothing can be inferred from, and an
+  // endpoint with no provider cannot be registered with any harness.
+  const ready = !!form.provider.trim();
+  const preview = ready ? credentialFrom(form, existingIds) : null;
+
   return (
-    <section className="rounded-lg border border-dashed border-border p-4">
-      <h3 className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">添加模型来源</h3>
-      <div className="mt-3 flex flex-wrap items-end gap-3">
-        <div className="min-w-[12rem] flex-1">
-          <Select value={key} onValueChange={(v) => setKey(v ?? 'hyqubit')} modal={false}>
-            <SelectTrigger className="h-9" aria-label="credential preset">
-              <SelectValue>{(v: string | null) => CREDENTIAL_PRESETS.find((p) => p.key === v)?.label ?? '自定义'}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {CREDENTIAL_PRESETS.map((p) => <SelectItem key={p.key} value={p.key}>{p.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>添加模型来源</DialogTitle>
+          <DialogDescription>
+            An endpoint plus the <span className="font-medium text-foreground/80">name</span> of a secret in this
+            machine’s store — never the key itself.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid max-h-[55vh] grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2">
+          <label className="block sm:col-span-2">
+            <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">预设</span>
+            {/* Fills the fields and nothing else — everything below stays editable,
+                so a preset is a head start rather than a mode. */}
+            <Select
+              value={presetKey}
+              onValueChange={(v) => { const k = v ?? 'custom'; setPresetKey(k); setForm(formFromPreset(k)); }}
+              modal={false}
+            >
+              <SelectTrigger className="mt-1.5 h-9" aria-label="credential preset">
+                <SelectValue>
+                  {(v: string | null) => CREDENTIAL_PRESETS.find((p) => p.key === v)?.label ?? '自定义'}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {CREDENTIAL_PRESETS.map((p) => <SelectItem key={p.key} value={p.key}>{p.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground/70">{preset.hint}</span>
+          </label>
+
+          <Field label="名称" hint="picker 和 backend 列表里显示的名字。留空用 Provider ID。">
+            <Input value={form.label} onChange={(e) => set({ label: e.target.value })}
+              placeholder={form.provider || 'hyqubit'} className="h-9" aria-label="credential name" />
+          </Field>
+          <Field label="Provider ID" hint="harness 里的 provider 名，例如 hyqubit / openrouter / zai">
+            <Input value={form.provider} onChange={(e) => set({ provider: e.target.value })}
+              placeholder="hyqubit" className="h-9 font-mono" aria-label="provider id" />
+          </Field>
+          <Field label="API 类型" hint="端点说的是哪套协议">
+            <Select value={form.api} onValueChange={(v) => set({ api: v ?? DEFAULT_API })} modal={false}>
+              <SelectTrigger className="h-9 font-mono" aria-label="api type">
+                <SelectValue>
+                  {(v: string | null) => API_CHOICES.find((a) => a.value === v)?.label ?? v ?? DEFAULT_API}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {API_CHOICES.map((a) => <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="Base URL" hint="留空表示这套 harness 自带端点（dsh 的 DeepSeek 目录就是这样）">
+            <Input value={form.baseUrl} onChange={(e) => set({ baseUrl: e.target.value })}
+              placeholder="https://litellm.hyqubit.com" className="h-9 font-mono" aria-label="base url" />
+          </Field>
+          <Field label="API Key" hint="填 secrets store 里的 key 名，不是 key 本身">
+            <div className="flex items-center gap-1.5">
+              <KeyRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <Input
+                type={reveal ? 'text' : 'password'}
+                value={form.secretKey}
+                onChange={(e) => set({ secretKey: e.target.value })}
+                placeholder="LITELLM_HYQUBIT_TOKEN"
+                className="h-9 font-mono"
+                aria-label="secret name"
+              />
+              <button type="button" onClick={() => setReveal((v) => !v)}
+                aria-label="toggle visibility" className="rounded p-1 text-muted-foreground hover:text-foreground">
+                {reveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+            <SecretPicker names={secretNames} onPick={(k) => set({ secretKey: k })} />
+          </Field>
+          <Field label="模型列表" hint="逗号分隔；会话详情里的模型下拉读的就是这个列表">
+            <Input value={form.models} onChange={(e) => set({ models: e.target.value })}
+              placeholder="claude-opus-5, claude-sonnet-5" className="h-9 font-mono" aria-label="models" />
+          </Field>
+          <Field label="默认模型" hint="用这个凭据的 backend 不另外指定时用它。留空取列表第一个。">
+            <Input value={form.defaultModel} onChange={(e) => set({ defaultModel: e.target.value })}
+              placeholder={preview?.models[0] ?? '列表第一个'} className="h-9 font-mono" aria-label="default model" />
+          </Field>
         </div>
-        <Button size="sm" onClick={() => onAdd(key)}>
-          <Plus className="mr-1 h-3.5 w-3.5" /> 添加
-        </Button>
-      </div>
-      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground/70">{preset.hint}</p>
-    </section>
+
+        <p className="text-[11px] leading-relaxed text-muted-foreground/70">
+          {preview
+            ? <>存为 <span className="font-mono text-foreground/80">{preview.id}</span> —— backend 引用的就是这个 id。加进列表后按页面底部的「保存」写入本机。</>
+            : <>Provider ID 是必填的：没有它，任何 harness 都注册不了这个端点。</>}
+        </p>
+
+        <DialogFooter>
+          <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
+          <Button disabled={!ready} onClick={() => onAdd(form)}>添加</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
