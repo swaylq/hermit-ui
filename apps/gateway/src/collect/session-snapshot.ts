@@ -21,6 +21,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import fsp from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { tmuxPaneName, parseClaudeSessionIdArg } from '@hermit-ui/tmux-driver';
 import { AGENTS_ROOT } from '../config';
@@ -31,6 +32,18 @@ import { extractText, hasToolResult, CcEvent } from '../claude-code';
 
 const TAIL_LINES = 500;
 const TAIL_TIMEOUT_MS = 4000;
+
+/**
+ * How far back the 500-line scan reads. Comfortably more than 500 ordinary
+ * transcript lines, and a hard ceiling on what one huge tool result can cost.
+ */
+const TAIL_WINDOW_BYTES = 1024 * 1024;
+
+/**
+ * The byte-bounded fallback window, unchanged from the `tail -c` it replaces:
+ * enough to clear recent big lines and reach the last usage record.
+ */
+const USAGE_WINDOW_BYTES = 8 * 1024 * 1024;
 const TMUX_TIMEOUT_MS = 2000;
 const MAX_BUF = 32 * 1024 * 1024; // big-line transcripts blow the 1 MB default
 const PROMPT_MAX_CHARS = 600;
@@ -147,9 +160,61 @@ function transcriptPath(claudeSessionId: string, agentDir: string): string | nul
   return p && fs.existsSync(p) ? p : null;
 }
 
-async function tailLines(jsonl: string, n = TAIL_LINES): Promise<string[]> {
-  const out = await run('tail', ['-n', String(n), jsonl]);
-  return out == null ? [] : out.split('\n').filter(Boolean);
+/**
+ * The last `maxBytes` of a file, read in this process.
+ *
+ * Every transcript read on this tick used to be a `tail` CHILD PROCESS, one per
+ * session. Sampled on a live gateway: 12 of them at the same instant, every 8
+ * seconds — around 130,000 spawns a day to read the end of a file Node can open
+ * itself. It also fed the exact pressure `run()` has a synchronous-throw guard
+ * for: fd exhaustion during spawn setup, whose failure mode is every session's
+ * snapshot going blank for a tick.
+ *
+ * Async rather than the sync form used elsewhere in this file: the window is up
+ * to 8 MB on the fallback path, and this runs for every session on a fixed tick.
+ * Blocking the loop for that is a worse trade than the one it replaces.
+ *
+ * `whole` says the window reached the start of the file, which is how the caller
+ * knows whether its first line is real or was cut in half by the window.
+ */
+export async function readTailBytes(
+  p: string,
+  maxBytes: number,
+): Promise<{ text: string; whole: boolean } | null> {
+  let fh: fsp.FileHandle | undefined;
+  try {
+    fh = await fsp.open(p, 'r');
+    const { size } = await fh.stat();
+    const len = Math.min(size, maxBytes);
+    if (len === 0) return { text: '', whole: true };
+    const buf = Buffer.alloc(len);
+    await fh.read(buf, 0, len, size - len);
+    return { text: buf.toString('utf8'), whole: len === size };
+  } catch {
+    return null;
+  } finally {
+    await fh?.close().catch(() => {});
+  }
+}
+
+/**
+ * The newest `n` lines, from a bounded window at the end of the file.
+ *
+ * Byte-bounded where `tail -n` was line-bounded, and that is a deliberate
+ * change: a turn that emits a few hundred-megabyte tool results would make
+ * `tail -n 500` read hundreds of megabytes to hand back 500 lines. The window
+ * caps that. When it does not reach far enough back to hold n lines the caller
+ * gets the newest ones it does hold, which is what every scan here wants, and
+ * the byte-bounded fallback below still covers the case where that misses the
+ * usage record.
+ */
+export async function tailLines(jsonl: string, n = TAIL_LINES): Promise<string[]> {
+  const got = await readTailBytes(jsonl, TAIL_WINDOW_BYTES);
+  if (!got) return [];
+  const lines = got.text.split('\n');
+  // A window that stopped short of the start cut its first line in half.
+  if (!got.whole) lines.shift();
+  return lines.filter(Boolean).slice(-n);
 }
 
 // Most-recent context size, robust to very long turns. The 500-line window can
@@ -159,9 +224,9 @@ async function tailLines(jsonl: string, n = TAIL_LINES): Promise<string[]> {
 // recent big lines to reach the last usage. Only runs when the main scan came
 // up empty.
 async function lastUsageTokens(jsonl: string): Promise<{ contextTokens: number; outputTokens: number } | null> {
-  const out = await run('tail', ['-c', String(8 * 1024 * 1024), jsonl]);
-  if (out == null) return null;
-  const lines = out.split('\n');
+  const got = await readTailBytes(jsonl, USAGE_WINDOW_BYTES);
+  if (got == null) return null;
+  const lines = got.text.split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     // A compact boundary is the authoritative post-compact size. Newest-first,
