@@ -130,6 +130,24 @@ export interface AgentRuntime {
   /** Is a turn currently in flight? Gates the message queue. */
   isWorking(handle: RuntimeHandle): Promise<boolean>;
 
+  /**
+   * Is this backend still holding the session — a live child, an open
+   * connection, anything that would still be writing to its transcript?
+   *
+   * NOT `isWorking`: a session can be held and idle, and that is precisely the
+   * state the destructive paths must not mistake for "gone". NOT `usage() !==
+   * null` either, which is what a caller would otherwise reach for: several
+   * backends return null usage for a live session that has not taken a turn yet
+   * (codex until a rollout exists, dsh until totals do), so a purge gated on it
+   * would unlink the transcript of a session that is running.
+   *
+   * Required rather than optional, because the callers are the ones that delete
+   * things. A backend that could decline to answer would be assumed dead, and
+   * the assumption would be invisible until it destroyed something — the same
+   * silent-degradation shape as a pane check on a session that has no pane.
+   */
+  isLive(handle: RuntimeHandle): Promise<boolean>;
+
   interrupt(handle: RuntimeHandle): Promise<void>;
   compact(handle: RuntimeHandle, instructions?: string): Promise<void>;
 

@@ -686,6 +686,11 @@ export class CodexExecRuntime implements AgentRuntime {
     return handleOf(handle)?.working ?? false;
   }
 
+  /** A live child for this session — true before any rollout exists, unlike usage(). */
+  async isLive(handle: RuntimeHandle): Promise<boolean> {
+    return handleOf(handle) !== null;
+  }
+
   async interrupt(handle: RuntimeHandle): Promise<void> {
     const h = handleOf(handle);
     if (!h?.abort) return;

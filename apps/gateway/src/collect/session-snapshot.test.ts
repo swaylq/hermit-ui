@@ -9,6 +9,9 @@ function fakeRuntime(live: RuntimeUsage | null, stored: RuntimeUsage | null): Ag
     async ensure() { throw new Error('not used'); },
     async submit() { return false; },
     async isWorking() { return false; },
+    // Held-ness is a separate question from busy-ness; this fake is a session
+    // with no child at all, which is what makes storedUsage the thing under test.
+    async isLive() { return false; },
     async interrupt() {},
     async compact() {},
     async usage() { return live; },

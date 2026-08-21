@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionIsBusy, type BusySession } from './session-busy';
+import { sessionIsBusy, sessionIsHeld, type BusySession } from './session-busy';
 import { runtimeFor, type AgentRuntime } from './runtime';
 
 // The regression these pin: `tmux capture-pane` against a session that has no
@@ -116,4 +116,67 @@ test('a probe that throws reads idle rather than propagating out of the op', asy
   assert.equal(await sessionIsBusy(sdkSession, { lookup: () => thrower }), false);
   const paneThrows = (async () => { throw new Error('tmux gone'); }) as never;
   assert.equal(await sessionIsBusy({ id: 'sess-6', runtime: 'claude-tmux' }, { pane: paneThrows }), false);
+});
+
+// ── sessionIsHeld ───────────────────────────────────────────────────────────
+// The destructive question. Purge unlinks a transcript and deletes the row, and
+// the row is what every kill path is driven by — so a wrong "nothing holds it"
+// strands a live ~500MB claude with nothing left able to reach it. It read
+// `tmuxSessionExists` alone, which is false for every claude-sdk session, always.
+
+const liveRuntime = (live: boolean, seen?: { handle?: unknown }): AgentRuntime =>
+  ({
+    kind: 'claude-sdk',
+    isLive: async (handle: unknown) => { if (seen) seen.handle = handle; return live; },
+  }) as unknown as AgentRuntime;
+
+const noPane = () => false;
+
+test('a session nothing holds is releasable — the purge proceeds', async () => {
+  assert.equal(
+    await sessionIsHeld({ id: 's1', claudeSessionId: 'cc-1' },
+      { paneExists: noPane, runtimes: () => [liveRuntime(false), liveRuntime(false)] }),
+    false,
+  );
+});
+
+test('one backend still holding it is enough to defer', async () => {
+  assert.equal(
+    await sessionIsHeld({ id: 's2' },
+      { paneExists: noPane, runtimes: () => [liveRuntime(false), liveRuntime(true)] }),
+    true,
+  );
+});
+
+test('a pane short-circuits, and the backends are not even asked', async () => {
+  let asked = 0;
+  const counting = { kind: 'claude-sdk', isLive: async () => { asked++; return false; } } as unknown as AgentRuntime;
+  assert.equal(await sessionIsHeld({ id: 's3' }, { paneExists: () => true, runtimes: () => [counting] }), true);
+  assert.equal(asked, 0);
+});
+
+test('the probe carries the ids a backend keys its live map on', async () => {
+  const seen: { handle?: unknown } = {};
+  await sessionIsHeld({ id: 's4', claudeSessionId: 'cc-4' },
+    { paneExists: noPane, runtimes: () => [liveRuntime(false, seen)] });
+  assert.deepEqual(seen.handle, { sessionId: 's4', externalSessionId: 'cc-4' });
+});
+
+// Every failure answers HELD. Being wrong that way costs one more 10-minute
+// tick; being wrong the other way costs a running session its history.
+test('anything that throws reads as held, never as gone', async () => {
+  const thrower = { kind: 'claude-sdk', isLive: async () => { throw new Error('mid-teardown'); } } as unknown as AgentRuntime;
+  assert.equal(await sessionIsHeld({ id: 's5' }, { paneExists: noPane, runtimes: () => [thrower] }), true);
+  const paneThrows = () => { throw new Error('tmux gone'); };
+  assert.equal(await sessionIsHeld({ id: 's6' }, { paneExists: paneThrows, runtimes: () => [] }), true);
+});
+
+// The real fan-out: no backend may claim a session it has never seen, or the
+// purge would defer forever and the recycle bin would never drain.
+test('with the real backends, an unknown session is held by none of them', async () => {
+  assert.equal(
+    await sessionIsHeld({ id: 'no-such-session', claudeSessionId: '99999999-9999-4999-8999-999999999999' },
+      { paneExists: noPane }),
+    false,
+  );
 });

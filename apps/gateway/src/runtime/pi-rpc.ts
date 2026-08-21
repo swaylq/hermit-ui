@@ -730,6 +730,11 @@ export class PiRpcRuntime implements AgentRuntime {
     return Boolean(state.isStreaming) || Boolean(state.isCompacting);
   }
 
+  /** A live RPC child for this session, turn or no turn. */
+  async isLive(handle: RuntimeHandle): Promise<boolean> {
+    return handleOf(handle) !== null;
+  }
+
   async interrupt(handle: RuntimeHandle): Promise<void> {
     await handleOf(handle)?.client.abort().catch(() => undefined);
   }

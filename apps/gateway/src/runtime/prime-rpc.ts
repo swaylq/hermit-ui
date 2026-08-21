@@ -446,6 +446,11 @@ export class PrimeRpcRuntime implements AgentRuntime {
     }
   }
 
+  /** A live RPC child for this session, turn or no turn. */
+  async isLive(handle: RuntimeHandle): Promise<boolean> {
+    return handleOf(handle) !== null;
+  }
+
   async interrupt(handle: RuntimeHandle): Promise<void> {
     await handleOf(handle)?.transport.send({ type: 'abort' }).catch(() => undefined);
   }

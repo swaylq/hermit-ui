@@ -4,21 +4,26 @@
 // The whole reason this lives in the gateway rather than in a dashboard mutation
 // is the ONE invariant that makes bulk cleanup safe:
 //
-//     never delete a row whose pane is still alive.
+//     never delete a row anything is still holding.
 //
 // Deleting a row is what strands a ~500MB claude forever — every path that could
-// kill a pane is driven by that row (see orphan-pane-reaper.ts). Only the machine
-// itself can see whether the pane is really gone, so the sequence is
+// kill the process is driven by that row (see orphan-pane-reaper.ts). Only the
+// machine itself can see whether it is really gone, so the sequence is
 // trash → hibernate → confirm dead → delete, and the confirmation step happens
-// here. A session still holding a pane is hibernated and left for the next tick;
-// it is never both killed and deleted in the same pass, so a crash between the
-// two leaves the recoverable state, not the leaked one.
+// here. A session still held is hibernated and left for the next tick; it is
+// never both killed and deleted in the same pass, so a crash between the two
+// leaves the recoverable state, not the leaked one.
+//
+// "Still alive" was read as `tmuxSessionExists` for as long as a pane was the
+// only way a session could run. On claude-sdk that is false for every session,
+// always — so this gate, the whole reason the step lives in the gateway, was
+// answering "nothing is holding it" without ever looking. See ./session-busy.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { tmuxSessionExists } from '@hermit-ui/tmux-driver';
 import { api } from './api';
 import { hibernateOneSession } from './chat-runner';
+import { sessionIsHeld } from './session-busy';
 import { PROJECTS_ROOT } from './config';
 
 /**
@@ -64,10 +69,10 @@ export async function sessionPurgeTick(): Promise<void> {
   let files = 0;
   let deferred = 0;
   for (const row of due) {
-    // Still holding a pane: hibernate it (full teardown — watcher, in-memory
+    // Something still holds it: hibernate (full teardown — watcher, in-memory
     // state, child process, pane) and leave the row for the next tick. Deleting
     // now is exactly the bug this pipeline exists to prevent.
-    if (tmuxSessionExists(row.id)) {
+    if (await sessionIsHeld(row)) {
       await hibernateOneSession(row.id).catch(() => false);
       deferred++;
       continue;
@@ -88,5 +93,5 @@ export async function sessionPurgeTick(): Promise<void> {
     }
     console.log(`[purge] purged ${purged.length} session(s), ${files} transcript(s)`);
   }
-  if (deferred > 0) console.log(`[purge] ${deferred} session(s) still had a pane — hibernated, purging next tick`);
+  if (deferred > 0) console.log(`[purge] ${deferred} session(s) were still held — hibernated, purging next tick`);
 }

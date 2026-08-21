@@ -1001,6 +1001,11 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     return describeActivity(h.activity, Date.now());
   }
 
+  /** A live, unclosed CLI child for this session. handleOf already excludes a torn-down one. */
+  async isLive(handle: RuntimeHandle): Promise<boolean> {
+    return handleOf(handle) !== null;
+  }
+
   async interrupt(handle: RuntimeHandle): Promise<void> {
     const h = handleOf(handle);
     if (!h) return;

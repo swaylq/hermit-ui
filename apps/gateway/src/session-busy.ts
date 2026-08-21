@@ -20,8 +20,9 @@
 // runtimeFor() declines — claude-tmux, and anything unrecognised — falls through
 // to the pane. Adding a backend therefore cannot reintroduce this bug: a new
 // runtime is asked automatically, and there is no `kind === ...` list to forget.
+import { tmuxSessionExists } from '@hermit-ui/tmux-driver';
 import { paneIsWorking, sessionTranscriptPath } from './pane';
-import { runtimeFor, type AgentRuntime } from './runtime';
+import { runtimeFor, allRuntimes, type AgentRuntime } from './runtime';
 
 /** Exactly the fields every caller already has from `api.pollChatPending()`. */
 export type BusySession = {
@@ -78,4 +79,46 @@ export async function sessionIsBusy(s: BusySession, probes: BusyProbes = {}): Pr
   } catch {
     return false;
   }
+}
+
+/** Seams for `sessionIsHeld`. Production calls pass nothing. */
+export type HeldProbes = {
+  runtimes?: () => AgentRuntime[];
+  paneExists?: (sessionId: string) => boolean;
+};
+
+/**
+ * Is ANY backend still holding this session — a live child, an open connection,
+ * a pane — regardless of whether a turn is in flight?
+ *
+ * The destructive question, and a different one from `sessionIsBusy`. Purge
+ * asks it before unlinking a transcript; deleting the row of a session whose
+ * child is alive is what strands a ~500MB claude forever, with every path that
+ * could kill it driven by the row just deleted.
+ *
+ * It takes no runtime kind because its callers have none — a purge row carries
+ * an id and a transcript path, nothing else. So it fans out over every backend
+ * and relies on each being false for a session it does not own, which is the
+ * same shape restart, hibernate and cancel already use for the same reason
+ * (see allRuntimes). Adding a backend cannot leave a hole here.
+ *
+ * Every failure is answered HELD. A probe that throws, a backend mid-teardown:
+ * the wrong answer in that direction costs one more 10-minute tick, and the
+ * wrong answer in the other costs a running session its history.
+ */
+export async function sessionIsHeld(
+  s: { id: string; claudeSessionId?: string | null },
+  probes: HeldProbes = {},
+): Promise<boolean> {
+  const paneExists = probes.paneExists ?? tmuxSessionExists;
+  try {
+    if (paneExists(s.id)) return true;
+  } catch {
+    return true;
+  }
+  const handle = { sessionId: s.id, externalSessionId: s.claudeSessionId ?? '' };
+  const verdicts = await Promise.all(
+    (probes.runtimes ?? allRuntimes)().map((r) => r.isLive(handle).catch(() => true)),
+  );
+  return verdicts.some(Boolean);
 }
