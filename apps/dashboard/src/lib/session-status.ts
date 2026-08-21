@@ -13,8 +13,12 @@
 //            (the session is mid-turn), but it pulses at you, not for you.
 //   yellow — working: a turn is in flight.
 //   green  — ready: alive + idle + you've seen the latest (caught up).
+//   dim green — asleep: idle and caught up, but NOTHING IS RUNNING. Resumable,
+//            not running. See `alive` below for why this had to grow a state.
 //   red    — unread: alive + idle + the agent finished work you haven't read yet
 //            ("上一个对话的任务都处理完了，等待阅读").
+//   grey   — stale: the gateway has not reported on this session recently, so the
+//            last `state` it wrote is a memory, not an observation.
 //
 // `liveWorking` lets a caller with a faster client-side signal (the chat page
 // knows a turn started via its SSE stream before the next ~15s gateway snapshot)
@@ -40,8 +44,30 @@ export interface SessionActivity {
 }
 
 export interface SessionRuntimeLike {
+  /**
+   * Is a process actually running this session RIGHT NOW?
+   *
+   * This used to be decorative here — declared and never read — because on the
+   * tmux backend it was true for every session that had ever started: a pane
+   * outlives the gateway, so "has a pane" and "exists" were the same fact. On
+   * claude-sdk they are not. The child is a gateway subprocess with no reattach
+   * (chat-runner only reattaches tmux), so `alive` is false for every session
+   * that has not been messaged since the last gateway restart — which is most
+   * of them, most of the time.
+   *
+   * Reading it is therefore not a new opinion, it is the same one the colour
+   * spec above always stated ("green — ALIVE + idle + caught up") finally being
+   * enforced. `false` means asleep, not broken.
+   */
   alive?: boolean | null;
   state?: string | null;
+  /**
+   * When the gateway last reported on this session. `state` is only evidence for
+   * as long as this is recent: nothing clears a `state` of 'working' if the
+   * gateway dies mid-turn, so without this the dot pulses amber forever. Absent
+   * means "never snapshotted" (a brand-new session), which is NOT stale.
+   */
+  snapshotAt?: Date | string | null;
   /**
    * Only the backends with a typed event stream fill this in. Absent means "this
    * backend cannot say", NOT "idle" — so it only ever REFINES the working label
@@ -61,7 +87,7 @@ export interface SessionRuntimeLike {
 }
 
 export interface StatusView {
-  key: 'needs-you' | 'working' | 'unread' | 'ready' | 'starting' | 'restarting' | 'down';
+  key: 'needs-you' | 'working' | 'unread' | 'ready' | 'starting' | 'restarting' | 'down' | 'stale' | 'asleep';
   label: string;
   dot: string;   // Tailwind bg-* for the status dot
   pulse: boolean; // animate the dot (working / starting)
@@ -113,9 +139,36 @@ export function activityLabel(raw: unknown): { label: string; detail?: string } 
   return null;
 }
 
+/**
+ * How long a session's `state` stays believable after the gateway last spoke.
+ *
+ * The snapshot tick is 8s, so this is ~5 missed ticks: long enough that a pm2
+ * restart or one slow tick does not grey the whole sidebar, short enough that a
+ * gateway which has actually stopped is visible before you act on what it last
+ * said. Nothing else expires `state` — the DB row is a last-write-wins cache
+ * with no TTL of its own.
+ */
+export const SNAPSHOT_STALE_MS = 45_000;
+
+/**
+ * Resting states: the session is fine and nothing is happening. The sidebar
+ * prints a label for every OTHER state, so this is what keeps a list of idle
+ * sessions from being a column of the word "asleep" — the dot already says it,
+ * and the row's tooltip spells it out.
+ */
+export function isRestingState(key: StatusView['key']): boolean {
+  return key === 'ready' || key === 'asleep';
+}
+
+function msSince(at: Date | string | null | undefined, now: number): number | null {
+  if (at == null) return null;
+  const t = at instanceof Date ? at.getTime() : new Date(at).getTime();
+  return Number.isFinite(t) ? now - t : null;
+}
+
 export function sessionStatusView(
   s: SessionRuntimeLike | null | undefined,
-  opts: { liveWorking?: boolean; unread?: boolean; needsYou?: boolean } = {},
+  opts: { liveWorking?: boolean; unread?: boolean; needsYou?: boolean; now?: number } = {},
 ): StatusView {
   // amber — blocked ON YOU. Only a view that has the session's messages loaded
   // can see this (a {type:'interaction'} block still pending), which is why it
@@ -128,10 +181,9 @@ export function sessionStatusView(
   if (opts.needsYou) {
     return { key: 'needs-you', label: 'needs you', dot: 'bg-amber-400', pulse: true };
   }
-  // yellow — working wins over everything else.
-  if (opts.liveWorking || s?.state === 'working') {
-    // A backend that can say WHAT it is doing gets to say it here; one that
-    // cannot keeps the label it always had.
+  // A backend that can say WHAT it is doing gets to say it here; one that
+  // cannot keeps the label it always had.
+  const working = (): StatusView => {
     const a = activityLabel(s?.activity);
     return {
       key: 'working',
@@ -140,25 +192,66 @@ export function sessionStatusView(
       pulse: true,
       detail: a?.detail,
     };
-  }
+  };
+  // yellow — working, as the BROWSER sees it. Split out from the server's
+  // `state` below and kept above every other check: this is the open chat page
+  // reading its own message stream, so it is both faster than the snapshot and
+  // still true when the gateway is the thing that has gone quiet.
+  if (opts.liveWorking) return working();
   // grey — down / not active.
   if (!s) return { key: 'down', label: '—', dot: 'bg-zinc-400', pulse: false };
+  // Closed outranks a server 'working' now, which it did not before. The gateway
+  // only polls sessions with closedAt = null, so a session archived mid-turn
+  // keeps whatever `state` it died on — and pulsed amber forever, for a
+  // conversation that is over.
   if (s.closedAt) return { key: 'down', label: 'closed', dot: 'bg-zinc-400', pulse: false };
+  // grey — the gateway has stopped reporting, so `state` is a memory. Ranked
+  // above it deliberately: the failure this exists for is a gateway that died
+  // while a session was 'working', where the row says "working" indefinitely and
+  // nothing in the pipeline ever contradicts it. Everything below this line
+  // reads `state` or `alive`, and neither is evidence once it is this old.
+  const age = msSince(s.snapshotAt, opts.now ?? Date.now());
+  if (age != null && age > SNAPSHOT_STALE_MS) {
+    return {
+      key: 'stale',
+      label: 'stale',
+      dot: 'bg-zinc-400',
+      pulse: false,
+      detail: 'the gateway has not reported on this session recently — this is the last state it saw',
+    };
+  }
+  // yellow — working, as the gateway last observed it.
+  if (s.state === 'working') return working();
   // sky — recycling: a restart was requested; the pane is being killed and will
   // respawn on the next message. Outranks the !alive check below, since `alive`
   // flips false mid-restart and we want "restarting", not "exited".
   if (s.restartRequestedAt) {
     return { key: 'restarting', label: 'restarting', dot: 'bg-sky-400', pulse: true };
   }
-  // A dead pane is NOT "down": a restarted/crashed session is still resumable —
-  // the next message `--resume`s it (history intact) or spawns fresh. Fall through
-  // to ready/unread so it reads as usable right away (no first message needed) and
-  // the composer stays enabled, instead of a grey "exited" dead-end.
+  // A dead pane is still NOT "down": a restarted/crashed session is resumable —
+  // the next message `--resume`s it (history intact) or spawns fresh — so it
+  // falls through to asleep/unread rather than a grey "exited" dead-end, and the
+  // composer stays enabled. What changed is that it no longer arrives at the
+  // SOLID green "ready", which claimed a live process there was none of.
   // sky — pane up but claude still booting (no transcript yet).
   if (s.state === 'starting') {
     return { key: 'starting', label: 'starting', dot: 'bg-sky-400', pulse: true };
   }
-  // alive + idle → red if there's unread finished work, else green (caught up).
+  // idle → red if there's unread finished work, else green (caught up). Unread
+  // outranks asleep: "the agent finished something you have not read" is the
+  // fact worth a colour, whether or not a process is still up to hear about it.
   if (opts.unread) return { key: 'unread', label: 'unread', dot: 'bg-rose-500', pulse: false };
+  // dim green — nothing is running. Same family as ready because nothing is
+  // wrong: the next message resumes the conversation with its history intact.
+  // But it is not `ready`, and saying so was the whole lie — see `alive` above.
+  if (s.alive === false) {
+    return {
+      key: 'asleep',
+      label: 'asleep',
+      dot: 'bg-emerald-500/30',
+      pulse: false,
+      detail: 'nothing is running — your next message wakes it with the conversation intact',
+    };
+  }
   return { key: 'ready', label: 'ready', dot: 'bg-emerald-500', pulse: false };
 }

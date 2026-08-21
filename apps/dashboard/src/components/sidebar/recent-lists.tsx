@@ -24,7 +24,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { sessionRecencyAt } from '@/lib/session-recency';
-import { sessionStatusView } from '@/lib/session-status';
+import { isRestingState, sessionStatusView } from '@/lib/session-status';
 import { isSessionUnread } from '@/lib/session-read';
 import { useLiveWorking, useLiveStatus, type LiveStatus } from '@/lib/session-live';
 import { usePins, togglePin } from '@/lib/session-pins';
@@ -368,7 +368,9 @@ const SessionRow = memo(function SessionRow({
           s.hiddenAt && 'opacity-50',
           s.hibernatedAt && !s.closedAt && 'opacity-60',
         )}
-        title={s.title || s.preview || s.agentName}
+        // The status is on the row whether or not it is printed: a resting
+        // state shows only a dot, and this is where you find out which one.
+        title={`${s.title || s.preview || s.agentName}\n${status.detail ?? status.label}`}
       >
         <div className="flex items-start gap-2 min-w-0">
           <span
@@ -395,7 +397,12 @@ const SessionRow = memo(function SessionRow({
             </div>
             <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 tabular-nums truncate">
               <span className="truncate">{s.agentName}</span>
-              {status.key !== 'ready' && (
+              {/* A label for everything EXCEPT the resting states. 'asleep' joins
+                  'ready' there on purpose: with claude-sdk most of this list has
+                  no live child at any moment, so labelling it would print the
+                  same word down the whole sidebar. The dimmed dot carries it,
+                  and the row's title spells it out. */}
+              {!isRestingState(status.key) && (
                 <>
                   <span className="text-muted-foreground/40">·</span>
                   <span>{status.label}</span>

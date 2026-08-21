@@ -12,6 +12,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { sessionRecencyAt, sessionRecencyMs } from '@/lib/session-recency';
+import { sessionStatusView } from '@/lib/session-status';
 import { SquarePen } from 'lucide-react';
 
 // ── Brain mode: the orchestrator's own chat system in the sidebar ─────────────
@@ -89,6 +90,7 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
           <ul className="space-y-px">
             {rows.map((s) => {
               const active = activeId === s.id;
+              const status = sessionStatusView(s, {});
               return (
                 <li key={s.id}>
                   <Link
@@ -100,8 +102,18 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
                     title={s.title || s.preview || 'Brain chat'}
                   >
                     <div className="flex items-start gap-2 min-w-0">
+                      {/* Same verdict as the chat sidebar. This used to read
+                          `alive` raw, which on claude-sdk means "the gateway
+                          happens to hold a handle" rather than anything about
+                          the conversation — solid green for a session whose
+                          turn ended hours ago, hollow for one it simply has not
+                          re-attached since the last restart. */}
                       <span
-                        className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', s.alive ? 'bg-emerald-500' : 'border border-muted-foreground/40')}
+                        className={cn(
+                          'mt-1.5 h-1.5 w-1.5 rounded-full shrink-0',
+                          status.dot,
+                          status.pulse && 'animate-pulse',
+                        )}
                         aria-hidden
                       />
                       <div className="min-w-0 flex-1">
@@ -160,6 +172,17 @@ export function RecentDispatchSessions() {
             {rows.map((s) => {
               const active = activeId === s.id;
               const label = s.title || `Brain → ${s.agentName}`;
+              // A dispatch is a one-shot task, so the question is only "still
+              // going?". That was read off `alive`, which answers a different
+              // question on claude-sdk: the handle is a gateway-memory fact, so
+              // a finished dispatch whose handle was still warm pulsed amber
+              // "running", and one the gateway had not re-attached since its
+              // last restart read green "done" while its turn was unfinished.
+              // Same verdict as every other session dot now; only the wording
+              // stays dispatch-shaped.
+              const status = sessionStatusView(s, {});
+              const phase =
+                status.key === 'working' ? 'running' : status.key === 'stale' ? 'unknown' : 'done';
               return (
                 <li key={s.id}>
                   <Link
@@ -172,7 +195,7 @@ export function RecentDispatchSessions() {
                   >
                     <div className="flex items-start gap-2 min-w-0">
                       <span
-                        className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', s.alive ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500')}
+                        className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', status.dot, status.pulse && 'animate-pulse')}
                         aria-hidden
                       />
                       <div className="min-w-0 flex-1">
@@ -185,7 +208,7 @@ export function RecentDispatchSessions() {
                           </span>
                         </div>
                         <div className="mt-0.5 truncate text-[10px] font-mono text-muted-foreground/70 tabular-nums">
-                          {s.alive ? 'running' : 'done'} · {s.agentName}
+                          {phase} · {s.agentName}
                         </div>
                       </div>
                     </div>

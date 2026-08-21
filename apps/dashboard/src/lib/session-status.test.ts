@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionStatusView, activityLabel } from './session-status';
+import { sessionStatusView, activityLabel, isRestingState, SNAPSHOT_STALE_MS } from './session-status';
 
 // ── the label a working session shows ───────────────────────────────────────
 //
@@ -144,5 +144,98 @@ test('one row plus one signal is one answer, whoever is asking', () => {
     });
     assert.equal(header.key, expected);
     assert.deepEqual(header, sidebar, live);
+  }
+});
+
+// ── the two things the row was asserting without evidence ───────────────────
+//
+// sway: "让侧边栏会话状态和实际的会话状态显示一致，尤其用了 claude sdk".
+//
+// Both of these were tmux-shaped assumptions that stopped holding when the
+// default backend became an SDK child. On tmux a pane outlives the gateway, so
+// `alive` was true for everything and `state` was refreshed by SOMEONE even
+// across a gateway restart. Neither is true of a gateway subprocess.
+
+const NOW = 1_700_000_000_000;
+const fresh = new Date(NOW - 1_000);
+const ancient = new Date(NOW - SNAPSHOT_STALE_MS - 1);
+
+test('a gateway that stopped reporting stops the row saying "working"', () => {
+  // The failure with no other backstop in the pipeline: nothing expires `state`,
+  // so a gateway that dies mid-turn leaves the dot pulsing amber indefinitely.
+  const v = sessionStatusView({ alive: true, state: 'working', snapshotAt: ancient }, { now: NOW });
+  assert.equal(v.key, 'stale');
+  assert.equal(v.pulse, false, 'a memory must not animate as though it were live');
+});
+
+test('a fresh snapshot is still believed', () => {
+  const v = sessionStatusView({ alive: true, state: 'working', snapshotAt: fresh }, { now: NOW });
+  assert.equal(v.key, 'working');
+});
+
+test('never snapshotted is not the same as stale', () => {
+  // A session created seconds ago has no snapshotAt at all. Greying it would
+  // report "the gateway is gone" for what is really "the gateway has not got
+  // to it yet".
+  assert.equal(sessionStatusView({ alive: true, state: 'idle' }, { now: NOW }).key, 'ready');
+  assert.equal(sessionStatusView({ alive: true, state: 'idle', snapshotAt: null }, { now: NOW }).key, 'ready');
+});
+
+test('what the browser can see outlives the gateway that cannot report it', () => {
+  // liveWorking is the open chat page reading its own message stream. It is
+  // ranked above the staleness check on purpose: the gateway being quiet is
+  // exactly when this is the only signal left.
+  const v = sessionStatusView({ alive: true, state: 'idle', snapshotAt: ancient }, { liveWorking: true, now: NOW });
+  assert.equal(v.key, 'working');
+});
+
+test('a session with no process is asleep, not ready', () => {
+  // `alive` was declared on the input type and never read. On claude-sdk the
+  // child is a gateway subprocess with no reattach, so this is the resting
+  // state of most of the sidebar most of the time — and every one of those rows
+  // was rendering the SOLID green that the colour spec defines as "alive".
+  const v = sessionStatusView({ alive: false, state: null, snapshotAt: fresh }, { now: NOW });
+  assert.equal(v.key, 'asleep');
+  assert.notEqual(v.dot, 'bg-emerald-500', 'must not be the same dot as a live idle session');
+  assert.equal(v.pulse, false);
+});
+
+test('a live idle session keeps the solid dot it always had', () => {
+  // The other half of the same claim: this is what tmux sessions still are, and
+  // they must not have moved.
+  const v = sessionStatusView({ alive: true, state: 'idle', snapshotAt: fresh }, { now: NOW });
+  assert.equal(v.key, 'ready');
+  assert.equal(v.dot, 'bg-emerald-500');
+});
+
+test('unread work outranks being asleep', () => {
+  // Which process is up is a detail; "it finished something you have not read"
+  // is the thing worth a colour.
+  const v = sessionStatusView({ alive: false, state: null, snapshotAt: fresh }, { unread: true, now: NOW });
+  assert.equal(v.key, 'unread');
+});
+
+test('an unknown `alive` claims nothing', () => {
+  // A caller that does not select the column must not be told its sessions are
+  // asleep. Only an explicit false means asleep.
+  assert.equal(sessionStatusView({ state: 'idle', snapshotAt: fresh }, { now: NOW }).key, 'ready');
+});
+
+test('a session archived mid-turn stops pulsing', () => {
+  // The gateway only polls sessions with closedAt = null, so a session archived
+  // while working keeps that `state` for good. It used to outrank the closed
+  // check and pulse amber forever, for a conversation that is over.
+  const v = sessionStatusView({ alive: true, state: 'working', closedAt: new Date(NOW), snapshotAt: fresh }, { now: NOW });
+  assert.equal(v.key, 'down');
+  assert.equal(v.label, 'closed');
+});
+
+test('only the resting states go unlabelled', () => {
+  // The sidebar prints status.label for everything else, so anything wrongly
+  // called "resting" would go silent in the list.
+  assert.equal(isRestingState('ready'), true);
+  assert.equal(isRestingState('asleep'), true);
+  for (const k of ['working', 'needs-you', 'unread', 'starting', 'restarting', 'down', 'stale'] as const) {
+    assert.equal(isRestingState(k), false, k);
   }
 });
