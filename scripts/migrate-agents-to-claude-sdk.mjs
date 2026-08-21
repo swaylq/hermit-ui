@@ -70,13 +70,44 @@ const only = (() => {
 const from = target === 'claude-sdk' ? 'claude-tmux' : 'claude-sdk';
 
 const agents = await query('agents.list', null);
-const picked = agents.filter((a) => !only || only.has(a.name));
 if (only) {
   const missing = [...only].filter((n) => !agents.some((a) => a.name === n));
   if (missing.length) {
     console.error(`unknown agent(s): ${missing.join(', ')}`);
     process.exit(1);
   }
+}
+
+// Only agents whose default is ACTUALLY the backend we are migrating away from.
+//
+// This is the whole safety property of the script and it is not optional: an
+// agent deliberately defaulted to codex or pi is on a different vendor, and
+// rewriting it to a claude backend is not "moving the tmux driver to the SDK
+// driver", it is changing what the agent IS. `agents.list` does not carry the
+// column, so each candidate is read individually — a handful of small requests,
+// once, against a decision that is expensive to get wrong.
+//
+// An agent with NO stored default already follows the fleet default and needs
+// no write; touching it would turn "inherits" into a pin.
+const named = agents.filter((a) => !only || only.has(a.name));
+const picked = [];
+const untouched = [];
+for (const a of named) {
+  // No catch. A read that fails must STOP the run, not be folded into "this
+  // agent has no default" — that is a guess, and a guess is the one thing a
+  // script that rewrites fleet configuration must never make. (It read
+  // `detail.runtime` here at first; the payload is `{agent: {...}}`, so every
+  // agent silently looked default-less and the whole migration would have
+  // reported nothing to do.)
+  const detail = await query('agents.byName', { name: a.name });
+  const row = detail?.agent;
+  if (!row) {
+    console.error(`could not read the current default for ${a.name} — refusing to guess. Nothing was changed.`);
+    process.exit(1);
+  }
+  const stored = row.runtime ?? null;
+  if (stored === from) picked.push(a);
+  else untouched.push({ name: a.name, runtime: stored ?? '(inherits the fleet default)' });
 }
 
 // Which live sessions actually move. A session that pinned its own backend is
@@ -96,7 +127,11 @@ const staysPinned = sessions.filter((s) => s.pinned);
 const midTurn = willFlip.filter((s) => s.working);
 
 console.log(`${apply ? 'APPLYING' : 'DRY RUN'} — ${from} → ${target}`);
-console.log(`  agents to update:                 ${picked.length}${only ? ` (of ${agents.length})` : ''}`);
+console.log(`  agents to update:                 ${picked.length} (of ${named.length} looked at)`);
+if (untouched.length) {
+  console.log(`  agents left alone:                ${untouched.length}`);
+  for (const u of untouched) console.log(`      ${u.name} — ${u.runtime}`);
+}
 console.log(`  live sessions that would move:    ${willFlip.length}`);
 console.log(`  live sessions pinned (unchanged): ${staysPinned.length}`);
 console.log(`  of the movers, mid-turn right now: ${midTurn.length} (they move on their next message)`);
