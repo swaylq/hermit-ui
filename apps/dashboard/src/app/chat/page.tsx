@@ -5,7 +5,7 @@ import { keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  RotateCw, Trash2, Terminal, Pencil, ListCollapse, Search, FoldVertical, Sparkles,
+  RotateCw, Trash2, Terminal, Pencil, Search, FoldVertical, Sparkles,
   MoreHorizontal, ChevronRight, SquarePen, Info, ArchiveRestore,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -277,94 +277,6 @@ function ChatPageInner() {
   );
 }
 
-// ── Summary mode ─────────────────────────────────────────────────────────────
-// A global, persisted "reading mode" that collapses each agent turn down to its
-// final text reply — hiding tool calls, results, thinking, and intermediate
-// prose. Persisted in localStorage so it sticks across sessions and reloads.
-function useSummaryMode(): [boolean, () => void] {
-  const [on, setOn] = useState(false);
-  useEffect(() => {
-    try { setOn(localStorage.getItem('hermit:chat-summary') === '1'); } catch {}
-  }, []);
-  const toggle = useCallback(() => {
-    setOn((v) => {
-      const n = !v;
-      try { localStorage.setItem('hermit:chat-summary', n ? '1' : '0'); } catch {}
-      return n;
-    });
-  }, []);
-  return [on, toggle];
-}
-
-type TimelineMsg = { id: string; role: string; content: any; createdAt: Date | string };
-
-// Collapse the timeline to "only the agent's final summary per turn". A turn runs
-// from one human-user message to the next; within it we keep the trailing run of
-// assistant text rows that come AFTER the turn's last tool activity (the final
-// answer), or — for a turn with no tools — all its text rows. Human-user and
-// system rows (prompts, restart/interaction notices) are always kept so the
-// conversation still reads as Q→A.
-// Summary mode: the conversation, without the machinery.
-//
-// Two failed shapes got us here. First it kept only the CLOSING reply of each
-// turn — a 60-row conversation became 5 rows and answers arrived from nowhere.
-// Then it kept the prose plus `tool_use` chips, which restored the thread but
-// put the machinery back on screen; the chips are what you turn summary mode ON
-// to escape.
-//
-// So: everything a person said or was told, and nothing about how it was
-// carried out.
-//
-//   keep   user messages, system messages
-//   keep   every assistant `text` block — including the mid-turn narration,
-//          which is where the agent explains what it found and why it's about
-//          to do something. That IS the useful signal.
-//   drop   `tool_use`, `tool_result`, `thinking`, the harness terminator, and
-//          images (attachments belong to the full view)
-//
-// A message left with nothing after filtering disappears entirely, so a turn
-// that was purely mechanical collapses to nothing rather than to an empty bubble.
-const SUMMARY_KEEP = new Set(['text']);
-// Filtered content arrays are cached against the ORIGINAL array, so toggling
-// summary mode or re-rendering on a stream tick hands memo(MessageRow) the same
-// object identity it saw last time instead of forcing a full re-render.
-const summaryContentCache = new WeakMap<object, unknown[] | null>();
-
-function summarizeContent(content: unknown): unknown[] | null {
-  if (!Array.isArray(content)) return null;
-  const cached = summaryContentCache.get(content);
-  if (cached !== undefined) return cached;
-  const kept = content.filter(
-    (b: any) => b && typeof b === 'object' && SUMMARY_KEEP.has(b.type) && typeof b.text === 'string' && b.text.trim().length > 0
-  );
-  // Return the ORIGINAL array when nothing was dropped, so memo(MessageRow)
-  // sees an unchanged `content` prop for the many messages that are pure prose.
-  const result = kept.length === 0 ? null : kept.length === content.length ? content : kept;
-  summaryContentCache.set(content, result);
-  return result;
-}
-
-function toSummaryView(messages: TimelineMsg[]): TimelineMsg[] {
-  const isToolResultOnly = (c: any) =>
-    Array.isArray(c) && c.length > 0 && c.every((b: any) => b?.type === 'tool_result');
-  const hasText = (c: any) =>
-    Array.isArray(c) && c.some((b: any) => b?.type === 'text' && (b.text ?? '').trim());
-  const out: TimelineMsg[] = [];
-  for (const m of messages) {
-    // A human turn and system notices always survive verbatim.
-    if (m.role === 'system' || (m.role === 'user' && hasText(m.content) && !isToolResultOnly(m.content))) {
-      out.push(m);
-      continue;
-    }
-    // Tool results and the harness terminator are exactly what's being summarized away.
-    if (isToolResultOnly(m.content) || isHarnessTerminator(m.content)) continue;
-    const kept = summarizeContent(m.content);
-    if (!kept) continue;
-    out.push(kept === m.content ? m : { ...m, content: kept });
-  }
-  return out;
-}
-
 // Composer draft state + per-session localStorage persistence now live IN
 // ComposeBar (components/chat/composer.tsx) so a keystroke re-renders only the
 // composer, not this whole pane. SessionPane's occasional draft writes go
@@ -407,7 +319,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const [streamConnected, setStreamConnected] = useState(false);
   // Fixed live window — see INITIAL_WINDOW. Older history lives in `older`.
   const limit = INITIAL_WINDOW;
-  const [summaryMode, toggleSummary] = useSummaryMode();
   const [findOpen, setFindOpen] = useState(false);
   // Live preview (hermit-preview CLI → gateway preview module → livePreview
   // column). Sourced from the single-row getSession poll — the merged `session`
@@ -825,12 +736,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
   // Older history, paged separately from the live window and served from the
   // local cache whenever it has the page. See use-older-pages.ts.
-  const older = useOlderPages(
-    sessionId,
-    windowRows?.[0],
-    (messages.data?.length ?? 0) >= limit,
-    summaryMode
-  );
+  const older = useOlderPages(sessionId, windowRows?.[0], (messages.data?.length ?? 0) >= limit);
   const baseRows = useMemo(
     () => (older.rows.length > 0 ? [...older.rows, ...(windowRows ?? [])] : windowRows),
     [older.rows, windowRows]
@@ -895,13 +801,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // useMemo keeps the array reference stable between refetches so memo(MessageTimeline) still bails on no-op ticks.
   const view = useMemo(() => {
     if (anchored.active) return anchored.rows ?? [];
-    const base = summaryMode ? toSummaryView(baseRows ?? []) : (baseRows ?? []);
+    const base = baseRows ?? [];
     if (pending.length === 0) return base;
     // Drop any optimistic row whose real counterpart (same user text) has landed.
     const sent = new Set((messages.data ?? []).filter((m) => m.role === 'user').map((m) => msgText(m.content)));
     const live = pending.filter((p) => !sent.has(msgText(p.content)));
     return live.length ? [...base, ...live] : base;
-  }, [messages.data, baseRows, summaryMode, pending, anchored.active, anchored.rows]);
+  }, [messages.data, baseRows, pending, anchored.active, anchored.rows]);
 
   // Top up a timeline too short to scroll.
   //
@@ -1595,19 +1501,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       </button>
       <button
         type="button"
-        onClick={toggleSummary}
-        aria-pressed={summaryMode}
-        aria-label="toggle summary-only view"
-        title={summaryMode ? 'Showing replies only — click for the full run' : 'Show only what was said, hiding tool calls and intermediate steps'}
-        className={cn(
-          'inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer',
-          summaryMode ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-        )}
-      >
-        <ListCollapse className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
         onClick={() => {
           if (!session?.agentName || newAgentChat.isPending) return;
           newAgentChat.mutate({ agentName: session.agentName });
@@ -1977,23 +1870,17 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                 </div>
                 )
               )}
-              {summaryMode && view.length === 0 ? (
-                <p className="text-center text-xs text-muted-foreground py-8">
-                  Replies only · this turn is still running, no final reply yet
-                </p>
-              ) : (
-                <RunDetailContext.Provider value={resolveRun}>
-                  <MessageTimeline
-                    messages={view}
-                    streamingTailId={streamingTailId}
-                    dotClass={status.dot}
-                    getViewport={getViewport}
-                    running={turnRunning && !summaryMode}
-                    runLabel={runActivity.label}
-                    runDetail={runActivity.detail}
-                  />
-                </RunDetailContext.Provider>
-              )}
+              <RunDetailContext.Provider value={resolveRun}>
+                <MessageTimeline
+                  messages={view}
+                  streamingTailId={streamingTailId}
+                  dotClass={status.dot}
+                  getViewport={getViewport}
+                  running={turnRunning}
+                  runLabel={runActivity.label}
+                  runDetail={runActivity.detail}
+                />
+              </RunDetailContext.Provider>
             </>
           )}
           {/* Only show the standalone dots-below indicator while the assistant

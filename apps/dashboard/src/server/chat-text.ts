@@ -30,6 +30,14 @@ export function extractSearchText(content: unknown): string {
 
 // The renderable blocks a summary reader would see that are NOT prose.
 //
+// NOTE (2026-08-21): summary mode is gone, and `summary-page.ts` — the only
+// consumer of the `blocks` this produces — went with it. The projection is still
+// WRITTEN into the local cache (chat.syncText → CachedText.blocks) and nothing
+// reads it back. It is kept rather than removed because dropping the field would
+// invalidate every browser's prose cache (~11 MB refetch each) to save a few
+// hundred bytes per session. Delete it the next time that cache is versioned
+// for another reason.
+//
 // Interaction cards — a permission request, a question and the option that was
 // chosen — are real conversation: they are what the agent asked and what the
 // person answered. They carry no `text` block, so the prose projection above
