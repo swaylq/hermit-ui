@@ -1,23 +1,28 @@
 'use client';
 
 // The message timeline: the day-grouped list of chat messages and everything
-// it renders. Extracted verbatim from chat/page.tsx (P2-3); behaviour
-// identical. MessageTimeline (the only export) is consumed by SessionPane;
+// it renders. MessageTimeline (the only export) is consumed by SessionPane;
 // MessageRow / GroupView / MessageActions / HarnessTerminatorRow and the
-// grouping helpers (Group / imageSourceToUrl / groupConsecutiveTools) are
-// module-private, called only from within this cluster.
+// grouping helpers are module-private, called only from within this cluster.
+//
+// The list is not one row per message. Tool calls, tool results and thinking are
+// folded out of the message stream and into a single run capsule per stretch of
+// machinery (fold-runs.ts) — so what remains is what someone said, plus one
+// expandable row standing in for how it was carried out.
 
 import { memo, useState, useCallback } from 'react';
 import { useTimelineWindow, WINDOW_ROW_ATTR } from '@/components/chat/use-timeline-window';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { TimeAgo } from '@/components/time-ago';
-import { isSameDay, isHarnessTerminator, type Block } from '@/components/chat/lib';
+import { isSameDay, type Block } from '@/components/chat/lib';
 import { sinkDeliverables, isAskToolUse } from '@/components/chat/sink-deliverables';
 import { StreamingDots, TypedText, DateDivider } from '@/components/chat/message-bits';
-import { ToolChip, ToolBatchChip, InlineToolResult, InlineToolResultBatch } from '@/components/chat/tool-chips';
+import { ToolChip, ToolBatchChip } from '@/components/chat/tool-chips';
 import { InteractionCard } from '@/components/chat/interaction-card';
 import { ChatImage, ChatFile } from '@/components/chat/file-preview';
+import { RunCapsule } from '@/components/chat/run-capsule';
+import { foldRuns } from '@/components/chat/fold-runs';
 
 function HarnessTerminatorRow({ ts }: { ts: Date | string }) {
   return (
@@ -32,10 +37,27 @@ function HarnessTerminatorRow({ ts }: { ts: Date | string }) {
   );
 }
 
-export const MessageTimeline = memo(function MessageTimeline({ messages, streamingTailId, dotClass, getViewport }: { messages: Array<{ id: string; role: string; content: any; createdAt: Date | string; authoredBy?: string | null }>; streamingTailId?: string | null; dotClass?: string; getViewport?: () => HTMLElement | null }) {
-  // Insert date dividers when day rolls over. Also coalesce consecutive
-  // tool-result-only messages into a single row so a parallel-fanout batch
-  // (e.g. 6 Read calls → 6 result rows) collapses to one expandable chip.
+export const MessageTimeline = memo(function MessageTimeline({
+  messages,
+  streamingTailId,
+  dotClass,
+  getViewport,
+  running = false,
+  runLabel = null,
+  runDetail = null,
+}: {
+  messages: Array<{ id: string; role: string; content: any; createdAt: Date | string; authoredBy?: string | null }>;
+  streamingTailId?: string | null;
+  dotClass?: string;
+  getViewport?: () => HTMLElement | null;
+  /** A turn is in flight — the trailing run capsule shows live progress. */
+  running?: boolean;
+  /** Gateway-reported current activity, so the capsule label survives a long
+   *  silent tool call that emits no new block. */
+  runLabel?: string | null;
+  runDetail?: string | null;
+}) {
+  // Insert date dividers when day rolls over.
   // The `ask` tool renders its InteractionCard at the tool_use call site (see
   // groupConsecutiveTools). Build a question→interaction-block map from the
   // separately-synced system messages, and suppress those standalone system
@@ -77,80 +99,70 @@ export const MessageTimeline = memo(function MessageTimeline({ messages, streami
   // where a sunk attachment can sit below the text that was actually last.
   const newestId = visibleMessages.length ? visibleMessages[visibleMessages.length - 1].id : null;
 
+  // Machinery out of the stream and into capsules. This is what turns a
+  // 15-row tool chain into one row.
+  const folded = foldRuns(orderedMessages);
+
   // Items rather than a flat node list: a long timeline renders only the slice
   // near the viewport (see use-timeline-window.ts), which means the list has to
   // be sliceable and every item has to carry a stable key to remember its
   // measured height by.
   const out: Array<{ key: string; node: React.ReactNode }> = [];
   let prevDay: Date | string | null = null;
-  let i = 0;
-  while (i < orderedMessages.length) {
-    const m = orderedMessages[i];
-    if (!prevDay || !isSameDay(prevDay, m.createdAt)) {
-      out.push({ key: `d-${m.id}`, node: <DateDivider key={`d-${m.id}`} day={m.createdAt} /> });
-      prevDay = m.createdAt;
+  for (let i = 0; i < folded.length; i++) {
+    const r = folded[i];
+    const ts = r.kind === 'run' ? r.from : r.createdAt;
+    if (!prevDay || !isSameDay(prevDay, ts)) {
+      out.push({ key: `d-${r.key}`, node: <DateDivider key={`d-${r.key}`} day={ts} /> });
+      prevDay = ts;
     }
-    // Harness "No response requested." terminator → render as a small dashed
-    // pill explaining what actually ended the turn, not as a normal bubble.
-    if (m.role === 'assistant' && isHarnessTerminator(m.content)) {
-      out.push({ key: m.id, node: <HarnessTerminatorRow key={m.id} ts={m.createdAt} /> });
-      i += 1;
+
+    if (r.kind === 'end') {
+      out.push({ key: r.key, node: <HarnessTerminatorRow key={r.key} ts={r.createdAt} /> });
       continue;
     }
-    const blocks = m.content as Block[];
-    const isToolResultOnly = blocks.length > 0 && blocks.every((b) => b.type === 'tool_result');
-    if (isToolResultOnly) {
-      const combined: Block[] = [...blocks];
-      let lastId = m.id;
-      let j = i + 1;
-      while (j < orderedMessages.length) {
-        const nb = orderedMessages[j].content as Block[];
-        const nIsToolResultOnly = nb.length > 0 && nb.every((b) => b.type === 'tool_result');
-        if (!nIsToolResultOnly) break;
-        if (!isSameDay(prevDay!, orderedMessages[j].createdAt)) break;
-        combined.push(...nb);
-        lastId = orderedMessages[j].id;
-        j++;
-      }
-      // `data-msg-id` carries EVERY id folded into this row (consecutive
-       // tool-result rows are merged above), space-separated so a lookup can use
-       // the `[data-msg-id~="…"]` word-match selector. It's how a search hit
-       // scrolls to its message — see use-anchored-window.ts.
+
+    if (r.kind === 'run') {
+      // Only the LAST row of the whole timeline can be the turn in flight.
+      const live = running && i === folded.length - 1;
       out.push({
-        key: `g-${m.id}-${lastId}`,
+        key: r.key,
+        // `data-msg-id` carries every id folded into this row, space-separated
+        // so a lookup can use the `[data-msg-id~="…"]` word-match selector.
+        // It's how a search hit scrolls to its message — see use-anchored-window.ts.
         node: (
-          <div key={`g-${m.id}-${lastId}`} data-msg-id={orderedMessages.slice(i, j).map((x) => x.id).join(' ')} {...{ [WINDOW_ROW_ATTR]: `g-${m.id}-${lastId}` }}>
-            <MessageRow role={m.role} content={combined} ts={m.createdAt} />
+          <div key={r.key} data-msg-id={r.ids.join(' ')} {...{ [WINDOW_ROW_ATTR]: r.key }} className="flex justify-start">
+            <div className="min-w-0 w-full max-w-[85%]">
+              <RunCapsule ids={r.ids} steps={r.steps} from={r.from} to={r.to} running={live} label={live ? runLabel : null} detail={live ? runDetail : null} />
+            </div>
           </div>
         ),
       });
-      i = j;
-    } else {
-      const streamingTail = !!streamingTailId && m.id === streamingTailId;
-      // Typewriter is decided at render time, NOT from streamingTailId — that's
-      // set by a post-render effect (one render late), which would mount the
-      // text already-complete and skip the animation. The newest assistant row,
-      // if it landed in the last few seconds, types out.
-      const isLast = m.id === newestId;
-      const typing = isLast && m.role === 'assistant' && Date.now() - new Date(m.createdAt).getTime() < 8_000;
-      // askCardByQuestion is rebuilt as a fresh Map every render, and `view`
-      // hands us a new array on every streaming tick — so passing the Map to
-      // every row would break MessageRow's memo shallow-compare each tick and
-      // re-render the whole visible timeline, not just the growing tail. Only
-      // ask tool_use rows actually read the map (groupConsecutiveTools);
-      // every other row gets a stable `undefined` and its memo bails. Identical
-      // output either way — non-ask rows never touch the map.
-      const rowHasAsk = blocks.some((b) => isAskToolUse(b));
-      out.push({
-        key: m.id,
-        node: (
-          <div key={m.id} data-msg-id={m.id} {...{ [WINDOW_ROW_ATTR]: m.id }}>
-            <MessageRow role={m.role} authoredBy={m.authoredBy} content={blocks} ts={m.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
-          </div>
-        ),
-      });
-      i += 1;
+      continue;
     }
+
+    const streamingTail = !!streamingTailId && r.msgId === streamingTailId && i === folded.length - 1;
+    // Typewriter is decided at render time, NOT from streamingTailId — that's
+    // set by a post-render effect (one render late), which would mount the
+    // text already-complete and skip the animation. The newest assistant row,
+    // if it landed in the last few seconds, types out.
+    const isLast = r.msgId === newestId;
+    const typing = isLast && r.role === 'assistant' && Date.now() - new Date(r.createdAt).getTime() < 8_000;
+    // askCardByQuestion is rebuilt as a fresh Map every render, and `view`
+    // hands us a new array on every streaming tick — so passing the Map to
+    // every row would break MessageRow's memo shallow-compare each tick and
+    // re-render the whole visible timeline, not just the growing tail. Only
+    // ask tool_use rows actually read the map (groupConsecutiveTools);
+    // every other row gets a stable `undefined` and its memo bails.
+    const rowHasAsk = r.blocks.some((b) => isAskToolUse(b));
+    out.push({
+      key: r.key,
+      node: (
+        <div key={r.key} data-msg-id={r.ids.join(' ')} {...{ [WINDOW_ROW_ATTR]: r.key }}>
+          <MessageRow role={r.role} authoredBy={r.authoredBy} content={r.blocks} ts={r.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
+        </div>
+      ),
+    });
   }
   return <TimelineBody items={out} getViewport={getViewport} />;
 });
@@ -172,25 +184,6 @@ function TimelineBody({ items, getViewport }: { items: Array<{ key: string; node
 }
 
 const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, streamingTail = false, typing = false, streamingDot, askCardByQuestion }: { role: string; authoredBy?: string | null; content: Block[]; ts: Date | string; streamingTail?: boolean; typing?: boolean; streamingDot?: string; askCardByQuestion?: Map<string, any> }) {
-  // Tool-result-only rows belong with the assistant's preceding tool calls,
-  // so we render them as condensed inline chips with no bubble.
-  const allToolResults = content.length > 0 && content.every((b) => b.type === 'tool_result');
-  if (allToolResults) {
-    const results = content as Array<{ type: string; tool_use_id?: string; content?: any; is_error?: boolean }>;
-    if (results.length === 1) {
-      return (
-        <div className="flex justify-start">
-          <div className="min-w-0 max-w-[85%]"><InlineToolResult block={results[0]} /></div>
-        </div>
-      );
-    }
-    return (
-      <div className="flex justify-start">
-        <div className="min-w-0 max-w-[85%]"><InlineToolResultBatch results={results} /></div>
-      </div>
-    );
-  }
-
   // A role='user' row is not automatically the human. During a Brain takeover the
   // Brain speaks in this slot, and the gateway's watchers drop `[dispatch update]`
   // pokes here too. Rendering all three identically would make a driven
@@ -207,8 +200,9 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
   // gateway's system banners.
   const isSystem = role === 'system' || byMachine;
 
-  // Group consecutive same-tool tool_use calls so a noisy claude turn doesn't
-  // generate 12 individual cards.
+  // Group consecutive same-tool tool_use calls. After folding, the only tool_use
+  // that reaches here is `ask` (swapped for its card below), so this is mostly a
+  // safety net for content shapes the fold does not recognise.
   const grouped = groupConsecutiveTools(content, askCardByQuestion);
   const hasVisibleText = content.some((b) => b.type === 'text' && (b as any).text?.trim());
 
@@ -229,10 +223,9 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
     );
   }
 
-  // Tool-use-only assistant turns: render the chips bare (no bubble, no
-  // placeholder text). They belong visually with the surrounding tool_result
-  // chips, not as standalone cards with empty bodies. When this row is the
-  // streaming tail, append a small dots chip at the end of the chip cluster.
+  // Nothing a person can read — an empty row, or a shape the fold left behind.
+  // Render bare so it belongs visually with the surrounding capsules rather than
+  // becoming a card with an empty body.
   if (!isHumanUser && !byBrain && !isSystem && !hasVisibleText && grouped.every((g) => g.kind === 'tool' || g.kind === 'thinking')) {
     return (
       <div className="flex justify-start">

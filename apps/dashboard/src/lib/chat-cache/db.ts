@@ -24,12 +24,19 @@ const DB_PREFIX = 'hermit-chat-cache';
 // refetches what MOVED, so old rows would keep their old shape forever. Wiping
 // the bookkeeping on upgrade makes the next pass a full refetch (~11 MB,
 // background, behind the usual "正在建立本地索引…" line).
-const DB_VERSION = 2;
+// 3: added the `digest` store — history pages as the collapsed timeline renders
+// them. Purely additive; nothing already cached changes meaning.
+const DB_VERSION = 3;
 
 export const STORE_TEXT = 'text';
 export const STORE_SESSIONS = 'sessions';
 export const STORE_FULL = 'full';
 export const STORE_FULL_META = 'fullMeta';
+// History pages in their DIGESTED form: tool arguments trimmed to the preview
+// the collapsed capsule shows, results to their first line, thinking to its
+// length (server/message-digest.ts). Roughly 5% of what `full` costs per row,
+// which is what lets a second walk back through a long session be free.
+export const STORE_DIGEST = 'digest';
 
 // How many sessions keep their full (renderable) rows. The prose layer covers
 // every session; this one only makes RE-opening a session instant, so a handful
@@ -72,7 +79,7 @@ function txDone(tx: IDBTransaction): Promise<void> {
 // so that tab's upgrade isn't blocked; the next call reopens.
 const openDbs = new Map<string, Promise<IDBDatabase | null>>();
 
-const ALL_STORES = [STORE_TEXT, STORE_SESSIONS, STORE_FULL, STORE_FULL_META];
+const ALL_STORES = [STORE_TEXT, STORE_SESSIONS, STORE_FULL, STORE_FULL_META, STORE_DIGEST];
 
 function createMissingStores(db: IDBDatabase): void {
   if (!db.objectStoreNames.contains(STORE_TEXT)) {
@@ -86,6 +93,9 @@ function createMissingStores(db: IDBDatabase): void {
   }
   if (!db.objectStoreNames.contains(STORE_FULL_META)) {
     db.createObjectStore(STORE_FULL_META, { keyPath: 'sessionId' });
+  }
+  if (!db.objectStoreNames.contains(STORE_DIGEST)) {
+    db.createObjectStore(STORE_DIGEST, { keyPath: 'id' }).createIndex('by_session', 'sessionId');
   }
 }
 
@@ -238,7 +248,7 @@ export async function getSessionText(scope: string, sessionId: string): Promise<
 export async function dropSession(scope: string, sessionId: string): Promise<void> {
   const db = await openCache(scope);
   if (!db) return;
-  const tx = db.transaction([STORE_TEXT, STORE_SESSIONS, STORE_FULL, STORE_FULL_META], 'readwrite');
+  const tx = db.transaction([STORE_TEXT, STORE_SESSIONS, STORE_FULL, STORE_FULL_META, STORE_DIGEST], 'readwrite');
   // Every request is issued SYNCHRONOUSLY, then we await the transaction once.
   // Awaiting anything non-IDB mid-transaction lets it auto-commit out from under
   // the remaining work.
@@ -246,6 +256,7 @@ export async function dropSession(scope: string, sessionId: string): Promise<voi
   tx.objectStore(STORE_FULL_META).delete(sessionId);
   void deleteByIndex(tx.objectStore(STORE_TEXT), sessionId);
   void deleteByIndex(tx.objectStore(STORE_FULL), sessionId);
+  void deleteByIndex(tx.objectStore(STORE_DIGEST), sessionId);
   await txDone(tx);
 }
 
@@ -309,6 +320,33 @@ export async function putFullRows(scope: string, sessionId: string, rows: Cached
   await txDone(tx);
 }
 
+// ── digested history layer ───────────────────────────────────────────────────
+// Same shape as `full`, different fidelity. Written by "load earlier" once a
+// page comes back from the server; read on the next walk back through the same
+// history, which is then free. Shares the `full` LRU: a session evicted from one
+// is evicted from the other, so there is one answer to "is this session cached".
+
+export async function getDigestRows(scope: string, sessionId: string): Promise<CachedFullRow[]> {
+  const db = await openCache(scope);
+  if (!db) return [];
+  const tx = db.transaction(STORE_DIGEST, 'readonly');
+  const idx = tx.objectStore(STORE_DIGEST).index('by_session');
+  const rows = await promisify(idx.getAll(IDBKeyRange.only(sessionId)) as IDBRequest<CachedFullRow[]>);
+  if (!rows || rows.length === 0) return [];
+  return rows.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1));
+}
+
+export async function putDigestRows(scope: string, sessionId: string, rows: CachedFullRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const db = await openCache(scope);
+  if (!db) return;
+  const tx = db.transaction([STORE_DIGEST, STORE_FULL_META], 'readwrite');
+  const store = tx.objectStore(STORE_DIGEST);
+  for (const r of rows) store.put(r);
+  tx.objectStore(STORE_FULL_META).put({ sessionId, lastUsedAt: Date.now() } satisfies FullMeta);
+  await txDone(tx);
+}
+
 // Keep the N most-recently-opened sessions' rendered rows; drop the rest. The
 // prose layer is untouched, so evicted sessions stay fully searchable.
 export async function evictFullLru(scope: string, keep = FULL_LRU_SESSIONS): Promise<number> {
@@ -318,11 +356,13 @@ export async function evictFullLru(scope: string, keep = FULL_LRU_SESSIONS): Pro
   const metas = await promisify(metaTx.objectStore(STORE_FULL_META).getAll() as IDBRequest<FullMeta[]>);
   if (!metas || metas.length <= keep) return 0;
   const doomed = metas.sort((a, b) => b.lastUsedAt - a.lastUsedAt).slice(keep);
-  const tx = db.transaction([STORE_FULL, STORE_FULL_META], 'readwrite');
+  const tx = db.transaction([STORE_FULL, STORE_FULL_META, STORE_DIGEST], 'readwrite');
   const store = tx.objectStore(STORE_FULL);
+  const digest = tx.objectStore(STORE_DIGEST);
   const meta = tx.objectStore(STORE_FULL_META);
   for (const m of doomed) {
     void deleteByIndex(store, m.sessionId); // issued synchronously — see dropSession
+    void deleteByIndex(digest, m.sessionId);
     meta.delete(m.sessionId);
   }
   await txDone(tx);

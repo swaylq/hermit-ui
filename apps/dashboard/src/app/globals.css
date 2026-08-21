@@ -150,6 +150,15 @@
   50%      { opacity: 1;    transform: scale(1); }
 }
 
+/* Tool-run capsule: an INDETERMINATE progress sweep. The number of steps a turn
+   will take is unknowable while it runs, so a filling bar would be a lie — this
+   is a travelling highlight that says "still going" and nothing more. The step
+   counter beside it carries the only honest quantity we have. */
+@keyframes run-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(320%); }
+}
+
 /* highlight.js theme — modern minimal palette, single accent + neutral text.
    Tuned for the flat zinc-900 code surface, no warm undertones. */
 .hljs {

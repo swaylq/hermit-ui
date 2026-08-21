@@ -14,6 +14,7 @@ import { QUEUE_LIMIT } from '../../lib/chat-queue';
 import { sessionRecencyMs } from '../../lib/session-recency';
 import { stripNulDeep } from '../sanitize';
 import { capMessageContent } from '../message-cap';
+import { digestMessageContent } from '../message-digest';
 import { extractSearchText, extractInteractionBlocks } from '../chat-text';
 import { generateSessionTitle } from '../session-title';
 import {
@@ -947,6 +948,12 @@ export const chatRouter = router({
         sessionId: z.string(),
         beforeId: z.string(),
         limit: z.number().int().min(1).max(500).default(200),
+        // History as the collapsed timeline renders it: tool arguments trimmed
+        // to the preview the chip shows, results to their first line, thinking
+        // to its length. ~2/3 of every page's bytes are tool_result the reader
+        // never sees — see server/message-digest.ts. Opening a capsule fetches
+        // the real thing through `getMessages`.
+        digest: z.boolean().default(false),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -972,10 +979,34 @@ export const chatRouter = router({
       });
       const hasMore = rows.length > input.limit;
       const page = hasMore ? rows.slice(0, input.limit) : rows;
+      const project = input.digest
+        ? (c: unknown) => digestMessageContent(capMessageContent(c))
+        : capMessageContent;
       return {
-        rows: page.reverse().map((r) => ({ ...r, content: capMessageContent(r.content) })),
+        rows: page.reverse().map((r) => ({ ...r, content: project(r.content) })),
         hasMore,
       };
+    }),
+
+  // The full content of a handful of messages, by id. The one caller is a run
+  // capsule being opened: history arrives digested (see `digest` above), so the
+  // bodies of the tool calls inside a capsule are not on the client until
+  // someone asks to see them. Bounded to one capsule's worth — a run of more
+  // than 200 steps is not a thing that happens, and the bound keeps this from
+  // becoming a way to pull a whole session in one request.
+  getMessages: agentProcedure
+    .input(z.object({ sessionId: z.string(), ids: z.array(z.string()).min(1).max(200) }))
+    .query(async ({ ctx, input }) => {
+      const rows = await prisma.chatMessage.findMany({
+        where: {
+          id: { in: input.ids },
+          sessionId: input.sessionId,
+          session: { machineId: ctx.machine.id, ...(ctx.scopedAgent ? { agentName: ctx.scopedAgent } : {}) },
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, role: true, content: true, createdAt: true, authoredBy: true },
+      });
+      return rows.map((r) => ({ ...r, content: capMessageContent(r.content) }));
     }),
 
   // The window AROUND a specific message — how a search hit outside the newest-N

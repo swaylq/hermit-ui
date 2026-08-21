@@ -42,6 +42,8 @@ import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 import { EmptyChat } from '@/components/chat/empty-chat';
 import { TypingIndicator } from '@/components/chat/message-bits';
 import { MessageTimeline } from '@/components/chat/message-timeline';
+import { RunDetailContext, stepsFromRows, type RunResolver } from '@/components/chat/run-capsule';
+import { isMachineryBlock } from '@/components/chat/fold-runs';
 import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
 import { VoiceMic } from '@/components/chat/voice-mic';
 import { DictationDock, type DictationHandle, type DictationSource } from '@/components/chat/dictation-dock';
@@ -366,6 +368,15 @@ function toSummaryView(messages: TimelineMsg[]): TimelineMsg[] {
 // ComposeBar (components/chat/composer.tsx) so a keystroke re-renders only the
 // composer, not this whole pane. SessionPane's occasional draft writes go
 // through the imperative ComposerHandle (composerRef) below.
+
+// How far above the top of the list a "load earlier" fires. Two screens of
+// runway, floored so a short viewport (a phone with the keyboard up) still gets
+// a useful lead. Kept as a function of the CURRENT viewport height rather than a
+// constant: the composer grows and the keyboard opens, and a fixed margin that
+// felt right at 900px is most of the screen at 300px.
+function pullMargin(clientHeight: number): number {
+  return Math.max(400, clientHeight * 2);
+}
 
 export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: string; anchorMessageId?: string | null }) {
   const utils = trpc.useUtils();
@@ -891,6 +902,31 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     return live.length ? [...base, ...live] : base;
   }, [messages.data, baseRows, summaryMode, pending, anchored.active, anchored.rows]);
 
+  // Top up a timeline too short to scroll.
+  //
+  // The live window is 60 MESSAGES, and folding turns those into far fewer rows
+  // — three quarters of a busy session's messages are tool traffic that now
+  // collapses into a handful of capsules. A session can therefore open with less
+  // than a screenful and no way to ask for more except the button, which is a
+  // worse first screen than before the fold. So: pull a page whenever there is
+  // not enough content to scroll, until there is.
+  //
+  // Capped rather than looped to exhaustion. Each pass is gated by the same
+  // one-at-a-time guard as a user pull, and a page always makes the list longer
+  // — but "longer" can be a few pixels if the whole page folds into a capsule
+  // that was already there, so an uncapped version would walk a 26k-message
+  // session back to its beginning. Five pages is several screens of anything.
+  const topUpsRef = useRef(0);
+  useEffect(() => {
+    if (anchored.active || !older.hasMore || older.loading) return;
+    if (topUpsRef.current >= 5) return;
+    const el = getViewport();
+    if (!el || el.scrollHeight > el.clientHeight * 1.5) return;
+    topUpsRef.current += 1;
+    const t = setTimeout(() => pullEarlier(), 0);
+    return () => clearTimeout(t);
+  }, [view.length, older.hasMore, older.loading, anchored.active, getViewport, pullEarlier]);
+
   // Prune optimistic rows once reflected in the cache so `pending` doesn't grow
   // over a long session. Same-ref return guards against a render loop.
   useEffect(() => {
@@ -1022,9 +1058,15 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       if (gap < 60) setPinned(true);
       else if (wentUp) setPinned(false);
 
-      // Infinite scroll up: near the top, pull the next page of history.
-      // loadEarlier anchors the scroll so the prepend doesn't yank the viewport.
-      if (st < 200) pullEarlier();
+      // Infinite scroll up: pull the next page of history BEFORE the top is
+      // reached. The old trigger was a flat 200px, which is inside one flick —
+      // the request left only once the user was already staring at the end of
+      // the list, so every gesture ended in a wait. Two viewport heights of
+      // runway means the page is normally already prepended by the time the
+      // reader gets there, which is the whole difference between this and a
+      // native chat app. loadEarlier anchors the scroll so the prepend doesn't
+      // yank the viewport.
+      if (st < pullMargin(h)) pullEarlier();
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     // A scroll event is not enough on its own. Once the viewport is clamped at
@@ -1033,7 +1075,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     // have fetched the next page never gets a chance to run. The raw gesture
     // still arrives, so use it as the second entry point.
     const onReach = (e: Event) => {
-      if (el.scrollTop >= 200) return;
+      if (el.scrollTop >= pullMargin(el.clientHeight)) return;
       if (e.type === 'wheel' && (e as WheelEvent).deltaY >= 0) return; // scrolling away, not into, the top
       pullEarlier();
     };
@@ -1250,6 +1292,60 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const status = sessionStatusView(
     session ? { ...session, activity: sessionOne.data?.activity ?? null } : session,
     { liveWorking: isInFlight, unread: false, needsYou: !!pendingInteraction },
+  );
+
+  // What the live run capsule puts in its header. Read off the raw activity
+  // rather than `status.label`, which folds elapsed time into the string — the
+  // capsule keeps its own clock and would otherwise print the duration twice.
+  // Returned as two PRIMITIVES: the activity object is a fresh identity on every
+  // 5s poll, and handing that to memo(MessageTimeline) would re-render the whole
+  // visible timeline four times a minute for a label that did not change.
+  const rawActivity = sessionOne.data?.activity as Record<string, unknown> | null | undefined;
+  const runActivity = useMemo((): { label: string | null; detail: string | null } => {
+    const a = rawActivity && typeof rawActivity === 'object' && !Array.isArray(rawActivity) ? rawActivity : null;
+    if (!a) return { label: null, detail: null };
+    const detail = typeof a.detail === 'string' && a.detail ? a.detail : null;
+    const label = typeof a.label === 'string' && a.label ? a.label : null;
+    switch (a.kind) {
+      case 'tool':
+      case 'subagent':
+        return { label, detail };
+      case 'thinking':
+      case 'compacting':
+      case 'background':
+        return { label: String(a.kind), detail };
+      case 'retrying':
+        return { label: 'retrying', detail: detail ?? 'the API asked us to back off' };
+      default:
+        return { label: null, detail: null };
+    }
+  }, [rawActivity]);
+
+  // Whether the timeline currently ENDS in machinery. When it does, the run
+  // capsule at the tail carries the progress bar and the standalone dots below
+  // it would be a second indicator for the same fact.
+  const tailIsRun = useMemo(() => {
+    const last = view[view.length - 1];
+    if (!last || !Array.isArray(last.content) || last.content.length === 0) return false;
+    // The fold emits a run LAST exactly when the last block is machinery — a
+    // turn that narrated and then called a tool ends in a capsule; one that
+    // called a tool and then spoke ends in a bubble.
+    const blocks = last.content as unknown[];
+    return isMachineryBlock(blocks[blocks.length - 1]);
+  }, [view]);
+
+  // Expanding a capsule from digested history: fetch the real rows for exactly
+  // those message ids, once, and re-fold them into steps. History pages arrive
+  // with tool arguments trimmed to a preview and results to their first line
+  // (see server/message-digest.ts) — this is the moment the reader asks for the
+  // rest, and the only moment it costs anything.
+  const resolveRun = useCallback<RunResolver>(
+    async (ids) => {
+      if (ids.length === 0) return null;
+      const rows = await utils.client.chat.getMessages.query({ sessionId, ids });
+      return rows.length ? stepsFromRows(rows) : null;
+    },
+    [utils, sessionId],
   );
 
   // Tell the sidebar what we can see, so its dot for THIS session is the same
@@ -1880,14 +1976,26 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   Replies only · this turn is still running, no final reply yet
                 </p>
               ) : (
-                <MessageTimeline messages={view} streamingTailId={streamingTailId} dotClass={status.dot} getViewport={getViewport} />
+                <RunDetailContext.Provider value={resolveRun}>
+                  <MessageTimeline
+                    messages={view}
+                    streamingTailId={streamingTailId}
+                    dotClass={status.dot}
+                    getViewport={getViewport}
+                    running={turnRunning && !summaryMode}
+                    runLabel={runActivity.label}
+                    runDetail={runActivity.detail}
+                  />
+                </RunDetailContext.Provider>
               )}
             </>
           )}
           {/* Only show the standalone dots-below indicator while the assistant
               has not yet emitted any content. Once the bubble appears, dots
-              live inline at the bubble's tail (StreamingDots). */}
-          {showThinkingDots && !streamingTailId && <TypingIndicator dot={status.dot} />}
+              live inline at the bubble's tail (StreamingDots) — and when the
+              turn is off in a tool chain, the run capsule's own sweep bar is
+              the indicator, so a second breathing dot below it is just noise. */}
+          {showThinkingDots && !streamingTailId && !tailIsRun && <TypingIndicator dot={status.dot} />}
         </div>
       </ScrollArea>
       {/* Scroll-to-latest, in a zero-height strip above the ComposeBar. Stop used

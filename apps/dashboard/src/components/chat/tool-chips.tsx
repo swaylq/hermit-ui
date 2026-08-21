@@ -1,11 +1,14 @@
 'use client';
 
 // Tool-call rendering for the chat timeline: the collapsible request chips
-// (ToolChip / ToolBatchChip) and their inline results (InlineToolResult /
-// InlineToolResultBatch), plus the one-line argument formatter oneLineArg (also
-// used by InteractionCard). Pure presentational — consumed by the message
-// renderers back in chat/page.tsx. Extracted from that god-file (P2-3), behaviour
-// identical.
+// (ToolChip / ToolBatchChip) and their inline results (InlineToolResult), plus
+// the one-line argument formatter oneLineArg (also used by InteractionCard).
+// Pure presentational — consumed by the run capsule (run-capsule.tsx) and by
+// MessageRow for the shapes the fold leaves inline.
+//
+// InlineToolResultBatch used to live here, for the row that coalesced a
+// parallel fan-out's result messages. The run capsule subsumes it: a fan-out is
+// now a stretch of steps inside one run, not a row of its own.
 
 import { useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -107,28 +110,6 @@ export function InlineToolResult({ block }: { block: { type: string; tool_use_id
           {text}
         </pre>
       )}
-    </details>
-  );
-}
-
-export function InlineToolResultBatch({ results }: { results: Array<{ type: string; tool_use_id?: string; content?: any; is_error?: boolean }> }) {
-  const errCount = results.filter((r) => r.is_error).length;
-  const ok = errCount === 0;
-  return (
-    <details className={cn(
-      'min-w-0 max-w-full overflow-hidden rounded text-[11px] border bg-background transition-colors',
-      ok ? 'border-border hover:border-foreground/30' : 'border-rose-500/40 bg-rose-500/5',
-    )}>
-      <summary className="cursor-pointer list-none px-2 py-1 font-mono flex items-center gap-1.5">
-        <span className={ok ? 'text-muted-foreground/70' : 'text-rose-500'}>←</span>
-        <span className="text-foreground/80 tabular-nums">{results.length} results</span>
-        {errCount > 0 && <span className="text-rose-500 tabular-nums">· {errCount} error{errCount > 1 ? 's' : ''}</span>}
-      </summary>
-      <div className="border-t border-border p-1.5 space-y-1 bg-muted/20 rounded-b">
-        {results.map((b, i) => (
-          <InlineToolResult key={i} block={b} />
-        ))}
-      </div>
     </details>
   );
 }
