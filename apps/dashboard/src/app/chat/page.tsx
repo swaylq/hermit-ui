@@ -1576,13 +1576,42 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   <Pencil className="h-3 w-3 shrink-0 opacity-0 group-hover/title:opacity-100 transition-opacity text-muted-foreground/70" aria-hidden="true" />
                 </button>
               )}
+              {/* State, beside the name of the thing it describes. It used to sit
+                  in the meta line below with the backend and the context bar —
+                  run metadata, which is what that line is for, except this is the
+                  one item on it that CHANGES while you watch, and it was the
+                  smallest text on the row. Up here it reads at a glance and lines
+                  up with the sidebar's dot for the same session.
+
+                  Kept deliberately quiet — 10px mono, muted, normal weight — so
+                  it annotates the title rather than competing with it. shrink-0
+                  with its own truncate cap: the title (min-w-0) is what yields
+                  when the header narrows, since a title is recognisable from its
+                  first few words and "retrying 2/5, 12s" is not. */}
+              {session && (
+                <span
+                  className="shrink-0 inline-flex items-center gap-1.5 font-mono text-[10px] font-normal text-muted-foreground"
+                  title={status.detail}
+                >
+                  <span
+                    className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot, status.pulse && 'animate-pulse')}
+                    aria-hidden="true"
+                  />
+                  {/* The label is no longer always one word: a claude-sdk session
+                      says WHAT it is doing ("Bash · 47s", "retrying 2/5, 12s").
+                      Truncated rather than wrapped, with the full command in the
+                      tooltip on the wrapper. */}
+                  <span className="max-w-[9rem] truncate">{status.label}</span>
+                </span>
+              )}
             </div>
             <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground truncate">
-              {/* Agent name leads the status line on every width — on a phone the
+              {/* Agent name leads the meta line on every width — on a phone the
                   sidebar is collapsed away, so this was the only thing telling you
                   WHICH agent you're talking to. It's the ONLY shrinkable item on the
                   row (capped + truncating), so a long name yields instead of pushing
-                  the state or ctx off the edge. */}
+                  the backend or ctx off the edge. (The live state used to sit here
+                  too; it moved up beside the title.) */}
               {session?.agentName ? (
                 // …and it's the way INTO the agent: /agents?name=<agent> is the
                 // detail sheet's deep link (same one the sidebar's Agents entry uses).
@@ -1598,20 +1627,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               )}
               {session && (
                 <>
-                  <span className="shrink-0 text-muted-foreground/40">·</span>
-                  {/* The label is no longer always one word: a claude-sdk session
-                      says WHAT it is doing ("Bash · 47s", "retrying 2/5, 12s").
-                      Truncated rather than wrapped — the meta line is tight at
-                      390px — with the full command in the tooltip. */}
-                  <span className="min-w-0 max-w-[11rem] truncate" title={status.detail}>
-                    {status.label}
-                  </span>
-                  {/* Status dot rides WITH the state word it describes, rather than
-                      next to the title where it read as decoration. */}
-                  <span
-                    className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot, status.pulse && 'animate-pulse')}
-                    aria-label={status.label}
-                  />
                   <span className="shrink-0 text-muted-foreground/40">·</span>
                   {/* Which backend is actually running this session. Sits left of
                       ctx because both describe the run, not the conversation.
