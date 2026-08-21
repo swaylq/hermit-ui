@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { foldRuns, summarizeRun, isMachineryBlock, type FoldedRow, type FoldedRun, type FoldedMsg } from './fold-runs';
+import { foldRuns, summarizeRun, isMachineryBlock, OPEN_RUN_KEY, type FoldedRow, type FoldedRun, type FoldedMsg } from './fold-runs';
 
 const msg = (r: FoldedRow): FoldedMsg => {
   assert.equal(r.kind, 'msg');
@@ -154,4 +154,97 @@ test('user rows never merge into a run even when adjacent to one', () => {
   ]);
   assert.deepEqual(kinds(rows), ['run', 'msg', 'run']);
   assert.equal(msg(rows[1]).role, 'user');
+});
+
+// ── Key stability ───────────────────────────────────────────────────────────
+// The bug these exist for: sway, 2026-08-21, "滚动会突变，向上滚了一下结果跳跃很多".
+// A run keyed by the message that OPENED it is stable only while history grows
+// downward. "Load earlier" grows it upward — the loaded window began in the
+// middle of a turn's machinery — so the topmost run re-opened at an older
+// message and changed key. That row is the one under the reader's eyes at the
+// moment they trigger the load, and losing its key loses its measured height,
+// the windowing hook's start anchor and the DOM element itself.
+
+const keys = (rows: FoldedRow[]) => rows.map((r) => `${r.kind}:${r.key}`);
+
+// The window starts mid-machinery, then some prose. Exactly what a page
+// boundary landing inside a turn produces.
+const startedMidRun = () => {
+  seq = 100;
+  return [
+    row('assistant', [call('Bash', {}, 't10')]),
+    row('user', [result('ok')]),
+    row('assistant', [text('done')]),
+  ];
+};
+
+test('a run keeps its key when history is prepended above it', () => {
+  const loaded = startedMidRun();
+  const before = keys(foldRuns(loaded));
+  seq = 200;
+  const older = [
+    row('user', [text('go')]),
+    row('assistant', [call('Read', {}, 't02')]),
+    row('user', [result('ok')]),
+  ];
+  const after = keys(foldRuns([...older, ...loaded]));
+  for (const k of before) assert.ok(after.includes(k), `prepend lost ${k} — ${after.join(' ')}`);
+});
+
+test('...and when the turn below it keeps writing', () => {
+  const loaded = startedMidRun();
+  const before = keys(foldRuns(loaded));
+  seq = 300;
+  const after = keys(foldRuns([...loaded, row('assistant', [call('Bash', {}, 't13')])]));
+  for (const k of before) assert.ok(after.includes(k), `append lost ${k} — ${after.join(' ')}`);
+});
+
+test('a run is named after the row below it, which nothing can move', () => {
+  seq = 400;
+  const rows = foldRuns([
+    row('assistant', [call('Bash', {}, 't1')]),
+    row('user', [result('ok')]),
+    row('assistant', [text('done')]),
+  ]);
+  const run = rows.find((r) => r.kind === 'run') as FoldedRun;
+  const prose = rows[rows.length - 1];
+  assert.equal(run.key, `r>${prose.key}`);
+});
+
+// The one run with nothing after it is the one still being written. It keeps a
+// sentinel rather than a derived id, because whatever it were derived from is
+// the thing that keeps moving while the turn runs.
+test('the run still being written is the only one with a sentinel key', () => {
+  seq = 500;
+  const rows = foldRuns([
+    row('user', [text('go')]),
+    row('assistant', [call('Bash', {}, 't1')]),
+  ]);
+  const runs = rows.filter((r) => r.kind === 'run') as FoldedRun[];
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].key, OPEN_RUN_KEY);
+});
+
+test('two runs in one message get two different names', () => {
+  seq = 600;
+  const rows = foldRuns([
+    row('assistant', [call('Bash', {}, 't1'), text('between'), call('Read', {}, 't2')]),
+    row('assistant', [text('after')]),
+  ]);
+  const runKeys = rows.filter((r) => r.kind === 'run').map((r) => r.key);
+  assert.equal(runKeys.length, 2);
+  assert.equal(new Set(runKeys).size, 2, runKeys.join(' '));
+});
+
+test('every row in a fold has a unique key — the windowing map is keyed on it', () => {
+  seq = 700;
+  const rows = foldRuns([
+    row('user', [text('go')]),
+    row('assistant', [call('Bash', {}, 't1'), text('mid'), call('Read', {}, 't2')]),
+    row('user', [result('ok'), result('ok')]),
+    row('assistant', [text('done')]),
+    row('assistant', [call('Bash', {}, 't3')]),
+  ]);
+  const ks = rows.map((r) => r.key);
+  assert.equal(new Set(ks).size, ks.length, ks.join(' '));
 });

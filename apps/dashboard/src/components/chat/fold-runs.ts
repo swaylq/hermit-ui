@@ -62,6 +62,26 @@ export type FoldedMsg = {
 
 export type FoldedRun = {
   kind: 'run';
+  /**
+   * Identity, and it is NOT the message that opened the run.
+   *
+   * A run is the machinery between two things a person said, so the obvious key
+   * is the message that opened it — which is stable only while history grows
+   * downward. "Load earlier" grows it upward: the loaded window began in the
+   * middle of a turn's machinery, the rest of that turn arrives above, and the
+   * run re-opens at an older message. The row whose identity would change is the
+   * TOPMOST one — exactly the row under the reader's eyes at the moment they
+   * triggered the load — and losing a row's key loses its measured height, the
+   * windowing hook's own start anchor, and the DOM element itself. All three are
+   * named in the notes on this subsystem as ways to lose the reading position,
+   * and together they are what makes scrolling up jump.
+   *
+   * So a run is keyed by the row that FOLLOWS it. A closed run is bounded below
+   * by a person-readable row that already exists; nothing arriving above or
+   * below can change which row that is. The one run with nothing after it is the
+   * one still being written, and it keeps a sentinel until it closes — a single
+   * remount at the moment the capsule stops being a live progress line anyway.
+   */
   key: string;
   ids: string[];
   steps: RunStep[];
@@ -128,6 +148,14 @@ function stepFor(block: Block): RunStep | null {
  * Runs never span a day boundary — the timeline draws a date divider there, and
  * a capsule straddling one would have to be either above or below its own label.
  */
+/**
+ * Key of the run still being written — the only one with no row after it.
+ *
+ * A constant rather than a derived id: whatever it were derived from would be
+ * the thing that keeps moving while the turn runs.
+ */
+export const OPEN_RUN_KEY = 'r-open';
+
 export function foldRuns(messages: FoldInput[]): FoldedRow[] {
   const out: FoldedRow[] = [];
   let run: FoldedRun | null = null;
@@ -192,6 +220,17 @@ export function foldRuns(messages: FoldInput[]): FoldedRow[] {
     // does — the old timeline rendered it, and dropping a row silently is how a
     // turn boundary goes missing.
     else if (blocks.length === 0 && part === 0) pushMsg([]);
+  }
+
+  // Second pass: name each run after the row below it (see FoldedRun.key). It
+  // has to be a second pass because the follower is not known when the run
+  // opens, and runs are never adjacent — a run is closed by the very row that
+  // ends it — so no two runs can claim the same name.
+  for (let i = 0; i < out.length; i++) {
+    const r = out[i];
+    if (r.kind !== 'run') continue;
+    const next = out[i + 1];
+    r.key = next ? `r>${next.key}` : OPEN_RUN_KEY;
   }
 
   return out;
