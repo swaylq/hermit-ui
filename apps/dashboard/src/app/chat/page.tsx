@@ -1874,6 +1874,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                 <MessageTimeline
                   messages={view}
                   streamingTailId={streamingTailId}
+                  streamKey={sessionId}
                   dotClass={status.dot}
                   getViewport={getViewport}
                   running={turnRunning}

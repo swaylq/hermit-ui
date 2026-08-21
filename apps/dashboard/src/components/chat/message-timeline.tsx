@@ -40,6 +40,7 @@ function HarnessTerminatorRow({ ts }: { ts: Date | string }) {
 export const MessageTimeline = memo(function MessageTimeline({
   messages,
   streamingTailId,
+  streamKey = '',
   dotClass,
   getViewport,
   running = false,
@@ -48,6 +49,9 @@ export const MessageTimeline = memo(function MessageTimeline({
 }: {
   messages: Array<{ id: string; role: string; content: any; createdAt: Date | string; authoredBy?: string | null }>;
   streamingTailId?: string | null;
+  /** Which conversation this is, so a reveal can survive the row swap mid-reply
+   *  (the gateway retracts its placeholder row and lands the real one). */
+  streamKey?: string;
   dotClass?: string;
   getViewport?: () => HTMLElement | null;
   /** A turn is in flight — the trailing run capsule shows live progress. */
@@ -142,12 +146,18 @@ export const MessageTimeline = memo(function MessageTimeline({
     }
 
     const streamingTail = !!streamingTailId && r.msgId === streamingTailId && i === folded.length - 1;
-    // Typewriter is decided at render time, NOT from streamingTailId — that's
-    // set by a post-render effect (one render late), which would mount the
-    // text already-complete and skip the animation. The newest assistant row,
-    // if it landed in the last few seconds, types out.
+    // Typewriter is decided at render time, NOT from streamingTailId alone —
+    // that's set by a post-render effect (one render late), which would mount
+    // the text already-complete and skip the animation. So a row that landed in
+    // the last few seconds may start typing on sight; a row the page has SEEN
+    // grow may start typing whatever its age, which is what keeps a reply that
+    // takes a minute to write animating for the whole minute.
+    //
+    // Either way this only STARTS the reveal — useTypewriter latches, because
+    // both of these signals decay while a long reply is still being written.
     const isLast = r.msgId === newestId;
-    const typing = isLast && r.role === 'assistant' && Date.now() - new Date(r.createdAt).getTime() < 8_000;
+    const typing = isLast && r.role === 'assistant'
+      && (streamingTail || Date.now() - new Date(r.createdAt).getTime() < 8_000);
     // askCardByQuestion is rebuilt as a fresh Map every render, and `view`
     // hands us a new array on every streaming tick — so passing the Map to
     // every row would break MessageRow's memo shallow-compare each tick and
@@ -159,7 +169,7 @@ export const MessageTimeline = memo(function MessageTimeline({
       key: r.key,
       node: (
         <div key={r.key} data-msg-id={r.ids.join(' ')} {...{ [WINDOW_ROW_ATTR]: r.key }}>
-          <MessageRow role={r.role} authoredBy={r.authoredBy} content={r.blocks} ts={r.createdAt} streamingTail={streamingTail} typing={typing} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
+          <MessageRow role={r.role} authoredBy={r.authoredBy} content={r.blocks} ts={r.createdAt} streamingTail={streamingTail} typing={typing} streamKey={streamKey} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
         </div>
       ),
     });
@@ -183,7 +193,7 @@ function TimelineBody({ items, getViewport }: { items: Array<{ key: string; node
   );
 }
 
-const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, streamingTail = false, typing = false, streamingDot, askCardByQuestion }: { role: string; authoredBy?: string | null; content: Block[]; ts: Date | string; streamingTail?: boolean; typing?: boolean; streamingDot?: string; askCardByQuestion?: Map<string, any> }) {
+const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, streamingTail = false, typing = false, streamKey = '', streamingDot, askCardByQuestion }: { role: string; authoredBy?: string | null; content: Block[]; ts: Date | string; streamingTail?: boolean; typing?: boolean; streamKey?: string; streamingDot?: string; askCardByQuestion?: Map<string, any> }) {
   // A role='user' row is not automatically the human. During a Brain takeover the
   // Brain speaks in this slot, and the gateway's watchers drop `[dispatch update]`
   // pokes here too. Rendering all three identically would make a driven
@@ -204,6 +214,10 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
   // that reaches here is `ask` (swapped for its card below), so this is mostly a
   // safety net for content shapes the fold does not recognise.
   const grouped = groupConsecutiveTools(content, askCardByQuestion);
+  // Only the LAST text block of a row can be the one being written; an earlier
+  // one was finished before this one started, and animating it again would
+  // retype text the reader has already read.
+  const liveGroup = grouped.reduce((at, g, i) => (g.kind === 'text' ? i : at), -1);
   const hasVisibleText = content.some((b) => b.type === 'text' && (b as any).text?.trim());
 
   // Interaction cards (permission / question prompts) carry their own border +
@@ -314,7 +328,7 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
           </div>
         )}
         {grouped.map((g, i) => (
-          <GroupView key={i} group={g} dark={false} typing={typing && !onSenderSide} />
+          <GroupView key={i} group={g} dark={false} typing={typing && !onSenderSide && i === liveGroup} streamKey={streamKey} />
         ))}
         {streamingTail && (
           <div className="flex">
@@ -460,8 +474,8 @@ function groupConsecutiveTools(blocks: Block[], askCardByQuestion?: Map<string, 
   return out;
 }
 
-function GroupView({ group, dark, inline = false, typing = false }: { group: Group; dark: boolean; inline?: boolean; typing?: boolean }) {
-  if (group.kind === 'text') return <TypedText text={group.text} typing={typing} />;
+function GroupView({ group, dark, inline = false, typing = false, streamKey = '' }: { group: Group; dark: boolean; inline?: boolean; typing?: boolean; streamKey?: string }) {
+  if (group.kind === 'text') return <TypedText text={group.text} typing={typing} streamKey={streamKey} />;
   if (group.kind === 'image') {
     return <ChatImage url={group.url} width={group.width} height={group.height} />;
   }
