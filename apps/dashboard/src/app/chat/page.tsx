@@ -1615,42 +1615,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   <Pencil className="h-3 w-3 shrink-0 opacity-0 group-hover/title:opacity-100 transition-opacity text-muted-foreground/70" aria-hidden="true" />
                 </button>
               )}
-              {/* State, beside the name of the thing it describes. It used to sit
-                  in the meta line below with the backend and the context bar —
-                  run metadata, which is what that line is for, except this is the
-                  one item on it that CHANGES while you watch, and it was the
-                  smallest text on the row. Up here it reads at a glance and lines
-                  up with the sidebar's dot for the same session.
-
-                  Kept deliberately quiet — 10px mono, muted, normal weight — so
-                  it annotates the title rather than competing with it. shrink-0
-                  with its own truncate cap: the title (min-w-0) is what yields
-                  when the header narrows, since a title is recognisable from its
-                  first few words and "retrying 2/5, 12s" is not. */}
-              {session && (
-                <span
-                  className="shrink-0 inline-flex items-center gap-1.5 font-mono text-[10px] font-normal text-muted-foreground"
-                  title={status.detail}
-                >
-                  <span
-                    className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot, status.pulse && 'animate-pulse')}
-                    aria-hidden="true"
-                  />
-                  {/* The label is no longer always one word: a claude-sdk session
-                      says WHAT it is doing ("Bash · 47s", "retrying 2/5, 12s").
-                      Truncated rather than wrapped, with the full command in the
-                      tooltip on the wrapper. */}
-                  <span className="max-w-[9rem] truncate">{status.label}</span>
-                </span>
-              )}
             </div>
             <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground truncate">
-              {/* Agent name leads the meta line on every width — on a phone the
+              {/* Agent name leads the status line on every width — on a phone the
                   sidebar is collapsed away, so this was the only thing telling you
                   WHICH agent you're talking to. It's the ONLY shrinkable item on the
                   row (capped + truncating), so a long name yields instead of pushing
-                  the backend or ctx off the edge. (The live state used to sit here
-                  too; it moved up beside the title.) */}
+                  the state or the context bar off the edge. */}
               {session?.agentName ? (
                 // …and it's the way INTO the agent: /agents?name=<agent> is the
                 // detail sheet's deep link (same one the sidebar's Agents entry uses).
@@ -1666,6 +1637,27 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               )}
               {session && (
                 <>
+                  <span className="shrink-0 text-muted-foreground/40">·</span>
+                  {/* The live state, back under the title where sway wants it: this
+                      row is the run metadata, and the state is run metadata. Dot
+                      first, so it leads the item it describes instead of trailing
+                      it as decoration — the same reading order as the sidebar row.
+
+                      shrink-0 with its own truncate cap, because the agent name is
+                      this row's one shrinkable item; the label is no longer always
+                      one word (a claude-sdk session says "Bash · 47s" or "retrying
+                      2/5, 12s"), so it truncates rather than wraps, with the full
+                      command in the tooltip on the wrapper. */}
+                  <span
+                    className="shrink-0 inline-flex items-center gap-1.5"
+                    title={status.detail}
+                  >
+                    <span
+                      className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot, status.pulse && 'animate-pulse')}
+                      aria-hidden="true"
+                    />
+                    <span className="max-w-[11rem] truncate">{status.label}</span>
+                  </span>
                   <span className="shrink-0 text-muted-foreground/40">·</span>
                   {/* Which backend is actually running this session. Sits left of
                       ctx because both describe the run, not the conversation.
@@ -1704,18 +1696,27 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   <span className="shrink-0 text-muted-foreground/40">·</span>
                   {/* Full bar (count + 56px track + percent) is ~130px and crowded a
                       390px header; mobile gets `mini` — same token count, shorter
-                      track, no percent. */}
+                      track, no percent.
+
+                      No "ctx" label on either (showLabel={false}): the coloured
+                      track already reads as a meter, the tooltip spells out
+                      "context N / M tokens", and the three letters cost width on
+                      the row that has least of it. The label stays on by default
+                      for the detail sheets, where the bar sits among unrelated
+                      rows and has to name itself. */}
                   <span className="sm:hidden shrink-0">
                     <CtxBar
                       tokens={session.contextTokens}
                       total={contextWindowFor(session.runtime, session.runtimeModel)}
                       variant="mini"
+                      showLabel={false}
                     />
                   </span>
                   <span className="hidden sm:inline-flex shrink-0">
                     <CtxBar
                       tokens={session.contextTokens}
                       total={contextWindowFor(session.runtime, session.runtimeModel)}
+                      showLabel={false}
                     />
                   </span>
                 </>
