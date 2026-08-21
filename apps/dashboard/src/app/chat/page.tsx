@@ -37,6 +37,7 @@ import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
 import { useOlderPages } from '@/components/chat/use-older-pages';
 import { usePrependAnchor } from '@/components/chat/use-prepend-anchor';
 import { useCachedTimeline, useTimelineWriteThrough } from '@/lib/chat-cache/use-chat-cache';
+import { applyMessagePush } from '@/lib/chat-cache/merge-messages';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 import { EmptyChat } from '@/components/chat/empty-chat';
 import { TypingIndicator } from '@/components/chat/message-bits';
@@ -87,40 +88,10 @@ const useIsoLayoutEffect = typeof document !== 'undefined' ? useLayoutEffect : u
 // The stream pushes the entire newest-N window every ~250ms. Writing it into
 // the cache wholesale gives every row a fresh object reference (rows come from
 // JSON.parse), so memoized MessageRows can't bail and the whole transcript
-// re-renders (markdown re-parse + highlight.js) ~4×/sec. Merge by id instead:
-// reuse the previous object for any row whose content is unchanged, so only the
-// genuinely-changed tail row gets a new reference. With memo(MessageRow) this
-// collapses a streaming tick to a single row render. The per-row signature is
-// cached on the (immutable) row object, so a reused row is never re-stringified
-// — steady-state cost is one JSON.stringify per *changed* row, not per row.
-const rowSigCache = new WeakMap<object, string>();
-function rowSig(m: { content: unknown }): string {
-  let s = rowSigCache.get(m);
-  if (s === undefined) {
-    s = JSON.stringify(m.content);
-    rowSigCache.set(m, s);
-  }
-  return s;
-}
-type CachedMsg = { id: string; role: string; content: unknown; createdAt: Date | string };
-
-function mergeMessagesById<T extends CachedMsg>(prev: T[] | undefined, next: T[]): T[] {
-  if (!prev || prev.length === 0) return next;
-  const byId = new Map(prev.map((m) => [m.id, m]));
-  let changed = prev.length !== next.length;
-  const out = next.map((n, i) => {
-    const old = byId.get(n.id);
-    if (old && old.role === n.role && rowSig(old) === rowSig(n)) {
-      if (old !== prev[i]) changed = true; // same row, new position
-      return old;
-    }
-    changed = true;
-    return n;
-  });
-  // Nothing moved or changed → hand back the previous array so its reference is
-  // stable too, letting memo(MessageTimeline) bail on a no-op keepalive tick.
-  return changed ? out : prev;
-}
+// re-renders (markdown re-parse + highlight.js) ~4×/sec. applyMessagePush merges
+// by id and keeps the previous object for every unchanged row — see
+// lib/chat-cache/merge-messages, which also owns the delta/gone semantics the
+// stream pushes in.
 
 // The "New chat" screen, split out behind React.lazy. It is a BRANCH you have to
 // click into (?new=1 / ?agent=…) — the normal /chat landing renders SessionPane —
@@ -517,7 +488,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           // this window (avoids the open-time double-fetch). A RECONNECT does NOT
           // skip: it emits the current window once to catch up on anything that
           // landed during the disconnect gap.
-          const res = await authedFetch(`/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}${isReconnect ? '' : '&skipInitial=1'}`, {
+          const res = await authedFetch(`/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}&delta=1${isReconnect ? '' : '&skipInitial=1'}`, {
             signal: myCtrl.signal,
           });
           if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
@@ -540,8 +511,14 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               const dataLine = frame.split('\n').find((l) => l.startsWith('data:'));
               if (!dataLine) continue;
               try {
-                const rows = JSON.parse(dataLine.slice(5).trim());
-                utils.chat.listMessages.setData({ sessionId, limit }, (prev) => mergeMessagesById(prev, rows));
+                // `delta=1` gets {rows, gone}. The bare array is what a server
+                // that predates the flag sends, and what a tab still running the
+                // previous bundle would ask for — accept both so a deploy never
+                // leaves a page silently unable to parse its own stream.
+                const frame = JSON.parse(dataLine.slice(5).trim());
+                const rows = Array.isArray(frame) ? frame : frame?.rows ?? [];
+                const gone = Array.isArray(frame) ? undefined : frame?.gone;
+                utils.chat.listMessages.setData({ sessionId, limit }, (prev) => applyMessagePush(prev, rows, gone));
               } catch { /* ignore a malformed frame */ }
             }
           }
@@ -689,9 +666,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const [composerNotice, setComposerNotice] = useState<string | null>(null);
   // Optimistic outbound messages — render the user's bubble instantly on send so
   // it doesn't wait for the send round-trip + SSE echo (~200ms). Kept in a SEPARATE
-  // overlay (NOT the query cache): the SSE rewrites the cache via
-  // mergeMessagesById(prev,next) => next, which would drop an in-cache optimistic
-  // row on the next stream push (and flicker it mid-turn). Merged into `view` at
+  // overlay (NOT the query cache): the cache holds server rows keyed by server id,
+  // and an optimistic row has neither — a full-window refetch drops it, and a
+  // delta push has nothing to match it against. Merged into `view` at
   // render-time and auto-dropped once the real row (same text) lands in the cache.
   const [pending, setPending] = useState<Array<{ id: string; role: 'user'; content: { type: 'text'; text: string }[]; createdAt: string }>>([]);
   // Inline-edit the session title from the header. Clicking the title swaps

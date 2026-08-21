@@ -52,6 +52,18 @@ export async function GET(req: NextRequest) {
   // newest ~60). Genuine post-open changes still emit on the next tick.
   const skipInitial = req.nextUrl.searchParams.get('skipInitial') === '1';
 
+  // `delta=1` says the client can merge a fragment: it gets {rows, gone} —
+  // only what changed, plus the ids that have left the window — instead of the
+  // whole window restated. Measured on a live session, a whole window is
+  // 105–120KB and a turn changes it eight times, so the old shape spent about a
+  // megabyte per turn per open tab to deliver a few kilobytes of new text.
+  //
+  // It is a flag and not a version bump because both shapes have to be on the
+  // wire at once during a deploy: a tab still running the previous bundle asks
+  // without it and must keep getting whole windows, or it would merge fragments
+  // into a list it thinks is complete and render a conversation with holes.
+  const wantsDelta = req.nextUrl.searchParams.get('delta') === '1';
+
   // Ownership check up front — the per-tick query also scopes by machine, but
   // this gives a clean 404 instead of an empty stream.
   const session = await prisma.chatSession.findFirst({
@@ -83,6 +95,22 @@ export async function GET(req: NextRequest) {
 
       let lastSig = '';
       let lastEmit = Date.now();
+      // What this connection has already put on the wire: row id → the updatedAt
+      // it carried. That is the entire delta state, and it is bounded by the
+      // window, so a long session costs no more to stream than a short one.
+      const sent = new Map<string, number>();
+
+      // The window, as ids only. Two columns off @@index([sessionId, createdAt]),
+      // so asking "which rows are current and how fresh is each" costs about what
+      // the MAX(updatedAt) probe costs — and unlike the probe it also notices a
+      // row LEAVING, which is how `gone` gets computed.
+      const readWindow = () =>
+        prisma.chatMessage.findMany({
+          where: { sessionId, session: { machineId: machine.id } },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: limit,
+          select: { id: true, updatedAt: true },
+        });
 
       // Open with a byte, before any await.
       //
@@ -116,26 +144,46 @@ export async function GET(req: NextRequest) {
             _max: { updatedAt: true },
           });
           const sig = `${agg._max.updatedAt?.getTime() ?? 0}`;
-          if (sig !== lastSig) {
-            lastSig = sig;
-            lastEmit = Date.now();
-            const rows = await prisma.chatMessage.findMany({
-              where: { sessionId, session: { machineId: machine.id } },
-              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-              take: limit,
-              // Same narrow shape as chat.listMessages so the client's
-              // merge-by-id sees identical rows over both transports.
-              // Same shape as chat.listMessages so the client's merge-by-id aligns —
-              // including authoredBy, or a Brain turn arriving live would render as
-              // the human's and only correct itself on the next full fetch.
-              select: { id: true, role: true, content: true, createdAt: true, authoredBy: true },
-            });
-            rows.reverse(); // newest window, ascending for the timeline
-            sendMessages(rows.map((r) => ({ ...r, content: capMessageContent(r.content) })));
-          } else if (Date.now() - lastEmit > PING_MS) {
-            lastEmit = Date.now();
-            sendPing(); // keep proxies (Caddy/Xray) from dropping an idle conn
+          if (sig === lastSig) {
+            if (Date.now() - lastEmit > PING_MS) {
+              lastEmit = Date.now();
+              sendPing(); // keep proxies (Caddy/Xray) from dropping an idle conn
+            }
+            return;
           }
+          lastSig = sig;
+
+          // Something in the session moved. Which rows, though, is a separate
+          // question: MAX(updatedAt) also moves when the gateway re-tails a
+          // transcript and upserts rows OLDER than this window, and that must
+          // not put a push on the wire.
+          const window = await readWindow();
+          const live = new Set(window.map((h) => h.id));
+          const changed = window.filter((h) => sent.get(h.id) !== h.updatedAt.getTime());
+          const gone = [...sent.keys()].filter((id) => !live.has(id));
+          if (changed.length === 0 && gone.length === 0) return;
+
+          // A delta client is told about `changed`; everyone else gets the window
+          // restated, which is the only shape they can merge.
+          const ids = wantsDelta ? changed.map((h) => h.id) : window.map((h) => h.id);
+          const rows = ids.length
+            ? await prisma.chatMessage.findMany({
+                where: { id: { in: ids } },
+                // Ascending for the timeline. Same narrow shape as
+                // chat.listMessages so the client's merge-by-id sees identical
+                // rows over both transports — including authoredBy, or a Brain
+                // turn arriving live would render as the human's and only
+                // correct itself on the next full fetch.
+                orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+                select: { id: true, role: true, content: true, createdAt: true, authoredBy: true },
+              })
+            : [];
+          lastEmit = Date.now();
+          const payload = rows.map((r) => ({ ...r, content: capMessageContent(r.content) }));
+          sendMessages(wantsDelta ? { rows: payload, gone } : payload);
+
+          for (const id of gone) sent.delete(id);
+          for (const h of window) sent.set(h.id, h.updatedAt.getTime());
         } catch {
           // transient DB hiccup — keep the stream alive, retry next tick
         }
@@ -153,19 +201,18 @@ export async function GET(req: NextRequest) {
       };
       unsubscribeChat = subscribeChat(sessionId, scheduleTick);
       if (skipInitial) {
-        // Prime lastSig to the current state WITHOUT emitting — the client already
-        // has this window from tRPC. If the probe fails, lastSig stays '' and the
-        // first interval tick emits normally (safe fallback).
+        // Record what the client already has from tRPC, without re-sending it.
+        // `lastSig` is deliberately left empty: the first tick then runs its
+        // window read, finds every row accounted for in `sent`, and emits
+        // nothing — one cheap query instead of a duplicated window.
+        // If this read fails, `sent` stays empty and the first tick emits the
+        // whole window, which is a wasteful but correct fallback.
         try {
-          const agg = await prisma.chatMessage.aggregate({
-            where: { sessionId, session: { machineId: machine.id } },
-            _max: { updatedAt: true },
-          });
-          lastSig = `${agg._max.updatedAt?.getTime() ?? 0}`;
+          for (const h of await readWindow()) sent.set(h.id, h.updatedAt.getTime());
           lastEmit = Date.now();
         } catch { /* fall through — first tick will emit */ }
       } else {
-        await tick(); // initial snapshot ASAP
+        await tick(); // initial snapshot ASAP — `sent` is empty, so it is a full window
       }
       interval = setInterval(tick, POLL_MS);
 

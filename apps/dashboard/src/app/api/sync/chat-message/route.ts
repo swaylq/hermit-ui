@@ -24,6 +24,12 @@ const Item = z.object({
   content: z.union([z.string(), z.array(z.unknown())]),
   externalId: z.string().nullable().optional(),
   claudeSessionId: z.string().nullable().optional(), // first message can stamp this on the session
+  // Retract the row this externalId names instead of writing it. The gateway
+  // streams a turn's text into a placeholder row and retracts it in the same
+  // batch that inserts the finished message, so the growing bubble becomes the
+  // real one in a single push rather than being briefly duplicated. `content` is
+  // ignored on a retraction; it stays required so the item shape does not fork.
+  deleted: z.boolean().optional(),
 });
 const Body = z.object({ items: z.array(Item) });
 
@@ -80,6 +86,19 @@ export async function POST(req: NextRequest) {
   for (const m of body.items) {
     const session = await getSession(m.sessionId);
     if (!session || session.machineId !== machine.id) continue;
+
+    if (m.deleted) {
+      // No externalId, nothing to name — and never a session-wide delete.
+      if (!m.externalId) continue;
+      const { count } = await prisma.chatMessage.deleteMany({
+        where: { sessionId: m.sessionId, externalId: m.externalId },
+      });
+      // Only wake the stream if a row actually went away. Retracting a
+      // placeholder that was never written (a turn short enough that the first
+      // throttled push never fired) is a no-op, not an event.
+      if (count > 0) dirtySessions.add(m.sessionId);
+      continue;
+    }
 
     // Strip NUL bytes (U+0000): Postgres jsonb/text reject them, which aborts
     // the insert and silently drops the message. No-op (same ref) otherwise.
