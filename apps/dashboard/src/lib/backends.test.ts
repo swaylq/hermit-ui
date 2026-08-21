@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   BUILT_IN_BACKENDS, listBackends, availableBackends, backendById, backendsConfigOf,
   effectiveDefaultBackendId, isBackendEnabled, toggleBackend, uniqueBackendId,
+  DEFAULT_BACKEND_ID,
   addBackendInstance, removeBackendInstance, updateBackendInstance, legacyHarnessOf,
   backendPatchFrom,
   type BackendsConfig,
@@ -205,4 +206,24 @@ test('only pi stores a mode, and only one that differs from the default', () => 
   // Prime has exactly one built-in tool; a mode's tool allowlist means nothing.
   assert.equal(backendPatchFrom({ ...FORM, harness: 'prime-rpc', mode: 'ops' }).mode, null);
   assert.equal(backendPatchFrom({ ...FORM, harness: 'dsh-exec', mode: 'ops' }).mode, null);
+});
+
+// The floor is spelled TWICE by construction — DEFAULT_BACKEND_ID is what an
+// unstated preference resolves to, BUILT_IN_BACKENDS[0] is what runtime-resolve
+// falls back to (its FLOOR) — so they have to be pinned to each other. They came
+// apart once already, in the other direction: two component sheets wrote the old
+// value as a bare literal and went on labelling claude-sdk agents "Claude Code
+// (tmux)" for as long as nobody opened a terminal to check.
+test('the client default and the resolver floor are the same backend', () => {
+  assert.equal(BUILT_IN_BACKENDS[0].id, DEFAULT_BACKEND_ID);
+  // And it is a backend every machine has, so the floor can always take a turn.
+  assert.equal(BUILT_IN_BACKENDS[0].builtIn, true);
+});
+
+// What the fallback is FOR: a row written before the column existed. Resolving
+// it must name the backend that actually runs it, because every label, chip and
+// picker in the UI is drawn from this answer.
+test('an agent with no stored backend reads as the default, never as the pane', () => {
+  assert.equal(effectiveDefaultBackendId(DEFAULT_BACKEND_ID, null), DEFAULT_BACKEND_ID);
+  assert.notEqual(DEFAULT_BACKEND_ID, 'claude-tmux');
 });

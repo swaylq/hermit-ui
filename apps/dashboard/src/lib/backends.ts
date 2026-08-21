@@ -232,9 +232,9 @@ export function availableBackends(
  * Every Agent and ChatSession row written before this change holds one of
  * these. They are resolved by pointing at the first enabled instance of that
  * harness (see backendById), which is what the migration creates — and if a
- * machine has none, the session degrades to the claude-tmux floor rather than
- * failing to start, the same one-directional soft failure an unknown pi mode
- * already has.
+ * machine has none, the session degrades to the floor (BUILT_IN_BACKENDS[0],
+ * DEFAULT_BACKEND_ID) rather than failing to start, the same one-directional
+ * soft failure an unknown pi mode already has.
  */
 export function legacyHarnessOf(id: string | null | undefined): CustomHarness | null {
   // The short-lived third backend, folded back into pi as an engine chosen by

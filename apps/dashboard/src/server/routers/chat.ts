@@ -1354,7 +1354,8 @@ export const chatRouter = router({
       isOrchestrator: orchByName.get(s.agentName) ?? false,
       // Which backend runs this session, resolved here so the gateway never has
       // to know the fallback chain: session's own choice, else the agent's
-      // default as this machine can run it, else claude-tmux. Provider/model
+      // default as this machine can run it, else the floor (DEFAULT_BACKEND_ID).
+      // Provider/model
       // follow whichever level won — a session that picked pi must not inherit
       // the agent's claude settings.
       ...resolveRuntime(s, runtimeByName.get(s.agentName), runtimeContextOf(ctx.machine)),

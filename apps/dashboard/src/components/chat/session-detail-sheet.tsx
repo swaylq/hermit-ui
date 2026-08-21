@@ -32,7 +32,7 @@ import { useScope } from '@/lib/use-scope';
 import {
   runtimeLabel, sharesConversation,
 } from '@/lib/runtime-labels';
-import { availableBackends, backendById } from '@/lib/backends';
+import { availableBackends, backendById, DEFAULT_BACKEND_ID } from '@/lib/backends';
 import { isPiMode, piModeLabel, PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, type PiMode } from '@/lib/pi-modes';
 
 function Row({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
@@ -108,7 +108,10 @@ export function SessionDetailSheet({
 
   // Both pickers show the RESOLVED value — they must say what is actually
   // running, not what this session happens to have written in its own columns.
-  const shownBackend: string = runtime ?? d?.backend.backendId ?? 'claude-tmux';
+  // The last fallback is the resolver's own floor, not the pane: reaching it
+  // means the detail query has not answered yet, and naming a backend the
+  // session is not on would be the one thing these pickers must never do.
+  const shownBackend: string = runtime ?? d?.backend.backendId ?? DEFAULT_BACKEND_ID;
   // The mode select follows the HARNESS behind the chosen backend, not its
   // name: two backends can both run pi against different credentials.
   const shownIsPi = backendById(cfg.data, shownBackend)?.harness === 'pi-rpc';

@@ -32,7 +32,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import {
   runtimeLabel,
 } from '@/lib/runtime-labels';
-import { effectiveDefaultBackendId, backendById, availableBackends } from '@/lib/backends';
+import { effectiveDefaultBackendId, backendById, availableBackends, DEFAULT_BACKEND_ID } from '@/lib/backends';
 import { PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
 
 // ── Deferred sub-trees ───────────────────────────────────────────────────────
@@ -336,7 +336,12 @@ function DefaultBackendSection({ agent, agentName }: { agent: AgentByNameOutput[
   // A stored mode the select does not offer (the removed triage router, a
   // machine-local mode) opens on the fleet default rather than on a missing row.
   const storedMode: PiMode | null = isPiMode(agent.runtimeMode) ? agent.runtimeMode : null;
-  const storedBackend: string = agent.runtime ?? 'claude-tmux';
+  // An agent with no stored default is NOT on the pane — the server resolves an
+  // unstated preference to BUILT_IN_BACKENDS[0] (runtime-resolve's FLOOR), which
+  // is claude-sdk. Spelling the floor a second time here is how this section came
+  // to label an SDK-run agent "Claude Code (tmux)": the same rule, written twice,
+  // drifted the moment the default moved.
+  const storedBackend: string = agent.runtime ?? DEFAULT_BACKEND_ID;
   // What the default resolves to ON THIS MACHINE. An agent whose stored default
   // has been switched off (or deleted) under Settings → Backends falls through
   // to one the machine runs — the same substitution the server applies when a
