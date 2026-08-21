@@ -41,7 +41,7 @@ Use the CronCreate/wakeup job id as the loop's `id`.
 Every iteration prompt MUST do, in order:
 
 ```
-Read silently first: ./IDENTITY.md ./USER.md ./AGENTS.md ./TOOLS.md ./MEMORY.md ./memory/<today>.md (if present).
+Read silently first: run the startup command in ./CLAUDE.md (it is the single source of truth for the boot chain — do not hardcode a file list here), plus ./memory/<today>.md if present.
 
 Then do this iteration of the loop: <THE TASK>
 

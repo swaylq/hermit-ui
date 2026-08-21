@@ -11,6 +11,7 @@
 | `USER.md` | who {{USER_NAME}} is. Fill in as you learn. |
 | `AGENTS.md` | workspace rules (memory, image safety, MCP discipline). Safe defaults shipped. |
 | `TOOLS.md` | local configs, accounts (credentials → the `secret` CLI) |
+| `references/` | the incidents behind the HARD RULES — **never preloaded**, read only when challenging a rule |
 | `evolution/` | your slowly-accreted narrative — lessons learned the hard way, weekly reflections (codified *procedures* live in `.claude/skills/`) |
 | `scripts/` | safe-image, tmux runners, browser launchers, etc. |
 | `start.sh` | spawn the agent in a tmux session |

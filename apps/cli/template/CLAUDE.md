@@ -1,32 +1,37 @@
 # CLAUDE.md — Session Bootstrap
 
-**This file must exist. Do not delete it, and do not "merge it into AGENTS.md".**
-Claude Code discovers exactly two project-doc filenames — `CLAUDE.md` and
-`CLAUDE.local.md` — hardcoded in the binary. `AGENTS.md` is **not** one of them, on
-either backend (`claude-sdk` and the tmux pane load identical settings). An agent that
-deletes this file starts every session with zero context and no error: the
-`asst` agent did exactly that on 2026-08-06 and ran blind for two weeks. `AGENTS.md`
-stays the main handbook — this file is what makes the agent go read it.
+**Never delete this file, and never "merge it into AGENTS.md".** Claude Code discovers
+exactly two project-doc filenames — `CLAUDE.md` and `CLAUDE.local.md` — hardcoded in the
+binary, on both backends. Delete it and every session starts with zero context **and no
+error**: one agent did that on 2026-08-06 and ran blind for two weeks.
 
-Before doing anything else, read these in order:
+## Startup: one command, then get to work
 
-1. `IDENTITY.md` — who you are, your name, persona, core values
-2. `USER.md` — who you're helping
-3. `AGENTS.md` — workspace rules and operational guide
-4. `TOOLS.md` — local configs, APIs, accounts
-5. `evolution/lessons.md` — failures past you learned from
+```bash
+cat IDENTITY.md USER.md AGENTS.md evolution/lessons.md
+```
 
-Then, only when you need it (nothing below is injected for you):
+Silently. Don't ask permission, don't announce it.
 
-- `memory/auto/MEMORY.md` — the long-term memory index. Automatic injection is off
-  fleet-wide (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`) so both backends behave the same:
-  zero memory at startup, everything on demand. Read the index, or `grep -r` under
-  `memory/`.
+## Everything else is on demand — nothing below is preloaded
 
-(Your codified procedures live as skills under `.claude/skills/` — Claude Code
-auto-surfaces those, no need to skim.)
+| When | Read |
+|---|---|
+| Touching local services, accounts, network, APIs | `TOOLS.md` |
+| Challenging a HARD RULE, or reviewing a past failure | `references/incidents.md` |
+| Retrospective question ("earlier", "last time") | `grep -r <keyword> evolution/ memory/` |
+| Long-term recall | `memory/auto/MEMORY.md` index, then the file it names |
 
-Do this silently. Don't ask permission. Don't announce it.
+Auto-memory injection is **off** fleet-wide (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`) — both
+backends behave identically: zero memory at startup, everything on demand. Skills are
+surfaced by the harness; no need to skim them.
 
-Memory rules, and the difference between `evolution/` (your slowly-accreted knowledge)
-and `memory/` (your dated log + indexed long-term store): see AGENTS.md.
+## Before you add anything to the startup command
+
+**Fails _silently_ if forgotten → startup.** Identity, behavioral guidelines, safety HARD
+RULES, reporting style, lessons.
+**Fails _loudly_ if forgotten → on demand.** Lookup data: IPs, ports, paths, handles, URLs.
+You notice the second kind missing the moment you need it; you never notice the first.
+
+Every line here is paid on **every session, forever**. The rule plus one clause of
+consequence lives in `AGENTS.md`; the prose justifying it lives in `references/`.

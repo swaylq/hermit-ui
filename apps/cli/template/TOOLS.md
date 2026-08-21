@@ -1,55 +1,48 @@
 # TOOLS.md — Local Notes
 
-_Technical configs, tool settings, accounts. Credentials are handled by the `secret` CLI (see AGENTS.md) — never inline values._
+_Local configs, services, accounts, API endpoints. **Not in the startup command** — read it
+when you actually touch one of these. Credentials go through the `secret` CLI (AGENTS.md
+"Credentials"); never inline a value here._
+
+_Skills describe themselves — the harness lists them every session. Don't re-list them here._
 
 ## Dashboard Chat
 
 - {{USER_NAME}} talks to you via the hermit-ui dashboard at `{{DASHBOARD_URL}}`.
-- Messages arrive through the local gateway: it spawns a tmux pane running `claude`, sends `{{USER_NAME}}`'s text via `tmux send-keys`, and tails your JSONL transcript to stream your reply back to the browser.
-- Every chat turn is a real interactive Claude Code turn — slash commands, sub-agents, `/compact` all work. Treat the dashboard like a remote terminal.
+- Sessions are driven by the gateway as a **Claude Code Agent SDK subprocess** (the
+  `claude-sdk` backend, default since 2026-08). A tmux-pane backend still exists but is not
+  what dashboard chat uses. Either way every turn is a real interactive Claude Code turn.
+- Permissions run in `bypassPermissions` mode — no approval gate.
 
-## Skills
+## Cron defaults
 
-- **restart** — restart this Claude Code session via tmux respawn.
-- **cron** — create DURABLE scheduled tasks (registered on the dashboard `/cron` page; the gateway's cron-runner fires each as a fresh interactive Claude turn in your dir, surviving restarts). This is the ONLY way to schedule — **never** LaunchAgents / launchd / systemd-user timers / `crontab`.
-- **loop** — repeat a task each turn in THIS chat session (session-scoped; stops on restart). For anything that must survive restart, use `cron`.
-- **brave-search** _(optional; requires API key)_ — web/news/image/video search via Brave Search API.
-- **browser-automation** _(optional)_ — self-managed Chrome + Playwright CDP. Explore with `mcp__playwright-browser__*`, record to `scripts/browser/<verb>-<target>.js`, replay via `scripts/browser-lock.sh run <script>`.
-- **provision-agent** — scaffold a new sibling hermit agent via `npx create-hermit-agent`.
-
-### Cron defaults
-
-- Schedule via the `cron` skill only — the gateway's cron-runner runs each fire as a fresh interactive Claude turn (no manual `with-timeout.sh` / launchd wrapping). Keep each cron strictly on-prompt (no human in the loop) and self-test every run before reporting.
-- Cron output lands on the dashboard `/cron` page (CronRun history) — review it there; there's no message-push side-channel.
+Schedule only through the `cron` skill (the gateway's cron-runner fires each as a fresh
+interactive turn, surviving restarts). Never LaunchAgents / launchd / systemd / `crontab` —
+see AGENTS.md "Cron / Scheduled Tasks". Output lands on the dashboard `/cron` page as
+CronRun history; there is no message-push side-channel.
 
 ## Browser _(optional)_
 
-- Self-managed Chrome instance, no OpenClaw dependency.
-- Profile: `browser/user-data/`
-- Runtime config: `browser/chrome.json` (CDP port, PID)
-- CDP port range: 19900–19999 (auto-assigned).
-- Start: `./scripts/chrome-launcher.sh start`
+Self-managed Chrome, no OpenClaw dependency. Profile `browser/user-data/`; runtime config
+`browser/chrome.json` (CDP port + PID); CDP ports 19900–19999 auto-assigned; start with
+`./scripts/chrome-launcher.sh start`. Procedure lives in the `browser-automation` skill.
 
-## APIs
+## Machine facts
 
 <!-- AGENT-SPECIFIC-START -->
 
-### Brave Search API _(optional)_
-
-The `brave-search` skill needs `BRAVE_API_KEY` — keep it in the `secret` store (`secret list` to confirm). Base URL `https://api.search.brave.com/res/v1`, auth header `X-Subscription-Token`.
-
-_(Add repos, APIs, services this agent uses regularly below.)_
+_(Hosts, ports, service inventories, disk pressure, network quirks — the static facts an
+ops skill doesn't carry. Add repos, APIs and services this agent uses regularly.)_
 
 <!-- AGENT-SPECIFIC-END -->
 
 ## Accounts
 
-_Per-site account identifiers (email, handle) and status — NEVER passwords (those live in the `secret` store)._
-
-No accounts logged yet.
-
-Format suggestion:
+_Account identifiers (email, handle) and status — **never** passwords; those live in the
+`secret` store._
 
 ```
 - <service> — <account-handle> — status: logged in / expired / 2FA pending — last-verified: YYYY-MM-DD
 ```
+
+No accounts logged yet.
