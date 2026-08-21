@@ -225,6 +225,45 @@ test('isWorking is true for the whole turn and false either side of it', async (
   await s.rt.stop(s.handle, 'kill');
 });
 
+// THE ready-mid-turn regression.
+//
+// `pending` counts submits, so it can only ever see turns the chat runner
+// started. The CLI starts turns of its own — a `/loop` wakeup, an auto-resume
+// continuation, and the case below: a background task finishing re-invokes the
+// model. For the whole of such a turn `pending` is 0 and, since `system/status`
+// frames need `includePartialMessages` (deliberately off), `statusBusy` is false
+// too. The dashboard's 8s snapshot therefore sampled "idle" and painted the
+// session green while it was demonstrably mid-turn.
+//
+// Only `session_state_changed` can see this, and only because the gateway asks
+// for it — hence an integration test: nothing offline can prove the env var is
+// still honoured by the installed CLI.
+test('a turn the CLI starts by itself reads as working, with nothing submitted', async () => {
+  const s = await open();
+  assert.equal(await s.rt.submit(
+    s.handle,
+    'Run `sleep 10` with the Bash tool in the background, then say STARTED. Do not wait for it.',
+    [],
+  ), true);
+  await s.settle(120_000);
+  assert.equal(await s.rt.isWorking(s.handle), false, 'the first turn never ended');
+
+  // From here nothing is submitted. When the command lands, the CLI wakes the
+  // model — and that turn must be visible.
+  const t0 = Date.now();
+  let sawWorking = false;
+  while (Date.now() - t0 < 120_000) {
+    if (await s.rt.isWorking(s.handle)) { sawWorking = true; break; }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  assert.ok(sawWorking, 'the background-task continuation was invisible — this is the ready-mid-turn bug');
+
+  // …and it still closes on its own, rather than pinning the session busy.
+  await s.settle(120_000);
+  assert.equal(await s.rt.isWorking(s.handle), false, 'the session stayed pinned busy after the continuation');
+  await s.rt.stop(s.handle, 'kill');
+});
+
 test('a stopped session reports idle rather than pinned busy', async () => {
   const s = await open();
   await s.rt.submit(s.handle, 'Say OK', []);

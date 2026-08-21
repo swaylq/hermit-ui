@@ -40,6 +40,16 @@ export type ActivityState = {
   tasks: Map<string, { description: string; subagentType?: string; lastTool?: string }>;
   /** The CLI's own status frame. */
   status: 'requesting' | 'compacting' | null;
+  /**
+   * The CLI's own turn boundary — see `sessionBusy` below, which is the only
+   * thing that reads it.
+   *
+   * `null` means no frame has ever arrived: either the turn has not started, or
+   * this CLI does not emit them (they are gated behind
+   * `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`, which claude-sdk.ts sets).
+   * Deliberately NOT reset by a `result`, because `idle` arrives AFTER it.
+   */
+  sessionState: 'idle' | 'running' | 'requires_action' | null;
   /** Set while the API is being retried; cleared by the next successful frame. */
   retry: { attempt: number; maxRetries: number; delayMs: number; atMs: number } | null;
   /** Live background tasks — REPLACE semantics, the payload is the whole set. */
@@ -47,7 +57,19 @@ export type ActivityState = {
 };
 
 export function newActivityState(): ActivityState {
-  return { tools: new Map(), tasks: new Map(), status: null, retry: null, background: [] };
+  return { tools: new Map(), tasks: new Map(), status: null, sessionState: null, retry: null, background: [] };
+}
+
+/**
+ * Whether the CLI says a turn is in flight, or null when it has not said.
+ *
+ * Split out so `isWorking` reads one named predicate instead of re-deriving the
+ * "which states count as busy" rule at the call site. `requires_action` counts:
+ * a session parked waiting on something is not a session you are caught up with.
+ */
+export function sessionBusy(st: ActivityState): boolean | null {
+  if (st.sessionState == null) return null;
+  return st.sessionState !== 'idle';
 }
 
 /** What the dashboard renders. Deliberately small and already human-facing. */
@@ -126,6 +148,18 @@ export function applyActivityMessage(st: ActivityState, msg: unknown, nowMs: num
   }
 
   if (m.type === 'system') {
+    // The turn boundary. Measured against 2.1.238: `running` arrives ahead of
+    // the turn's `init` frame — including for turns nothing submitted, such as
+    // the re-invocation that follows a background task completing — and `idle`
+    // lands immediately after that turn's `result`, or after an interrupt's
+    // `error_during_execution`. The one signal here that describes a whole turn
+    // rather than a slice of one.
+    if (m.subtype === 'session_state_changed') {
+      if (m.state === 'idle' || m.state === 'running' || m.state === 'requires_action') {
+        st.sessionState = m.state;
+      }
+      return;
+    }
     if (m.subtype === 'status') {
       st.status = m.status === 'requesting' || m.status === 'compacting' ? m.status : null;
       return;
@@ -170,6 +204,13 @@ export function applyActivityMessage(st: ActivityState, msg: unknown, nowMs: num
   }
 
   // A turn ended: nothing of this turn is still running.
+  //
+  // `sessionState` is deliberately NOT cleared here. Its `idle` frame arrives
+  // AFTER the result, so zeroing it on the result would blind us for exactly the
+  // window that matters — and a result is not even reliable evidence the work is
+  // over: the CLI emits one per inner turn and then re-invokes the model when a
+  // background task lands. `background` is left alone for the same reason (that
+  // work outlives the turn that started it).
   if (m.type === 'result') {
     st.tools.clear();
     st.tasks.clear();

@@ -62,7 +62,7 @@ import type {
 } from './types';
 import { translateSdkMessage, contextTokensOf } from './claude-sdk-events';
 import {
-  newActivityState, applyActivityMessage, describeActivity, bashesRunningLongerThan,
+  newActivityState, applyActivityMessage, describeActivity, bashesRunningLongerThan, sessionBusy,
   type ActivityState, type RuntimeActivity,
 } from './claude-sdk-activity';
 import { buildMcpServers } from '../mcp-config';
@@ -691,6 +691,13 @@ export class ClaudeSdkRuntime implements AgentRuntime {
           HERMIT_KEY: ASST_KEY,
           HERMIT_SESSION_ID: session.id,
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+          // Turn on `system/session_state_changed` — the CLI's authoritative
+          // turn-over signal, gated behind this variable and off by default.
+          // Without it the runtime has no way to see a turn it did not submit,
+          // and the dashboard reports such a turn as idle for its whole life
+          // (see `isWorking`). Purely additive: the frame produces no chat row,
+          // and a CLI that ignores the variable simply never sends one.
+          CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
         },
         // The transcript is the backstop AND what every collector reads; never
         // turn this off.
@@ -757,7 +764,10 @@ export class ClaudeSdkRuntime implements AgentRuntime {
           if (h.closed) break;
           onSdkMessage(h, msg);
         }
-        if (!h.closed && h.pending > 0) {
+        // `pending` alone would stay silent for a turn nothing submitted — the
+        // same blind spot `isWorking` had — so a crash during a `/loop`
+        // iteration or a background-task continuation reported nothing at all.
+        if (!h.closed && (h.pending > 0 || sessionBusy(h.activity) === true)) {
           emitOnce(h, systemItem(
             h.sessionId,
             `sdk-cut-${h.sessionId}-${Date.now()}`,
@@ -811,14 +821,48 @@ export class ClaudeSdkRuntime implements AgentRuntime {
    * read as idle gets a message delivered into it, while one wrongly read as
    * busy just waits for the next ~2s tick.
    *
-   * Two independent signals, ORed. `pending` covers a turn we started; the CLI's
-   * own status frame covers one we did not — a cron fire, a `/loop` iteration, a
-   * cross-session message — which is exactly the class the pane could only catch
-   * by scraping a spinner off the screen.
+   * Three signals, ORed, in descending order of authority.
+   *
+   * `sessionBusy` is the CLI's own turn boundary and the only one that is
+   * actually a statement about the WHOLE turn. The SDK documents `idle` as
+   * firing "after heldBackResult flushes and the bg-agent do-while exits —
+   * authoritative turn-over signal", which is precisely the property the other
+   * two lack.
+   *
+   * The other two were, until this signal existed, the entire basis of the
+   * verdict, and the comment here claimed they covered each other. Measured
+   * against 2.1.238, neither does:
+   *
+   *   - `pending` counts SUBMITS, and `submit()` has one caller — the chat
+   *     runner draining queued dashboard messages. Every turn the CLI starts by
+   *     itself is invisible to it: a `/loop` wakeup, an auto-resume
+   *     continuation, and above all the re-invocation that follows a background
+   *     task completing. Measured: a backgrounded Bash finished at 28s, the
+   *     model woke and ran a full turn (fresh `init`, a tool call, a reply, its
+   *     own `result`) and `pending` was 0 for every second of it.
+   *   - `statusBusy` never fires at all under the options this runtime uses.
+   *     `system/status` frames only arrive with `includePartialMessages: true`,
+   *     which is deliberately off (whole rows, not token-by-token rewrites), so
+   *     two full probe runs saw zero of them. Turning partials on would not
+   *     rescue it either: with them on, `status` stayed `'requesting'` for the
+   *     whole of a 35s foreground Bash instead of clearing, so it is imprecise
+   *     in both directions.
+   *
+   * Together that made a session report READY in the dashboard while it was
+   * demonstrably mid-turn — the bug this ordering fixes.
+   *
+   * ── Why an OR and not "trust the CLI outright" ───────────────────────────
+   * A `sessionBusy` of `false` deliberately does NOT force the answer to false.
+   * A missed or late frame would then be able to CONTRACT the verdict, and this
+   * function's whole contract is that a wrong answer must land on the busy side.
+   * As an OR, the new signal can only ever ADD "working" to what the old ones
+   * said. It also means a CLI that ignores the env var (`sessionBusy` stays
+   * null) degrades to exactly the previous behaviour, not to "always idle".
    */
   async isWorking(handle: RuntimeHandle): Promise<boolean> {
     const h = handleOf(handle);
     if (!h) return false;
+    if (sessionBusy(h.activity) === true) return true;
     return h.pending > 0 || h.statusBusy;
   }
 
@@ -846,6 +890,13 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       await h.q.interrupt();
       h.pending = 0;
       h.statusBusy = false;
+      // The CLI's own `idle` frame lands a beat after this resolves (measured:
+      // same millisecond as the aborted turn's result, but after it), and Stop
+      // must read as stopped the instant the user presses it — not on the next
+      // frame. Safe to pre-empt precisely because this signal is self-healing:
+      // if the interrupt did not take, the CLI's next `running` frame puts the
+      // session straight back to busy, which `pending = 0` above can never do.
+      h.activity.sessionState = 'idle';
     } catch (e) {
       h.interrupting = false;
       console.error(`[claude-sdk] interrupt failed session=${h.sessionId.slice(0, 8)}:`, e);

@@ -46,7 +46,7 @@ item below was a class of bug on the pane, not a theoretical improvement:
 | --- | --- | --- |
 | Deliver a message | type it, then prove a turn started; retry on a dropped keystroke; detect a widget that stole focus; probe whether the process still reads stdin at all | one function call |
 | Which transcript is this? | reserve a uuid before spawning, sniff for a new file, parse it back out of `ps` argv, exclude uuids other sessions hold | the `init` frame says so |
-| Is a turn running? | scrape `esc to interrupt` off the screen, OR transcript freshness, OR an unmatched `tool_use`, OR a hook's state file — because each fails on a different pane width | a status frame, plus a submit counter |
+| Is a turn running? | scrape `esc to interrupt` off the screen, OR transcript freshness, OR an unmatched `tool_use`, OR a hook's state file — because each fails on a different pane width | the CLI's own turn-boundary frame (see "Is a turn running?" below) |
 | Interrupt | send Escape, hope | an RPC with a receipt |
 | Slash-command output | poll `capture-pane` and guess from the footer when it finished | arrives as a message |
 | Change model | kill the pane, respawn, lose the warm context | `setModel()` |
@@ -174,6 +174,70 @@ column, so a picker there would name a model nothing was running.
 
 Run the integration suite before shipping any change to this runtime. Every
 property it checks is one the unit tests cannot see.
+
+## Is a turn running?
+
+The first answer this runtime shipped was "a status frame, plus a submit
+counter", ORed — `pending > 0 || statusBusy`. Both halves were measured against
+2.1.238 in August 2026 and **neither holds**:
+
+- **`statusBusy` never fires.** `system/status` frames only arrive with
+  `includePartialMessages: true`, which this runtime deliberately leaves off
+  (the dashboard renders whole rows, not token-by-token rewrites). Two full
+  probe runs saw zero status frames. Turning partials on does not rescue it:
+  with them on, `status` stayed `'requesting'` for the whole of a 35-second
+  foreground Bash rather than clearing, so it is wrong in both directions.
+- **`pending` only counts turns WE submitted**, and `submit()` has exactly one
+  caller — the chat runner draining queued dashboard messages. The CLI starts
+  turns of its own: a `/loop` wakeup, an auto-resume continuation, and above all
+  the re-invocation that follows a background task completing. Measured: a
+  backgrounded Bash finished at 28s, the model woke and ran a full turn — fresh
+  `init`, a tool call, a reply, its own `result` — with `pending` at 0 for every
+  second of it.
+
+The visible cost was a session that went **green "ready" in the dashboard while
+it was still working**, because the 8-second snapshot sampled `isWorking()`
+during exactly that window. Worse than cosmetic: `state` also gates the
+message-queue dispatch, the mid-turn guard on backend/model switches, and the
+cleanup sweep's "don't archive a busy session" check.
+
+The CLI has an authoritative answer and had it all along. `system/session_state_changed`
+carries `state: 'idle' | 'running' | 'requires_action'`, documented in the SDK
+types as:
+
+> 'idle' fires after heldBackResult flushes and **the bg-agent do-while exits** —
+> authoritative turn-over signal.
+
+That clause is the whole point: it is a statement about the turn, not about the
+API request inside it, and it waits for the background-agent loop rather than
+firing on the first `result`. Measured, `running` arrives ahead of the turn's
+`init` frame — including for the turns nothing submitted — and `idle` lands
+immediately after that turn's `result`, or after an interrupt's
+`error_during_execution`.
+
+It is **off by default**, gated behind `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`,
+which `ensure()` sets in the child's env. Purely additive: the frame produces no
+chat row (`translateSdkMessage` skips it, like every other system subtype it does
+not render).
+
+Two deliberate choices in how it is consumed:
+
+1. **It is ORed in, not trusted outright.** `sessionBusy === false` does not force
+   the verdict to false — a missed or late frame would then be able to *contract*
+   it, and this predicate's contract is that a wrong answer lands on the busy
+   side. As an OR the new signal can only ever ADD "working", and a CLI that
+   ignores the env var degrades to the previous behaviour instead of to "always
+   idle".
+2. **`interrupt()` pre-empts it to `idle`.** Stop must read as stopped the instant
+   the user presses it, and the CLI's own frame is a beat behind. Safe here in a
+   way `pending = 0` is not: if the interrupt did not take, the CLI's next
+   `running` frame puts the session straight back to busy.
+
+Regression cover: `claude-sdk-activity.test.ts` encodes the measured frame
+ordering (including that a `result` must NOT end the session), and
+`claude-sdk.itest.ts` proves against a real CLI that a background-task
+continuation reads as working with nothing submitted — the property no offline
+test can see, since it depends on the installed CLI still honouring the env var.
 
 ## Saying what the session is doing
 

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   newActivityState, applyActivityMessage, describeActivity,
-  bashesRunningLongerThan, elapsedSecOf,
+  bashesRunningLongerThan, elapsedSecOf, sessionBusy,
 } from './claude-sdk-activity';
 
 const T0 = 1_700_000_000_000;
@@ -251,4 +251,66 @@ test('a tool that has finished is never a rescue candidate', () => {
 test('elapsedSecOf never goes negative on a clock that jumped', () => {
   const t = { toolUseId: 'x', name: 'Bash', detail: null, startedAtMs: at(100), parentToolUseId: null };
   assert.equal(elapsedSecOf(t, at(50)), 0);
+});
+
+// ── the turn boundary ───────────────────────────────────────────────────────
+//
+// The signal `isWorking` leans on. These encode a sequence MEASURED against
+// claude 2.1.238 + agent-sdk 0.3.237, not one inferred from the types.
+
+const sessionStateMsg = (state: string) => ({ type: 'system', subtype: 'session_state_changed', state });
+const result = () => ({ type: 'result', subtype: 'success', is_error: false });
+
+test('sessionBusy is null until the CLI has said anything', () => {
+  // Not `false`. The difference is the whole fallback contract in isWorking: a
+  // CLI that does not emit these frames must keep the old signals, not be
+  // declared idle.
+  assert.equal(sessionBusy(newActivityState()), null);
+});
+
+test('running and requires_action are busy, idle is not', () => {
+  assert.equal(sessionBusy(stateWith([[sessionStateMsg('running'), at(0)]])), true);
+  assert.equal(sessionBusy(stateWith([[sessionStateMsg('requires_action'), at(0)]])), true);
+  assert.equal(sessionBusy(stateWith([[sessionStateMsg('idle'), at(0)]])), false);
+});
+
+test('a result does not end the session: the idle frame that follows does', () => {
+  // Measured ordering — `result` lands first, `idle` immediately after it. If a
+  // result cleared the state, the session would read idle in between.
+  const st = stateWith([
+    [sessionStateMsg('running'), at(0)],
+    [result(), at(4)],
+  ]);
+  assert.equal(sessionBusy(st), true, 'a result alone must not end the session');
+  applyActivityMessage(st, sessionStateMsg('idle'), at(4));
+  assert.equal(sessionBusy(st), false);
+});
+
+test('a turn nobody submitted still reads as busy — the ready-mid-turn bug', () => {
+  // The measured background-task sequence: the model answers and the turn
+  // results (session idle), the backgrounded command lands 24s later, and the
+  // CLI re-invokes the model. Nothing was submitted, so `pending` is 0 for all
+  // of it and only this signal can hold the session open.
+  const st = stateWith([
+    [sessionStateMsg('running'), at(0)],
+    [result(), at(4)],
+    [sessionStateMsg('idle'), at(4)],
+    [{ type: 'system', subtype: 'task_notification', task_id: 't1' }, at(28)],
+    [sessionStateMsg('running'), at(28)],
+    [toolUse('bg-read', 'Bash', { command: 'cat out.log' }), at(30)],
+  ]);
+  assert.equal(sessionBusy(st), true);
+  // and it closes again on the second turn's own idle, not on its result
+  applyActivityMessage(st, result(), at(32));
+  assert.equal(sessionBusy(st), true);
+  applyActivityMessage(st, sessionStateMsg('idle'), at(32));
+  assert.equal(sessionBusy(st), false);
+});
+
+test('an unrecognised state is ignored rather than treated as idle', () => {
+  const st = stateWith([
+    [sessionStateMsg('running'), at(0)],
+    [sessionStateMsg('some_state_a_newer_cli_invented'), at(1)],
+  ]);
+  assert.equal(sessionBusy(st), true);
 });
