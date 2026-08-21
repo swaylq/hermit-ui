@@ -52,6 +52,7 @@ import type { RuntimeImage } from './runtime/types';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
 import { relayImages } from './image-relay';
+import { noteOutboundSync } from './send-user-file';
 import { planAttachments } from './attachments';
 import { describeImage, formatVision } from './vision';
 import { tryAcquire, release, isLocked } from './op-locks';
@@ -1286,6 +1287,12 @@ function piState(sessionId: string): SessionState {
 }
 
 function queueSync(state: SessionState, item: SyncItem) {
+  // Every backend's rows funnel through here — tmux via onTranscriptEvent, every
+  // other runtime via the `emit` handed to runtime.ensure — which makes it the one
+  // place that sees a Claude Code `SendUserFile` call no matter who is driving.
+  // Left alone, that call delivers the file to Anthropic's Remote Control view and
+  // to nothing the dashboard can render. See send-user-file.ts.
+  noteOutboundSync(item);
   state.syncBuf.push(item);
   if (state.syncBuf.length >= SYNC_BATCH_MAX) {
     flushSync(state);
