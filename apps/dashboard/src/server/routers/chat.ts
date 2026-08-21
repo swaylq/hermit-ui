@@ -545,6 +545,72 @@ export const chatRouter = router({
       return { ok: true, restarted: plan.restart, backend: after };
     }),
 
+  // Change the MODEL this session runs on, without touching which backend runs
+  // it. Its own mutation rather than a field on setSessionRuntime because the
+  // two are different acts: a backend switch is a handover (it may restart the
+  // child and drop the external id), while this is a pin change that a live
+  // Claude Code session applies as one control request and keeps its warm
+  // context. Sending it through setSessionRuntime would also PIN the backend of
+  // a session that was happily inheriting its agent's default.
+  //
+  // Not validated against the machine's model catalogue on purpose: that
+  // catalogue is a cache of what one CLI last reported, and a session on a
+  // machine that has not reported yet would have every legal model rejected.
+  // The picker only ever offers catalogue rows; the harness rejects the rest.
+  setSessionModel: agentProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        // null clears the pin — "whatever this backend defaults to". The column
+        // means that everywhere else in the resolver, and Claude Code spells it
+        // `setModel(undefined)`, so one spelling of "unset" survives end to end.
+        model: z.string().trim().max(128).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const s = await prisma.chatSession.findUnique({ where: { id: input.id } });
+      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
+      ctx.assertAgent(s.agentName);
+
+      const agent = await prisma.agent.findUnique({
+        where: { machineId_name: { machineId: ctx.machine.id, name: s.agentName } },
+        select: { runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true },
+      });
+      const backends = runtimeContextOf(ctx.machine);
+      const before = resolveRuntime(s, agent, backends);
+      const model = input.model?.trim() ? input.model.trim() : null;
+      const after = resolveRuntime({ ...s, runtimeModel: model }, agent, backends);
+
+      // The pane reads its model from that machine's ~/.claude/settings.json and
+      // ignores this column entirely, so storing one would put a model name in
+      // the header that nothing is running. Say so instead.
+      if (after.runtime === 'claude-tmux') {
+        throw new Error(
+          'A tmux-driven session takes its model from the machine\'s Claude Code settings. ' +
+          'Switch this session to Claude Code (the SDK driver) to pin one here.',
+        );
+      }
+
+      // Same guard as a backend switch, for the same reason: a turn in flight
+      // belongs to the model that started it. Claude Code also declines to
+      // re-pin mid-turn, so without this the write would land in the DB and the
+      // session would keep answering on the old model with no sign of it.
+      const plan = planRuntimeSwitch(s, before, after);
+      if (!plan.ok) throw new Error(plan.reason);
+
+      await prisma.chatSession.update({
+        where: { id: input.id },
+        data: {
+          runtimeModel: model,
+          // A harness that bakes the model into its child at spawn (pi, prime)
+          // needs a fresh one; claude-sdk applies it live and plans no restart.
+          ...(plan.restart ? { hibernateRequestedAt: new Date() } : {}),
+        },
+      });
+
+      return { ok: true, restarted: plan.restart, model };
+    }),
+
   // Mark a session read = now. Was browser localStorage (per-device); now a DB
   // stamp so the red "unread" dot clears on every device (the chat pane fires
   // this on open + on each new message while open; other devices reconcile on
@@ -665,31 +731,6 @@ export const chatRouter = router({
       ctx.assertAgent(s.agentName);
       await prisma.chatSession.delete({ where: { id: input.id } });
       return { ok: true };
-    }),
-
-  // Append a synthetic system message to a session. Used by the composer to
-  // unstick the UI right after a built-in slash command (`/status` etc.) is
-  // sent: most slash commands print to claude's TUI panel but produce NO
-  // JSONL turn, so without a follow-up the dashboard sits forever on
-  // "assistant is working…" (isWaitingAssistant is driven by lastMsg.role ===
-  // 'user'). A short "↳ sent /X" note flips lastMsg.role to 'system' and
-  // clears the in-flight state.
-  appendSystemNote: agentProcedure
-    .input(z.object({ sessionId: z.string(), text: z.string().min(1).max(500) }))
-    .mutation(async ({ ctx, input }) => {
-      const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
-      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
-      ctx.assertAgent(s.agentName);
-      const content = [{ type: 'text', text: input.text }];
-      const row = await prisma.chatMessage.create({
-        data: {
-          sessionId: input.sessionId,
-          role: 'system',
-          content: content as unknown as Parameters<typeof prisma.chatMessage.create>[0]['data']['content'],
-        },
-      });
-      fireChat(input.sessionId);
-      return row;
     }),
 
   setTitle: agentProcedure

@@ -66,6 +66,7 @@ import {
   type ActivityState, type RuntimeActivity,
 } from './claude-sdk-activity';
 import { buildMcpServers } from '../mcp-config';
+import { api } from '../api';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from '../config';
 import { CcBlock } from '../claude-code';
 
@@ -164,8 +165,21 @@ type SdkHandle = RuntimeHandle & {
   closed: boolean;
   /** Monotonic counter behind the deterministic ids in claude-sdk-events. */
   seq: number;
-  /** Set once the model is known, so a pin change can be applied without a respawn. */
+  /**
+   * The model the CLI reports running (init frame) — a resolved id like
+   * `claude-sonnet-5`, not the alias we asked for.
+   */
   model: string | null;
+  /**
+   * The pin we last handed this session, and the only thing a pin change is
+   * compared against.
+   *
+   * Separate from `model` because they are not the same value: we ask for
+   * `sonnet` and init answers `claude-sonnet-5`. Comparing a pin against the
+   * resolved id made every check disagree, so the session re-sent `setModel`
+   * for a model it was already running.
+   */
+  modelPin: string | null;
   /** What the session is doing right now — see claude-sdk-activity.ts. */
   activity: ActivityState;
   /** Stops the long-Bash watchdog. */
@@ -175,6 +189,43 @@ type SdkHandle = RuntimeHandle & {
 };
 
 const live = new Map<string, SdkHandle>();
+
+/**
+ * The last catalogue we told the dashboard about, so this costs one HTTP call
+ * per gateway lifetime rather than one per session start.
+ */
+let reportedCatalogue: string | null = null;
+
+/**
+ * Tell the dashboard which models THIS machine's Claude Code offers.
+ *
+ * `supportedModels()` is a control request answered out of the CLI binary, so
+ * it is the only list guaranteed to match what `setModel()` will accept —
+ * aliases included, and those move: `opus[1m]` means whatever the installed
+ * claude thinks Opus is today. The dashboard caches the answer because it has
+ * no way to ask a machine anything; a machine that has never run a claude-sdk
+ * session falls back to a list in lib/claude-models.ts.
+ */
+async function reportModelCatalogue(h: SdkHandle): Promise<void> {
+  try {
+    const raw = await h.q.supportedModels();
+    const models = (raw ?? [])
+      .filter((m) => typeof m?.value === 'string' && m.value.trim())
+      .map((m) => ({
+        value: m.value.trim(),
+        displayName: (m.displayName || m.value).trim(),
+        ...(m.description?.trim() ? { description: m.description.trim() } : {}),
+      }));
+    if (models.length === 0) return;
+    const fingerprint = JSON.stringify(models);
+    if (fingerprint === reportedCatalogue) return;
+    await api.syncClaudeModels(models);
+    reportedCatalogue = fingerprint;
+    console.log(`[claude-sdk] reported ${models.length} models to the dashboard`);
+  } catch (e) {
+    console.warn('[claude-sdk] supportedModels failed:', (e as Error).message);
+  }
+}
 
 /** Handles that have been closed but whose usage the collectors may still want. */
 const lastKnownUsage = new Map<string, RuntimeUsage>();
@@ -334,7 +385,20 @@ function onSdkMessage(h: SdkHandle, msg: SDKMessage) {
       h.stamped = false;            // the DB has to learn the new one
       retail(h);                    // and the backstop has to follow it
     }
-    if (typeof m.model === 'string') h.model = m.model;
+    // The resolved id behind whatever alias was asked for — the only place the
+    // gateway ever learns which model is actually answering, and worth a line:
+    // "why does this session sound like Haiku" is otherwise unanswerable from
+    // the logs.
+    if (typeof m.model === 'string' && m.model !== h.model) {
+      h.model = m.model;
+      console.log(`[claude-sdk] session=${h.sessionId.slice(0, 8)} running ${m.model}`);
+    }
+    // The CLI is up, so its own model list can be asked for. This frame arrives
+    // with the first user MESSAGE rather than at spawn (measured), which is why
+    // the ask hangs off it instead of off query(): by here the control channel
+    // is certainly answering. Fire-and-forget — the dashboard has a fallback
+    // list and no session may fail over a catalogue.
+    void reportModelCatalogue(h);
     return;
   }
 
@@ -556,12 +620,17 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       // A model pin can change without touching the conversation — one control
       // request, no respawn. The pane had to be killed and re-created for this,
       // which is why switching models used to cost the session's warm context.
+      //
+      // Clearing the pin is a change too: `setModel(undefined)` is how the SDK
+      // spells "back to this CLI's default", and without this branch un-picking
+      // a model in the dashboard would leave the session on it until something
+      // else respawned the child.
       const want = session.model?.trim() || null;
-      if (want && want !== existing.model && existing.pending === 0) {
+      if (want !== existing.modelPin && existing.pending === 0) {
         try {
-          await existing.q.setModel(want);
-          existing.model = want;
-          console.log(`[claude-sdk] session=${session.id.slice(0, 8)} model → ${want}`);
+          await existing.q.setModel(want ?? undefined);
+          existing.modelPin = want;
+          console.log(`[claude-sdk] session=${session.id.slice(0, 8)} model → ${want ?? '(default)'}`);
         } catch (e) {
           console.warn(`[claude-sdk] setModel failed:`, e);
         }
@@ -668,7 +737,8 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       stopTail: () => {},
       closed: false,
       seq: 0,
-      model: session.model?.trim() || null,
+      model: null,
+      modelPin: session.model?.trim() || null,
       activity: newActivityState(),
       stopWatchdog: () => {},
       rescued: new Set<string>(),

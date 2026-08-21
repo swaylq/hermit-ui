@@ -30,9 +30,9 @@ test('an empty or whitespace summary adds nothing', () => {
   assert.equal(endNote('done', null), endNote('done'));
 });
 
-test('end notes stay within the appendSystemNote length limit', () => {
-  // System rows cap at 500 chars server-side; a Brain summary at its own 500-char
-  // limit must not push the note past that and get rejected.
+test('end notes stay within the system-row length limit', () => {
+  // System rows are kept to 500 chars; a Brain summary at its own 500-char
+  // limit must not push the note past that.
   assert.ok(endNote('done', 'x'.repeat(900)).length <= 500);
 });
 

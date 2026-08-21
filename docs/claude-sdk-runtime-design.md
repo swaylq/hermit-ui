@@ -114,6 +114,41 @@ rather than by reading code. The first two were latent in the pane path too.
    as the reading, so one slash command flattened the context bar of a session
    20k tokens deep until its next real turn.
 
+## Switching model mid-conversation
+
+`setModel()` is a control request, so a running session changes model without
+losing anything: no respawn, no re-read of the transcript, no cold context. That
+turned a capability into a product surface — the model chip in the chat header
+(`components/chat/model-chip.tsx`), one click from the reply that made you want
+a different model.
+
+Three things make it honest rather than a switch that appears to do something:
+
+1. **The catalogue is the machine's own.** `supportedModels()` is answered out
+   of the CLI binary, and the aliases in it (`opus[1m]`, `sonnet`) resolve to
+   whatever that claude thinks those mean today. The gateway reports the list
+   off the first `init` frame it sees (`/api/sync/claude-models` →
+   `Machine.claudeModels`) and then only when the answer changes. Measured, not
+   assumed: `init` arrives with the first USER MESSAGE, not at spawn — so a
+   machine that has never taken a turn shows the dashboard's fallback list, and
+   its first message replaces it for good. A catalogue
+   hardcoded in the dashboard would be wrong the day a model shipped, and would
+   fail as a switch that silently did nothing.
+2. **One spelling of "unset".** The catalogue's `default` row stores NULL on the
+   session — the same value the resolver already reads as "no pin" — and reaches
+   the SDK as `setModel(undefined)`. Un-picking a model therefore restores this
+   CLI's default immediately, instead of waiting for something to respawn the
+   child.
+3. **The pin is not the running model.** `init` answers with a resolved id
+   (`claude-sonnet-5`) while we asked for an alias (`sonnet`), so the handle
+   keeps both: `modelPin` is what a change is compared against, `model` is what
+   the CLI reports. Comparing against the reported id made every check disagree
+   and re-sent `setModel` for a model the session was already on.
+
+The pane driver is deliberately excluded, in the UI and again on the server: it
+takes its model from that machine's `~/.claude/settings.json` and ignores the
+column, so a picker there would name a model nothing was running.
+
 ## Testing
 
 - `claude-sdk-events.test.ts` — the translation vocabulary, including the
@@ -123,6 +158,12 @@ rather than by reading code. The first two were latent in the pane path too.
   which conversation a session resumes is the single decision that loses history
   when it is wrong.
 - `attachments.test.ts` — per-type attachment advice, shared by both backends.
+- `lib/claude-models.test.ts` (dashboard) — the catalogue's fallback, the rows
+  that cannot render, and that a pin the machine no longer offers still shows as
+  itself rather than as some other model.
+- `server/runtime-switch.test.ts` (dashboard) — a model change on Claude Code
+  plans NO restart (the whole point), is still refused mid-turn, and the same
+  change on pi still needs a fresh child.
 - `sdk-bucket.test.ts` — the billing sentinel's predicate, against a payload
   captured from a live probe.
 - `claude-sdk.itest.ts` — **a real Claude Code**, run with

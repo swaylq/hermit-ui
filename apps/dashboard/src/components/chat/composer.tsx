@@ -1,15 +1,14 @@
 'use client';
 
 // The chat composer and its queue strip. Extracted verbatim from chat/page.tsx
-// (P2-3); behaviour identical. ComposeBar (textarea + send + attachments +
-// slash-command suggestions) and QueueBar (the waiting-dispatch strip) are the
-// two exports, both consumed by SessionPane; AttachmentChip / readyLabel /
-// getExt / readImageDims / SLASH_COMMANDS and the SAFE_FILE_* / MAX_* file
-// constants are module-private, used only within this cluster.
+// (P2-3); behaviour identical. ComposeBar (textarea + send + attachments) and
+// QueueBar (the waiting-dispatch strip) are the two exports, both consumed by
+// SessionPane; AttachmentChip / readyLabel / getExt / readImageDims and the
+// SAFE_FILE_* / MAX_* file constants are module-private, used only within this
+// cluster.
 
 import { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImperativeHandle, type ChangeEvent, type ClipboardEvent, type DragEvent } from 'react';
 import { cn } from '@/lib/utils';
-import { trpc } from '@/lib/trpc';
 import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
 import { QUEUE_LIMIT } from '@/lib/chat-queue';
@@ -22,21 +21,6 @@ import { msgText, type Attachment } from '@/components/chat/lib';
 // the chat composer's first paint doesn't carry it — only an attachment preview
 // opens it. ssr:false, no loading fallback (renders null while closed anyway). (P3-5)
 const ImageLightbox = dynamic(() => import('@/components/ui/image-lightbox').then((m) => m.ImageLightbox), { ssr: false });
-
-// Claude Code built-in slash commands the composer suggests when the user
-// types "/". Picking one fills the draft; sending sends it as a normal user
-// message — it lands in the agent's REPL via tmux send-keys and claude runs
-// it just like a typed slash command. Interactive ones (/help, /memory, etc.)
-// are intentionally omitted: they open TUI modals that hang the headless pane.
-const SLASH_COMMANDS: Array<{ name: string; hint: string; needsArgs?: boolean }> = [
-  { name: '/compact',  hint: '压缩上下文' },
-  { name: '/clear',    hint: '清空对话' },
-  { name: '/status',   hint: '当前会话状态' },
-  { name: '/model',    hint: '切换模型（如 opus / sonnet / fable）', needsArgs: true },
-  { name: '/goal',     hint: '设置 / 查看目标' },
-  { name: '/exit',     hint: '退出会话' },
-  { name: '/logout',   hint: '退出登录' },
-];
 
 // The waiting-dispatch queue strip, shown between the LoopBar and the composer
 // whenever messages are queued behind the in-flight turn. Each item can be
@@ -522,37 +506,17 @@ export const ComposeBar = forwardRef<ComposerHandle, {
       .map((a) => ({ url: a.data.url, mimeType: a.data.mimeType, name: a.name }));
     onSend(text, images, files);
     histIdxRef.current = -1;
-    noteSlashCommand(text);
   };
 
-  // ── Slash-command picker ───────────────────────────────────────────────
-  // Open whenever the draft is "/" followed only by letters (no whitespace
-  // yet — once the user starts typing args the picker gets out of the way).
-  // ↑/↓ navigate, Enter sends (or picks if the command needs args), Tab picks
-  // without sending, Esc clears.
-  const slashPrefix = /^\/[a-zA-Z]*$/.test(draft) ? draft.toLowerCase() : null;
-  const slashFiltered = useMemo(
-    () => (slashPrefix == null ? [] : SLASH_COMMANDS.filter((c) => c.name.startsWith(slashPrefix))),
-    [slashPrefix],
-  );
-  const slashOpen = slashFiltered.length > 0;
-  const [slashIdx, setSlashIdx] = useState(0);
-  useEffect(() => { setSlashIdx(0); }, [slashPrefix]);
-  const pickCommand = useCallback((cmd: (typeof SLASH_COMMANDS)[number]) => {
-    setDraft(cmd.needsArgs ? cmd.name + ' ' : cmd.name);
-    taRef.current?.focus({ preventScroll: true });
-  }, [setDraft, taRef]);
-
-  // Most slash commands (/status, /clear, /model, …) print to claude's TUI
-  // panel but never write to the JSONL we tail — so without follow-up the
-  // dashboard sits forever on "assistant is working…" (lastMsg.role === 'user').
-  // Right after dispatching, append a tiny "↳ sent /X" system note: it both
-  // confirms the command landed AND flips the in-flight heuristic.
-  const appendSystemNote = trpc.chat.appendSystemNote.useMutation();
-  const noteSlashCommand = useCallback((text: string) => {
-    const m = /^\/(\w+)/.exec(text.trim());
-    if (m) appendSystemNote.mutate({ sessionId, text: `↳ sent /${m[1]}` });
-  }, [appendSystemNote, sessionId]);
+  // No slash-command menu. This box types AT the agent; it is not a remote
+  // keyboard for Claude Code's REPL. A menu of /clear, /model, /exit put the
+  // session's own controls one Enter away from a chat message, and each one
+  // changed state the dashboard then had to guess at: /model moved the model
+  // without moving the column that says which model this session runs, /clear
+  // dropped a conversation the timeline still displayed, /exit ended the
+  // session under a UI that showed it live. The two that earn their keep are
+  // buttons with the state behind them — compact in the header, and the model
+  // picker beside the backend chip.
 
   // The composer NEVER carries the stop control. It used to swap the send button
   // for an identically-styled dark circle whenever a turn was in flight, which
@@ -626,25 +590,6 @@ export const ComposeBar = forwardRef<ComposerHandle, {
               : 'border-border focus-within:border-foreground/40 focus-within:shadow-md',
           )}
         >
-          {slashOpen && (
-            <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-border bg-popover shadow-lg p-1 z-30 max-h-72 overflow-y-auto">
-              {slashFiltered.map((c, i) => (
-                <button
-                  key={c.name}
-                  type="button"
-                  onMouseDown={(ev) => { ev.preventDefault(); pickCommand(c); }}
-                  onMouseEnter={() => setSlashIdx(i)}
-                  className={cn(
-                    'w-full text-left flex items-baseline gap-3 px-2.5 py-1.5 rounded-md text-sm transition-colors cursor-pointer',
-                    i === slashIdx ? 'bg-accent' : 'hover:bg-accent/50',
-                  )}
-                >
-                  <span className="font-mono font-medium text-foreground shrink-0">{c.name}</span>
-                  <span className="text-xs text-muted-foreground truncate">{c.hint}</span>
-                </button>
-              ))}
-            </div>
-          )}
           {/* upload affordance: one + button. accept includes images and a
               whitelist of safe text / code / pdf extensions; binaries /
               archives / executables are rejected client- and server-side. */}
@@ -699,24 +644,10 @@ export const ComposeBar = forwardRef<ComposerHandle, {
                 setDraft('');
                 return;
               }
-              if (slashOpen && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-                // (the composition guard: with the slash menu open, ↑/↓/Tab during
-                // 拼音组字 belong to the IME's candidate window, not the menu)
-                if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => Math.min(slashFiltered.length - 1, i + 1)); return; }
-                if (e.key === 'ArrowUp')   { e.preventDefault(); setSlashIdx((i) => Math.max(0, i - 1)); return; }
-                if (e.key === 'Tab')       { e.preventDefault(); pickCommand(slashFiltered[slashIdx]); return; }
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229 && !isTouchPrimary()) {
-                  e.preventDefault();
-                  const cmd = slashFiltered[slashIdx];
-                  if (cmd.needsArgs) pickCommand(cmd);
-                  else if (!sending && !disabled && !inFlight && !awaitingInput) { onSend(cmd.name, [], []); noteSlashCommand(cmd.name); }
-                  return;
-                }
-              }
               // Shell-style history recall: ↑ on the first line walks back through
               // the messages you've sent this session; ↓ on the last line walks
-              // forward, then restores the draft you were typing. (The slash picker
-              // claims ↑/↓ above when open; skip during IME composition.)
+              // forward, then restores the draft you were typing. (Skipped during
+              // IME composition, where the arrows belong to the candidate window.)
               if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.nativeEvent.isComposing && history.length > 0) {
                 const ta = e.currentTarget;
                 const onFirstLine = !draft.slice(0, ta.selectionStart ?? 0).includes('\n');

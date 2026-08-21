@@ -20,9 +20,10 @@ const GUIDE: { title: string; points: string[] }[] = [
   {
     title: 'Chats & sessions',
     points: [
-      "Every chat is a live Claude session running in a tmux pane on the agent's machine.",
+      "Every chat is a live Claude session on the agent's machine.",
       'Send while it is working and your messages queue, delivered oldest-first.',
       'The status dot shows green = idle, amber pulsing = working.',
+      'The header chip next to the backend switches model (Claude Code sessions) — it applies from your next message and keeps the conversation.',
     ],
   },
   {

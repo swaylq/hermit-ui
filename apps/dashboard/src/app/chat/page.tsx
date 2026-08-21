@@ -42,6 +42,7 @@ import { FabDock } from '@/components/chat/fab-dock';
 import { PreviewFab } from '@/components/chat/preview-fab';
 import { LivePreviewPanel, parseLivePreview } from '@/components/chat/preview-panel';
 import { SessionDetailSheet } from '@/components/chat/session-detail-sheet';
+import { ModelChip } from '@/components/chat/model-chip';
 import { runtimeShortLabel, runtimeDetail, hasTmuxPane } from '@/lib/runtime-labels';
 
 // isTouchPrimary (phone/tablet vs desktop) lives in @/lib/save-file — the
@@ -1626,6 +1627,26 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   >
                     {backendLabel}
                   </button>
+                  {/* Model, next to the backend that runs it — the two answer
+                      one question together. Claude Code only: the pane driver
+                      and the credential-backed harnesses take their model from
+                      elsewhere, and a picker that silently did nothing would be
+                      worse than no picker at all.
+
+                      Not on a share link: the catalogue behind the menu is a
+                      machine-wide endpoint, which a scoped key is refused (same
+                      reason the terminal link below is hidden), so the menu
+                      would open empty. */}
+                  {!scope.scoped && session.runtime === 'claude-sdk' && (
+                    <>
+                      <span className="shrink-0 text-muted-foreground/40">·</span>
+                      <ModelChip
+                        sessionId={sessionId}
+                        model={session.runtimeModel}
+                        disabled={!!session.closedAt}
+                      />
+                    </>
+                  )}
                   <span className="shrink-0 text-muted-foreground/40">·</span>
                   {/* Full bar (count + 56px track + percent) is ~130px and crowded a
                       390px header; mobile gets `mini` — same token count, shorter
@@ -2012,10 +2033,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 //     within a moment of the pill appearing are ignored. You can only stop a
 //     turn by aiming at a pill that was already there.
 // Natural-language template the "开启循环任务" suggestion drops into the
-// composer. /loop left the slash picker (loops are natural-language now), so
-// this guided starter is the entry point. The loop skill matches on 循环/每 X/
-// 直到 and sets up a session-scoped recurring task whose every iteration
-// streams back into THIS conversation.
+// composer. There is no slash-command menu any more — loops are natural
+// language, so this guided starter is the entry point. The loop skill matches
+// on 循环/每 X/直到 and sets up a session-scoped recurring task whose every
+// iteration streams back into THIS conversation.
 const LOOP_TEMPLATE =
   '开启循环任务：每 1 小时，<要做的事>。每轮做完都自己测试验证一遍，再把结果（含验证结论）发到这个对话；达成 <完成条件> 后自动停止。';
 

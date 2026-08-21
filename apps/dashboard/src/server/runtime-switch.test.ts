@@ -223,3 +223,36 @@ test('a mid-turn session refuses the switch on either claude driver', () => {
     false,
   );
 });
+
+// The whole point of the header's model chip: Claude Code re-pins a live
+// session with one control request, so a model change must NOT plan a restart
+// (which hibernates the child and throws away its warm context). pi bakes the
+// model into its child at spawn and genuinely has to be restarted — the two
+// must not be answered the same way.
+const claudeSdk = (model: string | null = null) => ({
+  backendId: 'claude-sdk', runtime: 'claude-sdk', runtimeCredentialId: null,
+  runtimeProvider: null, runtimeModel: model, runtimeMode: null,
+});
+
+test('a model change on Claude Code keeps the running session', () => {
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, claudeSdk(null), claudeSdk('sonnet')),
+    { ok: true, restart: false, resetExternalId: false },
+  );
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, claudeSdk('sonnet'), claudeSdk(null)),
+    { ok: true, restart: false, resetExternalId: false },
+  );
+});
+
+test('a model change mid-turn is refused, on Claude Code too', () => {
+  const plan = planRuntimeSwitch({ state: 'working' }, claudeSdk(null), claudeSdk('sonnet'));
+  assert.equal(plan.ok, false);
+});
+
+test('the same model change on pi still needs a fresh child', () => {
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, pi(null, null), pi(null, 'kimi-k2')),
+    { ok: true, restart: true, resetExternalId: false },
+  );
+});

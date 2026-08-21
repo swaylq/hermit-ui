@@ -8,10 +8,12 @@
 // Mirrors the agent detail sheet so the two feel like the same idea at two
 // scopes. See docs/pi-runtime-design.md.
 //
-// No model field. The pi model comes from Settings → Pi Runtime (the machine
-// default) or the agent's own pin; a free-text model box here sat right next to
-// "mode" and was read as one, while the setting that actually decides how a
-// session behaves — the mode — was the read-only one.
+// No EDITABLE model field. The pi model comes from Settings → Pi Runtime (the
+// machine default) or the agent's own pin; a free-text model box here sat right
+// next to "mode" and was read as one, while the setting that actually decides
+// how a session behaves — the mode — was the read-only one. A Claude Code
+// session does show which model it runs, because that one is switchable now —
+// from the chip in the chat header, which is the only control (chat/model-chip.tsx).
 
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
@@ -315,6 +317,18 @@ export function SessionDetailSheet({
             </Section>
 
             <Section title="run">
+              {/* Reported, not edited. The switch itself is the chip in the chat
+                  header, one click from the reply that made you want it — and
+                  keeping the only control in one place is what stops this sheet
+                  from growing a second, disagreeing answer. */}
+              {d.backend.runtime === 'claude-sdk' && (
+                <Row label="model" mono>
+                  {d.backend.runtimeModel ?? 'default'}
+                  <span className="ml-2 font-sans text-[11px] text-muted-foreground">
+                    change it from the header chip
+                  </span>
+                </Row>
+              )}
               <Row label="state">
                 <span className="font-mono text-xs">{d.state ?? 'idle'}</span>
                 {d.hibernatedAt && <span className="ml-2 text-xs text-muted-foreground">💤 asleep since {relTime(d.hibernatedAt)}</span>}

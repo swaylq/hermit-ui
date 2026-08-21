@@ -76,6 +76,12 @@ export const api = {
   // source for the true 5h/weekly window %; ccusage is a cost estimate).
   syncPlanUsage: (planUsage: any) => post('/api/sync/plan-usage', { planUsage }),
   syncCodexUsage: (codexUsage: any) => post('/api/sync/codex-usage', { codexUsage }),
+  // What Claude Code on this machine can run — the SDK's own `supportedModels()`
+  // answer, cached on Machine.claudeModels so the chat model picker offers the
+  // aliases THIS CLI accepts instead of a list the dashboard would have to
+  // maintain. Pushed once per gateway lifetime and again whenever it changes.
+  syncClaudeModels: (models: Array<{ value: string; displayName: string; description?: string }>) =>
+    post('/api/sync/claude-models', { models }),
 
   // ── Cron jobs (gateway cron-runner) ───────────────────────────────────────
   // Enabled crons joined with their agent's on-disk directory; the runner fires

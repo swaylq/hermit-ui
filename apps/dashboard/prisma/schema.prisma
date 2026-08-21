@@ -80,6 +80,17 @@ model Machine {
   // themselves, on the machine.
   modelProviders Json?
 
+  // What Claude Code on THIS machine says it can run — the array
+  // `supportedModels()` returns, `[{ value, displayName, description }]`.
+  // Pushed by the gateway when a claude-sdk session boots (POST
+  // /api/sync/claude-models); read by the chat header's model picker.
+  //
+  // A cache of the machine's own answer, never a list the dashboard curates:
+  // the aliases in it (`opus[1m]`, `sonnet`) are resolved by the CLI, and which
+  // model they mean changes under us. null = no gateway has reported yet, and
+  // the picker falls back to lib/claude-models.ts.
+  claudeModels Json?
+
   // Legacy pi-runtime machine config, superseded by `modelProviders`. Still
   // written by nothing and read only by the compatibility projection that keeps
   // a lagging gateway working until it restarts (machines.pollPiConfig).

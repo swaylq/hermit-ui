@@ -6,6 +6,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { CUSTOM_HARNESSES } from '@/lib/runtime-labels';
 import { listBackends, backendsConfigOf } from '@/lib/backends';
 import { modelCredentialsOf, defaultModelOf } from '@/lib/model-credentials';
+import { claudeModelsOf } from '@/lib/claude-models';
 
 export const PI_CONFIG_SCHEMA = z.object({
   // NOTE: `authMode` used to live here and could name 'cc-subscription', which
@@ -125,6 +126,19 @@ export const machinesRouter = router({
   getModelCredentials: machineProcedure.query(async ({ ctx }) => {
     const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
     return modelCredentialsOf(m);
+  }),
+
+  // Which models Claude Code offers on this machine — the CLI's own
+  // `supportedModels()` answer, pushed by the gateway (/api/sync/claude-models)
+  // and read by the chat header's model picker. Falls back to a small list when
+  // no gateway has reported yet, so the picker is never empty on a fresh
+  // machine. Nothing here is editable: the catalogue belongs to the CLI.
+  getClaudeModels: machineProcedure.query(async ({ ctx }) => {
+    const m = await prisma.machine.findUnique({
+      where: { id: ctx.machine.id },
+      select: { claudeModels: true },
+    });
+    return claudeModelsOf(m);
   }),
 
   setModelCredentials: machineProcedure
