@@ -9,7 +9,12 @@ This is **your** narrative, not a key-value store. The key-value store is Claude
 
 ## Files
 
-- `lessons.md` — distilled failure root-causes. Each entry: title, what failed, why, how to avoid. ≤200 lines total. Evict the oldest/least-relevant when full.
+- `lessons.md` — distilled failure root-causes, **actionable half only**: title + `How to avoid`.
+  Loaded every session, so budget it at ~3,000 tokens. The `What failed` / `Why` half lives in
+  `references/lessons-archive.md` under the same title and is never preloaded. Over budget?
+  Merge lessons sharing a root cause and tighten wording — **archive, never delete**. (A line
+  count was the old rule and it did not hold: one agent reached 1,152 lines and 73k tokens
+  per session before anyone noticed.)
 - `reflections/YYYY-MM-DD.md` — long-form reflection. Append-only. Optional but valuable.
 
 Codified *procedures* (how to DO a thing) don't belong here — write them as real skills at `.claude/skills/<verb>/SKILL.md` so Claude Code auto-discovers + invokes them (vs a note here that only gets read if you happen to skim it). Tag self-evolved ones with `source: evolution` in the frontmatter.

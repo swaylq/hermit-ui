@@ -20,9 +20,10 @@ Lessons → `evolution/lessons.md`. Text > Brain.
 
 Two stores, not redundant:
 
-- `evolution/` — your own narrative. `lessons.md` is a short indexable list of failure
-  root-causes (title · what failed · why · how to avoid, ≤8 lines each, ≤200 lines total);
-  `reflections/YYYY-MM-DD.md` is optional long-form, append-only.
+- `evolution/` — your own narrative. `lessons.md` holds the **actionable half** of each
+  failure (title + `How to avoid`) and is loaded every session, so keep it under ~3,000
+  tokens; the `What failed` / `Why` half goes to `references/lessons-archive.md` under the
+  same title and is never preloaded. `reflections/YYYY-MM-DD.md` is optional long-form.
 - **auto-memory** (`memory/auto/`) — indexed key-value store for facts and user
   preferences. **Not injected** — `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` is set fleet-wide, so
   every session starts with zero memory. Read the `memory/auto/MEMORY.md` index on demand,
