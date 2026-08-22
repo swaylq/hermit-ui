@@ -32,7 +32,11 @@ const DB_PREFIX = 'hermit-chat-cache';
 // them — so changing DASHSCOPE_TRANSLATE_MODEL leaves the old translations in
 // place. They stay valid translations, just from the previous model; bump this
 // version if a model change ever needs to invalidate them.
-const DB_VERSION = 4;
+// 5: added the `heights` store. Purely additive again. One record per session
+// and column width, holding every row height that has been measured at that
+// width — so re-opening a conversation does not start by guessing the size of
+// rows it has already displayed once.
+const DB_VERSION = 5;
 
 export const STORE_TEXT = 'text';
 export const STORE_SESSIONS = 'sessions';
@@ -47,6 +51,12 @@ export const STORE_DIGEST = 'digest';
 // target language. Reading these back is what stops a reload re-buying every
 // translation on screen.
 export const STORE_TRANSLATIONS = 'translations';
+// Measured row heights, one record per (session, column width). The windowed
+// timeline has to know how tall rows it has never mounted are, and everything
+// it has not measured is an estimate that gets corrected — visibly — the moment
+// the row appears. A height that was measured once is the one thing that never
+// needs estimating again, so it is worth keeping.
+export const STORE_HEIGHTS = 'heights';
 
 // How many sessions keep their full (renderable) rows. The prose layer covers
 // every session; this one only makes RE-opening a session instant, so a handful
@@ -110,7 +120,7 @@ function txDone(tx: IDBTransaction): Promise<void> {
 // so that tab's upgrade isn't blocked; the next call reopens.
 const openDbs = new Map<string, Promise<IDBDatabase | null>>();
 
-const ALL_STORES = [STORE_TEXT, STORE_SESSIONS, STORE_FULL, STORE_FULL_META, STORE_DIGEST, STORE_TRANSLATIONS];
+const ALL_STORES = [STORE_TEXT, STORE_SESSIONS, STORE_FULL, STORE_FULL_META, STORE_DIGEST, STORE_TRANSLATIONS, STORE_HEIGHTS];
 
 function createMissingStores(db: IDBDatabase): void {
   if (!db.objectStoreNames.contains(STORE_TEXT)) {
@@ -130,6 +140,9 @@ function createMissingStores(db: IDBDatabase): void {
   }
   if (!db.objectStoreNames.contains(STORE_TRANSLATIONS)) {
     db.createObjectStore(STORE_TRANSLATIONS, { keyPath: 'key' });
+  }
+  if (!db.objectStoreNames.contains(STORE_HEIGHTS)) {
+    db.createObjectStore(STORE_HEIGHTS, { keyPath: 'key' });
   }
 }
 
@@ -541,4 +554,113 @@ export async function requestPersistence(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ── measured row heights ────────────────────────────────────────────────────
+//
+// Keyed by session AND column width, because a height is only true at the width
+// it was measured at: the same reply is three lines on a laptop and nine on a
+// phone. Widths are rounded into buckets so that a scrollbar appearing, or a
+// window dragged a pixel, does not orphan everything measured a moment ago.
+//
+// One record per (session, width) rather than one per row. A long session has
+// thousands of rows, and thousands of IndexedDB keys to write and read back is
+// the kind of cost that would outweigh what this saves.
+
+/** Round a column width into the bucket its heights are stored under. */
+export function widthBucket(width: number): number {
+  return Math.max(0, Math.round(width / HEIGHT_WIDTH_BUCKET) * HEIGHT_WIDTH_BUCKET);
+}
+const HEIGHT_WIDTH_BUCKET = 8;
+/** Sessions × widths kept. Small records, but unbounded growth is still growth. */
+const HEIGHTS_LRU = 40;
+
+export type CachedHeights = {
+  key: string;
+  sessionId: string;
+  width: number;
+  heights: Record<string, number>;
+  lastUsedAt: number;
+};
+
+function heightsKey(sessionId: string, width: number): string {
+  return `${sessionId}:${widthBucket(width)}`;
+}
+
+export async function getHeights(scope: string, sessionId: string, width: number): Promise<Record<string, number>> {
+  const db = await openCache(scope);
+  if (!db) return {};
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(STORE_HEIGHTS, 'readonly');
+      const req = tx.objectStore(STORE_HEIGHTS).get(heightsKey(sessionId, width));
+      req.onsuccess = () => resolve((req.result as CachedHeights | undefined)?.heights ?? {});
+      req.onerror = () => resolve({});
+    } catch {
+      resolve({});
+    }
+  });
+}
+
+export async function putHeights(
+  scope: string,
+  sessionId: string,
+  width: number,
+  heights: Record<string, number>
+): Promise<void> {
+  const db = await openCache(scope);
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_HEIGHTS, 'readwrite');
+      tx.objectStore(STORE_HEIGHTS).put({
+        key: heightsKey(sessionId, width),
+        sessionId,
+        width: widthBucket(width),
+        heights,
+        lastUsedAt: Date.now(),
+      } satisfies CachedHeights);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+/** Oldest-used records first, same shape as the other LRUs here. */
+export async function evictHeightsLru(scope: string): Promise<void> {
+  const db = await openCache(scope);
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_HEIGHTS, 'readwrite');
+      const os = tx.objectStore(STORE_HEIGHTS);
+      const countReq = os.count();
+      countReq.onsuccess = () => {
+        if (countReq.result <= HEIGHTS_LRU) {
+          resolve();
+          return;
+        }
+        const all: CachedHeights[] = [];
+        const cur = os.openCursor();
+        cur.onsuccess = () => {
+          const c = cur.result;
+          if (c) {
+            all.push(c.value as CachedHeights);
+            c.continue();
+            return;
+          }
+          all.sort((a, b) => a.lastUsedAt - b.lastUsedAt);
+          for (const row of all.slice(0, all.length - HEIGHTS_LRU)) os.delete(row.key);
+          resolve();
+        };
+        cur.onerror = () => resolve();
+      };
+      countReq.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
 }

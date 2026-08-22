@@ -286,7 +286,7 @@ function TimelineBody({ items, ctx, getViewport }: { items: TimelineItem[]; ctx:
     },
     [items],
   );
-  const win = useTimelineWindow(keys, getViewport ?? noViewport, textAt);
+  const win = useTimelineWindow(keys, getViewport ?? noViewport, textAt, ctx.sessionId);
   // visibleSlice, not an indexed loop. The plan is clamped at its source now, but
   // the thing that broke production was a hand-rolled range over React state
   // describing a list that had already changed length — so this reads the rows

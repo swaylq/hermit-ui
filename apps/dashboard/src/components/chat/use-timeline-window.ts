@@ -33,6 +33,8 @@ import {
   type WindowPlan,
 } from './timeline-window';
 import { loadTextHeight, textHeightReady, proseHeight, fontOf } from '@/lib/text-height';
+import { getHeights, putHeights, evictHeightsLru, widthBucket } from '@/lib/chat-cache/db';
+import { currentScope } from '@/lib/chat-cache/sync';
 
 /** Below this many rows, render the whole thing and touch nothing. */
 const THRESHOLD = 400;
@@ -52,6 +54,8 @@ const ROW_GAP = 12;
 const PROSE_BUDGET_MS = 6;
 /** Re-predict everything if the column changed width by more than this. */
 const WIDTH_EPSILON = 2;
+/** Quiet period before measured heights are written back to disk. */
+const HEIGHTS_SAVE_MS = 2_000;
 
 /** Marks a rendered item so the measurer can find it and know which row it is. */
 export const WINDOW_ROW_ATTR = 'data-window-key';
@@ -118,6 +122,8 @@ export function useTimelineWindow(
    * exactly as it did before prose prediction existed.
    */
   textAt?: (i: number) => string,
+  /** Which conversation these heights belong to, for keeping them on disk. */
+  sessionId?: string,
 ): TimelineWindow {
   const measured = useRef(new Map<string, number>());
   // Predicted prose height per row key, at `proseMetrics`' width. 0 means "asked
@@ -129,6 +135,10 @@ export function useTimelineWindow(
   const idleHandle = useRef<number | null>(null);
   // Correction that asked for more room than the scroller had — see below.
   const owed = useRef(0);
+  // Bookkeeping for keeping measured heights across a reload.
+  const saveHandle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savedKey = useRef<string | null>(null);
+  const dirtyHeights = useRef(false);
   const textAtRef = useRef<((i: number) => string) | undefined>(textAt);
   // `startKey` is what makes the window survive a prepend: see the remap below.
   const [plan, setPlan] = useState<WindowPlan & { sig: string; startKey: string | null }>(() => ({
@@ -340,6 +350,68 @@ export function useTimelineWindow(
     predictRef.current = predict;
   });
 
+  // ── keep what has been measured, across reloads ────────────────────────────
+  //
+  // A prediction is a guess that gets corrected the moment the row appears, and
+  // the correction moves the reader. A measurement does not need predicting at
+  // all — and a row the reader has already scrolled past has been measured, so
+  // throwing that away when the tab closes means paying for the same guess again
+  // tomorrow. Kept per session and per column width, because a height is only
+  // true at the width it was taken at.
+  const seedFromDisk = useCallback(async () => {
+    const vp = getViewport();
+    const scope = currentScope();
+    if (!vp || !scope || !sessionId) return;
+    const width = widthBucket(vp.clientWidth);
+    const key = `${sessionId}:${width}`;
+    if (savedKey.current === key) return;
+    savedKey.current = key;
+    const stored = await getHeights(scope, sessionId, width);
+    let added = 0;
+    for (const [k, h] of Object.entries(stored)) {
+      // Never overwrite something measured in THIS session: the row may have
+      // grown since (an image arrived, a capsule was expanded) and the live
+      // measurement is the true one.
+      if (h > 0 && !measured.current.has(k)) {
+        measured.current.set(k, h);
+        added++;
+      }
+    }
+    if (!added) return;
+    refit();
+    recompute();
+  }, [getViewport, sessionId, refit, recompute]);
+
+  useEffect(() => {
+    void seedFromDisk();
+  }, [seedFromDisk]);
+
+  const scheduleSave = useCallback(() => {
+    dirtyHeights.current = true;
+    if (saveHandle.current !== null) return;
+    saveHandle.current = setTimeout(() => {
+      saveHandle.current = null;
+      if (!dirtyHeights.current) return;
+      dirtyHeights.current = false;
+      const vp = getViewport();
+      const scope = currentScope();
+      if (!vp || !scope || !sessionId || measured.current.size === 0) return;
+      const snapshot: Record<string, number> = {};
+      for (const [k, h] of measured.current) snapshot[k] = h;
+      void putHeights(scope, sessionId, vp.clientWidth, snapshot)
+        .then(() => evictHeightsLru(scope))
+        .catch(() => {});
+    }, HEIGHTS_SAVE_MS);
+  }, [getViewport, sessionId]);
+
+  useEffect(
+    () => () => {
+      if (saveHandle.current !== null) clearTimeout(saveHandle.current);
+      saveHandle.current = null;
+    },
+    []
+  );
+
   // Kick the loader once, and only for lists big enough to be windowed at all.
   useEffect(() => {
     if (keys.length > THRESHOLD) loadTextHeight();
@@ -451,7 +523,10 @@ export function useTimelineWindow(
           // correction, so the two compose instead of fighting.
           if (lift !== 0) vp.scrollTop += lift;
         }
-        if (dirty) applyMeasured();
+        if (dirty) {
+          applyMeasured();
+          scheduleSave();
+        }
       });
       rowObserver.current = ro;
     }
@@ -504,6 +579,7 @@ export function useTimelineWindow(
     if (changed) {
       refit();
       applyMeasured();
+      scheduleSave();
     }
   });
 
