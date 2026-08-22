@@ -143,8 +143,14 @@ export const MessageTimeline = memo(function MessageTimeline({
         // `data-msg-id` carries every id folded into this row, space-separated
         // so a lookup can use the `[data-msg-id~="…"]` word-match selector.
         // It's how a search hit scrolls to its message — see use-anchored-window.ts.
+        //
+        // `data-run` says "this row can swallow more of the conversation later".
+        // Loading earlier history folds the machinery it brings into the capsule
+        // at the seam, so the SAME row comes back taller and starting further
+        // back — and a word-match lookup still finds it, which is what makes it
+        // a trap. The prepend anchor uses the mark to refuse to anchor here.
         node: (
-          <div key={r.key} data-msg-id={r.ids.join(' ')} {...{ [WINDOW_ROW_ATTR]: r.key }} className="flex justify-start">
+          <div key={r.key} data-msg-id={r.ids.join(' ')} data-run="" {...{ [WINDOW_ROW_ATTR]: r.key }} className="flex justify-start">
             <div className="min-w-0 w-full max-w-[85%]">
               <RunCapsule ids={r.ids} steps={r.steps} from={r.from} to={r.to} running={live} label={live ? runLabel : null} detail={live ? runDetail : null} />
             </div>

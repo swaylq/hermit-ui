@@ -190,24 +190,52 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
       captured = true;
     } else {
       const vpTop = root.getBoundingClientRect().top;
-      // The topmost message still visible: the first whose bottom edge has not
-      // passed the top of the viewport. That's what the user is reading.
+      // The topmost message still visible — the first whose bottom edge has not
+      // passed the top of the viewport — is what the user is reading, and the
+      // obvious thing to hold.
+      //
+      // With one exception, and it is the last jump left on a phone. A run
+      // capsule at the seam SWALLOWS the machinery that "load earlier" brings:
+      // the same row comes back taller and starting further back in the
+      // conversation, and because `data-msg-id` carries every folded id and the
+      // lookup is a word match, the anchor happily finds it again and measures
+      // the new, taller element's top edge. The correction then falls short by
+      // exactly what the capsule absorbed — measured on a 17k-message session,
+      // deterministically: content grew 544px, the anchor moved 358px, the
+      // reader lost 186px, once, on the first pull after opening.
+      //
+      // So skip capsules and hold the first visible row that cannot grow that
+      // way. A closed run always has a human-readable row below it (which is
+      // why runs are NAMED after that row — see fold-runs.ts), so this almost
+      // always finds one; when a screenful is nothing but machinery, fall back
+      // to the topmost row rather than not anchoring at all.
+      let fallback: { id: string; offset: number } | null = null;
+      let pick: { id: string; offset: number } | null = null;
       for (const el of Array.from(root.querySelectorAll('[data-msg-id]'))) {
         const r = el.getBoundingClientRect();
-        if (r.bottom > vpTop) {
-          const id = (el.getAttribute('data-msg-id') ?? '').split(' ')[0];
-          if (id) {
-            held.current = {
-              mode: 'top',
-              id,
-              hold: { offset: r.top - vpTop, lastTop: root.scrollTop },
-              until,
-              maxUntil,
-            };
-            captured = true;
-          }
+        if (r.bottom <= vpTop) continue;
+        const id = (el.getAttribute('data-msg-id') ?? '').split(' ')[0];
+        if (!id) continue;
+        const cand = { id, offset: r.top - vpTop };
+        if (!fallback) fallback = cand;
+        if (!el.hasAttribute('data-run')) {
+          pick = cand;
           break;
         }
+        // Only look a little way down for a stable row; past the fold it is no
+        // longer describing where the reader's eyes are.
+        if (r.top - vpTop > root.clientHeight) break;
+      }
+      const anchor = pick ?? fallback;
+      if (anchor) {
+        held.current = {
+          mode: 'top',
+          id: anchor.id,
+          hold: { offset: anchor.offset, lastTop: root.scrollTop },
+          until,
+          maxUntil,
+        };
+        captured = true;
       }
     }
 
