@@ -197,6 +197,7 @@ type RenderContext = {
 };
 
 function renderItem(it: TimelineItem, ctx: RenderContext): React.ReactNode {
+  if (!it) return null;
   if (it.kind === 'divider') return <DateDivider key={it.key} day={it.day} />;
   const r = it.row;
 
@@ -286,7 +287,8 @@ function TimelineBody({ items, ctx, getViewport }: { items: TimelineItem[]; ctx:
   );
   const win = useTimelineWindow(keys, getViewport ?? noViewport, textAt);
   const shown: React.ReactNode[] = [];
-  for (let i = win.start; i < win.end; i++) shown.push(renderItem(items[i], ctx));
+  const end = Math.min(win.end, items.length);
+  for (let i = win.start; i < end; i++) shown.push(renderItem(items[i], ctx));
   return (
     <div className="space-y-3">
       {win.padTop > 0 && <div data-window-spacer="top" style={{ height: win.padTop }} aria-hidden />}
