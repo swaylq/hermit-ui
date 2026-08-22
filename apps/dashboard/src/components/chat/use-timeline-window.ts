@@ -198,7 +198,29 @@ export function useTimelineWindow(
       screens: WINDOW_SCREENS,
       minRows: MIN_WINDOW_ROWS,
     });
-    if (yes) windowedRef.current = true;
+    if (yes) {
+      windowedRef.current = true;
+      // The instant it flips, measure everything on screen.
+      //
+      // Until this moment the list was NOT being windowed, which means every row
+      // of it is mounted and its real height is there for the taking. The first
+      // windowed plan replaces most of them with spacers, and if those spacers
+      // are built from guesses the list changes total height under the reader —
+      // measured at 805px of displacement from a row that grew by 240px, because
+      // the growth is what tipped the decision in the first place.
+      //
+      // Measuring here makes that first plan exact: same rows, same heights,
+      // same layout, and nothing to correct. It is one forced pass over rows
+      // that are already laid out, once per conversation.
+      if (vp) {
+        for (const node of vp.querySelectorAll(`[${WINDOW_ROW_ATTR}]`)) {
+          const key = node.getAttribute(WINDOW_ROW_ATTR);
+          if (!key || measured.current.has(key)) continue;
+          const h = (node as HTMLElement).getBoundingClientRect().height + ROW_GAP;
+          if (h > ROW_GAP) measured.current.set(key, h);
+        }
+      }
+    }
     return yes;
   }, [getViewport]);
 
