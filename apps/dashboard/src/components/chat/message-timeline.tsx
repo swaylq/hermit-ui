@@ -18,6 +18,10 @@ import { TimeAgo } from '@/components/time-ago';
 import { isSameDay, type Block } from '@/components/chat/lib';
 import { sinkDeliverables, isAskToolUse } from '@/components/chat/sink-deliverables';
 import { StreamingDots, TypedText, DateDivider } from '@/components/chat/message-bits';
+import { TranslatedText } from '@/components/chat/translated-text';
+import { useTranslatePrefs } from '@/lib/translate-prefs';
+import { canTranslate, shouldAutoTranslate } from '@/lib/translate-text';
+import { originalFor } from '@/lib/translate-outbound';
 import { ToolChip, ToolBatchChip } from '@/components/chat/tool-chips';
 import { InteractionCard } from '@/components/chat/interaction-card';
 import { ChatImage, ChatFile } from '@/components/chat/file-preview';
@@ -41,6 +45,7 @@ export const MessageTimeline = memo(function MessageTimeline({
   messages,
   streamingTailId,
   streamKey = '',
+  sessionId = '',
   dotClass,
   getViewport,
   running = false,
@@ -52,6 +57,10 @@ export const MessageTimeline = memo(function MessageTimeline({
   /** Which conversation this is, so a reveal can survive the row swap mid-reply
    *  (the gateway retracts its placeholder row and lands the real one). */
   streamKey?: string;
+  /** The session these messages belong to — the translate route checks it owns
+   *  them. Same value as streamKey today, kept separate because streamKey is a
+   *  reveal-lane identifier and is allowed to stop being a session id. */
+  sessionId?: string;
   dotClass?: string;
   getViewport?: () => HTMLElement | null;
   /** A turn is in flight — the trailing run capsule shows live progress. */
@@ -169,7 +178,7 @@ export const MessageTimeline = memo(function MessageTimeline({
       key: r.key,
       node: (
         <div key={r.key} data-msg-id={r.ids.join(' ')} {...{ [WINDOW_ROW_ATTR]: r.key }}>
-          <MessageRow role={r.role} authoredBy={r.authoredBy} content={r.blocks} ts={r.createdAt} streamingTail={streamingTail} typing={typing} streamKey={streamKey} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
+          <MessageRow role={r.role} authoredBy={r.authoredBy} content={r.blocks} ts={r.createdAt} streamingTail={streamingTail} typing={typing} streamKey={streamKey} sessionId={sessionId} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
         </div>
       ),
     });
@@ -193,7 +202,14 @@ function TimelineBody({ items, getViewport }: { items: Array<{ key: string; node
   );
 }
 
-const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, streamingTail = false, typing = false, streamKey = '', streamingDot, askCardByQuestion }: { role: string; authoredBy?: string | null; content: Block[]; ts: Date | string; streamingTail?: boolean; typing?: boolean; streamKey?: string; streamingDot?: string; askCardByQuestion?: Map<string, any> }) {
+const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, streamingTail = false, typing = false, streamKey = '', sessionId = '', streamingDot, askCardByQuestion }: { role: string; authoredBy?: string | null; content: Block[]; ts: Date | string; streamingTail?: boolean; typing?: boolean; streamKey?: string; sessionId?: string; streamingDot?: string; askCardByQuestion?: Map<string, any> }) {
+  // Hooks first — everything below this can return early.
+  const translatePrefs = useTranslatePrefs();
+  // null = follow the automatic setting; true/false = the reader overrode it on
+  // THIS message. Row-local on purpose: the override is a glance at one reply,
+  // not a mode, and it should not outlive scrolling past.
+  const [translateOverride, setTranslateOverride] = useState<boolean | null>(null);
+
   // A role='user' row is not automatically the human. During a Brain takeover the
   // Brain speaks in this slot, and the gateway's watchers drop `[dispatch update]`
   // pokes here too. Rendering all three identically would make a driven
@@ -210,10 +226,32 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
   // gateway's system banners.
   const isSystem = role === 'system' || byMachine;
 
+  // A message this device sent translated is displayed as the Chinese that was
+  // typed. The English in `content` is the truth of what the agent received and
+  // stays one tap away — but a conversation where your own bubbles are in a
+  // language you never used is not readable. See lib/translate-outbound.ts.
+  const sentText = isHumanUser
+    ? content
+        .filter((b) => b.type === 'text' && (b as { text?: string }).text)
+        .map((b) => (b as { text?: string }).text ?? '')
+        .join('\n\n')
+        .trim()
+    : '';
+  const outboundOriginal = sentText ? originalFor(sentText) : undefined;
+  // The same row-local override drives both directions: on a reply it means
+  // "translate this", on your own message it means "show me what was sent".
+  const showSentText = translateOverride === true;
+  const displayContent =
+    outboundOriginal && !showSentText
+      ? content.map((b) =>
+          b.type === 'text' && (b as { text?: string }).text === sentText ? { ...b, text: outboundOriginal } : b,
+        )
+      : content;
+
   // Group consecutive same-tool tool_use calls. After folding, the only tool_use
   // that reaches here is `ask` (swapped for its card below), so this is mostly a
   // safety net for content shapes the fold does not recognise.
-  const grouped = groupConsecutiveTools(content, askCardByQuestion);
+  const grouped = groupConsecutiveTools(displayContent, askCardByQuestion);
   // Only the LAST text block of a row can be the one being written; an earlier
   // one was finished before this one started, and animating it again would
   // retype text the reader has already read.
@@ -260,11 +298,58 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
   // Flatten visible text blocks into one plain-text string so the hover Copy
   // action grabs only what the user can actually read (skip tool calls,
   // thinking, images). Used by MessageActions below.
-  const plainText = content
+  const plainText = displayContent
     .filter((b) => b.type === 'text' && (b as { text?: string }).text)
     .map((b) => (b as { text?: string }).text ?? '')
     .join('\n\n')
     .trim();
+
+  // Only replies get translated INTO Chinese. What the human sent is shown in
+  // what they typed — if it went out translated, composer-side bookkeeping put
+  // the original back (see lib/translate-outbound.ts), so there is nothing here
+  // to undo.
+  const translatable = translatePrefs.on && role === 'assistant' && !isSystem && !!plainText;
+  const translateMode: 'auto' | 'on' | 'off' = !translatable
+    ? 'off'
+    : translateOverride === null
+      // No override: follow the setting. `auto` still asks whether this
+      // particular reply needs it — the switch says "you may", the text says
+      // "there is a point". Without the autoIn check here, turning the
+      // automatic switch OFF would have translated every English reply anyway.
+      ? translatePrefs.autoIn
+        ? 'auto'
+        : 'off'
+      : translateOverride
+        ? 'on'
+        : 'off';
+  // What the button says it will do. In `auto` the answer depends on the text,
+  // so the label is computed from the same gate the renderer uses rather than
+  // from the flag alone — otherwise a Chinese reply under auto-translate would
+  // offer "show original" for a translation that never happened.
+  // Exactly the decision TranslatedText makes from the same inputs. Kept in
+  // step by hand because the button has to be labelled BEFORE the block renders
+  // — if these two ever disagree the button lies about what it will do.
+  const showingTranslated =
+    translateMode === 'on' || (translateMode === 'auto' && shouldAutoTranslate(plainText, 'zh'));
+  // The first press flips away from what is currently displayed; after that it
+  // alternates. Deriving it from `showingTranslated` rather than from the
+  // override alone is what makes the button work under auto-translate: there,
+  // `null` already means "showing the translation", so a first press that set
+  // the override to `true` would change nothing at all.
+  //
+  // The same expression covers a sent message, where nothing is "translated"
+  // but the Chinese original is what is on screen: false → first press true →
+  // showSentText → the English that actually went out.
+  const toggleTranslate = () => setTranslateOverride((v) => (v === null ? !showingTranslated : !v));
+  const translateAction: { label: string; title: string } | undefined = outboundOriginal
+    ? showSentText
+      ? { label: '中文', title: '显示你输入的中文' }
+      : { label: 'EN', title: '显示实际发送给 agent 的英文' }
+    : translatable && canTranslate(plainText)
+      ? showingTranslated
+        ? { label: '原文', title: '显示原文' }
+        : { label: '译', title: '翻译成中文' }
+      : undefined;
 
   // System messages (gateway-emitted banners like "[session restarted —
   // send a message to continue]") should read as inline notices, not real
@@ -328,7 +413,22 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
           </div>
         )}
         {grouped.map((g, i) => (
-          <GroupView key={i} group={g} dark={false} typing={typing && !onSenderSide && i === liveGroup} streamKey={streamKey} />
+          <GroupView
+            key={i}
+            group={g}
+            dark={false}
+            typing={typing && !onSenderSide && i === liveGroup}
+            // Only the live group may claim the session's reveal lane. It was
+            // already true in practice — a non-typing TypedText returns before
+            // it marks anything — but a translated block animates on its own
+            // schedule, so the restriction has to be explicit now.
+            streamKey={i === liveGroup ? streamKey : ''}
+            translate={
+              translateMode === 'off'
+                ? undefined
+                : { sessionId, target: 'zh' as const, mode: translateMode }
+            }
+          />
         ))}
         {streamingTail && (
           <div className="flex">
@@ -350,6 +450,8 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
             <MessageActions
               text={plainText}
               tone={isHumanUser ? 'on-dark' : 'on-light'}
+              translateAction={translateAction}
+              onTranslate={toggleTranslate}
             />
           )}
         </div>
@@ -358,11 +460,25 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
   );
 });
 
-// Compact hover-action cluster shown below a message bubble. Currently just
-// Copy; adding Edit/Regenerate later means dropping more icon buttons here.
-// `tone` flips foreground colors so the icon stays readable on light vs dark
+// Compact hover-action cluster shown below a message bubble. Copy, and — when
+// translation is switched on and this message has prose in it — a toggle
+// between the reply and its Chinese. Adding Edit/Regenerate later means
+// dropping more buttons here.
+//
+// `tone` flips foreground colors so the label stays readable on light vs dark
 // bubble backgrounds.
-function MessageActions({ text, tone }: { text: string; tone: 'on-light' | 'on-dark' }) {
+function MessageActions({
+  text,
+  tone,
+  translateAction,
+  onTranslate,
+}: {
+  text: string;
+  tone: 'on-light' | 'on-dark';
+  /** Undefined → the button is not offered at all (feature off, nothing to translate). */
+  translateAction?: { label: string; title: string };
+  onTranslate?: () => void;
+}) {
   const [copied, setCopied] = useState(false);
   const copy = useCallback(async () => {
     try {
@@ -374,7 +490,31 @@ function MessageActions({ text, tone }: { text: string; tone: 'on-light' | 'on-d
       // denied — silently swallow rather than throw at the user.
     }
   }, [text]);
+  const btn = cn(
+    'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono transition-opacity cursor-pointer',
+    // Desktop (hover-capable): hidden until the row is hovered or a key grabs
+    // focus, so the conversation stays clean to read. Touch devices
+    // (`hover: none`) can't discover via hover, so always show — slightly
+    // muted, tap to use.
+    'opacity-0 group-hover/msg:opacity-100 focus-visible:opacity-100',
+    '[@media(hover:none)]:opacity-80',
+    tone === 'on-dark'
+      ? 'text-background/80 hover:text-background hover:bg-background/10'
+      : 'text-muted-foreground hover:text-foreground hover:bg-accent',
+  );
   return (
+    <>
+      {translateAction && (
+        <button
+          type="button"
+          onClick={onTranslate}
+          aria-label={translateAction.title}
+          title={translateAction.title}
+          className={btn}
+        >
+          {translateAction.label}
+        </button>
+      )}
     <button
       type="button"
       onClick={copy}
@@ -397,6 +537,7 @@ function MessageActions({ text, tone }: { text: string; tone: 'on-light' | 'on-d
     >
       {copied ? '✓ copied' : 'copy'}
     </button>
+    </>
   );
 }
 
@@ -474,8 +615,22 @@ function groupConsecutiveTools(blocks: Block[], askCardByQuestion?: Map<string, 
   return out;
 }
 
-function GroupView({ group, dark, inline = false, typing = false, streamKey = '' }: { group: Group; dark: boolean; inline?: boolean; typing?: boolean; streamKey?: string }) {
-  if (group.kind === 'text') return <TypedText text={group.text} typing={typing} streamKey={streamKey} />;
+function GroupView({ group, dark, inline = false, typing = false, streamKey = '', translate }: { group: Group; dark: boolean; inline?: boolean; typing?: boolean; streamKey?: string; translate?: { sessionId: string; target: 'zh' | 'en'; mode: 'auto' | 'on' } }) {
+  if (group.kind === 'text') {
+    if (translate) {
+      return (
+        <TranslatedText
+          text={group.text}
+          typing={typing}
+          streamKey={streamKey}
+          sessionId={translate.sessionId}
+          target={translate.target}
+          mode={translate.mode}
+        />
+      );
+    }
+    return <TypedText text={group.text} typing={typing} streamKey={streamKey} />;
+  }
   if (group.kind === 'image') {
     return <ChatImage url={group.url} width={group.width} height={group.height} />;
   }

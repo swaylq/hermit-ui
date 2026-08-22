@@ -43,6 +43,8 @@ import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 import { EmptyChat } from '@/components/chat/empty-chat';
 import { TypingIndicator } from '@/components/chat/message-bits';
 import { MessageTimeline } from '@/components/chat/message-timeline';
+import { readTranslatePrefs } from '@/lib/translate-prefs';
+import { translateOutgoing } from '@/lib/translate-outbound';
 import { RunDetailContext, stepsFromRows, type RunResolver } from '@/components/chat/run-capsule';
 import { isMachineryBlock } from '@/components/chat/fold-runs';
 import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
@@ -576,6 +578,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // out-of-band writes (empty-state chip, voice transcript, send clear/restore)
   // via this imperative handle — so typing never re-renders SessionPane.
   const composerRef = useRef<ComposerHandle>(null);
+  // Outgoing sends are issued through this chain so they reach the server in the
+  // order they were typed. Only matters with outgoing auto-translate on: that
+  // send waits ~0.4s for the translation, and an untranslated message typed
+  // straight after would otherwise overtake it and land first.
+  const sendChainRef = useRef<Promise<void>>(Promise.resolve());
   // Realtime dictation lives in its own dock (above the composer) so the text
   // arriving ~36×/second re-renders the composer's own draft and nothing else.
   // All that reaches here is a ref to drive it and two booleans the mic draws.
@@ -1906,6 +1913,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   messages={view}
                   streamingTailId={streamingTailId}
                   streamKey={sessionId}
+                  sessionId={sessionId}
                   dotClass={status.dot}
                   getViewport={getViewport}
                   running={turnRunning}
@@ -2079,23 +2087,37 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               }
               composerRef.current?.clear();
               setAttachments([]);
-              send.mutate(
-                { sessionId, text, images, files },
-                {
-                  onSuccess: (msg) => {
-                    if (wasIdle) setStarterIds((s) => { const n = new Set(s); n.add(msg.id); return n; });
+              // Outgoing auto-translate. The optimistic bubble above already
+              // shows what was TYPED, so the send stays instant to the eye and
+              // the ~0.4s translation happens behind it; the real row lands in
+              // English and translate-outbound puts the Chinese back at render
+              // time. On any failure translateOutgoing returns the input, so
+              // the worst case is the message going out exactly as typed.
+              const prefs = readTranslatePrefs();
+              sendChainRef.current = sendChainRef.current.then(async () => {
+                const sendText =
+                  text && prefs.on && prefs.autoOut ? await translateOutgoing(sessionId, text) : text;
+                send.mutate(
+                  { sessionId, text: sendText, images, files },
+                  {
+                    onSuccess: (msg) => {
+                      if (wasIdle) setStarterIds((s) => { const n = new Set(s); n.add(msg.id); return n; });
+                    },
+                    onError: (err) => {
+                      setPending((p) => p.filter((x) => x.id !== optimisticId));
+                      setOptimisticQueue((q) => q.filter((x) => x.id !== optimisticId));
+                      composerRef.current?.restore(prevDraft);
+                      setAttachments(prevAttachments);
+                      // Surface WHY (e.g. over the image cap) instead of silently
+                      // restoring the draft — the old behavior read as "send is dead".
+                      setComposerNotice(err.message || 'Failed to send — please try again.');
+                    },
                   },
-                  onError: (err) => {
-                    setPending((p) => p.filter((x) => x.id !== optimisticId));
-                    setOptimisticQueue((q) => q.filter((x) => x.id !== optimisticId));
-                    composerRef.current?.restore(prevDraft);
-                    setAttachments(prevAttachments);
-                    // Surface WHY (e.g. over the image cap) instead of silently
-                    // restoring the draft — the old behavior read as "send is dead".
-                    setComposerNotice(err.message || 'Failed to send — please try again.');
-                  },
-                },
-              );
+                );
+                // A rejection anywhere in the chain would silently kill every
+                // send after it. Nothing above is supposed to throw — swallow
+                // it here so that stays true even if something starts to.
+              }).catch(() => {});
             }}
             ref={composerRef}
             attachments={attachments}

@@ -16,11 +16,18 @@ import { foldTail, newClaim, replaceTail, type DictationClaim } from '@/lib/dict
 import dynamic from 'next/dynamic';
 import { Plus, ArrowUp, FileText, X } from 'lucide-react';
 import { msgText, type Attachment } from '@/components/chat/lib';
+import { originalFor } from '@/lib/translate-outbound';
 
 // Lazy-load the zoomable image lightbox (its own ~20KB portal-overlay chunk) so
 // the chat composer's first paint doesn't carry it — only an attachment preview
 // opens it. ssr:false, no loading fallback (renders null while closed anyway). (P3-5)
 const ImageLightbox = dynamic(() => import('@/components/ui/image-lightbox').then((m) => m.ImageLightbox), { ssr: false });
+
+/** msgText, but showing a translated-on-send message as it was typed. */
+function queuePreview(content: unknown): string {
+  const t = msgText(content);
+  return (t && originalFor(t)) || t;
+}
 
 // The waiting-dispatch queue strip, shown between the LoopBar and the composer
 // whenever messages are queued behind the in-flight turn. Each item can be
@@ -56,7 +63,10 @@ export function QueueBar({
           {items.map((it, i) => (
             <li key={it.id} className="flex items-center gap-2 min-w-0">
               <span className="shrink-0 tabular-nums text-muted-foreground/60">{i + 1}.</span>
-              <span className="min-w-0 flex-1 truncate text-foreground/80">{msgText(it.content) || '（附件）'}</span>
+              {/* What the reader typed, not the English it was translated into
+                  on the way out — otherwise the bubble above shows Chinese and
+                  this strip shows English for the same message. */}
+              <span className="min-w-0 flex-1 truncate text-foreground/80">{queuePreview(it.content) || '（附件）'}</span>
               <button
                 type="button"
                 onClick={() => onCancel(it.id)}
