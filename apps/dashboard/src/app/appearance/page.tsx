@@ -25,6 +25,16 @@ function readMicShown() {
 // note in app/backends/page.tsx about why a second toggle STYLE is how two of
 // them drift) — this is that same markup, lifted to a local component now that
 // the page has more than one.
+//
+// The knob rides IN FLOW (inline-flex track + items-center), the way the
+// switches on Global Memory and Backends do, and NOT absolutely positioned.
+// The absolute version this page used to carry looked right on a wide screen
+// and was wrong everywhere: a `<button>` has `text-align: center` from the UA
+// stylesheet, and an absolutely-positioned child with no `left` takes its
+// STATIC position from that centring — 22px into a 44px track. The transform
+// then added its 2px/22px on top, so the knob sat 22px right of where it should
+// and, when on, entirely outside the track. Measured on a 390px viewport:
+// track 317→361, knob 361→381.
 function Switch({
   checked,
   onToggle,
@@ -47,14 +57,14 @@ function Switch({
       disabled={disabled}
       onClick={onToggle}
       className={cn(
-        'relative h-6 w-11 shrink-0 rounded-full transition-colors cursor-pointer',
+        'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer',
         disabled && 'opacity-40 cursor-not-allowed',
         mounted && checked ? 'bg-emerald-500' : 'bg-muted',
       )}
     >
       <span
         className={cn(
-          'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform',
+          'inline-block h-5 w-5 rounded-full bg-white shadow transition-transform',
           mounted && checked ? 'translate-x-[22px]' : 'translate-x-0.5',
         )}
       />
