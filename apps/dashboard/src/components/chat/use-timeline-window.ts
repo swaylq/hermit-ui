@@ -485,8 +485,15 @@ export function useTimelineWindow(
   const observedRows = useRef(new Set<Element>());
   useIsoLayoutEffect(() => {
     const vp = getViewport();
-    if (!vp || keys.length <= THRESHOLD) return;
-    if (plan.sig !== sig) return;
+    if (!vp) return;
+    // Below the threshold there is no window, no plan and nothing to measure for
+    // — but rows still settle above the reader and still shove them, so the
+    // observer runs whatever the list length. A short conversation with
+    // auto-translate on is exactly that case: every English reply is replaced by
+    // a shorter Chinese one seconds after it renders, and until now nothing gave
+    // those pixels back because the observer was inside the windowing branch.
+    const windowed = keys.length > THRESHOLD;
+    if (windowed && plan.sig !== sig) return;
     let ro = rowObserver.current;
     if (!ro && typeof ResizeObserver !== 'undefined') {
       ro = new ResizeObserver((entries) => {
@@ -521,9 +528,20 @@ export function useTimelineWindow(
           // Reads to the prepend anchor as a scroll it did not make — i.e. as
           // the user — which is exactly how it already treats `applyMeasured`'s
           // correction, so the two compose instead of fighting.
+          const beforeLift = vp.scrollTop;
           if (lift !== 0) vp.scrollTop += lift;
+          logWindow({
+            t: Date.now(), wanted: lift, applied: vp.scrollTop - beforeLift,
+            start: -1, end: settled.length, padTopPlan: 0, padTopNow: 0,
+            scrollTop: vp.scrollTop, scrollHeight: vp.scrollHeight,
+            rows: keysRef.current.length, measured: measured.current.size,
+            fit: fit.current ? fit.current.samples : 0,
+          });
         }
-        if (dirty) {
+        // `applyMeasured` and the write-back are about ESTIMATES, which only
+        // exist when the list is windowed. The lift above is about the reader,
+        // who is there either way.
+        if (dirty && keysRef.current.length > THRESHOLD) {
           applyMeasured();
           scheduleSave();
         }
@@ -549,14 +567,16 @@ export function useTimelineWindow(
         ro.observe(node);
         observedRows.current.add(node);
       }
-      if (measured.current.has(key)) continue;
+      // Measuring is only worth its forced layout when something reads the
+      // number, and only a windowed list does.
+      if (!windowed || measured.current.has(key)) continue;
       const h = (node as HTMLElement).getBoundingClientRect().height + ROW_GAP;
       if (h > ROW_GAP) {
         measured.current.set(key, h);
         changed = true;
       }
     }
-    if (firstRow && keys.length > THRESHOLD) {
+    if (firstRow && windowed) {
       const width = firstRow.getBoundingClientRect().width;
       const prev = proseMetrics.current;
       if (width > 0 && (!prev || Math.abs(prev.width - width) > WIDTH_EPSILON)) {
