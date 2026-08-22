@@ -790,10 +790,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
   // Put the reading position back BEFORE the browser paints the taller list.
   // A layout effect is the only place that can: by the time a rAF callback runs
-  // the displaced frame is already on screen, and a 200-message prepend can
-  // block the main thread long enough that "already on screen" lasts seconds.
+  // the displaced frame is already on screen. It fires once per committed chunk
+  // (`older.rows.length` grows by COMMIT_CHUNK each time, see use-older-pages),
+  // so `reassert` lands the correction before paint and `rearm` pushes the
+  // settle window out so the still-settling chunk cannot outlive the anchor.
   useIsoLayoutEffect(() => {
     prependAnchor.reassert();
+    prependAnchor.rearm();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [older.rows.length]);
 
@@ -833,21 +836,23 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // The live window is 60 MESSAGES, and folding turns those into far fewer rows
   // — three quarters of a busy session's messages are tool traffic that now
   // collapses into a handful of capsules. A session can therefore open with less
-  // than a screenful and no way to ask for more except the button, which is a
-  // worse first screen than before the fold. So: pull a page whenever there is
-  // not enough content to scroll, until there is.
+  // than a screenful and no way to ask for more except the button. So: pull a
+  // page whenever there is not enough content to scroll, until there is. Three
+  // screens is the target — on a phone the live window folds to as few as four
+  // rows, so one screen is not nearly enough to feel like a conversation.
   //
   // Capped rather than looped to exhaustion. Each pass is gated by the same
   // one-at-a-time guard as a user pull, and a page always makes the list longer
   // — but "longer" can be a few pixels if the whole page folds into a capsule
   // that was already there, so an uncapped version would walk a 26k-message
-  // session back to its beginning. Five pages is several screens of anything.
+  // session back to its beginning. Five pages of 60 is several screens of
+  // anything.
   const topUpsRef = useRef(0);
   useEffect(() => {
     if (anchored.active || !older.hasMore || older.loading) return;
     if (topUpsRef.current >= 5) return;
     const el = getViewport();
-    if (!el || el.scrollHeight > el.clientHeight * 1.5) return;
+    if (!el || el.scrollHeight > el.clientHeight * 3) return;
     topUpsRef.current += 1;
     const t = setTimeout(() => pullEarlier(), 0);
     return () => clearTimeout(t);

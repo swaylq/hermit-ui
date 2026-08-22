@@ -59,3 +59,47 @@ export function planFrame(hold: AnchorHold, input: FrameInput): FramePlan {
   const raw = input.anchorTop - offset;
   return { correction: Math.abs(raw) < eps ? 0 : raw, offset };
 }
+
+/**
+ * The bottom half of the same idea: hold the TAIL steady instead of a row.
+ *
+ * When the reader is pinned to the bottom (the top-up prefill that thickens a
+ * short conversation, or a pull that fires while they're at the end), the thing
+ * they're looking at is not a message near the top — it's the last row. Prepend
+ * history there must keep that tail in view, so the new history appears ABOVE,
+ * out of sight, rather than yanking the view to the top of what just arrived.
+ *
+ * The arithmetic mirrors `planFrame` exactly, with `scrollHeight` playing the
+ * role the anchor row's position played above:
+ *   · the user changes `scrollTop`, so that movement is adopted into the gap;
+ *   · content growing changes `scrollHeight` (and thus the gap), so that is
+ *     corrected by scrolling down the same amount.
+ */
+
+/** The distance between the bottom edge and the viewport bottom we're holding. */
+export type BottomHold = {
+  /** Distance from the content bottom to the viewport bottom, in px. */
+  gap: number;
+  /** `scrollTop` as it stood after our last correction. */
+  lastTop: number;
+};
+
+export type BottomFrameInput = {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  epsilon?: number;
+};
+
+export type BottomFramePlan = {
+  correction: number;
+  gap: number;
+};
+
+export function planBottomFrame(hold: BottomHold, input: BottomFrameInput): BottomFramePlan {
+  const eps = input.epsilon ?? EPSILON;
+  const userDelta = input.scrollTop - hold.lastTop;
+  const gap = hold.gap - userDelta;
+  const raw = input.scrollHeight - input.scrollTop - input.clientHeight - gap;
+  return { correction: Math.abs(raw) < eps ? 0 : raw, gap };
+}

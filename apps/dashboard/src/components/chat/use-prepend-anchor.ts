@@ -19,14 +19,39 @@
 // Holding it, though, is only half the job. Correcting by the anchor row's
 // total displacement also undoes the user's own scrolling — see
 // prepend-anchor-core.ts, which separates the two and is where the rule lives.
+//
+// There are two things a reader can be looking at when a prepend lands: a
+// message near the top (they scrolled up to read history), or the TAIL (they
+// are pinned to the bottom while a prefill thickens a short conversation).
+// `capture` decides which, and the hold keeps that one steady — the top anchor
+// via `planFrame`, the bottom anchor via `planBottomFrame`.
+//
+// The settle window here is not a fixed 1500ms from `capture()` any more. That
+// is what broke on the phone: the page was fetched and 120 rows parsed, and by
+// the time the first correction was due the deadline had already passed, so the
+// displaced frame painted uncorrected. Now the deadline is RE-ARMED after each
+// committed chunk and after each content resize (see `rearm`), with a hard cap
+// measured from `capture()`. A live streaming tail keeps resizing the content,
+// and without the cap the hold would never end.
 
 import { useCallback, useEffect, useRef } from 'react';
-import { planFrame, type AnchorHold } from './prepend-anchor-core';
+import { planFrame, planBottomFrame, type AnchorHold, type BottomHold } from './prepend-anchor-core';
 
-// How long to keep correcting after a prepend. Long enough to outlast markdown
-// + highlight + image layout, short enough that a later genuine scroll is the
-// user's own.
+// How long after the LAST activity (a chunk commit, or a content resize) we keep
+// correcting. Short enough that once the content is truly quiet we let go; long
+// enough to outlast a markdown + highlight + image pass on a slow phone.
 const SETTLE_MS = 1500;
+// Hard cap on one hold, measured from `capture()`. Covers a stream that keeps
+// resizing the content (each resize would otherwise re-arm forever).
+const MAX_HOLD_MS = 3000;
+// Below this distance from the bottom the reader counts as "pinned to the end",
+// so a prepend holds the tail rather than the top row. Matches the ~60px slack
+// the pin detector in chat/page.tsx uses.
+const BOTTOM_SLACK = 60;
+
+type Held =
+  | { mode: 'top'; id: string; hold: AnchorHold; until: number; maxUntil: number }
+  | { mode: 'bottom'; hold: BottomHold; until: number; maxUntil: number };
 
 export type PrependAnchor = {
   /** Record the current reading position. Call BEFORE triggering a prepend. */
@@ -40,6 +65,9 @@ export type PrependAnchor = {
    * thread it can be many frames too late.
    */
   reassert: () => void;
+  /** Extend the settle window — called after each chunk lands and on content
+   *  resize, so the deadline never expires before the work it guards has run. */
+  rearm: (ms?: number) => void;
   /** True while a captured anchor is still being held steady. */
   isHolding: () => boolean;
   /** Abandon the anchor entirely. */
@@ -47,18 +75,48 @@ export type PrependAnchor = {
 };
 
 export function usePrependAnchor(getViewport: () => HTMLElement | null): PrependAnchor {
-  const held = useRef<{ id: string; hold: AnchorHold; until: number } | null>(null);
+  const held = useRef<Held | null>(null);
   const raf = useRef<number | null>(null);
+  const ro = useRef<ResizeObserver | null>(null);
+
+  const release = useCallback(() => {
+    held.current = null;
+    if (raf.current !== null) {
+      cancelAnimationFrame(raf.current);
+      raf.current = null;
+    }
+    ro.current?.disconnect();
+    ro.current = null;
+  }, []);
+
+  const rearm = useCallback((ms: number = SETTLE_MS) => {
+    const h = held.current;
+    if (!h) return;
+    h.until = Math.min(Date.now() + ms, h.maxUntil);
+  }, []);
 
   const reassert = useCallback(() => {
     const h = held.current;
     if (!h) return;
-    if (Date.now() > h.until) {
-      held.current = null;
+    if (Date.now() > h.maxUntil || Date.now() > h.until) {
+      release();
       return;
     }
     const root = getViewport();
     if (!root) return;
+
+    if (h.mode === 'bottom') {
+      const { correction, gap } = planBottomFrame(h.hold, {
+        scrollTop: root.scrollTop,
+        scrollHeight: root.scrollHeight,
+        clientHeight: root.clientHeight,
+      });
+      h.hold.gap = gap;
+      if (correction !== 0) root.scrollTop += correction;
+      h.hold.lastTop = root.scrollTop;
+      return;
+    }
+
     const el = root.querySelector(`[data-msg-id~="${CSS.escape(h.id)}"]`) as HTMLElement | null;
     if (!el) return;
     const anchorTop = el.getBoundingClientRect().top - root.getBoundingClientRect().top;
@@ -69,7 +127,7 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
     // both ends, and a predicted value that never happened would read as a user
     // scroll on the next frame and shift the anchor by the difference.
     h.hold.lastTop = root.scrollTop;
-  }, [getViewport]);
+  }, [getViewport, release]);
 
   // A ResizeObserver only fires when the observed box changes. An image decoding
   // inside an already-sized row, a font swap, a code block gaining a scrollbar —
@@ -88,38 +146,69 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
   const capture = useCallback(() => {
     const root = getViewport();
     if (!root) return;
-    const vpTop = root.getBoundingClientRect().top;
-    // The topmost message still visible: the first whose bottom edge has not
-    // passed the top of the viewport. That's what the user is reading.
-    for (const el of Array.from(root.querySelectorAll('[data-msg-id]'))) {
-      const r = el.getBoundingClientRect();
-      if (r.bottom > vpTop) {
-        const id = (el.getAttribute('data-msg-id') ?? '').split(' ')[0];
-        if (id) {
-          held.current = {
-            id,
-            hold: { offset: r.top - vpTop, lastTop: root.scrollTop },
-            until: Date.now() + SETTLE_MS,
-          };
-          pump();
+    const until = Date.now() + SETTLE_MS;
+    const maxUntil = Date.now() + MAX_HOLD_MS;
+    let captured = false;
+
+    // Pinned to the bottom → hold the TAIL, so a prefill prepends history above
+    // and leaves the last messages where they were instead of jumping the view
+    // to the top of what just arrived.
+    if (root.scrollHeight - root.scrollTop - root.clientHeight < BOTTOM_SLACK) {
+      held.current = {
+        mode: 'bottom',
+        hold: { gap: root.scrollHeight - root.scrollTop - root.clientHeight, lastTop: root.scrollTop },
+        until,
+        maxUntil,
+      };
+      captured = true;
+    } else {
+      const vpTop = root.getBoundingClientRect().top;
+      // The topmost message still visible: the first whose bottom edge has not
+      // passed the top of the viewport. That's what the user is reading.
+      for (const el of Array.from(root.querySelectorAll('[data-msg-id]'))) {
+        const r = el.getBoundingClientRect();
+        if (r.bottom > vpTop) {
+          const id = (el.getAttribute('data-msg-id') ?? '').split(' ')[0];
+          if (id) {
+            held.current = {
+              mode: 'top',
+              id,
+              hold: { offset: r.top - vpTop, lastTop: root.scrollTop },
+              until,
+              maxUntil,
+            };
+            captured = true;
+          }
+          break;
         }
-        return;
       }
     }
-  }, [getViewport, pump]);
 
-  const release = useCallback(() => {
-    held.current = null;
-  }, []);
+    if (captured) {
+      pump();
+      // Observe the content box so a resize that lands AFTER the quiet window
+      // (an image getting its intrinsic size, a font swap) re-arms the hold and
+      // is caught instead of shoving the text once we've let go.
+      const content = root.firstElementChild as HTMLElement | null;
+      ro.current?.disconnect();
+      if (content && typeof ResizeObserver !== 'undefined') {
+        const obs = new ResizeObserver(() => {
+          if (held.current) rearm();
+        });
+        obs.observe(content);
+        ro.current = obs;
+      }
+    }
+  }, [getViewport, pump, rearm]);
 
   const isHolding = useCallback(() => held.current !== null, []);
 
   useEffect(
     () => () => {
-      if (raf.current !== null) cancelAnimationFrame(raf.current);
+      release();
     },
-    []
+    [release]
   );
 
-  return { capture, reassert, isHolding, release };
+  return { capture, reassert, rearm, isHolding, release };
 }

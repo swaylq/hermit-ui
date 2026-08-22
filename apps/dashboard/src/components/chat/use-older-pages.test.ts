@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pageBefore, OLDER_PAGE } from './use-older-pages';
+import { pageBefore, chunksBottomFirst, OLDER_PAGE, COMMIT_CHUNK } from './use-older-pages';
 
 // The seam between a cached page and the rest of history. Getting it wrong does
 // not throw — it shows a turn twice, or drops one, the next time someone reads
@@ -58,11 +58,41 @@ test('Date and string timestamps are the same order', () => {
 // page and then refusing to serve it because the reader wants a bigger one
 // would spend the request and keep the wait.
 test('a page is one size, and the warm fetch uses it', () => {
-  assert.equal(OLDER_PAGE, 120);
+  assert.equal(OLDER_PAGE, 60);
   const many = Array.from({ length: OLDER_PAGE + 1 }, (_, i) =>
     row(`m${String(i).padStart(4, '0')}`, new Date(1_700_000_000_000 + i * 1000).toISOString()));
   const edge = many[many.length - 1];
   const page = pageBefore(many, { createdAt: edge.createdAt, id: edge.id }, OLDER_PAGE);
   assert.equal(page?.length, OLDER_PAGE);
   assert.equal(page?.[page.length - 1].id, many[many.length - 2].id);
+});
+
+// The commit seam: a page lands in several chunks, and between them the prepend
+// anchor re-asserts. If a chunk duplicates or drops a row the reader meets a
+// turn twice — or never — exactly the failure pageBefore exists to prevent.
+test('a page is committed in chunks, newest first, with no dup and no gap', () => {
+  const page = Array.from({ length: OLDER_PAGE }, (_, i) =>
+    row(`p${String(i).padStart(3, '0')}`, new Date(1_700_000_000_000 + i * 1000).toISOString()));
+  const chunks = chunksBottomFirst(page, COMMIT_CHUNK);
+  assert.equal(chunks.length, OLDER_PAGE / COMMIT_CHUNK);
+  // Newest chunk first: the rows nearest the reader land before the older ones.
+  assert.equal(chunks[0][0].id, `p${String(OLDER_PAGE - COMMIT_CHUNK).padStart(3, '0')}`);
+  // The seam: the newest chunk's first row is exactly one row after the oldest
+  // chunk's last row — no gap, no overlap.
+  const oldest = chunks[chunks.length - 1];
+  assert.equal(oldest[oldest.length - 1].id, `p${String(OLDER_PAGE - COMMIT_CHUNK - 1).padStart(3, '0')}`);
+  // All 60 ids, exactly once, in the original order once concatenated oldest-first.
+  const flattened = chunks.flatMap((c) => c.map((r) => r.id));
+  assert.equal(flattened.length, OLDER_PAGE);
+  assert.equal(new Set(flattened).size, OLDER_PAGE);
+  assert.deepEqual([...chunks[1].map((r) => r.id), ...chunks[0].map((r) => r.id)], page.map((r) => r.id));
+});
+
+test('a short page still commits whole, no empty chunk', () => {
+  const page = Array.from({ length: COMMIT_CHUNK - 5 }, (_, i) =>
+    row(`s${String(i).padStart(3, '0')}`, new Date(1_700_000_000_000 + i * 1000).toISOString()));
+  const chunks = chunksBottomFirst(page, COMMIT_CHUNK);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].length, page.length);
+  assert.deepEqual(chunks[0].map((r) => r.id), page.map((r) => r.id));
 });

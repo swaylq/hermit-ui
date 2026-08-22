@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planFrame, EPSILON } from './prepend-anchor-core';
+import { planFrame, planBottomFrame, EPSILON } from './prepend-anchor-core';
 
 // A stand-in for the scroll viewport: content of a known height, a reading
 // position, and one row we're holding steady. `grow` prepends height ABOVE the
@@ -113,4 +113,64 @@ test('clamping at the top is not mistaken for a user scroll', () => {
   frame(vp, hold);
   assert.equal(frame(vp, hold), 0); // and the next frame is quiet, not chasing the clamp
   assert.equal(vp.scrollTop, 0);
+});
+
+// ── the bottom hold ──────────────────────────────────────────────────────────
+// Same rule, mirrored: a reader pinned to the end keeps the tail steady while
+// history is prepended above it.
+
+// A stand-in for a viewport that is being held at its bottom edge.
+function bottomViewport(opts: { height: number; client: number; top: number }) {
+  const vp = {
+    scrollHeight: opts.height,
+    clientHeight: opts.client,
+    scrollTop: opts.top,
+    prepend(px: number) {
+      this.scrollHeight += px; // history landed above; scrollTop is untouched
+    },
+    user(px: number) {
+      const next = Math.max(0, Math.min(this.scrollTop + px, this.scrollHeight - this.clientHeight));
+      this.scrollTop = next;
+    },
+  };
+  return vp;
+}
+
+function bottomFrame(vp: ReturnType<typeof bottomViewport>, hold: { gap: number; lastTop: number }) {
+  const { correction, gap } = planBottomFrame(hold, {
+    scrollTop: vp.scrollTop,
+    scrollHeight: vp.scrollHeight,
+    clientHeight: vp.clientHeight,
+  });
+  hold.gap = gap;
+  if (correction !== 0) vp.user(correction);
+  hold.lastTop = vp.scrollTop;
+  return correction;
+}
+
+test('a bottom-pinned reader stays on the tail when history is prepended', () => {
+  const vp = bottomViewport({ height: 600, client: 600, top: 0 });
+  const hold = { gap: 0, lastTop: 0 };
+  vp.prepend(2200);
+  assert.equal(bottomFrame(vp, hold), 2200);
+  assert.equal(vp.scrollTop, 2200); // scrolled down by exactly what arrived
+  assert.equal(vp.scrollHeight - vp.scrollTop - vp.clientHeight, 0); // still on the bottom
+});
+
+test('a user scroll during a bottom hold is never undone', () => {
+  const vp = bottomViewport({ height: 3000, client: 600, top: 2400 });
+  const hold = { gap: 0, lastTop: 2400 };
+  vp.user(-120); // one wheel notch up, off the bottom
+  assert.equal(bottomFrame(vp, hold), 0);
+  assert.equal(vp.scrollTop, 2280); // the notch stands
+  assert.equal(hold.gap, 120); // the gap tracks the reader instead
+});
+
+test('prepend and a user scroll in the same frame: only the prepend is corrected', () => {
+  const vp = bottomViewport({ height: 3000, client: 600, top: 2400 });
+  const hold = { gap: 0, lastTop: 2400 };
+  vp.prepend(2200);
+  vp.user(-120);
+  assert.equal(bottomFrame(vp, hold), 2200);
+  assert.equal(vp.scrollTop, 2400 - 120 + 2200);
 });
