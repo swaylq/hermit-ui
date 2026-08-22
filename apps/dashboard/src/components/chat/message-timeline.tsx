@@ -20,7 +20,7 @@ import { sinkDeliverables, isAskToolUse } from '@/components/chat/sink-deliverab
 import { StreamingDots, TypedText, DateDivider } from '@/components/chat/message-bits';
 import { TranslatedText } from '@/components/chat/translated-text';
 import { useTranslatePrefs } from '@/lib/translate-prefs';
-import { canTranslate, shouldAutoTranslate } from '@/lib/translate-text';
+import { shouldAutoTranslate } from '@/lib/translate-text';
 import { originalFor } from '@/lib/translate-outbound';
 import { ToolChip, ToolBatchChip } from '@/components/chat/tool-chips';
 import { InteractionCard } from '@/components/chat/interaction-card';
@@ -351,7 +351,11 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
     ? showSentText
       ? { label: '中文', title: '显示你输入的中文' }
       : { label: 'EN', title: '显示实际发送给 agent 的英文' }
-    : translatable && canTranslate(plainText)
+    // Offered only when translating would actually change something — the same
+    // gate the renderer uses. A reply already in Chinese used to carry a 「译」
+    // button that spent a round trip to hand back the identical text; so did an
+    // acknowledgement with no prose in it.
+    : translatable && shouldAutoTranslate(plainText, 'zh')
       ? showingTranslated
         ? { label: '原文', title: '显示原文' }
         : { label: '译', title: '翻译成中文' }

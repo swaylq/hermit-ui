@@ -180,15 +180,6 @@ export function shouldAutoTranslate(src: string, target: Lang): boolean {
 }
 
 /**
- * Is there anything at all a manual translate could do? Used to decide whether
- * the button appears, so it does not offer to translate a screenshot caption or
- * a bare stack trace.
- */
-export function canTranslate(src: string): boolean {
-  return splitBlocks(src).some((b) => b.translatable);
-}
-
-/**
  * Cache key for one translated block. The SOURCE TEXT is the key, never the
  * message id: the gateway retracts its placeholder row and lands the real one
  * under a different id mid-reply, and keying by id would throw away every

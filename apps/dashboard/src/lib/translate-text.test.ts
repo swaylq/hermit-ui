@@ -14,7 +14,6 @@ import {
   splitBlocks,
   joinBlocks,
   shouldAutoTranslate,
-  canTranslate,
   blockKey,
 } from './translate-text';
 
@@ -148,11 +147,15 @@ test('auto-translate fires only across a language boundary', () => {
   assert.equal(shouldAutoTranslate('```sh\nls -la\n```', 'zh'), false, 'all code');
 });
 
-test('the manual button is offered whenever a block has prose in it', () => {
-  assert.equal(canTranslate('Done.'), true, 'the user asking IS the signal');
-  assert.equal(canTranslate('```sh\nls -la\n```'), false);
-  assert.equal(canTranslate('---'), false);
-  assert.equal(canTranslate(''), false);
+test('the manual button rides the same gate — it is never offered for a no-op', () => {
+  // It used to be offered whenever a block held any prose at all, on the theory
+  // that the user asking IS the signal. But a reply already in Chinese then
+  // carried a 「译」 button that spent a round trip to return the same text.
+  assert.equal(shouldAutoTranslate('网关重启把会话杀掉了，已经修好。', 'zh'), false);
+  assert.equal(shouldAutoTranslate('Here is the root cause of the failure.', 'zh'), true);
+  assert.equal(shouldAutoTranslate('Done.', 'zh'), false, 'nothing to gain');
+  assert.equal(shouldAutoTranslate('```sh\nls -la\n```', 'zh'), false);
+  assert.equal(shouldAutoTranslate('', 'zh'), false);
 });
 
 // ── cache keys ───────────────────────────────────────────────────────────────
