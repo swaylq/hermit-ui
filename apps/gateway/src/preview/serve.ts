@@ -16,6 +16,7 @@
 // registered static root (realpath-contained, dotfiles refused), and the only
 // sockets that can be reached are the loopback targets pinned at registration.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -23,9 +24,10 @@ import path from 'node:path';
 import type { Duplex } from 'node:stream';
 import { PREVIEW_SERVE_PORT } from '../config';
 import { getById, soleEntry, touch, type PreviewEntry } from './registry';
-import { addSseClient, injectIntoHtml } from './reload';
+import { addSseClient, htmlInjector, injectIntoHtml } from './reload';
 
-const MAX_INJECT_BYTES = 2 * 1024 * 1024; // HTML bigger than this streams raw, uninjected
+/** A static file bigger than this is served raw rather than read into memory to be injected. */
+const MAX_INJECT_BYTES = 2 * 1024 * 1024;
 const COOKIE = 'hermit_pv';
 
 const MIME: Record<string, string> = {
@@ -216,7 +218,7 @@ function serveStatic(entry: PreviewEntry, rest: string, req: http.IncomingMessag
   if (isHtml && entry.reload && st.size <= MAX_INJECT_BYTES) {
     fs.readFile(real, 'utf8', (err, html) => {
       if (err) return notFound(res);
-      const out = Buffer.from(injectIntoHtml(html, entry.previewId));
+      const out = Buffer.from(injectIntoHtml(html, entry.previewId, entry.watchDir != null));
       res.writeHead(200, { ...baseHeaders, 'content-length': String(out.byteLength) });
       res.end(out);
     });
@@ -244,8 +246,17 @@ function targetParts(entry: PreviewEntry): { host: string; port: number; basePat
   return { host: u.hostname === 'localhost' ? '127.0.0.1' : u.hostname.replace(/^\[|\]$/g, ''), port: Number(u.port), basePath: u.pathname.replace(/\/$/, '') };
 }
 
-/** Directives like frame-ancestors would stop the dashboard embedding the preview; strip only that. */
-function stripAntiEmbed(headers: http.IncomingHttpHeaders): Record<string, string | string[]> {
+/**
+ * Rewrite the upstream's response headers for life inside the dashboard's frame.
+ *
+ * Two edits, both to policies the app set for a context it is no longer in:
+ * frame-ancestors (and X-Frame-Options) would refuse the embedding outright, and
+ * a script-src without 'unsafe-inline' — helmet's default — would refuse the
+ * snippet we are about to splice in, leaving the panel's controls dead with no
+ * clue why. `nonce` is that snippet's, and is allowed through rather than the
+ * directive being dropped: the app's own protection stays exactly as strict.
+ */
+export function stripAntiEmbed(headers: http.IncomingHttpHeaders, nonce?: string | null): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {};
   for (const [k, v] of Object.entries(headers)) {
     if (v === undefined) continue;
@@ -253,7 +264,7 @@ function stripAntiEmbed(headers: http.IncomingHttpHeaders): Record<string, strin
     if (key === 'x-frame-options') continue;
     if (key === 'content-security-policy' || key === 'content-security-policy-report-only') {
       const filtered = (Array.isArray(v) ? v : [v])
-        .map((h) => h.split(';').filter((d) => !/^\s*frame-ancestors/i.test(d)).join(';'))
+        .map((h) => rewriteCsp(h, nonce))
         .filter((h) => h.trim().length > 0);
       if (filtered.length) out[k] = filtered.length === 1 ? filtered[0] : filtered;
       continue;
@@ -261,6 +272,19 @@ function stripAntiEmbed(headers: http.IncomingHttpHeaders): Record<string, strin
     out[k] = v as string | string[];
   }
   return out;
+}
+
+/** Drop frame-ancestors; let our nonce through whichever directive governs scripts. */
+function rewriteCsp(policy: string, nonce?: string | null): string {
+  const kept = policy.split(';').filter((d) => !/^\s*frame-ancestors/i.test(d));
+  if (nonce) {
+    // script-src if it exists, else default-src, which script-src falls back to.
+    // Neither present means scripts are unrestricted and there is nothing to do.
+    let i = kept.findIndex((d) => /^\s*script-src\s/i.test(d));
+    if (i === -1) i = kept.findIndex((d) => /^\s*default-src\s/i.test(d));
+    if (i !== -1) kept[i] = `${kept[i].trimEnd()} 'nonce-${nonce}'`;
+  }
+  return kept.join(';');
 }
 
 function serveProxy(entry: PreviewEntry, rest: string, search: string, req: http.IncomingMessage, res: http.ServerResponse) {
@@ -275,43 +299,41 @@ function serveProxy(entry: PreviewEntry, rest: string, search: string, req: http
   delete headers.connection;
 
   const upstream = http.request({ host, port, method: req.method, path: forwardPath, headers }, (ur) => {
-    const outHeaders = stripAntiEmbed(ur.headers);
     const ctype = String(ur.headers['content-type'] ?? '');
     const isHtml = ctype.includes('text/html');
-    const wantInject = isHtml && entry.reload && entry.watchDir != null;
-    const len = Number(ur.headers['content-length'] ?? NaN);
+    // Injected even without --watch: a dev server owns its own freshness, but
+    // the panel's back/forward/picker bridge has to come from somewhere, and
+    // the reload half is left out below when there is nothing to watch.
+    //
+    // Three responses are left alone. A HEAD, a 204 or a 304 has no body to
+    // splice into (and a body on a 304 is a protocol error, not a preview). A
+    // compressed one we asked not to be compressed is a server that ignores
+    // accept-encoding — splicing text into a gzip stream would break the page
+    // outright, so it keeps its bytes and loses the controls.
+    const encoding = String(ur.headers['content-encoding'] ?? '').trim().toLowerCase();
+    const hasBody = req.method !== 'HEAD' && ur.statusCode !== 204 && ur.statusCode !== 304;
+    const plain = encoding === '' || encoding === 'identity';
+    const wantInject = isHtml && entry.reload && hasBody && plain;
+
+    const nonce = wantInject ? crypto.randomBytes(16).toString('base64') : null;
+    const outHeaders = stripAntiEmbed(ur.headers, nonce);
 
     if (isHtml) {
       outHeaders['set-cookie'] = appendSetCookie(outHeaders['set-cookie'], `${COOKIE}=${entry.previewId}; Path=/; SameSite=Lax; Max-Age=86400`);
     }
 
-    if (wantInject && (Number.isNaN(len) || len <= MAX_INJECT_BYTES)) {
-      const chunks: Buffer[] = [];
-      let size = 0;
-      let bailed = false;
-      ur.on('data', (c: Buffer) => {
-        if (bailed) return;
-        size += c.length;
-        if (size > MAX_INJECT_BYTES) {
-          // Too big after all — flush what we have and fall back to streaming.
-          bailed = true;
-          delete outHeaders['content-length'];
-          res.writeHead(ur.statusCode ?? 200, outHeaders);
-          for (const b of chunks) res.write(b);
-          res.write(c);
-          ur.pipe(res);
-          return;
-        }
-        chunks.push(c);
-      });
-      ur.on('end', () => {
-        if (bailed) return;
-        const out = Buffer.from(injectIntoHtml(Buffer.concat(chunks).toString('utf8'), entry.previewId));
-        outHeaders['content-length'] = String(out.byteLength);
-        res.writeHead(ur.statusCode ?? 200, outHeaders);
-        res.end(out);
-      });
+    if (wantInject) {
+      // The body grows by the snippet and we are not going to count it, so the
+      // upstream's framing headers go and Node re-frames the response itself.
+      // Streaming (htmlInjector) rather than buffering, so a dev server that
+      // streams its SSR is not held at a blank page until it finishes.
+      delete outHeaders['content-length'];
+      delete outHeaders['transfer-encoding'];
+      res.writeHead(ur.statusCode ?? 200, outHeaders);
+      const inject = htmlInjector(entry.previewId, entry.watchDir != null, nonce);
       ur.on('error', () => res.destroy());
+      inject.on('error', () => res.destroy());
+      ur.pipe(inject).pipe(res);
       return;
     }
 

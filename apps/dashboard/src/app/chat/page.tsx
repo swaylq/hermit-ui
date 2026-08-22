@@ -1446,6 +1446,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     composerRef.current?.setText(text);
   }, []);
 
+  // An element picked in the live-preview panel → APPEND its selector to the
+  // draft, backticked. Appended, not set: picking one is a step in a sentence
+  // you were already typing ("把 `…` 的间距收紧"), not a fresh prompt.
+  const pickSelector = useCallback((selector: string) => {
+    composerRef.current?.appendText(`\`${selector}\``);
+  }, []);
+
   // Voice transcript → APPEND to the current draft (never clobber typed text),
   // then focus + caret-to-end + resize (all handled inside ComposeBar).
   // Stable so the memo'd VoiceMic doesn't get fresh props on every SSE tick.
@@ -2132,7 +2139,14 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         </div>
       </div>
       {previewOpen && livePreview && (
-        <LivePreviewPanel preview={livePreview} onClose={() => setPreviewOpenUrl(null)} />
+        // key: a re-registration rotates the URL, and the panel's history
+        // bookkeeping is only true of the frame it was counted in.
+        <LivePreviewPanel
+          key={livePreview.url}
+          preview={livePreview}
+          onClose={() => setPreviewOpenUrl(null)}
+          onPickSelector={pickSelector}
+        />
       )}
       </div>
     </>

@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { ServerResponse } from 'node:http';
+import { Transform } from 'node:stream';
+import { bridgeSnippet, nonceAttr } from './bridge';
 
 const SCAN_INTERVAL_MS = 1_000;
 const MAX_SCAN_ENTRIES = 5_000;
@@ -174,19 +176,190 @@ export function dropPreview(previewId: string): void {
 
 // ── HTML injection ───────────────────────────────────────────────────────────
 
-/** The auto-reload client, injected before </body> of served HTML. Inline — no extra route, auto-reconnects via EventSource. */
-export function reloadSnippet(previewId: string): string {
+/** The auto-reload client, injected into served HTML. Inline — no extra route, auto-reconnects via EventSource. */
+export function reloadSnippet(previewId: string, nonce?: string | null): string {
   return (
-    `<script data-hermit-preview>(function(){try{` +
+    `<script data-hermit-preview${nonceAttr(nonce)}>(function(){try{` +
     `var es=new EventSource("/p/${previewId}/__hermit__/sse");` +
     `es.onmessage=function(ev){if(ev.data==="reload"){es.close();location.reload();}};` +
     `}catch(e){}})();</script>`
   );
 }
 
-export function injectIntoHtml(html: string, previewId: string): string {
-  const snippet = reloadSnippet(previewId);
-  const i = html.toLowerCase().lastIndexOf('</body>');
-  if (i === -1) return html + snippet;
-  return html.slice(0, i) + snippet + html.slice(i);
+/**
+ * What gets spliced into served HTML: always the panel bridge (back/forward,
+ * reload, element picker — see bridge.ts), plus the auto-reload client when
+ * something is actually being watched. A proxied dev server with its own HMR
+ * has nothing to watch, but it still wants the bridge.
+ */
+export function previewSnippet(previewId: string, withReload: boolean, nonce?: string | null): string {
+  return (withReload ? reloadSnippet(previewId, nonce) : '') + bridgeSnippet(nonce);
+}
+
+// ── where the snippet goes ───────────────────────────────────────────────────
+//
+// The end of <head> if there is one, else the end of <body>, else the end of the
+// document. head first, because the bridge should be listening before the page's
+// own scripts start moving history around.
+//
+// Finding it is a scan, not an indexOf, because `</head>` is ordinary text
+// inside a <script>, a <style>, a <title> or a comment — splicing there drops a
+// <script> tag into the middle of somebody's string literal and corrupts the
+// page. So the scan tracks whether it is inside raw text, and skips it.
+//
+// Bytes, not a decoded string: a proxied chunk boundary can fall in the middle
+// of a multi-byte character, and decoding half of one turns it into U+FFFD. The
+// markup that matters here is pure ASCII, so bytes lose nothing.
+//
+// (Not handled, deliberately: `</head>` inside a <template>, and the script-data
+// double-escaped state. Both leave the snippet somewhere harmless rather than
+// somewhere wrong, and an HTML parser is not worth carrying for them.)
+
+const b = (s: string) => Buffer.from(s, 'ascii');
+const HEAD_CLOSE = b('</head>');
+const BODY_CLOSE = b('</body>');
+const COMMENT_OPEN = b('<!--');
+const COMMENT_CLOSE = b('-->');
+/** Elements whose content is text, not markup — anything tag-shaped inside is not a tag. */
+const RAW_TEXT: Array<[Buffer, Buffer]> = [
+  [b('<script'), b('</script')],
+  [b('<style'), b('</style')],
+  [b('<textarea'), b('</textarea')],
+  [b('<title'), b('</title')],
+];
+/** The longest thing we match, so a caller streaming chunks knows how far back to re-read. */
+export const SCAN_LOOKBACK = Math.max(...RAW_TEXT.flat().map((n) => n.length), HEAD_CLOSE.length, COMMENT_CLOSE.length);
+
+/** ASCII-case-insensitive "does `needle` start at buf[i]", false if it would run off the end. */
+function matchAt(buf: Buffer, i: number, needle: Buffer): boolean {
+  if (i + needle.length > buf.length) return false;
+  for (let j = 0; j < needle.length; j++) {
+    let c = buf[i + j];
+    if (c >= 0x41 && c <= 0x5a) c += 0x20;
+    if (c !== needle[j]) return false;
+  }
+  return true;
+}
+
+/** A tag name ends at whitespace, `/` or `>` — so `<style>` opens one and `<styled-x>` does not. */
+function endsTagName(c: number | undefined): boolean {
+  return c === undefined || c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0c || c === 0x0d || c === 0x2f || c === 0x3e;
+}
+
+export interface ScanState {
+  /** null = ordinary markup; otherwise the terminator we are looking for. */
+  until: Buffer | null;
+}
+
+export const freshScan = (): ScanState => ({ until: null });
+
+/**
+ * Scan `buf[from..limit)` for the insertion point, carrying `state` across calls.
+ * Returns -1 when there is none in range — the caller reads more, or gives up.
+ * `limit` must leave SCAN_LOOKBACK bytes of slack unless the input is complete,
+ * or a marker straddling the end is missed and the state goes wrong.
+ */
+export function scanForInsertPoint(buf: Buffer, from: number, limit: number, state: ScanState): number {
+  let i = Math.max(0, from);
+  const end = Math.min(limit, buf.length);
+  while (i < end) {
+    if (state.until) {
+      if (matchAt(buf, i, state.until)) {
+        i += state.until.length;
+        state.until = null;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (buf[i] !== 0x3c /* < */) {
+      i += 1;
+      continue;
+    }
+    if (matchAt(buf, i, COMMENT_OPEN)) {
+      state.until = COMMENT_CLOSE;
+      i += COMMENT_OPEN.length;
+      continue;
+    }
+    if (matchAt(buf, i, HEAD_CLOSE) || matchAt(buf, i, BODY_CLOSE)) return i;
+    let opened = false;
+    for (const [open, close] of RAW_TEXT) {
+      if (matchAt(buf, i, open) && endsTagName(buf[i + open.length])) {
+        state.until = close;
+        i += open.length;
+        opened = true;
+        break;
+      }
+    }
+    if (!opened) i += 1;
+  }
+  return -1;
+}
+
+/** The whole-document form, for HTML read off disk. */
+export function findInsertPoint(html: string): number {
+  const buf = Buffer.from(html, 'utf8');
+  return scanForInsertPoint(buf, 0, buf.length, freshScan());
+}
+
+export function injectIntoHtml(html: string, previewId: string, withReload: boolean, nonce?: string | null): string {
+  const snippet = previewSnippet(previewId, withReload, nonce);
+  const at = findInsertPoint(html);
+  if (at === -1) return html + snippet;
+  const buf = Buffer.from(html, 'utf8');
+  return buf.subarray(0, at).toString('utf8') + snippet + buf.subarray(at).toString('utf8');
+}
+
+/**
+ * The same splice, for a response we are proxying rather than reading off disk.
+ *
+ * Buffering the whole document would be simpler, and was what the --watch path
+ * did — but now that EVERY proxied preview is injected, a dev server that
+ * streams its SSR would be held at a blank page until it finished. So: hold only
+ * until the insertion point shows up (it lives in the first kilobyte of any real
+ * document), splice there, and pipe the rest through untouched.
+ *
+ * Markup that never shows one: past SCAN_LIMIT we stop looking and stream on,
+ * appending the snippet at the end instead.
+ */
+export function htmlInjector(previewId: string, withReload: boolean, nonce?: string | null): Transform {
+  const snippet = Buffer.from(previewSnippet(previewId, withReload, nonce), 'utf8');
+  const SCAN_LIMIT = 128 * 1024;
+  const state = freshScan();
+  let held: Buffer | null = Buffer.alloc(0);
+  let scanned = 0;
+  let placed = false;
+
+  return new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      if (held === null) return cb(null, chunk); // already spliced, or given up
+      held = held.length ? Buffer.concat([held, chunk]) : chunk;
+      // Stop short of the end: a marker split across this boundary must be read
+      // again with the next chunk, and re-reading is only safe for bytes whose
+      // state we have not already advanced past.
+      const limit = Math.max(0, held.length - SCAN_LOOKBACK + 1);
+      const at = scanForInsertPoint(held, scanned, limit, state);
+      if (at !== -1) {
+        const out = Buffer.concat([held.subarray(0, at), snippet, held.subarray(at)]);
+        held = null;
+        placed = true;
+        return cb(null, out);
+      }
+      scanned = limit;
+      if (held.length >= SCAN_LIMIT) {
+        const out = held;
+        held = null; // stream the rest raw; flush() appends the snippet
+        return cb(null, out);
+      }
+      cb();
+    },
+    flush(cb) {
+      if (placed) return cb();
+      if (held === null) return cb(null, snippet);
+      // The document is complete now, so the tail we were holding back is safe
+      // to scan to the very end.
+      const at = scanForInsertPoint(held, scanned, held.length, state);
+      cb(null, at === -1 ? Buffer.concat([held, snippet]) : Buffer.concat([held.subarray(0, at), snippet, held.subarray(at)]));
+    },
+  });
 }

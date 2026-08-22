@@ -8,7 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
     "doctor": "node scripts/doctor.mjs",
-    "test": "tsx --test src/*.test.ts src/collect/*.test.ts src/runtime/*.test.ts",
+    "test": "tsx --test src/*.test.ts src/collect/*.test.ts src/preview/*.test.ts src/runtime/*.test.ts",
     "test:integration": "tsx --test --test-concurrency=1 --test-timeout=900000 src/runtime/*.itest.ts"
   },
   "dependencies": {

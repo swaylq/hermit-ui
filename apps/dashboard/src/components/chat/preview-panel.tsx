@@ -21,10 +21,28 @@
 // Chrome follows the house style (gallery/hermit.md): monochrome + hairline
 // borders, mono type for the target path, a size-1.5 status dot instead of a
 // colored pill, and the shared `breathe` dot while the iframe loads.
+//
+// Back / forward / picker all run through the bridge script the preview server
+// injects into every page it serves (apps/gateway/src/preview/bridge.ts). Being
+// a different origin, this side cannot read the frame's history or its DOM — it
+// asks, and the page answers over postMessage:
+//
+//   panel → page   nav{delta} · reload · pick{on} · hello
+//   page  → panel  state{url,len,can} · picked{selector} · pick-cancel
+//
+// The page posts to '*' (it does not know who embedded it), so THIS side does
+// the authenticating: origin must be the preview's, source must be our own
+// contentWindow. Everything the page sends is treated as display data.
+//
+// Back is the one command that can hurt: an iframe traversing one entry past
+// its own first walks the joint session history and takes the dashboard with
+// it. So Back is only sent while `back` below says an entry exists — from the
+// Navigation API where the browser has it, otherwise from counting pushes
+// (history.length rising) against traversals we asked for ourselves.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Check, Copy, ExternalLink, RotateCw, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Copy, ExternalLink, RotateCw, SquareDashedMousePointer, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface LivePreviewInfo {
@@ -66,11 +84,13 @@ function HeaderButton({
   title,
   children,
   className,
+  disabled = false,
 }: {
   onClick: () => void;
   title: string;
   children: React.ReactNode;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -78,9 +98,11 @@ function HeaderButton({
       onClick={onClick}
       title={title}
       aria-label={title}
+      disabled={disabled}
       className={cn(
         'inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground',
         'transition-colors cursor-pointer hover:bg-accent/40 hover:text-foreground',
+        'disabled:pointer-events-none disabled:opacity-30',
         className,
       )}
     >
@@ -89,13 +111,177 @@ function HeaderButton({
   );
 }
 
-export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInfo; onClose: () => void }) {
-  const [gen, setGen] = useState(0); // manual refresh = remount the iframe
+// ── the page bridge ──────────────────────────────────────────────────────────
+
+const MSG_DOWN = 'hermit-preview'; // panel → page
+const MSG_UP = 'hermit-preview-page'; // page → panel
+/** A traversal that draws no answer stops counting, rather than skewing the next push. */
+const NAV_ANSWER_MS = 2_500;
+/** Shown on the three controls the bridge drives when this preview has none. */
+const NO_BRIDGE = '本次预览未注入脚本（hermit-preview --no-reload），前进后退与元素选择不可用';
+
+interface PageState {
+  url?: unknown;
+  len?: unknown;
+  can?: unknown;
+}
+
+/** What the page says about itself. Untrusted input from a cross-origin frame — validate every field. */
+function readPageState(d: PageState): { len: number | null; can: { back: boolean; fwd: boolean } | null } {
+  const len = typeof d.len === 'number' && Number.isFinite(d.len) ? d.len : null;
+  const c = d.can as { back?: unknown; fwd?: unknown } | null | undefined;
+  const can = c && typeof c.back === 'boolean' ? { back: c.back, fwd: c.fwd === true } : null;
+  return { len, can };
+}
+
+/**
+ * How far into the preview we have wandered, as a path to show beside the
+ * target. Empty at the entry page — a back button with no sense of where you
+ * are is half a browser, but "/" on the front page is noise.
+ */
+function subPath(url: unknown, root: string): string {
+  if (typeof url !== 'string') return '';
+  try {
+    const u = new URL(url);
+    const base = new URL(root);
+    if (u.origin !== base.origin || !u.pathname.startsWith(base.pathname)) return '';
+    const rest = u.pathname.slice(base.pathname.length) + u.search + u.hash;
+    return rest === '' || rest === 'index.html' ? '' : `/${rest.replace(/^\//, '')}`;
+  } catch {
+    return '';
+  }
+}
+
+export function LivePreviewPanel({
+  preview,
+  onClose,
+  onPickSelector,
+}: {
+  preview: LivePreviewInfo;
+  onClose: () => void;
+  /** A picked element's CSS selector, on its way to the composer. */
+  onPickSelector?: (selector: string) => void;
+}) {
+  const [gen, setGen] = useState(0); // hard refresh = remount the iframe
   const [copied, setCopied] = useState(false);
   // Covers the iframe with the panel's own background until the document fires
   // onLoad — without it, opening the panel in dark mode flashes a white block
   // before the preview paints. Reset on every remount (refresh).
   const [loaded, setLoaded] = useState(false);
+
+  // Bridge state. `ready` flips on the page's first word — until then (and
+  // forever, under --no-reload, which suppresses the injection) the three
+  // bridge-driven controls are visibly dead rather than quietly broken.
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const [ready, setReady] = useState(false);
+  const [picking, setPicking] = useState(false);
+  // On a phone the panel covers the composer, so a selector landing in it is
+  // invisible. Say so for a moment, then get out of the way.
+  const [picked, setPicked] = useState<string | null>(null);
+  const [nav, setNav] = useState({ back: false, fwd: false });
+  const [here, setHere] = useState('');
+  // Where we think we are in the frame's own history, for browsers with no
+  // Navigation API. idx/max are positions, `pending` is a traversal we asked
+  // for and have not seen answered, `len` the last history.length we were told.
+  const hist = useRef({ idx: 0, max: 0, pending: null as number | null, seq: 0, len: null as number | null });
+
+  const origin = useMemo(() => {
+    try {
+      return new URL(preview.url).origin;
+    } catch {
+      return '';
+    }
+  }, [preview.url]);
+
+  const post = useCallback(
+    (msg: Record<string, unknown>) => {
+      const w = frameRef.current?.contentWindow;
+      if (!w || !origin) return;
+      try {
+        w.postMessage({ source: MSG_DOWN, v: 1, ...msg }, origin);
+      } catch {
+        /* frame gone mid-click */
+      }
+    },
+    [origin],
+  );
+
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (!origin || e.origin !== origin) return;
+      if (e.source !== frameRef.current?.contentWindow) return;
+      const d = e.data as { source?: unknown; type?: unknown; selector?: unknown } & PageState;
+      if (!d || d.source !== MSG_UP) return;
+
+      if (d.type === 'state') {
+        setReady(true);
+        const h = hist.current;
+        const { len, can } = readPageState(d);
+        const pending = h.pending;
+        h.pending = null;
+        if (pending != null) {
+          h.idx = Math.max(0, Math.min(h.max, h.idx + pending));
+        } else if (h.len != null && len != null && len > h.len) {
+          // An entry appeared that we did not ask for: a link was followed, so
+          // whatever was ahead of us is gone.
+          h.idx += 1;
+          h.max = h.idx;
+        }
+        h.len = len;
+        setNav(can ?? { back: h.idx > 0, fwd: h.idx < h.max });
+        setHere(subPath(d.url, preview.url));
+      } else if (d.type === 'picked') {
+        setPicking(false);
+        if (typeof d.selector === 'string' && d.selector) {
+          onPickSelector?.(d.selector);
+          setPicked(d.selector);
+        }
+      } else if (d.type === 'pick-cancel') {
+        setPicking(false);
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [origin, onPickSelector, preview.url]);
+
+  useEffect(() => {
+    if (!picked) return;
+    const t = window.setTimeout(() => setPicked(null), 2_200);
+    return () => window.clearTimeout(t);
+  }, [picked]);
+
+  const go = useCallback(
+    (delta: -1 | 1) => {
+      const h = hist.current;
+      const seq = ++h.seq;
+      h.pending = delta;
+      window.setTimeout(() => {
+        if (h.seq === seq) h.pending = null;
+      }, NAV_ANSWER_MS);
+      post({ type: 'nav', delta });
+    },
+    [post],
+  );
+
+  const togglePick = useCallback(() => {
+    const on = !picking;
+    setPicking(on);
+    post({ type: 'pick', on });
+  }, [picking, post]);
+
+  // Reload through the bridge where we can — it keeps the history the back
+  // button depends on. Without a bridge there is only the blunt instrument:
+  // throw the frame away and build a new one.
+  const refresh = useCallback(() => {
+    if (ready) {
+      post({ type: 'reload' });
+      return;
+    }
+    hist.current = { idx: 0, max: 0, pending: null, seq: 0, len: null };
+    setNav({ back: false, fwd: false });
+    setLoaded(false);
+    setGen((g) => g + 1);
+  }, [ready, post]);
 
   // Divider state. null = the default 45% split (no stored width). While a drag
   // is live the width goes straight to the CSS var through panelRef; React sees
@@ -170,16 +356,24 @@ export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInf
     [persistWidth],
   );
 
-  // Esc closes the panel. data-esc-layer (below) makes the chat page's
-  // "Esc cancels the running turn" shortcut stand down while we're mounted —
-  // same contract as Overlay.
+  // Esc closes the panel — unless a pick is in flight, in which case it calls
+  // that off first and the panel stays. (Esc pressed with focus inside the
+  // frame never reaches here; the bridge cancels there and tells us.)
+  // data-esc-layer (below) makes the chat page's "Esc cancels the running turn"
+  // shortcut stand down while we're mounted — same contract as Overlay.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key !== 'Escape') return;
+      if (picking) {
+        setPicking(false);
+        post({ type: 'pick', on: false });
+        return;
+      }
+      onClose();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, picking, post]);
 
   const shortTarget = useMemo(() => preview.target.replace(/^\/(Users|home)\/[^/]+\//, '~/'), [preview.target]);
 
@@ -227,24 +421,45 @@ export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInf
       {/* h-12 matches the chat header exactly — on lg+ the two sit on one line
           and the border-b runs straight across the split. */}
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
+        {/* Read left to right like any browser: where you can go, where you are,
+            what you can do to it. */}
+        <div className="flex shrink-0 items-center gap-0.5">
+          <HeaderButton title={ready ? '后退' : NO_BRIDGE} disabled={!nav.back} onClick={() => go(-1)}>
+            <ChevronLeft className="h-4 w-4" />
+          </HeaderButton>
+          <HeaderButton title={ready ? '前进' : NO_BRIDGE} disabled={!nav.fwd} onClick={() => go(1)}>
+            <ChevronRight className="h-4 w-4" />
+          </HeaderButton>
+          <HeaderButton title="刷新预览" onClick={refresh}>
+            <RotateCw className="h-3.5 w-3.5" />
+          </HeaderButton>
+        </div>
         {/* live dot + mode, the house status idiom: a dot and a tracked label,
-            never a colored pill. emerald = the registration is live. */}
+            never a colored pill. emerald = the registration is live. The mode
+            word is the first thing to go when the header runs out of room. */}
         <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
-        <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+        <span className="hidden shrink-0 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70 sm:inline">
           {preview.mode === 'static' ? 'static' : 'service'}
         </span>
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" title={preview.target}>
           {shortTarget}
         </span>
+        {/* Where inside the preview we are. Its own span, brighter than the
+            target: after a back button exists, "which page" is the part that
+            changes, and it must not be the first thing truncated away. */}
+        {here && (
+          <span className="max-w-[45%] shrink truncate font-mono text-[11px] text-foreground/70" title={here}>
+            {here}
+          </span>
+        )}
         <div className="flex shrink-0 items-center gap-0.5">
           <HeaderButton
-            title="刷新预览"
-            onClick={() => {
-              setLoaded(false);
-              setGen((g) => g + 1);
-            }}
+            title={!ready ? NO_BRIDGE : picking ? '取消选择 (Esc)' : '选择页面元素 —— 选中后把它的 CSS 选择器填进输入框'}
+            disabled={!ready}
+            className={picking ? 'bg-accent/60 text-foreground hover:bg-accent/60' : undefined}
+            onClick={togglePick}
           >
-            <RotateCw className="h-3.5 w-3.5" />
+            <SquareDashedMousePointer className="h-3.5 w-3.5" />
           </HeaderButton>
           <HeaderButton
             title={copied ? '已复制' : '复制预览链接'}
@@ -283,11 +498,18 @@ export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInf
             divider drags, the iframe goes inert so it can't swallow the gesture. */}
         <iframe
           key={gen}
+          ref={frameRef}
           src={preview.url}
           title="live preview"
           sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
           className={cn('h-full w-full border-0 bg-white', dragging && 'pointer-events-none')}
-          onLoad={() => setLoaded(true)}
+          onLoad={() => {
+            setLoaded(true);
+            // The bridge announces itself unprompted; this only matters for a
+            // restore out of the back/forward cache, where the script does not
+            // re-run. Costs one message.
+            post({ type: 'hello' });
+          }}
         />
         <div
           aria-hidden="true"
@@ -299,6 +521,22 @@ export function LivePreviewPanel({ preview, onClose }: { preview: LivePreviewInf
         >
           <span className="inline-block size-2 rounded-full bg-foreground/60 motion-safe:animate-[breathe_1.4s_ease-in-out_infinite]" />
         </div>
+        {/* Picking swallows every click in the frame, which is alarming if you
+            have forgotten why. One line, floated clear of the content, saying
+            what will happen and how to stop. */}
+        {(picking || picked) && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-3">
+            <span className="max-w-full truncate rounded-full bg-foreground/90 px-3 py-1 text-[11px] font-medium text-background shadow-lg">
+              {picking ? (
+                '点选一个元素，选择器会填进输入框 · Esc 取消'
+              ) : (
+                <>
+                  已填进输入框 <span className="font-mono">{picked}</span>
+                </>
+              )}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
