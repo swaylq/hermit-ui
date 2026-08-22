@@ -35,7 +35,14 @@
 // and without the cap the hold would never end.
 
 import { useCallback, useEffect, useRef } from 'react';
-import { planFrame, planBottomFrame, settledHold, type AnchorHold, type BottomHold } from './prepend-anchor-core';
+import {
+  planFrame,
+  planBottomFrame,
+  settledHold,
+  shouldRecapture,
+  type AnchorHold,
+  type BottomHold,
+} from './prepend-anchor-core';
 
 // How long after the LAST activity (a chunk commit, or a content resize) we keep
 // correcting. Short enough that once the content is truly quiet we let go; long
@@ -86,6 +93,41 @@ export type PrependAnchor = {
   release: () => void;
 };
 
+/**
+ * The last few hundred corrections, for a jump nobody can reproduce on demand.
+ *
+ * This one is intermittent by nature: on a warm cache a page of history arrives
+ * inside the frame that asked for it, so whether the correction lands cleanly
+ * depends on how a handful of events interleave. It has been caught once with
+ * full frame data — content grew 2,481px, `scrollTop` moved 1,972px, the reader
+ * lost 509px — and not again in twenty attempts across both modes, both cache
+ * states, and five viewport sizes. A description after the fact cannot tell us
+ * which frame went wrong, so record it while it happens.
+ *
+ * Bounded, allocation-free after warmup, and only written on frames that
+ * actually corrected something. Dump it from the console right after a jump:
+ *   copy(JSON.stringify(window.__prependAnchorLog))
+ */
+const LOG_SIZE = 300;
+type AnchorLogEntry = {
+  t: number;
+  mode: 'top' | 'bottom' | 'lost';
+  /** What this frame asked for, before the browser clamped or quantised it. */
+  raw: number;
+  /** What `scrollTop` actually moved by. A gap here is a correction that could not land. */
+  applied: number;
+  scrollTop: number;
+  scrollHeight: number;
+};
+const anchorLog: AnchorLogEntry[] = [];
+function logCorrection(e: AnchorLogEntry): void {
+  anchorLog.push(e);
+  if (anchorLog.length > LOG_SIZE) anchorLog.shift();
+  if (typeof window !== 'undefined') {
+    (window as unknown as { __prependAnchorLog?: AnchorLogEntry[] }).__prependAnchorLog = anchorLog;
+  }
+}
+
 export function usePrependAnchor(getViewport: () => HTMLElement | null): PrependAnchor {
   const held = useRef<Held | null>(null);
   const raf = useRef<number | null>(null);
@@ -126,17 +168,31 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
       // is what stops the same correction being re-issued every frame.
       h.hold.gap = settledHold(gap, raw, root.scrollTop - before);
       h.hold.lastTop = root.scrollTop;
+      if (correction !== 0) {
+        logCorrection({ t: Date.now(), mode: 'bottom', raw, applied: root.scrollTop - before, scrollTop: root.scrollTop, scrollHeight: root.scrollHeight });
+      }
       quiet.current = correction === 0 ? quiet.current + 1 : 0;
       return;
     }
 
     const el = root.querySelector(`[data-msg-id~="${CSS.escape(h.id)}"]`) as HTMLElement | null;
-    if (!el) return;
+    if (!el) {
+      // The row being held is not in the DOM. Nothing can be corrected this
+      // frame, and the hold is deliberately kept — the row may come back, since
+      // "load earlier" can fold it into a capsule and re-render it. Worth
+      // recording either way: a stretch of these around a jump would say the
+      // reader was displaced while the anchor had nothing to measure.
+      logCorrection({ t: Date.now(), mode: 'lost', raw: 0, applied: 0, scrollTop: root.scrollTop, scrollHeight: root.scrollHeight });
+      return;
+    }
     const anchorTop = el.getBoundingClientRect().top - root.getBoundingClientRect().top;
     const { correction, offset, raw } = planFrame(h.hold, { scrollTop: root.scrollTop, anchorTop });
     const before = root.scrollTop;
     if (correction !== 0) root.scrollTop += correction;
     h.hold.offset = settledHold(offset, raw, root.scrollTop - before);
+    if (correction !== 0) {
+      logCorrection({ t: Date.now(), mode: 'top', raw, applied: root.scrollTop - before, scrollTop: root.scrollTop, scrollHeight: root.scrollHeight });
+    }
     // Read the position back instead of predicting it: the browser clamps at
     // both ends, and a predicted value that never happened would read as a user
     // scroll on the next frame and shift the anchor by the difference.
@@ -173,6 +229,17 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
   const capture = useCallback(() => {
     const root = getViewport();
     if (!root) return;
+    // A hold that is still live already knows where the reader was before the
+    // history currently landing. Re-measuring now would take the displaced
+    // position for the wanted one and make the displacement permanent — and on a
+    // warm cache pulls arrive inside the frame that asked for them, so this
+    // interleaving is the normal case rather than a rare one. Push the settle
+    // window out instead and let the existing hold keep working; it tracks the
+    // user's own scrolling either way (see shouldRecapture).
+    if (!shouldRecapture(held.current, Date.now())) {
+      rearm();
+      return;
+    }
     const until = Date.now() + SETTLE_MS;
     const maxUntil = Date.now() + MAX_HOLD_MS;
     let captured = false;

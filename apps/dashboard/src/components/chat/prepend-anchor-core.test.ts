@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planFrame, planBottomFrame, settledHold, EPSILON } from './prepend-anchor-core';
+import {
+  planFrame,
+  planBottomFrame,
+  settledHold,
+  EPSILON,
+  shouldRecapture,
+} from './prepend-anchor-core';
 
 // A stand-in for the scroll viewport: content of a known height, a reading
 // position, and one row we're holding steady. `grow` prepends height ABOVE the
@@ -256,4 +262,47 @@ test('sub-pixel growth is below the write threshold entirely', () => {
   vp.grow(0.4);
   assert.equal(frame(vp, hold), 0, 'never worth ending a fling for');
   assert.ok(EPSILON >= 1, 'the threshold is a whole pixel, because scrollTop is quantised');
+});
+
+// --- shouldRecapture: never re-measure on top of a hold that is still working --
+
+test('with no hold at all, a pull must measure one', () => {
+  assert.equal(shouldRecapture(null, 1000), true);
+  assert.equal(shouldRecapture(undefined, 1000), true);
+});
+
+test('a hold whose settle window has passed is re-measured', () => {
+  assert.equal(shouldRecapture({ until: 1000 }, 1000), true);
+  assert.equal(shouldRecapture({ until: 1000 }, 1500), true);
+});
+
+test('a hold that is still live is kept, not re-measured', () => {
+  // The warm-cache case: the second pull fires while the first page is still
+  // landing. Re-measuring here records the displacement as the target.
+  assert.equal(shouldRecapture({ until: 2000 }, 1000), false);
+});
+
+test('five back-to-back pulls share one hold', () => {
+  // The top-up prefill fires up to five times, and on a warm cache all five land
+  // within a few ms of each other. Exactly one of them may measure.
+  let held: { until: number } | null = null;
+  const measured: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    const now = 1000 + i * 3;
+    if (shouldRecapture(held, now)) {
+      measured.push(now);
+      held = { until: now + 1500 };
+    } else {
+      held = { until: now + 1500 }; // rearm pushes the window out, same hold
+    }
+  }
+  assert.deepEqual(measured, [1000]);
+});
+
+test('a pull long after the last one measures again', () => {
+  // The reader stopped, read for a while, then scrolled up once more. That is a
+  // new reading position and it must be measured.
+  const held: { until: number } = { until: 2500 };
+  assert.equal(shouldRecapture(held, 1000), false);
+  assert.equal(shouldRecapture(held, 9000), true);
 });

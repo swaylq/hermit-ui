@@ -144,3 +144,31 @@ export function planBottomFrame(hold: BottomHold, input: BottomFrameInput): Bott
   const raw = input.scrollHeight - input.scrollTop - input.clientHeight - gap;
   return { correction: Math.abs(raw) < eps ? 0 : raw, gap, raw };
 }
+
+/**
+ * Should a new pull re-measure the reading position, or keep the hold it already
+ * has?
+ *
+ * Keep it, while it is live. A hold describes where the reader was BEFORE the
+ * history now landing; re-measuring in the middle of that records the
+ * displacement as the target and makes it permanent — the reader never gets
+ * those pixels back.
+ *
+ * This is not a rare interleaving. A page already in the local cache is
+ * prepended with no network call at all, so on a warm cache a pull resolves
+ * inside the same frame the scroll event fired in; the top-up prefill can fire
+ * five of them back to back; and each one used to call capture() again. Measured
+ * on a 509-message session, reopened warm and nudged up once: content grew
+ * 2,481px, `scrollTop` moved 1,972px, and the reader lost the missing 509px in a
+ * single frame. With the timing spread out by a network round trip instead, the
+ * very same code compensated 2,531px to the pixel — which is why this only ever
+ * showed up as "sometimes it jumps enormously".
+ *
+ * Keeping the hold is safe for both modes because both adopt whatever the user
+ * did in the meantime: `planFrame` folds their scrolling into the offset and
+ * `planBottomFrame` folds it into the tail gap. So a hold taken three pulls ago
+ * still describes where they are now.
+ */
+export function shouldRecapture(held: { until: number } | null | undefined, now: number): boolean {
+  return !held || now >= held.until;
+}
