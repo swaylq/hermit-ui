@@ -13,6 +13,7 @@ import { Markdown } from '@/components/markdown';
 import dynamic from 'next/dynamic';
 import { saveFile } from '@/lib/save-file';
 import { Overlay } from '@/components/overlay';
+import { cn } from '@/lib/utils';
 
 // Lazy-load the zoomable image lightbox (a portal overlay in its own ~20KB chunk)
 // so the chat route's first paint doesn't carry it — it's only needed once an
@@ -23,9 +24,27 @@ const ImageLightbox = dynamic(() => import('@/components/ui/image-lightbox').the
 
 // A chat image: a capped thumbnail that opens a zoomable full-screen lightbox
 // on click (instead of yanking the user to the raw file in a new tab).
+//
+// `width`/`height` are on the element, not just in the alt text, and that is the
+// whole point of them. Without the attributes the browser has no idea how tall
+// the picture will be, so the row is ZERO px until the bytes arrive and then
+// snaps to the 320px cap — and `loading="lazy"` guarantees the bytes arrive
+// exactly as the reader scrolls onto it. Measured on the deployed dashboard,
+// scrolling up through a session with 456 pictures: jumps of 259px and 310px,
+// the reading position moving by the cap itself.
+//
+// With the attributes the browser knows the aspect ratio before it has a single
+// byte, reserves the box at first layout, and nothing moves when the picture
+// lands. `w-auto h-auto` is what makes the pair a RATIO rather than a size: left
+// to the presentational hints, `max-w`/`max-h` would clamp the two dimensions
+// independently and squash a tall screenshot into a square.
+//
+// `decoding="async"` keeps the decode of a 924×2000 JPEG off the frame that
+// happens to paint it.
 export function ChatImage({ url, width, height }: { url: string; width: number | null; height: number | null }) {
   const [open, setOpen] = useState(false);
   const alt = `attachment${width && height ? ` ${width}×${height}` : ''}`;
+  const sized = !!width && !!height;
   return (
     <>
       <button
@@ -36,7 +55,15 @@ export function ChatImage({ url, width, height }: { url: string; width: number |
         className="inline-block cursor-zoom-in overflow-hidden rounded border border-border align-bottom transition-opacity hover:opacity-90"
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={url} alt={alt} className="max-h-[320px] max-w-[320px]" loading="lazy" />
+        <img
+          src={url}
+          alt={alt}
+          width={sized ? width : undefined}
+          height={sized ? height : undefined}
+          className={cn('max-h-[320px] max-w-[320px]', sized && 'h-auto w-auto')}
+          loading="lazy"
+          decoding="async"
+        />
       </button>
       <ImageLightbox open={open} onOpenChange={setOpen} url={url} alt={alt} siblingSelector="[data-lightbox-src]" />
     </>
