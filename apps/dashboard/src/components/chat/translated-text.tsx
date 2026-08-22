@@ -24,6 +24,31 @@
 // The last block of a reply that is still streaming is never sent. It is half a
 // sentence; translating it would buy a translation of a fragment, throw it away
 // when the block grows, and pay again.
+//
+// THE HEIGHT RULE. Everything above describes a bubble that changes height, one
+// block at a time, while the reader is looking at something else — and a bubble
+// that changes height above the reading position moves the reading position.
+// Two things follow, and both are about height rather than about text:
+//
+//   · A reply that has ALREADY FINISHED WRITING converts in one step, not six.
+//     Block-by-block accumulation exists so the Chinese can start arriving while
+//     the English is still being written; a message that was written an hour ago
+//     has nothing to race, and showing it convert in lurches only buys the
+//     reader six position changes instead of one. So while `typing` is false the
+//     original stays on screen until every block is home.
+//
+//   · The untranslated remainder is rendered IN FULL. It used to be cut to 240
+//     characters, which meant the first block landing did not shorten the bubble
+//     by the length difference between the two languages — it shortened it by
+//     everything past the 240th character of the remainder, and then the bubble
+//     grew back as the rest arrived. Measured in WebKit at 390px on a six-block,
+//     1,310-character reply: 840px → 264px → 354 → 470 → 586 → 624 → 580, a 576px
+//     collapse and 980px of total movement. Rendering the whole remainder makes
+//     the same reply 840 → 836 → 796 → 730 → 690 → 624 → 580: monotonic, biggest
+//     single step 66px, 260px of movement in total, and that remaining 260px is
+//     the genuine length difference between English and Chinese. The remainder is
+//     a placeholder for text that has not arrived, and a truncated placeholder is
+//     a placeholder of the wrong size.
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { TypedText } from '@/components/chat/message-bits';
@@ -36,9 +61,6 @@ import {
   subscribeTranslations,
   translationsVersion,
 } from '@/lib/translate-store';
-
-/** How much of the untranslated remainder to preview under the translation. */
-const PREVIEW_CHARS = 240;
 
 function zeroVersion(): number {
   return 0;
@@ -101,7 +123,19 @@ export function TranslatedText({
 
   // Nothing translated yet and nothing to show: keep the original on screen
   // rather than blanking the bubble while the first block is in flight.
-  if (!shown) return <TypedText text={text} typing={typing} streamKey={streamKey} />;
+  //
+  // Same call, for a different reason, when a FINISHED reply is being translated
+  // automatically: hold the original until the last block is home, so the bubble
+  // changes height once instead of once per block. `wanted` was already requested
+  // above — this withholds the partial result, not the work.
+  //
+  // Not when the reader pressed the button. `mode === 'on'` means they are
+  // looking at this message and waiting for it; accumulating in front of them is
+  // the feedback that something is happening, and the height it moves is height
+  // under their own eyes rather than above someone's reading position. That is
+  // also the case the typewriter below exists for.
+  const holdUntilComplete = !typing && mode !== 'on';
+  if (!shown || (holdUntilComplete && !complete)) return <TypedText text={text} typing={typing} streamKey={streamKey} />;
 
   return (
     <div>
@@ -121,7 +155,7 @@ export function TranslatedText({
           aria-hidden
           className="mt-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-muted-foreground/45 leading-[1.65]"
         >
-          {rest.length > PREVIEW_CHARS ? `${rest.slice(0, PREVIEW_CHARS)}…` : rest}
+          {rest}
         </div>
       ) : null}
     </div>

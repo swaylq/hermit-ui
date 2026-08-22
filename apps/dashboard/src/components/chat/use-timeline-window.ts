@@ -21,7 +21,17 @@
 // applied here reads to it as already settled and produces no delta of its own.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { planWindow, fullWindow, heightsFor, type WindowPlan } from './timeline-window';
+import {
+  planWindow,
+  fullWindow,
+  heightsFor,
+  liftFromSettled,
+  fitProseHeights,
+  type ProseFit,
+  type SettledRow,
+  type WindowPlan,
+} from './timeline-window';
+import { loadTextHeight, textHeightReady, proseHeight, fontOf } from '@/lib/text-height';
 
 /** Below this many rows, render the whole thing and touch nothing. */
 const THRESHOLD = 400;
@@ -31,11 +41,23 @@ const OVERSCAN_SCREENS = 3;
 const FALLBACK_ROW = 90;
 /** `space-y-3` between rows — part of the height an item occupies. */
 const ROW_GAP = 12;
+/**
+ * Main-thread budget for one batch of prose predictions. Predicting a row costs
+ * about 0.1ms warm, so a whole 4,000-row session is ~400ms — a long task and an
+ * unacceptable one on a phone. Spent in idle slices instead: the estimates get
+ * better as slices land, and every mechanism downstream already copes with an
+ * estimate changing, because that is what a row mounting has always done.
+ */
+const PROSE_BUDGET_MS = 6;
+/** Re-predict everything if the column changed width by more than this. */
+const WIDTH_EPSILON = 2;
 
 /** Marks a rendered item so the measurer can find it and know which row it is. */
 export const WINDOW_ROW_ATTR = 'data-window-key';
 
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
+
+function noop(): void {}
 
 export type TimelineWindow = WindowPlan & {
   /** True while the list is actually being windowed. */
@@ -47,8 +69,24 @@ function signature(keys: string[]): string {
   return `${keys.length}:${keys[0] ?? ''}:${keys[keys.length - 1] ?? ''}`;
 }
 
-export function useTimelineWindow(keys: string[], getViewport: () => HTMLElement | null): TimelineWindow {
+export function useTimelineWindow(
+  keys: string[],
+  getViewport: () => HTMLElement | null,
+  /**
+   * Each row's source text, positionally matched to `keys`. Optional: without it
+   * the window behaves exactly as it did before prose prediction existed.
+   */
+  texts?: string[],
+): TimelineWindow {
   const measured = useRef(new Map<string, number>());
+  // Predicted prose height per row key, at `proseMetrics`' width. 0 means "asked
+  // and there is no prose here" — a picture, a run capsule — which is a real
+  // answer worth remembering, not a miss to retry every idle slice.
+  const prose = useRef(new Map<string, number>());
+  const proseMetrics = useRef<{ font: string; lineHeight: number; width: number } | null>(null);
+  const fit = useRef<ProseFit | null>(null);
+  const idleHandle = useRef<number | null>(null);
+  const textsRef = useRef<string[] | undefined>(texts);
   // `startKey` is what makes the window survive a prepend: see the remap below.
   const [plan, setPlan] = useState<WindowPlan & { sig: string; startKey: string | null }>(() => ({
     ...fullWindow(keys.length),
@@ -62,6 +100,7 @@ export function useTimelineWindow(keys: string[], getViewport: () => HTMLElement
   useIsoLayoutEffect(() => {
     keysRef.current = keys;
     planRef.current = plan;
+    textsRef.current = texts;
   });
 
   const recompute = useCallback(() => {
@@ -77,7 +116,7 @@ export function useTimelineWindow(keys: string[], getViewport: () => HTMLElement
       return;
     }
     const next = planWindow({
-      heights: heightsFor(ks, measured.current, FALLBACK_ROW),
+      heights: heightsFor(ks, measured.current, FALLBACK_ROW, prose.current, fit.current),
       scrollTop: vp.scrollTop,
       viewportHeight: vp.clientHeight,
       overscan: vp.clientHeight * OVERSCAN_SCREENS,
@@ -123,7 +162,7 @@ export function useTimelineWindow(keys: string[], getViewport: () => HTMLElement
       const at = keys.indexOf(plan.startKey);
       if (at >= 0) {
         const span = Math.max(1, plan.end - plan.start);
-        const heights = heightsFor(keys, measured.current, FALLBACK_ROW);
+        const heights = heightsFor(keys, measured.current, FALLBACK_ROW, prose.current, fit.current);
         const end = Math.min(keys.length, at + span);
         let padTop = 0;
         for (let i = 0; i < at; i++) padTop += heights[i];
@@ -152,7 +191,7 @@ export function useTimelineWindow(keys: string[], getViewport: () => HTMLElement
     // to be corrected — it is the prepend itself, which the prepend anchor is
     // already holding. Correcting it too moved the view by ~2,400px in one frame.
     if (!vp || ks.length <= THRESHOLD || p.sig !== signature(ks)) return;
-    const heights = heightsFor(ks, measured.current, FALLBACK_ROW);
+    const heights = heightsFor(ks, measured.current, FALLBACK_ROW, prose.current, fit.current);
     let padTopNow = 0;
     for (let i = 0; i < p.start; i++) padTopNow += heights[i];
     const delta = padTopNow - p.padTop;
@@ -164,6 +203,99 @@ export function useTimelineWindow(keys: string[], getViewport: () => HTMLElement
     for (let i = p.end; i < heights.length; i++) padBottomNow += heights[i];
     setPlan((prev) => (prev.sig === p.sig ? { ...prev, padTop: padTopNow, padBottom: padBottomNow } : prev));
   }, [getViewport]);
+
+  // Predicting the rows nobody has seen.
+  //
+  // The mean of what has been measured is the same number for every unmeasured
+  // row, so a one-line "好的。" and a page of markdown are guessed identically and
+  // the difference arrives as a scroll correction the moment either one mounts.
+  // pretext lays the row's own prose out at the column's width without touching
+  // the DOM (see lib/text-height.ts), and fitProseHeights learns what that
+  // predicts about a real row from the rows already measured — so nothing here
+  // hard-codes a padding, a margin or a font.
+  //
+  // Done in idle slices with a millisecond budget, not in one pass: the whole of
+  // a 4,000-row session is ~400ms of work, which as a single task is a visibly
+  // dropped second on a phone.
+  //
+  // Only `applyMeasured` runs afterwards, deliberately — it moves `scrollTop` by
+  // exactly the amount the space above the viewport just changed, which is what
+  // makes a better estimate invisible to the reader instead of a jump. Replanning
+  // the window is left to the next scroll, which is a few ms away anyway.
+  const refit = useCallback(() => {
+    const pairs: Array<{ prose: number; real: number }> = [];
+    for (const [k, real] of measured.current) {
+      const p = prose.current.get(k);
+      if (p !== undefined && p > 0) pairs.push({ prose: p, real });
+    }
+    fit.current = fitProseHeights(pairs);
+  }, []);
+
+  // Self-rescheduling through a ref rather than through the dependency array:
+  // a slice that runs out of budget has to queue the next one, and a callback
+  // cannot list itself as its own dependency.
+  const predictRef = useRef<() => void>(noop);
+  const schedulePredict = useCallback(() => {
+    if (idleHandle.current !== null) return;
+    const run = () => predictRef.current();
+    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number })
+      .requestIdleCallback;
+    idleHandle.current = ric ? ric(run, { timeout: 500 }) : (setTimeout(run, 50) as unknown as number);
+  }, []);
+
+  const predict = useCallback(() => {
+    idleHandle.current = null;
+    const ks = keysRef.current;
+    const ts = textsRef.current;
+    const m = proseMetrics.current;
+    if (!m || !ts || ks.length <= THRESHOLD || !textHeightReady()) return;
+    const deadline = performance.now() + PROSE_BUDGET_MS;
+    let did = 0;
+    let more = false;
+    for (let i = 0; i < ks.length; i++) {
+      if (prose.current.has(ks[i])) continue;
+      if (performance.now() > deadline) {
+        more = true;
+        break;
+      }
+      const t = ts[i];
+      const r = t ? proseHeight(t, m) : { height: 0, blocks: 0 };
+      prose.current.set(ks[i], r.blocks > 0 ? r.height : 0);
+      did++;
+    }
+    if (!did) return;
+    refit();
+    applyMeasured();
+    if (more) schedulePredict();
+  }, [applyMeasured, refit, schedulePredict]);
+
+  // Declared after `predict` on purpose: an idle slice that runs out of budget
+  // queues the next one through this ref, and a callback cannot name itself in
+  // its own dependency array.
+  useIsoLayoutEffect(() => {
+    predictRef.current = predict;
+  });
+
+  // Kick the loader once, and only for lists big enough to be windowed at all.
+  useEffect(() => {
+    if (keys.length > THRESHOLD) loadTextHeight();
+  }, [keys.length]);
+
+  useEffect(() => {
+    if (keys.length <= THRESHOLD) return;
+    schedulePredict();
+  }, [keys.length, sig, schedulePredict]);
+
+  useEffect(
+    () => () => {
+      if (idleHandle.current === null) return;
+      const cic = (window as unknown as { cancelIdleCallback?: (h: number) => void }).cancelIdleCallback;
+      if (cic) cic(idleHandle.current);
+      else clearTimeout(idleHandle.current);
+      idleHandle.current = null;
+    },
+    [],
+  );
 
   // A row's height is wanted for two different reasons, and they want it at two
   // different moments:
@@ -193,24 +325,55 @@ export function useTimelineWindow(keys: string[], getViewport: () => HTMLElement
     if (!ro && typeof ResizeObserver !== 'undefined') {
       ro = new ResizeObserver((entries) => {
         let dirty = false;
+        // A row that settles above the reader shoves them down by however much
+        // it grew, and `padTop` cannot see it happen — the row is mounted, so it
+        // is not part of `padTop` at all. Collect the changes here and undo the
+        // total once, below. Reading rects inside a ResizeObserver callback is
+        // free: it runs after layout, so nothing is dirty to force.
+        const vp = getViewport();
+        const viewportTop = vp ? vp.getBoundingClientRect().top : 0;
+        const settled: SettledRow[] = [];
         for (const entry of entries) {
           const key = (entry.target as HTMLElement).getAttribute(WINDOW_ROW_ATTR);
           if (!key) continue;
           const h = (entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height) + ROW_GAP;
-          if (h > ROW_GAP && measured.current.get(key) !== h) {
-            measured.current.set(key, h);
-            dirty = true;
+          if (h <= ROW_GAP) continue;
+          const was = measured.current.get(key);
+          if (was === h) continue;
+          measured.current.set(key, h);
+          dirty = true;
+          // `was === undefined` is a first measurement, not a settle: the row
+          // was a guess in `padTop` until this moment, and undoing a guess is
+          // `applyMeasured`'s job, not this one. Counting it here would correct
+          // the same pixels twice.
+          if (was !== undefined && vp) {
+            settled.push({ was, now: h, bottom: (entry.target as HTMLElement).getBoundingClientRect().bottom });
           }
+        }
+        if (vp && settled.length) {
+          const lift = liftFromSettled(settled, viewportTop);
+          // Reads to the prepend anchor as a scroll it did not make — i.e. as
+          // the user — which is exactly how it already treats `applyMeasured`'s
+          // correction, so the two compose instead of fighting.
+          if (lift !== 0) vp.scrollTop += lift;
         }
         if (dirty) applyMeasured();
       });
       rowObserver.current = ro;
     }
     let changed = false;
+    // What the prose predictor lays text out with, taken from a row that is
+    // actually on screen rather than assumed: the font follows the theme and
+    // whatever next/font named the family this build, and the width follows the
+    // column, which is not the viewport (there is a max-width and padding).
+    // A width change invalidates every prediction — line breaks move — so the
+    // cache is dropped and refilled in idle slices, same as the first fill.
+    let firstRow: HTMLElement | null = null;
     // The rows live inside the viewport we already have — no second ref needed.
     const live = new Set<Element>();
     for (const node of vp.querySelectorAll(`[${WINDOW_ROW_ATTR}]`)) {
       live.add(node);
+      if (!firstRow) firstRow = node as HTMLElement;
       const key = node.getAttribute(WINDOW_ROW_ATTR);
       if (!key) continue;
       if (ro && !observedRows.current.has(node)) {
@@ -224,13 +387,30 @@ export function useTimelineWindow(keys: string[], getViewport: () => HTMLElement
         changed = true;
       }
     }
+    if (firstRow && keys.length > THRESHOLD) {
+      const width = firstRow.getBoundingClientRect().width;
+      const prev = proseMetrics.current;
+      if (width > 0 && (!prev || Math.abs(prev.width - width) > WIDTH_EPSILON)) {
+        proseMetrics.current = { ...fontOf(firstRow), width };
+        prose.current.clear();
+        fit.current = null;
+        schedulePredict();
+      } else if (prev && prose.current.size < keys.length) {
+        schedulePredict();
+      }
+    }
     // Windowed-out rows are detached; keep the observer from holding them.
     for (const node of observedRows.current) {
       if (live.has(node)) continue;
       ro?.unobserve(node);
       observedRows.current.delete(node);
     }
-    if (changed) applyMeasured();
+    // A measurement is also a new data point for the fit between predicted prose
+    // and real rows — that is what makes the prediction get better with use.
+    if (changed) {
+      refit();
+      applyMeasured();
+    }
   });
 
   useEffect(

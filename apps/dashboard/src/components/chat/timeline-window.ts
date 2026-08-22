@@ -87,6 +87,48 @@ export function planWindow(input: WindowInput): WindowPlan {
   return { start, end, padTop, padBottom };
 }
 
+/** A row that changed height after it was already mounted. */
+export type SettledRow = {
+  /** Height before the change, including the gap below it. */
+  was: number;
+  /** Height after it. */
+  now: number;
+  /** The row's bottom edge AFTER the change, in the scroller's own coordinates. */
+  bottom: number;
+};
+
+/**
+ * How far the reading position was pushed by rows that settled above it.
+ *
+ * `padTop` only covers rows OUTSIDE the window; a row inside it is a real
+ * element, so when it changes height `padTop` does not move and the correction
+ * that watches `padTop` sees nothing to do. But the window keeps three screens
+ * of rows mounted above the viewport, and every one of them can still change
+ * height long after it mounted — an image decoding, a code block gaining a
+ * horizontal scrollbar, markdown replacing its own source, a translation
+ * replacing the original text. Each one shoves everything below it, including
+ * what the reader is looking at, and nothing was undoing that.
+ *
+ * Only rows that were ENTIRELY above the reader count. A row straddling the top
+ * edge is the one being read from partway down: part of its change is above the
+ * reader's eye and part below, there is no single right answer, and guessing
+ * moves text that did not need to move.
+ */
+export function liftFromSettled(rows: SettledRow[], viewportTop: number): number {
+  let lift = 0;
+  for (const r of rows) {
+    const grew = r.now - r.was;
+    if (grew === 0) continue;
+    // Where the bottom edge was BEFORE the change. A row that was fully above
+    // the reader pushed them by `grew` whether or not the push then carried its
+    // own bottom edge down past the top of the viewport — testing the post-change
+    // edge would drop exactly the biggest pushes.
+    if (r.bottom - grew > viewportTop) continue;
+    lift += grew;
+  }
+  return lift;
+}
+
 /**
  * A height to use for items that have never been on screen. The running mean of
  * what HAS been measured beats any constant: these rows are anything from a
@@ -101,14 +143,93 @@ export function estimateFrom(measured: Map<string, number>, fallback: number): n
 }
 
 /**
+ * What a row's measured height turned out to be, per px of prose in it.
+ *
+ * `a` is the slope and `b` the fixed part: bubble padding, the avatar row, the
+ * timestamp, the gaps between markdown blocks — everything that is there
+ * whatever the text says. The slope picks up the rest, including the fact that
+ * the prose was laid out at the ROW's width rather than at the bubble's (85% of
+ * it, less padding), which is a systematic scale error and exactly what a slope
+ * is for. Nothing here is hand-written, so a CSS change re-fits rather than
+ * quietly rotting.
+ */
+export type ProseFit = { a: number; b: number; samples: number };
+
+/** Below this many measured rows the fit is noise; keep using the mean. */
+const MIN_FIT_SAMPLES = 8;
+/** A slope outside this says the inputs are not what we think they are. */
+const MIN_SLOPE = 0.4;
+const MAX_SLOPE = 4;
+/** No row is shorter than one line plus its gap, whatever the arithmetic says. */
+const MIN_ROW = 24;
+
+function leastSquares(pairs: Array<{ prose: number; real: number }>): { a: number; b: number } | null {
+  const n = pairs.length;
+  if (n < 2) return null;
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (const p of pairs) {
+    sx += p.prose;
+    sy += p.real;
+    sxx += p.prose * p.prose;
+    sxy += p.prose * p.real;
+  }
+  const denom = n * sxx - sx * sx;
+  // Every sample the same length: a slope through one point is not a slope.
+  if (Math.abs(denom) < 1e-6) return null;
+  return { a: (n * sxy - sx * sy) / denom, b: (sy - ((n * sxy - sx * sy) / denom) * sx) / n };
+}
+
+/**
+ * Fit measured heights against predicted prose heights.
+ *
+ * Refit once with the outliers dropped, because a fair number of rows are prose
+ * PLUS something this cannot predict — a screenshot, a fenced code block, an
+ * expandable run capsule — and plain least squares would let a handful of those
+ * tilt the line for everyone else. Two passes is enough: the second fit
+ * describes the ordinary row, and the extraordinary ones keep being wrong, which
+ * is honest, because nothing here can see what makes them tall.
+ */
+export function fitProseHeights(pairs: Array<{ prose: number; real: number }>): ProseFit | null {
+  const usable = pairs.filter((p) => p.prose > 0 && p.real > 0);
+  if (usable.length < MIN_FIT_SAMPLES) return null;
+  const first = leastSquares(usable);
+  if (!first) return null;
+  let sum = 0;
+  for (const p of usable) sum += Math.abs(p.real - (first.a * p.prose + first.b));
+  const mean = sum / usable.length;
+  const kept = mean > 0 ? usable.filter((p) => Math.abs(p.real - (first.a * p.prose + first.b)) <= 2 * mean) : usable;
+  const fit = (kept.length >= MIN_FIT_SAMPLES ? leastSquares(kept) : first) ?? first;
+  if (!(fit.a >= MIN_SLOPE && fit.a <= MAX_SLOPE) || !Number.isFinite(fit.b)) return null;
+  return { a: fit.a, b: fit.b, samples: kept.length };
+}
+
+/**
  * Per-item heights: what was measured, an estimate for everything else.
  *
  * Keyed by the item's own key, never by its index. "Load earlier" prepends a
  * page, which shifts every index down by 40 — index-keyed heights would then
  * describe the wrong messages, and the correction that holds the reading
  * position would shove the view by the size of the mistake.
+ *
+ * Three tiers, best first: a real measurement; a prediction from the row's own
+ * prose once enough rows have been measured to fit against; and the running mean
+ * for everything else — a row with no prose at all (a picture, a run capsule),
+ * or any row before the fit has anything to stand on.
  */
-export function heightsFor(keys: string[], measured: Map<string, number>, fallback: number): number[] {
+export function heightsFor(
+  keys: string[],
+  measured: Map<string, number>,
+  fallback: number,
+  prose?: Map<string, number>,
+  fit?: ProseFit | null,
+): number[] {
   const est = estimateFrom(measured, fallback);
-  return keys.map((k) => measured.get(k) ?? est);
+  return keys.map((k) => {
+    const m = measured.get(k);
+    if (m !== undefined) return m;
+    if (!fit || !prose) return est;
+    const p = prose.get(k);
+    if (p === undefined || p <= 0) return est;
+    return Math.max(MIN_ROW, fit.a * p + fit.b);
+  });
 }

@@ -120,7 +120,7 @@ export const MessageTimeline = memo(function MessageTimeline({
   // near the viewport (see use-timeline-window.ts), which means the list has to
   // be sliceable and every item has to carry a stable key to remember its
   // measured height by.
-  const out: Array<{ key: string; node: React.ReactNode }> = [];
+  const out: Array<{ key: string; node: React.ReactNode; text?: string }> = [];
   let prevDay: Date | string | null = null;
   for (let i = 0; i < folded.length; i++) {
     const r = folded[i];
@@ -182,6 +182,10 @@ export const MessageTimeline = memo(function MessageTimeline({
     const rowHasAsk = r.blocks.some((b) => isAskToolUse(b));
     out.push({
       key: r.key,
+      // What the windowing hook predicts this row's height from before it is ever
+      // mounted (use-timeline-window.ts). Date dividers, run capsules and the
+      // terminator deliberately carry none: their height is not text.
+      text: proseOf(r.blocks),
       node: (
         <div key={r.key} data-msg-id={r.ids.join(' ')} {...{ [WINDOW_ROW_ATTR]: r.key }}>
           <MessageRow role={r.role} authoredBy={r.authoredBy} content={r.blocks} ts={r.createdAt} streamingTail={streamingTail} typing={typing} streamKey={streamKey} sessionId={sessionId} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
@@ -195,10 +199,28 @@ export const MessageTimeline = memo(function MessageTimeline({
 // Rendering half of MessageTimeline, split out only so the windowing hook has a
 // component of its own to live in — the hook must run on every render, and
 // MessageTimeline's body is a long straight-line build of `items`.
-function TimelineBody({ items, getViewport }: { items: Array<{ key: string; node: React.ReactNode }>; getViewport?: () => HTMLElement | null }) {
+/**
+ * The prose of a row, for predicting its height before it is rendered.
+ *
+ * Only `text` blocks. Thinking sits behind a collapsed `<details>`, tool calls
+ * are folded into a capsule, and an image is not text at all — including any of
+ * them would predict a height for something whose height the text does not
+ * decide.
+ */
+function proseOf(blocks: Block[]): string {
+  let out = '';
+  for (const b of blocks) {
+    if (b.type !== 'text' || !b.text) continue;
+    out = out ? `${out}\n\n${b.text}` : b.text;
+  }
+  return out;
+}
+
+function TimelineBody({ items, getViewport }: { items: Array<{ key: string; node: React.ReactNode; text?: string }>; getViewport?: () => HTMLElement | null }) {
   const keys = items.map((it) => it.key);
+  const texts = items.map((it) => it.text ?? '');
   const noViewport = useCallback(() => null, []);
-  const win = useTimelineWindow(keys, getViewport ?? noViewport);
+  const win = useTimelineWindow(keys, getViewport ?? noViewport, texts);
   return (
     <div className="space-y-3">
       {win.padTop > 0 && <div data-window-spacer="top" style={{ height: win.padTop }} aria-hidden />}
