@@ -35,7 +35,7 @@
 // and without the cap the hold would never end.
 
 import { useCallback, useEffect, useRef } from 'react';
-import { planFrame, planBottomFrame, type AnchorHold, type BottomHold } from './prepend-anchor-core';
+import { planFrame, planBottomFrame, settledHold, type AnchorHold, type BottomHold } from './prepend-anchor-core';
 
 // How long after the LAST activity (a chunk commit, or a content resize) we keep
 // correcting. Short enough that once the content is truly quiet we let go; long
@@ -48,6 +48,18 @@ const MAX_HOLD_MS = 3000;
 // so a prepend holds the tail rather than the top row. Matches the ~60px slack
 // the pin detector in chat/page.tsx uses.
 const BOTTOM_SLACK = 60;
+// Consecutive frames with nothing to correct that put the rAF pump to sleep.
+// The hold stays armed — the ResizeObserver on the content box wakes it the
+// moment anything moves, and so does each committed chunk via `rearm`.
+//
+// Two reasons not to just run it for the whole window. A frame of the pump is a
+// `querySelector` plus a `getBoundingClientRect`, i.e. a forced layout of a
+// scroller that can be 40,000px tall, every frame for up to three seconds. And
+// a frame that finds a correction WRITES `scrollTop`, which on iOS is
+// `setContentOffset` and ends the reader's momentum scroll (see EPSILON in
+// prepend-anchor-core.ts). Sleeping while the content is quiet costs nothing and
+// removes both.
+const QUIET_FRAMES = 6;
 
 type Held =
   | { mode: 'top'; id: string; hold: AnchorHold; until: number; maxUntil: number }
@@ -78,6 +90,8 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
   const held = useRef<Held | null>(null);
   const raf = useRef<number | null>(null);
   const ro = useRef<ResizeObserver | null>(null);
+  /** Consecutive frames the pump found nothing to do — see QUIET_FRAMES. */
+  const quiet = useRef(0);
 
   const release = useCallback(() => {
     held.current = null;
@@ -87,12 +101,6 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
     }
     ro.current?.disconnect();
     ro.current = null;
-  }, []);
-
-  const rearm = useCallback((ms: number = SETTLE_MS) => {
-    const h = held.current;
-    if (!h) return;
-    h.until = Math.min(Date.now() + ms, h.maxUntil);
   }, []);
 
   const reassert = useCallback(() => {
@@ -106,27 +114,34 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
     if (!root) return;
 
     if (h.mode === 'bottom') {
-      const { correction, gap } = planBottomFrame(h.hold, {
+      const { correction, gap, raw } = planBottomFrame(h.hold, {
         scrollTop: root.scrollTop,
         scrollHeight: root.scrollHeight,
         clientHeight: root.clientHeight,
       });
-      h.hold.gap = gap;
+      const before = root.scrollTop;
       if (correction !== 0) root.scrollTop += correction;
+      // What the viewport actually did, which is not always what we asked: it
+      // quantises `scrollTop` and clamps it at both ends. Adopting the shortfall
+      // is what stops the same correction being re-issued every frame.
+      h.hold.gap = settledHold(gap, raw, root.scrollTop - before);
       h.hold.lastTop = root.scrollTop;
+      quiet.current = correction === 0 ? quiet.current + 1 : 0;
       return;
     }
 
     const el = root.querySelector(`[data-msg-id~="${CSS.escape(h.id)}"]`) as HTMLElement | null;
     if (!el) return;
     const anchorTop = el.getBoundingClientRect().top - root.getBoundingClientRect().top;
-    const { correction, offset } = planFrame(h.hold, { scrollTop: root.scrollTop, anchorTop });
-    h.hold.offset = offset;
+    const { correction, offset, raw } = planFrame(h.hold, { scrollTop: root.scrollTop, anchorTop });
+    const before = root.scrollTop;
     if (correction !== 0) root.scrollTop += correction;
+    h.hold.offset = settledHold(offset, raw, root.scrollTop - before);
     // Read the position back instead of predicting it: the browser clamps at
     // both ends, and a predicted value that never happened would read as a user
     // scroll on the next frame and shift the anchor by the difference.
     h.hold.lastTop = root.scrollTop;
+    quiet.current = correction === 0 ? quiet.current + 1 : 0;
   }, [getViewport, release]);
 
   // A ResizeObserver only fires when the observed box changes. An image decoding
@@ -134,14 +149,26 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
   // all shift content without necessarily resizing the container. So correct on
   // every frame of the settle window rather than trusting one signal.
   const pump = useCallback(() => {
+    quiet.current = 0;
     if (raf.current !== null) return; // already running
     const step = () => {
       reassert();
-      if (held.current) raf.current = requestAnimationFrame(step);
+      if (held.current && quiet.current < QUIET_FRAMES) raf.current = requestAnimationFrame(step);
       else raf.current = null;
     };
     raf.current = requestAnimationFrame(step);
   }, [reassert]);
+
+  const rearm = useCallback(
+    (ms: number = SETTLE_MS) => {
+      const h = held.current;
+      if (!h) return;
+      h.until = Math.min(Date.now() + ms, h.maxUntil);
+      // Something moved, so the pump has work again even if it had gone quiet.
+      pump();
+    },
+    [pump]
+  );
 
   const capture = useCallback(() => {
     const root = getViewport();
@@ -201,7 +228,20 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
     }
   }, [getViewport, pump, rearm]);
 
-  const isHolding = useCallback(() => held.current !== null, []);
+  // A sleeping pump is not running `reassert`, so it is not the thing that
+  // notices the window has closed. Anyone asking whether we are still holding
+  // gets the deadline checked for them — otherwise a hold that went quiet would
+  // read as live forever, and the scroll listener that defers to it (load
+  // earlier, pin detection) would never run again.
+  const isHolding = useCallback(() => {
+    const h = held.current;
+    if (!h) return false;
+    if (Date.now() > h.until || Date.now() > h.maxUntil) {
+      release();
+      return false;
+    }
+    return true;
+  }, [release]);
 
   useEffect(
     () => () => {

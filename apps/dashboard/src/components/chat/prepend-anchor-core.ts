@@ -21,8 +21,19 @@
 // `scrollTop` on our behalf. Adopt that movement into the anchor and correct
 // only what remains.
 
-/** Corrections below this are invisible, and only risk fighting the browser's own rounding. */
-export const EPSILON = 0.5;
+/**
+ * Corrections below this are not worth issuing.
+ *
+ * Not merely "invisible": a write to `scrollTop` is the thing that ENDS a
+ * momentum scroll on iOS (scrolling there is run by UIScrollView outside the
+ * engine, and assigning an offset is `setContentOffset`, which cancels the
+ * deceleration). So a sub-pixel correction does not cost a sub-pixel of
+ * accuracy — it costs the reader their entire fling. And it cannot even land:
+ * `scrollTop` is quantised, so anything under a pixel reads back unchanged.
+ *
+ * One CSS pixel. Below that, carry the difference instead (see `settledHold`).
+ */
+export const EPSILON = 1;
 
 export type AnchorHold = {
   /** Where the anchor row is held, in px from the top of the viewport. */
@@ -44,6 +55,8 @@ export type FramePlan = {
   correction: number;
   /** The offset to carry forward — it tracks the user, so it changes as they scroll. */
   offset: number;
+  /** The correction BEFORE the epsilon cut — what `settledHold` reconciles against. */
+  raw: number;
 };
 
 export function planFrame(hold: AnchorHold, input: FrameInput): FramePlan {
@@ -57,7 +70,33 @@ export function planFrame(hold: AnchorHold, input: FrameInput): FramePlan {
   // history prepended above it, markdown reflowing, an image resolving its
   // height. That, and only that, is worth correcting.
   const raw = input.anchorTop - offset;
-  return { correction: Math.abs(raw) < eps ? 0 : raw, offset };
+  return { correction: Math.abs(raw) < eps ? 0 : raw, offset, raw };
+}
+
+/**
+ * Where the hold sits once a correction has been ATTEMPTED — the difference
+ * between what we asked the viewport to do and what it did.
+ *
+ * This is not bookkeeping pedantry; without it the pump writes `scrollTop` on
+ * every frame of the settle window and never gets anywhere. Two ways a write
+ * comes up short:
+ *
+ *   · `scrollTop` is quantised, so a 0.6px correction reads back unchanged;
+ *   · the viewport is clamped at 0 or at the end, so the correction has nowhere
+ *     to go.
+ *
+ * In both cases the next frame recomputes the SAME correction, writes again,
+ * and so on — measured on the deployed dashboard at 93 writes in a 1.7s hold,
+ * one per frame. Each of those ends the reader's momentum scroll on a phone,
+ * which is what turns "load earlier" into a list that will not glide.
+ *
+ * So: adopt whatever actually happened. `held` is the offset (or, for the tail
+ * hold, the gap) we were carrying, `raw` is what this frame asked for, and
+ * `applied` is how far `scrollTop` really moved. What is left over stops being
+ * a correction and becomes the new resting place.
+ */
+export function settledHold(held: number, raw: number, applied: number): number {
+  return held + raw - applied;
 }
 
 /**
@@ -94,6 +133,8 @@ export type BottomFrameInput = {
 export type BottomFramePlan = {
   correction: number;
   gap: number;
+  /** The correction BEFORE the epsilon cut — what `settledHold` reconciles against. */
+  raw: number;
 };
 
 export function planBottomFrame(hold: BottomHold, input: BottomFrameInput): BottomFramePlan {
@@ -101,5 +142,5 @@ export function planBottomFrame(hold: BottomHold, input: BottomFrameInput): Bott
   const userDelta = input.scrollTop - hold.lastTop;
   const gap = hold.gap - userDelta;
   const raw = input.scrollHeight - input.scrollTop - input.clientHeight - gap;
-  return { correction: Math.abs(raw) < eps ? 0 : raw, gap };
+  return { correction: Math.abs(raw) < eps ? 0 : raw, gap, raw };
 }

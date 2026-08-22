@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planFrame, planBottomFrame, EPSILON } from './prepend-anchor-core';
+import { planFrame, planBottomFrame, settledHold, EPSILON } from './prepend-anchor-core';
 
 // A stand-in for the scroll viewport: content of a known height, a reading
 // position, and one row we're holding steady. `grow` prepends height ABOVE the
@@ -27,9 +27,11 @@ function viewport(opts: { height: number; client: number; top: number; anchorTop
 
 // One frame of the rAF pump, exactly as the hook runs it.
 function frame(vp: ReturnType<typeof viewport>, hold: { offset: number; lastTop: number }) {
-  const { correction, offset } = planFrame(hold, { scrollTop: vp.scrollTop, anchorTop: vp.anchorTop });
-  hold.offset = offset;
+  const { correction, offset, raw } = planFrame(hold, { scrollTop: vp.scrollTop, anchorTop: vp.anchorTop });
+  const before = vp.scrollTop;
   if (correction !== 0) vp.user(correction);
+  // What the viewport really did — clamped, and possibly quantised.
+  hold.offset = settledHold(offset, raw, vp.scrollTop - before);
   hold.lastTop = vp.scrollTop; // the REAL post-write value, so clamping can't be misread
   return correction;
 }
@@ -137,13 +139,14 @@ function bottomViewport(opts: { height: number; client: number; top: number }) {
 }
 
 function bottomFrame(vp: ReturnType<typeof bottomViewport>, hold: { gap: number; lastTop: number }) {
-  const { correction, gap } = planBottomFrame(hold, {
+  const { correction, gap, raw } = planBottomFrame(hold, {
     scrollTop: vp.scrollTop,
     scrollHeight: vp.scrollHeight,
     clientHeight: vp.clientHeight,
   });
-  hold.gap = gap;
+  const before = vp.scrollTop;
   if (correction !== 0) vp.user(correction);
+  hold.gap = settledHold(gap, raw, vp.scrollTop - before);
   hold.lastTop = vp.scrollTop;
   return correction;
 }
@@ -173,4 +176,84 @@ test('prepend and a user scroll in the same frame: only the prepend is corrected
   vp.user(-120);
   assert.equal(bottomFrame(vp, hold), 2200);
   assert.equal(vp.scrollTop, 2400 - 120 + 2200);
+});
+
+
+// --- what a write COSTS, not just what it computes ---------------------------
+//
+// Every one of these is about the same defect: a correction the viewport cannot
+// carry out, re-issued on the next frame because nothing recorded that it did
+// not land. On a desktop that is invisible. On iOS each write is
+// `setContentOffset`, which ends the reader's momentum scroll — so a correction
+// that repeats for the whole settle window is a list that will not glide for
+// one and a half seconds after every "load earlier". Measured on the deployed
+// dashboard before this: 93 writes in a 1.7s hold, one per frame, while a
+// smooth scroll of 5,000px managed 2,785 of them and then stopped dead.
+
+// A viewport whose scrollTop is an integer, which every browser's is.
+function quantised(opts: { height: number; client: number; top: number; anchorTop: number }) {
+  const vp = viewport(opts);
+  const user = vp.user.bind(vp);
+  vp.user = (px: number) => {
+    const before = vp.scrollTop;
+    user(px);
+    const landed = Math.trunc(vp.scrollTop) - Math.trunc(before);
+    vp.anchorTop += vp.scrollTop - before - landed; // the sub-pixel part never happened
+    vp.scrollTop = Math.trunc(before) + landed;
+  };
+  return vp;
+}
+
+test('a whole settle window does not turn into one write per frame', () => {
+  // The measured defect, reproduced without a browser: content settles by a
+  // fraction of a pixel, the correction is issued, `scrollTop` quantises it away
+  // to nothing, and the next frame computes the very same correction. 1.5s of
+  // holding at 60fps is 90 frames — and 90 momentum-ending writes.
+  const vp = quantised({ height: 5000, client: 700, top: 2000, anchorTop: 120 });
+  const hold = { offset: 120, lastTop: 2000 };
+  vp.grow(0.7); // a font swap; nowhere near a pixel of reading position
+  let writes = 0;
+  for (let i = 0; i < 90; i++) if (frame(vp, hold) !== 0) writes++;
+  assert.ok(writes <= 1, `held for 90 frames and wrote scrollTop ${writes} times`);
+});
+
+test('growth that IS worth correcting still converges in one write', () => {
+  const vp = quantised({ height: 5000, client: 700, top: 2000, anchorTop: 120 });
+  const hold = { offset: 120, lastTop: 2000 };
+  vp.grow(1.4); // a code block gaining a scrollbar
+  let writes = 0;
+  for (let i = 0; i < 30; i++) if (frame(vp, hold) !== 0) writes++;
+  assert.equal(writes, 1, 'exactly one write, not one per frame');
+  assert.equal(vp.scrollTop, 2001);
+});
+
+test('a correction the viewport is clamped out of is not re-issued every frame', () => {
+  // At the very top: there is nowhere to scroll up to, so a negative correction
+  // cannot be carried out at all.
+  const vp = viewport({ height: 5000, client: 700, top: 0, anchorTop: 120 });
+  const hold = { offset: 120, lastTop: 0 };
+  vp.grow(-400); // content above the anchor SHRANK (a run capsule collapsing)
+  const writes = [frame(vp, hold), frame(vp, hold), frame(vp, hold), frame(vp, hold), frame(vp, hold)];
+  assert.equal(writes.filter((c) => c !== 0).length, 1, 'one attempt, then it lets go');
+  assert.equal(vp.scrollTop, 0);
+  assert.equal(hold.offset, vp.anchorTop, 'the hold moved to where the row actually is');
+});
+
+test('the same, for the tail hold', () => {
+  const vp = bottomViewport({ height: 3000, client: 600, top: 2400 });
+  const hold = { gap: 0, lastTop: 2400 };
+  // Content shrinks below the reader while they sit at the very bottom: the
+  // correction wants to scroll further down than the content allows.
+  vp.scrollHeight -= 400;
+  vp.scrollTop = 2400; // browser has not re-clamped yet
+  const writes = [bottomFrame(vp, hold), bottomFrame(vp, hold), bottomFrame(vp, hold), bottomFrame(vp, hold)];
+  assert.equal(writes.filter((c) => c !== 0).length, 1);
+});
+
+test('sub-pixel growth is below the write threshold entirely', () => {
+  const vp = viewport({ height: 5000, client: 700, top: 2000, anchorTop: 120 });
+  const hold = { offset: 120, lastTop: 2000 };
+  vp.grow(0.4);
+  assert.equal(frame(vp, hold), 0, 'never worth ending a fling for');
+  assert.ok(EPSILON >= 1, 'the threshold is a whole pixel, because scrollTop is quantised');
 });
