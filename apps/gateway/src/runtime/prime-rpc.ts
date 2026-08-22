@@ -302,9 +302,10 @@ export class PrimeRpcRuntime implements AgentRuntime {
         HERMIT_KEY: ASST_KEY,
         HERMIT_SESSION_ID: session.id,
         // Tells the shared hermit extension which backend it is inside. Prime
-        // registers providers the way pi does (pi.registerProvider with a
-        // "$HERMIT_PI_API_KEY" reference it expands), so unlike omp this one
-        // WANTS the registration.
+        // takes pi.registerProvider, so unlike omp this one WANTS the
+        // registration — but it resolves `apiKey` as a BARE env var name, not
+        // pi's "$VAR" reference, so the extension has to spell the key
+        // differently here. See registerMachineProvider.
         HERMIT_RUNTIME: 'prime-rpc',
         PI_SKIP_VERSION_CHECK: '1',
       } as Record<string, string>,

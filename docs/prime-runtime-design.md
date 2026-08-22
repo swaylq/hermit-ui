@@ -30,10 +30,33 @@ That inheritance is the whole reason this is cheap. **Verified identical to pi:*
 | --- | --- |
 | RPC mode (`--mode rpc`), JSONL over stdio | same protocol, same `ready`/`response`/event framing |
 | event vocabulary | `message_end` with `{text,thinking,toolCall}` parts, `tool_execution_end` with `{toolCallId,toolName,result,isError}` — byte-for-byte the shapes `translatePiEvent` already handles |
-| extension API | default-export factory receiving `pi`; `pi.registerTool`, `pi.registerCommand`, `pi.registerProvider`, `pi.on('tool_call')` returning `{block, reason}` |
+| extension API | default-export factory receiving `pi`; `pi.registerTool`, `pi.registerCommand`, `pi.registerProvider`, `pi.on('tool_call')` returning `{block, reason}` — but see the `apiKey` exception below |
 | extension loading | jiti, so `hermit-pi-extension.ts` stays a `.ts` file |
 | skills | `SKILL.md` with `{name, description}` frontmatter |
 | `--tools` semantics | allowlist covering built-in **and extension** tools — pi's meaning, not omp's inverted one |
+
+**The one place the fork has drifted: `apiKey` resolution.** The signature of
+`registerProvider` is pi's, so this looks identical and is not. The fork
+predates pi's config-value templating, and the two now disagree about what an
+`apiKey` string means:
+
+| harness | resolver | `"$HERMIT_PI_API_KEY"` | `"HERMIT_PI_API_KEY"` |
+| --- | --- | --- | --- |
+| pi 0.83 | `parseConfigValueTemplate` — `$NAME`/`${NAME}` interpolate, `$$` escapes | the key | the literal string |
+| prime 0.8 | `resolveEnvOrLiteral` — `process.env[config]`, else return input | the literal string | the key |
+
+Each one's correct value is the other's **silent** failure: the unresolved
+string is passed through as the credential, so the endpoint 401s quoting the
+reference back (`Received=$HERMIT_PI_API_KEY, expected to start with 'sk-'`).
+This is omp's models.yml bug in a third spelling, and it cost a debugging round
+here because the "identical extension API" row above was read as covering it.
+`registerMachineProvider` branches on `HERMIT_RUNTIME`; `hermit-pi-extension.test.ts`
+locks both spellings. Measured against a local endpoint on prime 0.8.0 — the
+`$`-form arrived verbatim, the bare form arrived as the real key.
+
+Note the version: this doc's other rows were verified at `0.7.4`, this one at
+`0.8.0`. If prime later rebases onto a newer pi, the bare name silently becomes
+a literal and every prime session 401s — the test is what catches that.
 
 Two things are genuinely new, and they are the reason to bother:
 

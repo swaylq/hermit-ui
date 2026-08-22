@@ -152,10 +152,13 @@ const BUILTIN_PI_PROVIDERS = new Set(['moonshotai', 'moonshotai-cn', 'kimi-codin
  * alone — it has to be declared. registerProvider is the supported way, and an
  * extension is the only place that runs inside the RPC child.
  *
- * apiKey is passed as a "$VAR" reference so the key stays in the environment
- * rather than being baked into a registration object.
+ * apiKey is passed as an environment reference — "$VAR" for pi, the bare name
+ * for prime (see the branch below) — so the key stays in the environment rather
+ * than being baked into a registration object.
  */
-function registerMachineProvider(pi: any): void {
+// Exported for the test only; pi loads an extension by its DEFAULT export, so a
+// named export alongside it changes nothing about how this file is consumed.
+export function registerMachineProvider(pi: any): void {
   // omp declares providers in ~/.omp/agent/models.yml, and resolves `apiKey` as
   // the NAME of an environment variable. Registering here would override that
   // entry with pi's "$VAR" reference syntax, which omp passes through
@@ -173,10 +176,26 @@ function registerMachineProvider(pi: any): void {
   const api = process.env.HERMIT_PI_API?.trim() || 'anthropic-messages';
   const ids = (process.env.HERMIT_PI_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean);
 
+  // prime forked pi BEFORE pi grew "$VAR" interpolation, and the two now read
+  // `apiKey` in incompatible ways:
+  //
+  //   pi 0.83    parseConfigValueTemplate — "$NAME"/"${NAME}" interpolate, a
+  //              bare word is a literal key.
+  //   prime 0.8  resolveEnvOrLiteral — process.env[config], i.e. the BARE name,
+  //              falling through to the literal when that misses.
+  //
+  // So each one's correct value is the other's silent failure: "$HERMIT_PI_API_KEY"
+  // reaches a prime endpoint verbatim and 401s ("expected to start with 'sk-'"),
+  // which is omp's bug above with a third spelling. No single string satisfies
+  // both — hence the branch. Measured on prime 0.8.0, not theorised.
+  const apiKey = process.env.HERMIT_RUNTIME === 'prime-rpc'
+    ? 'HERMIT_PI_API_KEY'
+    : '$HERMIT_PI_API_KEY';
+
   pi.registerProvider(id, {
     baseUrl,
     api,
-    apiKey: '$HERMIT_PI_API_KEY',
+    apiKey,
     ...(ids.length
       ? {
           models: ids.map((modelId) => {
