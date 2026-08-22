@@ -16,7 +16,8 @@
 // eviction all surface as exceptions from `indexedDB.open`; callers get empty
 // results and the UI falls back to server-side behavior rather than breaking.
 
-import type { CachedText, CachedSession, CachedFullRow, FullMeta } from './types';
+import { getActiveEntry } from '@/lib/keyring';
+import type { CachedText, CachedSession, CachedFullRow, FullMeta, CachedTranslation } from './types';
 
 const DB_PREFIX = 'hermit-chat-cache';
 // 2: `text` rows gained `blocks`, so interaction cards survive in cache-served
@@ -26,7 +27,12 @@ const DB_PREFIX = 'hermit-chat-cache';
 // background, behind the usual "正在建立本地索引…" line).
 // 3: added the `digest` store — history pages as the collapsed timeline renders
 // them. Purely additive; nothing already cached changes meaning.
-const DB_VERSION = 3;
+// 4: added the `translations` store. Also purely additive. NOTE: entries are
+// keyed by source text + target language only, NOT by which model produced
+// them — so changing DASHSCOPE_TRANSLATE_MODEL leaves the old translations in
+// place. They stay valid translations, just from the previous model; bump this
+// version if a model change ever needs to invalidate them.
+const DB_VERSION = 4;
 
 export const STORE_TEXT = 'text';
 export const STORE_SESSIONS = 'sessions';
@@ -37,6 +43,10 @@ export const STORE_FULL_META = 'fullMeta';
 // length (server/message-digest.ts). Roughly 5% of what `full` costs per row,
 // which is what lets a second walk back through a long session be free.
 export const STORE_DIGEST = 'digest';
+// Translated markdown blocks, keyed by a hash of the source text plus the
+// target language. Reading these back is what stops a reload re-buying every
+// translation on screen.
+export const STORE_TRANSLATIONS = 'translations';
 
 // How many sessions keep their full (renderable) rows. The prose layer covers
 // every session; this one only makes RE-opening a session instant, so a handful
@@ -44,8 +54,29 @@ export const STORE_DIGEST = 'digest';
 // is a few MB.
 export const FULL_LRU_SESSIONS = 15;
 
+// How many translated blocks to keep. Paragraph-sized entries, so this is a
+// couple of MB at worst — small beside the ~11 MB prose layer, and far more
+// than one reader gets through in a session. Trimmed back to KEEP after it is
+// exceeded, so eviction runs rarely rather than on every write.
+export const TRANSLATION_LRU_MAX = 6_000;
+export const TRANSLATION_LRU_KEEP = 4_500;
+
 export function scopeId(machineId: string, agentName?: string | null): string {
   return agentName ? `${machineId}::${agentName}` : machineId;
+}
+
+/**
+ * Which cache database the active keyring entry maps to, or null when there is
+ * no workspace selected yet.
+ *
+ * Lives here rather than in sync.ts so that reaching for a scope does not drag
+ * the sync engine — and with it the search worker — into a caller that only
+ * wants to read one store.
+ */
+export function currentScope(): string | null {
+  const entry = getActiveEntry();
+  if (!entry) return null;
+  return scopeId(entry.id, entry.scoped ? entry.agentName : null);
 }
 
 function dbName(scope: string): string {
@@ -79,7 +110,7 @@ function txDone(tx: IDBTransaction): Promise<void> {
 // so that tab's upgrade isn't blocked; the next call reopens.
 const openDbs = new Map<string, Promise<IDBDatabase | null>>();
 
-const ALL_STORES = [STORE_TEXT, STORE_SESSIONS, STORE_FULL, STORE_FULL_META, STORE_DIGEST];
+const ALL_STORES = [STORE_TEXT, STORE_SESSIONS, STORE_FULL, STORE_FULL_META, STORE_DIGEST, STORE_TRANSLATIONS];
 
 function createMissingStores(db: IDBDatabase): void {
   if (!db.objectStoreNames.contains(STORE_TEXT)) {
@@ -96,6 +127,9 @@ function createMissingStores(db: IDBDatabase): void {
   }
   if (!db.objectStoreNames.contains(STORE_DIGEST)) {
     db.createObjectStore(STORE_DIGEST, { keyPath: 'id' }).createIndex('by_session', 'sessionId');
+  }
+  if (!db.objectStoreNames.contains(STORE_TRANSLATIONS)) {
+    db.createObjectStore(STORE_TRANSLATIONS, { keyPath: 'key' });
   }
 }
 
@@ -367,6 +401,103 @@ export async function evictFullLru(scope: string, keep = FULL_LRU_SESSIONS): Pro
   }
   await txDone(tx);
   return doomed.length;
+}
+
+// ── translations ─────────────────────────────────────────────────────────────
+
+/**
+ * Look up many blocks at once, and stamp the ones found as used now so the LRU
+ * measures "last read", not "last written" — a paragraph you scroll past every
+ * day should outlive one translated once and never reopened.
+ *
+ * Returns only what was found; the caller pays the network for the rest.
+ */
+export async function getTranslations(scope: string, keys: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (keys.length === 0) return out;
+  const db = await openCache(scope);
+  if (!db) return out;
+  try {
+    const tx = db.transaction(STORE_TRANSLATIONS, 'readonly');
+    const store = tx.objectStore(STORE_TRANSLATIONS);
+    const rows = await Promise.all(keys.map((k) => promisify(store.get(k) as IDBRequest<CachedTranslation | undefined>)));
+    for (const r of rows) if (r && typeof r.text === 'string') out.set(r.key, r.text);
+  } catch {
+    return out;
+  }
+  if (out.size) void touchTranslations(scope, [...out.keys()]);
+  return out;
+}
+
+/** Refresh lastUsedAt. Fire-and-forget: a lost touch costs LRU accuracy only. */
+async function touchTranslations(scope: string, keys: string[]): Promise<void> {
+  const db = await openCache(scope);
+  if (!db) return;
+  try {
+    const now = Date.now();
+    const tx = db.transaction(STORE_TRANSLATIONS, 'readwrite');
+    const store = tx.objectStore(STORE_TRANSLATIONS);
+    for (const k of keys) {
+      const req = store.get(k) as IDBRequest<CachedTranslation | undefined>;
+      req.onsuccess = () => {
+        const row = req.result;
+        if (row) store.put({ ...row, lastUsedAt: now });
+      };
+    }
+    await txDone(tx);
+  } catch {
+    /* fails soft, like everything else here */
+  }
+}
+
+export async function putTranslations(scope: string, rows: CachedTranslation[]): Promise<void> {
+  if (rows.length === 0) return;
+  const db = await openCache(scope);
+  if (!db) return;
+  try {
+    const tx = db.transaction(STORE_TRANSLATIONS, 'readwrite');
+    const store = tx.objectStore(STORE_TRANSLATIONS);
+    for (const r of rows) store.put(r);
+    await txDone(tx);
+  } catch {
+    /* quota, or the store vanished under us — the in-memory copy still serves */
+  }
+}
+
+/**
+ * Trim to `keep` least-recently-used. Deliberately not run on every write:
+ * `max` gives it a band to work in, so a reader who never crosses it never
+ * pays for a full scan.
+ */
+export async function evictTranslationsLru(
+  scope: string,
+  max = TRANSLATION_LRU_MAX,
+  keep = TRANSLATION_LRU_KEEP,
+): Promise<number> {
+  const db = await openCache(scope);
+  if (!db) return 0;
+  try {
+    const countTx = db.transaction(STORE_TRANSLATIONS, 'readonly');
+    const store = countTx.objectStore(STORE_TRANSLATIONS);
+    const n = await promisify(store.count() as IDBRequest<number>);
+    if (n <= max) return 0;
+    // Only the keys and their timestamps are needed to decide; pulling the
+    // translations themselves would mean holding every cached paragraph in
+    // memory at once just to throw most of them away.
+    const rows = await promisify(store.getAll() as IDBRequest<CachedTranslation[]>);
+    const doomed = rows
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+      .slice(keep)
+      .map((r) => r.key);
+    if (!doomed.length) return 0;
+    const tx = db.transaction(STORE_TRANSLATIONS, 'readwrite');
+    const del = tx.objectStore(STORE_TRANSLATIONS);
+    for (const k of doomed) del.delete(k);
+    await txDone(tx);
+    return doomed.length;
+  } catch {
+    return 0;
+  }
 }
 
 // ── housekeeping ─────────────────────────────────────────────────────────────

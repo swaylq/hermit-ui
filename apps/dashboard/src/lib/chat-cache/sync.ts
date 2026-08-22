@@ -240,8 +240,6 @@ export function getChatCacheSync(): ChatCacheSync {
   return singleton;
 }
 
-export function currentScope(): string | null {
-  const entry = getActiveEntry();
-  if (!entry) return null;
-  return scopeId(entry.id, entry.scoped ? entry.agentName : null);
-}
+// Re-exported so the existing callers keep their import path; it lives in db.ts
+// now because translate-store needs a scope without pulling in this module.
+export { currentScope } from './db';

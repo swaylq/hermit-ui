@@ -19,12 +19,21 @@
 // moment the reader is watching them accumulate. Keyed by content, a row swap
 // is invisible — the same blocks hash to the same entries.
 //
-// In memory only. A reload re-translates what is on screen, which costs about
-// ¥0.0007 per message and half a second; persisting it would mean a quota story
-// on iOS and a staleness story here, for that.
+// TWO TIERS. The in-memory map is the synchronous read path — `getTranslation`
+// is called during render and cannot await — and IndexedDB sits behind it so a
+// reload does not re-buy every translation on screen. A key is therefore looked
+// for on DISK once per page load before it is ever paid for on the NETWORK; the
+// disk stage is what `diskPending` and `diskAsked` below sequence.
+//
+// The disk copy lives in the scoped chat-cache database, alongside the messages
+// themselves: a translation IS message content, so signing out of a machine has
+// to take it along (pruneForeignScopes), and it should not survive into another
+// workspace's browser storage.
 
 import { blockKey, type Lang } from '@/lib/translate-text';
+import { routeKey } from '@/lib/translate-route';
 import { authedFetch } from '@/lib/asst-fetch';
+import { currentScope, getTranslations, putTranslations, evictTranslationsLru } from '@/lib/chat-cache/db';
 
 /** Blocks in one HTTP request — must not exceed the route's own MAX_BLOCKS. */
 const BATCH = 8;
@@ -48,6 +57,21 @@ const inflight = new Set<string>();
 const queue: Pending[] = [];
 let batchTimer: ReturnType<typeof setTimeout> | null = null;
 let running = 0;
+
+// Disk stage. `diskAsked` makes the lookup once-per-key-per-page-load — without
+// it, every render of an untranslated block would queue another IndexedDB read
+// — and `diskPending` keeps those keys out of the network queue while it runs.
+const diskAsked = new Set<string>();
+const diskPending = new Set<string>();
+let diskQueue: Pending[] = [];
+let diskTimer: ReturnType<typeof setTimeout> | null = null;
+// The LRU is checked ONCE per page load, on the first write. Gating it on a
+// write COUNT instead was the obvious thing and was wrong: the counter resets
+// on reload, and nobody translates 1,500 blocks in one sitting, so the check
+// would essentially never fire and the store would grow without bound across
+// sessions. `evictTranslationsLru` opens with a `count()` and returns
+// immediately when it is under the cap, so paying it once a load is nearly free.
+let evictChecked = false;
 
 /**
  * Latched when the route answers 503. The server has no key configured, and
@@ -120,11 +144,66 @@ export function requestTranslations(
 ): void {
   if (notConfigured) return;
   for (const b of blocks) {
-    if (done.has(b.key) || failed.has(b.key) || inflight.has(b.key)) continue;
-    if (queue.some((q) => q.key === b.key)) continue;
-    queue.push({ key: b.key, text: b.text, sessionId, target });
+    const route = routeKey({
+      known: done.has(b.key),
+      failed: failed.has(b.key),
+      inflight: inflight.has(b.key),
+      diskPending: diskPending.has(b.key),
+      queued: queue.some((q) => q.key === b.key),
+      diskAsked: diskAsked.has(b.key),
+    });
+    if (route === 'skip') continue;
+    const item: Pending = { key: b.key, text: b.text, sessionId, target };
+    if (route === 'disk') {
+      diskAsked.add(b.key);
+      diskPending.add(b.key);
+      diskQueue.push(item);
+      scheduleDisk();
+      continue;
+    }
+    queue.push(item);
   }
   schedule();
+}
+
+function scheduleDisk(): void {
+  if (diskTimer) return;
+  diskTimer = setTimeout(() => {
+    diskTimer = null;
+    void drainDisk();
+  }, COALESCE_MS);
+}
+
+/**
+ * Resolve everything waiting on disk in one transaction. Hits go straight into
+ * memory; misses fall through to the network queue, which is the only place
+ * they could have gone without this stage.
+ */
+async function drainDisk(): Promise<void> {
+  const batch = diskQueue;
+  diskQueue = [];
+  if (!batch.length) return;
+  let hits = new Map<string, string>();
+  try {
+    const scope = currentScope();
+    if (scope) hits = await getTranslations(scope, batch.map((b) => b.key));
+  } catch {
+    // No cache (private browsing, evicted, disabled) — every key is a miss and
+    // the network stage behaves exactly as it did before this tier existed.
+  }
+  let found = 0;
+  for (const b of batch) {
+    diskPending.delete(b.key);
+    const cached = hits.get(b.key);
+    if (cached) {
+      remember(b.key, cached);
+      found++;
+    } else if (!done.has(b.key) && !failed.has(b.key) && !inflight.has(b.key)) {
+      queue.push(b);
+    }
+  }
+  if (found) bump();
+  if (queue.length) schedule();
 }
 
 function schedule(): void {
@@ -183,16 +262,37 @@ async function runBatch(batch: Pending[]): Promise<void> {
       return;
     }
     const { texts } = (await r.json()) as { texts?: Array<string | null> };
+    const fresh: Array<{ key: string; text: string; lastUsedAt: number }> = [];
+    const now = Date.now();
     batch.forEach((b, i) => {
       const t = texts?.[i];
-      if (typeof t === 'string' && t) remember(b.key, t);
-      else failed.add(b.key);
+      if (typeof t === 'string' && t) {
+        remember(b.key, t);
+        fresh.push({ key: b.key, text: t, lastUsedAt: now });
+      } else failed.add(b.key);
     });
     bump();
+    // Write-through, off the render path. A failure here costs a re-translation
+    // after the next reload and nothing else, so it is never awaited.
+    if (fresh.length) void persist(fresh);
   } catch {
     // Offline, aborted, a parse failure — the reader keeps the original text.
     for (const b of batch) failed.add(b.key);
     bump();
+  }
+}
+
+async function persist(rows: Array<{ key: string; text: string; lastUsedAt: number }>): Promise<void> {
+  try {
+    const scope = currentScope();
+    if (!scope) return;
+    await putTranslations(scope, rows);
+    if (!evictChecked) {
+      evictChecked = true;
+      await evictTranslationsLru(scope);
+    }
+  } catch {
+    /* fails soft — the in-memory tier still serves this page load */
   }
 }
 
@@ -202,11 +302,19 @@ export function resetTranslationStore(): void {
   failed.clear();
   inflight.clear();
   queue.length = 0;
+  diskAsked.clear();
+  diskPending.clear();
+  diskQueue = [];
+  evictChecked = false;
   notConfigured = false;
   version = 0;
   if (batchTimer) {
     clearTimeout(batchTimer);
     batchTimer = null;
+  }
+  if (diskTimer) {
+    clearTimeout(diskTimer);
+    diskTimer = null;
   }
 }
 

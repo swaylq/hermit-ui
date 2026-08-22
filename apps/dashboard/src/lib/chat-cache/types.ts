@@ -47,6 +47,19 @@ export type CachedFullRow = {
   authoredBy?: string | null;
 };
 
+// One translated markdown block, keyed by a hash of its SOURCE text plus the
+// target language — never by message id, because the gateway swaps the row id
+// mid-reply and because the same paragraph quoted twice is the same work.
+//
+// Lives in the scoped cache database like everything else here: a translation
+// is message content, so signing out of a machine must take it with it
+// (pruneForeignScopes).
+export type CachedTranslation = {
+  key: string;
+  text: string;
+  lastUsedAt: number;
+};
+
 // LRU bookkeeping for the `full` store.
 export type FullMeta = {
   sessionId: string;
