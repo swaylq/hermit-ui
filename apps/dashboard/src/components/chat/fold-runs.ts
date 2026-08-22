@@ -156,6 +156,52 @@ function stepFor(block: Block): RunStep | null {
  */
 export const OPEN_RUN_KEY = 'r-open';
 
+/**
+ * Does this message leave no run open, whatever came before it?
+ *
+ * The only state `foldRuns` carries between messages is `run` and `prevDay`,
+ * and `prevDay` exists solely to close `run` on a day change. So at any message
+ * where no run is open, the fold has no memory at all — which makes such a point
+ * a seam: folding the two halves separately gives exactly the rows folding the
+ * whole gives. That is what lets a long session be folded once and then only
+ * re-folded from the seam as the live turn grows, instead of end to end on every
+ * streaming tick (26,874 messages fold in 13ms, ten times a second).
+ *
+ * "Whatever came before it" is the important half. A message whose blocks are
+ * all machinery leaves whatever was open still open, so it can only be judged
+ * with the previous state in hand; this answers true only when the message
+ * closes a run on its own — it is a terminator, it is empty, or something
+ * visible follows its last machinery block and flushes the buffer.
+ */
+export function closesRunUnconditionally(m: FoldInput): boolean {
+  if (isHarnessTerminator(m.content)) return true;
+  const blocks = blocksOf(m.content);
+  if (blocks.length === 0) return true;
+  // Mirrors the block loop below: a machinery block flushes any pending visible
+  // blocks into a row and opens a run; visible blocks accumulate. Anything left
+  // over at the end is flushed too, and flushing is what closes the run.
+  let pending = 0;
+  for (const b of blocks) {
+    if (isMachineryBlock(b)) pending = 0;
+    else pending += 1;
+  }
+  return pending > 0;
+}
+
+/**
+ * The largest index at or below `at` that is safe to fold up to.
+ *
+ * Returns 0 when there is no seam to be found, which simply means the whole list
+ * is folded as one — correct, just not incremental.
+ */
+export function safeSplitIndex(messages: FoldInput[], at: number): number {
+  const upper = Math.min(at, messages.length);
+  for (let i = upper; i > 0; i--) {
+    if (closesRunUnconditionally(messages[i - 1])) return i;
+  }
+  return 0;
+}
+
 export function foldRuns(messages: FoldInput[]): FoldedRow[] {
   const out: FoldedRow[] = [];
   let run: FoldedRun | null = null;

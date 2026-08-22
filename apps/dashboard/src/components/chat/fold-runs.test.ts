@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { foldRuns, summarizeRun, isMachineryBlock, OPEN_RUN_KEY, type FoldedRow, type FoldedRun, type FoldedMsg } from './fold-runs';
+import {
+  foldRuns,
+  summarizeRun,
+  isMachineryBlock,
+  OPEN_RUN_KEY,
+  type FoldedRow,
+  type FoldedRun,
+  type FoldedMsg,
+  safeSplitIndex,
+  closesRunUnconditionally,
+} from './fold-runs';
 
 const msg = (r: FoldedRow): FoldedMsg => {
   assert.equal(r.kind, 'msg');
@@ -247,4 +257,69 @@ test('every row in a fold has a unique key — the windowing map is keyed on it'
   ]);
   const ks = rows.map((r) => r.key);
   assert.equal(new Set(ks).size, ks.length, ks.join(' '));
+});
+
+// --- seams: folding in two halves must equal folding the whole ---------------
+//
+// This is what makes an incremental fold legal. If it ever stops holding, a long
+// session will silently render a different conversation from a short one.
+
+test('a seam splits the fold without changing a single row', () => {
+  // Deliberately awkward: runs spanning messages, a message that is machinery
+  // then prose, one that is prose then machinery (which leaves a run OPEN and so
+  // must never be offered as a seam), a terminator-free tail, and an empty row.
+  const msgs = [
+    row('user', [text('hello')]),
+    row('assistant', [call('Read', { file_path: '/x' })]),
+    row('user', [result('ok')]),
+    row('assistant', [call('Bash', { command: 'ls' }), text('done')]),
+    row('assistant', [text('before'), call('Grep', { pattern: 'x' })]),
+    row('user', [result('ok')]),
+    row('assistant', [text('finally')]),
+    row('user', []),
+    row('assistant', [call('Edit'), call('Write')]),
+    row('assistant', [text('end')]),
+    row('assistant', [think('hmm'), call('Read'), text('after thinking')]),
+    row('assistant', [text('same day tail')], NEXT_DAY),
+  ];
+  const ident = (rows: FoldedRow[]) => rows.map((r) => `${r.kind}:${r.key}:${r.ids.join('+')}`);
+  const whole = ident(foldRuns(msgs));
+  let seams = 0;
+  for (let at = 1; at < msgs.length; at++) {
+    const cut = safeSplitIndex(msgs, at);
+    if (cut === 0) continue;
+    seams++;
+    const split = ident([...foldRuns(msgs.slice(0, cut)), ...foldRuns(msgs.slice(cut))]);
+    assert.deepEqual(split, whole, `split at ${cut} changed the fold`);
+  }
+  assert.ok(seams >= 4, `expected several seams in this fixture, found ${seams}`);
+});
+
+test('a message that ends mid-run is never offered as a seam', () => {
+  // `[text, tool_use]` flushes the prose into a row and then OPENS a run, so the
+  // fold still has memory afterwards. Splitting there would cut one capsule in two.
+  assert.equal(closesRunUnconditionally(row('assistant', [text('before'), call('Grep')])), false);
+  assert.equal(closesRunUnconditionally(row('assistant', [call('Read')])), false);
+});
+
+test('a message that ends on something visible is a seam', () => {
+  assert.equal(closesRunUnconditionally(row('assistant', [call('Bash'), text('done')])), true);
+  assert.equal(closesRunUnconditionally(row('user', [text('hi')])), true);
+  assert.equal(closesRunUnconditionally(row('assistant', [call('Read'), image()])), true);
+});
+
+test('an empty message is a seam — it still produces a row', () => {
+  assert.equal(closesRunUnconditionally(row('user', [])), true);
+});
+
+test('with no seam anywhere, the whole list is folded as one', () => {
+  const allMachinery = [row('assistant', [call('Read')]), row('user', [result('ok')])];
+  assert.equal(safeSplitIndex(allMachinery, 2), 0);
+});
+
+test('safeSplitIndex never returns a point past what was asked for', () => {
+  const msgs = [row('user', [text('a')]), row('user', [text('b')]), row('user', [text('c')])];
+  assert.equal(safeSplitIndex(msgs, 2), 2);
+  assert.equal(safeSplitIndex(msgs, 1), 1);
+  assert.equal(safeSplitIndex(msgs, 99), 3);
 });

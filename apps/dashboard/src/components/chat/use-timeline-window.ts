@@ -59,6 +59,43 @@ const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : use
 
 function noop(): void {}
 
+/**
+ * The last few hundred reading-position corrections the window made.
+ *
+ * Same reason as the prepend anchor's log: once history is loaded up front there
+ * is no prepend left to blame, and the only thing still holding the reader while
+ * they scroll is this — replacing a guessed row height with a measured one and
+ * moving `scrollTop` by the difference. When that comes up short the reader
+ * slides, and a description afterwards cannot say by how much or against what.
+ * Dump it right after a jump:
+ *   copy(JSON.stringify(window.__timelineWindowLog))
+ */
+const WINDOW_LOG_SIZE = 300;
+type WindowLogEntry = {
+  t: number;
+  /** What the correction asked for, and what `scrollTop` actually moved by. */
+  wanted: number;
+  applied: number;
+  start: number;
+  end: number;
+  padTopPlan: number;
+  padTopNow: number;
+  scrollTop: number;
+  scrollHeight: number;
+  rows: number;
+  measured: number;
+  /** Whether the prose fit was in play, and on how many samples. */
+  fit: number;
+};
+const windowLog: WindowLogEntry[] = [];
+function logWindow(e: WindowLogEntry): void {
+  windowLog.push(e);
+  if (windowLog.length > WINDOW_LOG_SIZE) windowLog.shift();
+  if (typeof window !== 'undefined') {
+    (window as unknown as { __timelineWindowLog?: WindowLogEntry[] }).__timelineWindowLog = windowLog;
+  }
+}
+
 export type TimelineWindow = WindowPlan & {
   /** True while the list is actually being windowed. */
   active: boolean;
@@ -73,10 +110,13 @@ export function useTimelineWindow(
   keys: string[],
   getViewport: () => HTMLElement | null,
   /**
-   * Each row's source text, positionally matched to `keys`. Optional: without it
-   * the window behaves exactly as it did before prose prediction existed.
+   * A row's source text by index. An accessor rather than an array because a row
+   * is predicted at most once and the answer is kept: materialising every row's
+   * prose on every render would be thousands of strings built for the thirty the
+   * predictor actually asks about. Optional — without it the window behaves
+   * exactly as it did before prose prediction existed.
    */
-  texts?: string[],
+  textAt?: (i: number) => string,
 ): TimelineWindow {
   const measured = useRef(new Map<string, number>());
   // Predicted prose height per row key, at `proseMetrics`' width. 0 means "asked
@@ -86,7 +126,9 @@ export function useTimelineWindow(
   const proseMetrics = useRef<{ font: string; lineHeight: number; width: number } | null>(null);
   const fit = useRef<ProseFit | null>(null);
   const idleHandle = useRef<number | null>(null);
-  const textsRef = useRef<string[] | undefined>(texts);
+  // Correction that asked for more room than the scroller had — see below.
+  const owed = useRef(0);
+  const textAtRef = useRef<((i: number) => string) | undefined>(textAt);
   // `startKey` is what makes the window survive a prepend: see the remap below.
   const [plan, setPlan] = useState<WindowPlan & { sig: string; startKey: string | null }>(() => ({
     ...fullWindow(keys.length),
@@ -100,7 +142,7 @@ export function useTimelineWindow(
   useIsoLayoutEffect(() => {
     keysRef.current = keys;
     planRef.current = plan;
-    textsRef.current = texts;
+    textAtRef.current = textAt;
   });
 
   const recompute = useCallback(() => {
@@ -198,7 +240,28 @@ export function useTimelineWindow(
     if (Math.abs(delta) < 1) return;
     // Grow or shrink the space above the viewport and move with it, so the row
     // the reader is looking at does not move at all.
+    const before = vp.scrollTop;
     vp.scrollTop += delta;
+    // A correction that GROWS the space above the reader is asking `scrollTop`
+    // to move somewhere the scroller cannot reach yet: the taller spacer is
+    // still the plan's old height until React commits the setPlan below, so the
+    // browser clamps the write and silently drops the rest. Shrinking never hits
+    // this — a smaller `scrollTop` is always reachable — which is why it shows up
+    // as a one-sided slide, only ever upward, and only on lists long enough for
+    // the guesses above to be wrong by real distances. Measured on a 1,718-row
+    // session: a correction of 25,430px landed 1,727px of itself and the reader
+    // lost the other 23,703px in one frame.
+    //
+    // So keep the remainder and pay it in the layout effect below, once the
+    // spacer that makes room for it exists.
+    const applied = vp.scrollTop - before;
+    if (Math.abs(delta - applied) >= 1) owed.current += delta - applied;
+    logWindow({
+      t: Date.now(), wanted: delta, applied: vp.scrollTop - before,
+      start: p.start, end: p.end, padTopPlan: p.padTop, padTopNow,
+      scrollTop: vp.scrollTop, scrollHeight: vp.scrollHeight,
+      rows: ks.length, measured: measured.current.size, fit: fit.current ? fit.current.samples : 0,
+    });
     let padBottomNow = 0;
     for (let i = p.end; i < heights.length; i++) padBottomNow += heights[i];
     setPlan((prev) => (prev.sig === p.sig ? { ...prev, padTop: padTopNow, padBottom: padBottomNow } : prev));
@@ -246,9 +309,9 @@ export function useTimelineWindow(
   const predict = useCallback(() => {
     idleHandle.current = null;
     const ks = keysRef.current;
-    const ts = textsRef.current;
+    const textOf = textAtRef.current;
     const m = proseMetrics.current;
-    if (!m || !ts || ks.length <= THRESHOLD || !textHeightReady()) return;
+    if (!m || !textOf || ks.length <= THRESHOLD || !textHeightReady()) return;
     const deadline = performance.now() + PROSE_BUDGET_MS;
     let did = 0;
     let more = false;
@@ -258,7 +321,7 @@ export function useTimelineWindow(
         more = true;
         break;
       }
-      const t = ts[i];
+      const t = textOf(i);
       const r = t ? proseHeight(t, m) : { height: 0, blocks: 0 };
       prose.current.set(ks[i], r.blocks > 0 ? r.height : 0);
       did++;
@@ -296,6 +359,36 @@ export function useTimelineWindow(
     },
     [],
   );
+
+  // Pay back whatever the correction above could not fit.
+  //
+  // By now the plan it was computed for has been committed, so the top spacer is
+  // its new height and the scroller is finally tall enough to hold the position
+  // it was asked to hold. This is a layout effect on the plan itself, so it runs
+  // in the same commit — before the browser paints, and therefore before the
+  // reader could see the frame where it had not been paid.
+  //
+  // One attempt. If it still will not fit, something other than the spacer is
+  // wrong and re-trying every commit would be a scroll that fights the reader
+  // rather than a correction that holds them.
+  useIsoLayoutEffect(() => {
+    const debt = owed.current;
+    if (!debt) return;
+    owed.current = 0;
+    const vp = getViewport();
+    if (!vp) return;
+    const before = vp.scrollTop;
+    vp.scrollTop += debt;
+    const paid = vp.scrollTop - before;
+    if (Math.abs(debt - paid) >= 1) {
+      logWindow({
+        t: Date.now(), wanted: debt, applied: paid,
+        start: plan.start, end: plan.end, padTopPlan: plan.padTop, padTopNow: plan.padTop,
+        scrollTop: vp.scrollTop, scrollHeight: vp.scrollHeight,
+        rows: keysRef.current.length, measured: measured.current.size, fit: fit.current ? fit.current.samples : 0,
+      });
+    }
+  }, [plan, getViewport]);
 
   // A row's height is wanted for two different reasons, and they want it at two
   // different moments:

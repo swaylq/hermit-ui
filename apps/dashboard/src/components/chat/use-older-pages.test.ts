@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pageBefore, chunksBottomFirst, OLDER_PAGE, COMMIT_CHUNK } from './use-older-pages';
+import { pageBefore, chunksBottomFirst, OLDER_PAGE, COMMIT_CHUNK, allBefore } from './use-older-pages';
 
 // The seam between a cached page and the rest of history. Getting it wrong does
 // not throw — it shows a turn twice, or drops one, the next time someone reads
@@ -95,4 +95,54 @@ test('a short page still commits whole, no empty chunk', () => {
   assert.equal(chunks.length, 1);
   assert.equal(chunks[0].length, page.length);
   assert.deepEqual(chunks[0].map((r) => r.id), page.map((r) => r.id));
+});
+
+// --- allBefore: hand over the whole of what is already on disk ---------------
+
+const at = (n: number) => `2026-08-22T10:${String(n).padStart(2, '0')}:00.000Z`;
+const mk = (n: number) => ({ id: `m${String(n).padStart(3, '0')}`, createdAt: at(n) });
+
+test('allBefore returns everything older, in order, with no minimum', () => {
+  const rows = [mk(1), mk(2), mk(3), mk(4), mk(5)];
+  const got = allBefore(rows, { createdAt: at(4), id: 'm004' });
+  assert.deepEqual(got.map((r) => r.id), ['m001', 'm002', 'm003']);
+});
+
+test('a single row is enough — pageBefore would refuse it', () => {
+  // This is the whole difference: a partial answer is useless to a pager and is
+  // exactly what a one-shot preload wants.
+  const rows = [mk(1)];
+  const edge = { createdAt: at(2), id: 'm002' };
+  assert.equal(pageBefore(rows, edge, 60), null);
+  assert.equal(allBefore(rows, edge).length, 1);
+});
+
+test('nothing older is an empty list, not a null', () => {
+  assert.deepEqual(allBefore([mk(5)], { createdAt: at(1), id: 'm001' }), []);
+  assert.deepEqual(allBefore([], { createdAt: at(1), id: 'm001' }), []);
+});
+
+test('the edge row itself is excluded, and ties break by id', () => {
+  // Same timestamp, which happens constantly: a turn's blocks land in one write.
+  const same = [
+    { id: 'a', createdAt: at(3) },
+    { id: 'b', createdAt: at(3) },
+    { id: 'c', createdAt: at(3) },
+  ];
+  assert.deepEqual(allBefore(same, { createdAt: at(3), id: 'b' }).map((r) => r.id), ['a']);
+});
+
+test('allBefore and pageBefore agree on the same seam', () => {
+  // If these ever disagree the reader gets a turn twice, or loses one.
+  const rows = Array.from({ length: 40 }, (_, i) => mk(i + 1));
+  const edge = { createdAt: at(30), id: 'm030' };
+  const all = allBefore(rows, edge);
+  const page = pageBefore(rows, edge, 10);
+  assert.ok(page);
+  assert.deepEqual(page.map((r) => r.id), all.slice(all.length - 10).map((r) => r.id));
+});
+
+test('Date objects and ISO strings compare the same way', () => {
+  const rows = [{ id: 'm001', createdAt: new Date(at(1)) }, { id: 'm002', createdAt: at(2) }];
+  assert.deepEqual(allBefore(rows, { createdAt: at(2), id: 'm002' }).map((r) => r.id), ['m001']);
 });

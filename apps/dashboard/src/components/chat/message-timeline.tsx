@@ -10,7 +10,7 @@
 // machinery (fold-runs.ts) — so what remains is what someone said, plus one
 // expandable row standing in for how it was carried out.
 
-import { memo, useState, useCallback } from 'react';
+import { memo, useState, useCallback, useMemo } from 'react';
 import { useTimelineWindow, WINDOW_ROW_ATTR } from '@/components/chat/use-timeline-window';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
@@ -26,7 +26,7 @@ import { ToolChip, ToolBatchChip } from '@/components/chat/tool-chips';
 import { InteractionCard } from '@/components/chat/interaction-card';
 import { ChatImage, ChatFile } from '@/components/chat/file-preview';
 import { RunCapsule } from '@/components/chat/run-capsule';
-import { foldRuns } from '@/components/chat/fold-runs';
+import { foldRuns, safeSplitIndex, type FoldedRow } from '@/components/chat/fold-runs';
 
 function HarnessTerminatorRow({ ts }: { ts: Date | string }) {
   return (
@@ -114,87 +114,142 @@ export const MessageTimeline = memo(function MessageTimeline({
 
   // Machinery out of the stream and into capsules. This is what turns a
   // 15-row tool chain into one row.
-  const folded = foldRuns(orderedMessages);
+  //
+  // Folded in two halves, because a fully-loaded session is folded on EVERY
+  // render and `view` is a new array on every streaming tick. Measured on a real
+  // 26,874-message session: one fold is 13.2ms, which at ten ticks a second is
+  // the whole frame budget on a phone and most of it on a laptop.
+  //
+  // Splitting is legal at a seam — a point where no run is open — because the
+  // only state the fold carries between messages is the open run and the day it
+  // uses to close it (see closesRunUnconditionally, and the property test that
+  // pins this). The head is then folded once and reused; only the tail, which is
+  // where the live turn is, is folded again.
+  //
+  // The boundary moves in quanta rather than tracking the length, so that the
+  // head is re-folded once every FOLD_STEP messages instead of once per message
+  // — with no state to carry across renders to remember where it was last time.
+  const headLimit = Math.max(0, Math.floor((orderedMessages.length - FOLD_TAIL) / FOLD_STEP) * FOLD_STEP);
+  const cut = headLimit > 0 ? safeSplitIndex(orderedMessages, headLimit) : 0;
+  // Identity of the head, and the ONLY thing this memo may depend on: while a
+  // reply streams, the last message's content grows but no id changes and the
+  // length does not move, so this string is stable and the head is not re-folded.
+  const headKey = cut > 0 ? `${cut}:${orderedMessages[0]?.id}:${orderedMessages[cut - 1]?.id}` : '';
+  const head = useMemo(
+    () => (cut > 0 ? foldRuns(orderedMessages.slice(0, cut)) : EMPTY_ROWS),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [headKey],
+  );
+  const folded = useMemo(
+    () => (cut > 0 ? [...head, ...foldRuns(orderedMessages.slice(cut))] : foldRuns(orderedMessages)),
+    [head, cut, orderedMessages],
+  );
 
-  // Items rather than a flat node list: a long timeline renders only the slice
-  // near the viewport (see use-timeline-window.ts), which means the list has to
-  // be sliceable and every item has to carry a stable key to remember its
-  // measured height by.
-  const out: Array<{ key: string; node: React.ReactNode; text?: string }> = [];
+  // Descriptors, not elements. A long timeline renders only the slice near the
+  // viewport, so building a React element for every row — 11,152 of them for the
+  // session above — is work thrown away on all but about thirty. The window
+  // slices these and `renderItem` below turns the survivors into nodes.
+  const items: TimelineItem[] = [];
   let prevDay: Date | string | null = null;
   for (let i = 0; i < folded.length; i++) {
     const r = folded[i];
     const ts = r.kind === 'run' ? r.from : r.createdAt;
     if (!prevDay || !isSameDay(prevDay, ts)) {
-      out.push({ key: `d-${r.key}`, node: <DateDivider key={`d-${r.key}`} day={ts} /> });
+      items.push({ key: `d-${r.key}`, kind: 'divider', day: ts });
       prevDay = ts;
     }
-
-    if (r.kind === 'end') {
-      out.push({ key: r.key, node: <HarnessTerminatorRow key={r.key} ts={r.createdAt} /> });
-      continue;
-    }
-
-    if (r.kind === 'run') {
-      // Only the LAST row of the whole timeline can be the turn in flight.
-      const live = running && i === folded.length - 1;
-      out.push({
-        key: r.key,
-        // `data-msg-id` carries every id folded into this row, space-separated
-        // so a lookup can use the `[data-msg-id~="…"]` word-match selector.
-        // It's how a search hit scrolls to its message — see use-anchored-window.ts.
-        //
-        // `data-run` says "this row can swallow more of the conversation later".
-        // Loading earlier history folds the machinery it brings into the capsule
-        // at the seam, so the SAME row comes back taller and starting further
-        // back — and a word-match lookup still finds it, which is what makes it
-        // a trap. The prepend anchor uses the mark to refuse to anchor here.
-        node: (
-          <div key={r.key} data-msg-id={r.ids.join(' ')} data-run="" {...{ [WINDOW_ROW_ATTR]: r.key }} className="flex justify-start">
-            <div className="min-w-0 w-full max-w-[85%]">
-              <RunCapsule ids={r.ids} steps={r.steps} from={r.from} to={r.to} running={live} label={live ? runLabel : null} detail={live ? runDetail : null} />
-            </div>
-          </div>
-        ),
-      });
-      continue;
-    }
-
-    const streamingTail = !!streamingTailId && r.msgId === streamingTailId && i === folded.length - 1;
-    // Typewriter is decided at render time, NOT from streamingTailId alone —
-    // that's set by a post-render effect (one render late), which would mount
-    // the text already-complete and skip the animation. So a row that landed in
-    // the last few seconds may start typing on sight; a row the page has SEEN
-    // grow may start typing whatever its age, which is what keeps a reply that
-    // takes a minute to write animating for the whole minute.
-    //
-    // Either way this only STARTS the reveal — useTypewriter latches, because
-    // both of these signals decay while a long reply is still being written.
-    const isLast = r.msgId === newestId;
-    const typing = isLast && r.role === 'assistant'
-      && (streamingTail || Date.now() - new Date(r.createdAt).getTime() < 8_000);
-    // askCardByQuestion is rebuilt as a fresh Map every render, and `view`
-    // hands us a new array on every streaming tick — so passing the Map to
-    // every row would break MessageRow's memo shallow-compare each tick and
-    // re-render the whole visible timeline, not just the growing tail. Only
-    // ask tool_use rows actually read the map (groupConsecutiveTools);
-    // every other row gets a stable `undefined` and its memo bails.
-    const rowHasAsk = r.blocks.some((b) => isAskToolUse(b));
-    out.push({
-      key: r.key,
-      // What the windowing hook predicts this row's height from before it is ever
-      // mounted (use-timeline-window.ts). Date dividers, run capsules and the
-      // terminator deliberately carry none: their height is not text.
-      text: proseOf(r.blocks),
-      node: (
-        <div key={r.key} data-msg-id={r.ids.join(' ')} {...{ [WINDOW_ROW_ATTR]: r.key }}>
-          <MessageRow role={r.role} authoredBy={r.authoredBy} content={r.blocks} ts={r.createdAt} streamingTail={streamingTail} typing={typing} streamKey={streamKey} sessionId={sessionId} streamingDot={streamingTail ? dotClass : undefined} askCardByQuestion={rowHasAsk ? askCardByQuestion : undefined} />
-        </div>
-      ),
-    });
+    items.push({ key: r.key, kind: 'row', row: r, last: i === folded.length - 1 });
   }
-  return <TimelineBody items={out} getViewport={getViewport} />;
+
+  const ctx: RenderContext = {
+    running, runLabel, runDetail, streamingTailId, newestId,
+    streamKey, sessionId, dotClass, askCardByQuestion,
+  };
+  return <TimelineBody items={items} ctx={ctx} getViewport={getViewport} />;
 });
+
+/** Messages at the tail that are re-folded on every render. */
+const FOLD_TAIL = 400;
+/** Quantum the head boundary moves in — see the fold above. */
+const FOLD_STEP = 400;
+const EMPTY_ROWS: FoldedRow[] = [];
+
+/**
+ * One row of the timeline, as data. Carries no React element and nothing
+ * volatile: everything that changes per tick lives in RenderContext, so this
+ * array costs the same whether the session is sixty messages or twenty-seven
+ * thousand.
+ */
+type TimelineItem =
+  | { key: string; kind: 'divider'; day: Date | string }
+  | { key: string; kind: 'row'; row: FoldedRow; last: boolean };
+
+type RenderContext = {
+  running: boolean;
+  runLabel: string | null;
+  runDetail: string | null;
+  streamingTailId: string | null | undefined;
+  newestId: string | null;
+  streamKey: string;
+  sessionId: string;
+  dotClass: string | undefined;
+  askCardByQuestion: Map<string, any>;
+};
+
+function renderItem(it: TimelineItem, ctx: RenderContext): React.ReactNode {
+  if (it.kind === 'divider') return <DateDivider key={it.key} day={it.day} />;
+  const r = it.row;
+
+  if (r.kind === 'end') return <HarnessTerminatorRow key={r.key} ts={r.createdAt} />;
+
+  if (r.kind === 'run') {
+    // Only the LAST row of the whole timeline can be the turn in flight.
+    const live = ctx.running && it.last;
+    return (
+      // `data-msg-id` carries every id folded into this row, space-separated
+      // so a lookup can use the `[data-msg-id~="…"]` word-match selector.
+      // It's how a search hit scrolls to its message — see use-anchored-window.ts.
+      //
+      // `data-run` says "this row can swallow more of the conversation later".
+      // Loading earlier history folds the machinery it brings into the capsule
+      // at the seam, so the SAME row comes back taller and starting further
+      // back — and a word-match lookup still finds it, which is what makes it
+      // a trap. The prepend anchor uses the mark to refuse to anchor here.
+      <div key={r.key} data-msg-id={r.ids.join(' ')} data-run="" {...{ [WINDOW_ROW_ATTR]: r.key }} className="flex justify-start">
+        <div className="min-w-0 w-full max-w-[85%]">
+          <RunCapsule ids={r.ids} steps={r.steps} from={r.from} to={r.to} running={live} label={live ? ctx.runLabel : null} detail={live ? ctx.runDetail : null} />
+        </div>
+      </div>
+    );
+  }
+
+  const streamingTail = !!ctx.streamingTailId && r.msgId === ctx.streamingTailId && it.last;
+  // Typewriter is decided at render time, NOT from streamingTailId alone —
+  // that's set by a post-render effect (one render late), which would mount
+  // the text already-complete and skip the animation. So a row that landed in
+  // the last few seconds may start typing on sight; a row the page has SEEN
+  // grow may start typing whatever its age, which is what keeps a reply that
+  // takes a minute to write animating for the whole minute.
+  //
+  // Either way this only STARTS the reveal — useTypewriter latches, because
+  // both of these signals decay while a long reply is still being written.
+  const isLast = r.msgId === ctx.newestId;
+  const typing = isLast && r.role === 'assistant'
+    && (streamingTail || Date.now() - new Date(r.createdAt).getTime() < 8_000);
+  // askCardByQuestion is rebuilt as a fresh Map every render, and `view`
+  // hands us a new array on every streaming tick — so passing the Map to
+  // every row would break MessageRow's memo shallow-compare each tick and
+  // re-render the whole visible timeline, not just the growing tail. Only
+  // ask tool_use rows actually read the map (groupConsecutiveTools);
+  // every other row gets a stable `undefined` and its memo bails.
+  const rowHasAsk = r.blocks.some((b) => isAskToolUse(b));
+  return (
+    <div key={r.key} data-msg-id={r.ids.join(' ')} {...{ [WINDOW_ROW_ATTR]: r.key }}>
+      <MessageRow role={r.role} authoredBy={r.authoredBy} content={r.blocks} ts={r.createdAt} streamingTail={streamingTail} typing={typing} streamKey={ctx.streamKey} sessionId={ctx.sessionId} streamingDot={streamingTail ? ctx.dotClass : undefined} askCardByQuestion={rowHasAsk ? ctx.askCardByQuestion : undefined} />
+    </div>
+  );
+}
+
 
 // Rendering half of MessageTimeline, split out only so the windowing hook has a
 // component of its own to live in — the hook must run on every render, and
@@ -216,15 +271,26 @@ function proseOf(blocks: Block[]): string {
   return out;
 }
 
-function TimelineBody({ items, getViewport }: { items: Array<{ key: string; node: React.ReactNode; text?: string }>; getViewport?: () => HTMLElement | null }) {
+function TimelineBody({ items, ctx, getViewport }: { items: TimelineItem[]; ctx: RenderContext; getViewport?: () => HTMLElement | null }) {
   const keys = items.map((it) => it.key);
-  const texts = items.map((it) => it.text ?? '');
   const noViewport = useCallback(() => null, []);
-  const win = useTimelineWindow(keys, getViewport ?? noViewport, texts);
+  // An accessor rather than an array of every row's prose. The window predicts a
+  // row's height at most once and remembers it, so building 11,000 strings on
+  // every tick to hand it thirty of them is work with no reader.
+  const textAt = useCallback(
+    (i: number) => {
+      const it = items[i];
+      return it && it.kind === 'row' && it.row.kind === 'msg' ? proseOf(it.row.blocks) : '';
+    },
+    [items],
+  );
+  const win = useTimelineWindow(keys, getViewport ?? noViewport, textAt);
+  const shown: React.ReactNode[] = [];
+  for (let i = win.start; i < win.end; i++) shown.push(renderItem(items[i], ctx));
   return (
     <div className="space-y-3">
       {win.padTop > 0 && <div data-window-spacer="top" style={{ height: win.padTop }} aria-hidden />}
-      {items.slice(win.start, win.end).map((it) => it.node)}
+      {shown}
       {win.padBottom > 0 && <div data-window-spacer="bottom" style={{ height: win.padBottom }} aria-hidden />}
     </div>
   );
