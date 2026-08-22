@@ -87,6 +87,43 @@ export function planWindow(input: WindowInput): WindowPlan {
   return { start, end, padTop, padBottom };
 }
 
+/**
+ * A plan that cannot point outside the list it is used with.
+ *
+ * The plan is React state, so between the row list changing length and the
+ * layout effect that replans, a render happens where the plan still describes
+ * the OLD list. Every consumer then indexes past the end. That is not
+ * hypothetical: replacing `items.slice(start, end)` — which clamps out-of-range
+ * indices silently, as every JS array method does — with a `for` loop over the
+ * same numbers took the production dashboard down with "Cannot read properties
+ * of undefined (reading 'kind')".
+ *
+ * So clamp where the plan is produced rather than at each place it is read. A
+ * consumer that forgets is the normal case; there is no reason for a plan to be
+ * able to name a row that does not exist.
+ */
+export function clampPlan(plan: WindowPlan, count: number): WindowPlan {
+  const end = Math.min(plan.end, count);
+  const start = Math.min(plan.start, end);
+  if (start === plan.start && end === plan.end) return plan;
+  // The spacers are deliberately left alone. They stand in for rows that are not
+  // rendered, and the heights they were computed from are the ones the reading
+  // position was corrected against; recomputing them here from a list this
+  // function cannot see would move the reader to hide an inconsistency that the
+  // replan is about to fix properly.
+  return { ...plan, start, end };
+}
+
+/**
+ * The rows a plan says to render. The only way `TimelineBody` should get at
+ * them — it is where the out-of-range read happened, so it is worth having a
+ * function that cannot do it and a test that says so.
+ */
+export function visibleSlice<T>(items: T[], plan: { start: number; end: number }): T[] {
+  const p = clampPlan({ start: plan.start, end: plan.end, padTop: 0, padBottom: 0 }, items.length);
+  return items.slice(p.start, p.end);
+}
+
 /** A row that changed height after it was already mounted. */
 export type SettledRow = {
   /** Height before the change, including the gap below it. */

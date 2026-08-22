@@ -12,6 +12,7 @@
 
 import { memo, useState, useCallback, useMemo } from 'react';
 import { useTimelineWindow, WINDOW_ROW_ATTR } from '@/components/chat/use-timeline-window';
+import { visibleSlice } from '@/components/chat/timeline-window';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { TimeAgo } from '@/components/time-ago';
@@ -286,9 +287,11 @@ function TimelineBody({ items, ctx, getViewport }: { items: TimelineItem[]; ctx:
     [items],
   );
   const win = useTimelineWindow(keys, getViewport ?? noViewport, textAt);
-  const shown: React.ReactNode[] = [];
-  const end = Math.min(win.end, items.length);
-  for (let i = win.start; i < end; i++) shown.push(renderItem(items[i], ctx));
+  // visibleSlice, not an indexed loop. The plan is clamped at its source now, but
+  // the thing that broke production was a hand-rolled range over React state
+  // describing a list that had already changed length — so this reads the rows
+  // through something that cannot express an out-of-range read at all.
+  const shown = visibleSlice(items, win).map((it) => renderItem(it, ctx));
   return (
     <div className="space-y-3">
       {win.padTop > 0 && <div data-window-spacer="top" style={{ height: win.padTop }} aria-hidden />}

@@ -26,6 +26,7 @@ import {
   fullWindow,
   heightsFor,
   liftFromSettled,
+  clampPlan,
   fitProseHeights,
   type ProseFit,
   type SettledRow,
@@ -515,5 +516,9 @@ export function useTimelineWindow(
     []
   );
 
-  return { ...plan, active: keys.length > THRESHOLD };
+  // Clamped here, at the source. A stale plan is a normal state — it is React
+  // state, and the replan is a layout effect — so every consumer would otherwise
+  // have to remember, and one of them not remembering is what took the dashboard
+  // down. See clampPlan.
+  return { ...clampPlan(plan, keys.length), active: keys.length > THRESHOLD };
 }

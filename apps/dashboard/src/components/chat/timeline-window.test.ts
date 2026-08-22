@@ -8,6 +8,8 @@ import {
   liftFromSettled,
   fitProseHeights,
   type WindowInput,
+  clampPlan,
+  visibleSlice,
 } from './timeline-window';
 
 const uniform = (n: number, h = 100): number[] => new Array(n).fill(h);
@@ -285,4 +287,71 @@ test('a prediction is never shorter than a line', () => {
   const measured = new Map([['a', 100], ['b', 300]]);
   const fit = { a: 1.2, b: -400, samples: 20 };
   assert.deepEqual(heightsFor(['c'], measured, 90, new Map([['c', 10]]), fit), [24]);
+});
+
+// --- clampPlan / visibleSlice: a stale plan must not name a row -------------
+//
+// The plan is React state and the replan is a layout effect, so a render where
+// the plan describes the PREVIOUS, longer list is normal. Reading past the array
+// there is what took the dashboard down with "Cannot read properties of
+// undefined (reading 'kind')".
+
+test('a plan that fits is returned untouched, same reference', () => {
+  const p = { start: 5, end: 20, padTop: 500, padBottom: 800 };
+  assert.equal(clampPlan(p, 50), p);
+});
+
+test('an end past the list is pulled back to it', () => {
+  // The session was switched, or a search closed: the list got shorter and this
+  // render still holds the plan for the old one.
+  assert.deepEqual(clampPlan({ start: 5, end: 900, padTop: 1, padBottom: 2 }, 20), {
+    start: 5, end: 20, padTop: 1, padBottom: 2,
+  });
+});
+
+test('a start past the list collapses to an empty window, never a negative one', () => {
+  const c = clampPlan({ start: 900, end: 1000, padTop: 1, padBottom: 2 }, 20);
+  assert.equal(c.start, 20);
+  assert.equal(c.end, 20);
+  assert.ok(c.end >= c.start, 'end must never fall below start');
+});
+
+test('an empty list yields an empty window', () => {
+  const c = clampPlan({ start: 10, end: 40, padTop: 1, padBottom: 2 }, 0);
+  assert.deepEqual([c.start, c.end], [0, 0]);
+});
+
+test('the spacers are left alone — clamping must not move the reader', () => {
+  // padTop is what the reading-position correction was measured against. Making
+  // up a new one here would shift the view to paper over a plan the replan is
+  // about to fix properly.
+  const c = clampPlan({ start: 5, end: 900, padTop: 4321, padBottom: 8765 }, 20);
+  assert.equal(c.padTop, 4321);
+  assert.equal(c.padBottom, 8765);
+});
+
+test('visibleSlice never reads past the array, whatever the plan says', () => {
+  const items = ['a', 'b', 'c'];
+  assert.deepEqual(visibleSlice(items, { start: 0, end: 999 }), ['a', 'b', 'c']);
+  assert.deepEqual(visibleSlice(items, { start: 2, end: 999 }), ['c']);
+  assert.deepEqual(visibleSlice(items, { start: 99, end: 999 }), []);
+  assert.deepEqual(visibleSlice([], { start: 3, end: 9 }), []);
+  for (const got of [
+    visibleSlice(items, { start: 0, end: 999 }),
+    visibleSlice(items, { start: 99, end: 999 }),
+  ]) {
+    assert.ok(got.every((x) => x !== undefined), 'no hole may reach the renderer');
+  }
+});
+
+test('planWindow output is always in range for its own list', () => {
+  // The invariant the hook now guarantees, checked against the planner itself.
+  for (const n of [0, 1, 5, 401, 1000]) {
+    for (const top of [0, 1234, 1e9]) {
+      const p = planWindow({ heights: uniform(n), scrollTop: top, viewportHeight: 900, overscan: 2700, threshold: 400 });
+      const c = clampPlan(p, n);
+      assert.ok(c.start >= 0 && c.start <= n, `start ${c.start} out of range for ${n}`);
+      assert.ok(c.end >= c.start && c.end <= n, `end ${c.end} out of range for ${n}`);
+    }
+  }
 });
