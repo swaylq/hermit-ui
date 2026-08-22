@@ -101,7 +101,7 @@ export default function BackendsPage() {
           ) : (
             <>
               <section>
-                <h2 className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">订阅 · built in</h2>
+                <h2 className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Subscription · built in</h2>
                 <Card className="divide-y divide-border p-0">
                   {BUILT_IN_BACKENDS.map((b) => (
                     <BackendRow
@@ -124,11 +124,11 @@ export default function BackendsPage() {
               <section>
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <h2 className="text-xs uppercase tracking-wide text-muted-foreground">
-                    自建 · harness + credential
+                    Composed · harness + credential
                   </h2>
                   {credentials.length > 0 && (
                     <Button size="sm" variant="outline" onClick={() => { setErr(null); setEditing('new'); }}>
-                      <Plus className="mr-1 h-3.5 w-3.5" /> 添加 backend
+                      <Plus className="mr-1 h-3.5 w-3.5" /> Add backend
                     </Button>
                   )}
                 </div>
@@ -380,11 +380,11 @@ function BackendDialog({
           </label>
 
           <label className="block">
-            <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">默认模型</span>
+            <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Default model</span>
             <Input
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder={credential?.models[0] ?? '留空用凭证的默认'}
+              placeholder={credential?.models[0] ?? 'the credential’s default'}
               className="mt-1.5 h-9 font-mono"
               aria-label="default model"
             />
@@ -415,7 +415,7 @@ function BackendDialog({
         {error && <p className="text-[11px] leading-relaxed text-rose-500">{error}</p>}
 
         <DialogFooter>
-          <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
           <Button
             disabled={!ready || busy}
             onClick={() => {
@@ -431,7 +431,7 @@ function BackendDialog({
               }));
             }}
           >
-            {instance ? '保存' : '添加'}
+            {instance ? 'Save' : 'Add'}
           </Button>
         </DialogFooter>
       </DialogContent>

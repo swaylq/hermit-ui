@@ -123,10 +123,10 @@ export default function ModelsSettingsPage() {
 
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
-              模型来源 · credentials
+              Model sources · credentials
             </h2>
             <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
-              <Plus className="mr-1 h-3.5 w-3.5" /> 添加模型来源
+              <Plus className="mr-1 h-3.5 w-3.5" /> Add model source
             </Button>
           </div>
 
@@ -154,11 +154,11 @@ export default function ModelsSettingsPage() {
           <div className="flex items-center gap-3">
             <Button onClick={() => save.mutate({ credentials: list })} disabled={save.isPending || creds === null}>
               {save.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1.5 h-3.5 w-3.5" />}
-              保存
+              Save
             </Button>
             {saved && (
               <span className="flex items-center gap-1 text-xs text-emerald-600">
-                <CheckCircle2 className="h-3.5 w-3.5" /> 已保存
+                <CheckCircle2 className="h-3.5 w-3.5" /> Saved
               </span>
             )}
             {err && (
@@ -195,22 +195,24 @@ function SubscriptionCard({
 }) {
   const rows = [
     {
-      name: 'Claude Code 订阅',
+      name: 'Claude Code subscription',
       seenAt: claudeSeenAt,
-      detail: 'Interactive tmux 会话走这一份，也是唯一走它的东西。',
+      detail: 'Interactive tmux sessions run on this one, and nothing else does.',
     },
     {
-      name: 'Codex 订阅',
+      name: 'Codex subscription',
       seenAt: codexSeenAt,
-      detail: codexPlan ? `plan: ${codexPlan}` : '`codex login`，与本机同一个用户。',
+      detail: codexPlan ? `plan: ${codexPlan}` : '`codex login`, as this machine’s own user.',
     },
   ];
   return (
     <section className="rounded-lg border border-border bg-card p-4">
-      <h3 className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">订阅 · 无需配置</h3>
+      <h3 className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Subscriptions · nothing to configure</h3>
       <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/70">
-        这两份凭据在机器上，由各自的 CLI 自己登录和刷新，这里没有可填的字段。其他 harness 也<span className="text-foreground/80">不能</span>指向它们
-        —— 拿第三方 harness 去跑一个 Max 账号，正是限流和请求分类器存在的理由。
+        These two live on the machine, logged in and refreshed by their own CLIs, so there is no field here to
+        fill in. No other harness <span className="text-foreground/80">can</span> be pointed at them either —
+        running a Max account through a third-party harness is exactly what the rate limits and the request
+        classifier exist to catch.
       </p>
       <div className="mt-3 divide-y divide-border rounded-md border border-border">
         {rows.map((r) => (
@@ -239,7 +241,7 @@ function ActivationBadge({ seenAt, loading }: { seenAt: Date | string | null; lo
   if (!seenAt) {
     return (
       <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
-        未见用量上报
+        no usage reported
       </span>
     );
   }
@@ -248,7 +250,7 @@ function ActivationBadge({ seenAt, loading }: { seenAt: Date | string | null; lo
   const ago = mins < 60 ? `${mins}m` : mins < 1440 ? `${Math.round(mins / 60)}h` : `${Math.round(mins / 1440)}d`;
   return (
     <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
-      已激活 · {ago} 前
+      active · {ago} ago
     </span>
   );
 }
@@ -286,11 +288,11 @@ function CredentialCard({
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Provider ID" hint="harness 里的 provider 名，例如 hyqubit / openrouter / zai">
+        <Field label="Provider ID" hint="The provider name inside the harness — hyqubit / openrouter / zai.">
           <Input value={c.provider} onChange={(e) => onChange({ provider: e.target.value })}
             placeholder="hyqubit" className="h-9 font-mono" />
         </Field>
-        <Field label="API 类型" hint="端点说的是哪套协议">
+        <Field label="API type" hint="Which protocol the endpoint speaks.">
           <Select value={c.api} onValueChange={(v) => onChange({ api: v ?? DEFAULT_API })} modal={false}>
             <SelectTrigger className="h-9 font-mono" aria-label="api type">
               <SelectValue>{(v: string | null) => API_CHOICES.find((a) => a.value === v)?.label ?? v ?? DEFAULT_API}</SelectValue>
@@ -300,11 +302,11 @@ function CredentialCard({
             </SelectContent>
           </Select>
         </Field>
-        <Field label="Base URL" hint="留空表示这套 harness 自带端点（dsh 的 DeepSeek 目录就是这样）">
+        <Field label="Base URL" hint="Blank means the harness brings its own endpoint (dsh’s DeepSeek catalog does).">
           <Input value={c.baseUrl} onChange={(e) => onChange({ baseUrl: e.target.value })}
             placeholder="https://litellm.hyqubit.com" className="h-9 font-mono" />
         </Field>
-        <Field label="API Key" hint="填 secrets store 里的 key 名，不是 key 本身">
+        <Field label="API Key" hint="The key’s NAME in the secrets store — never the key itself.">
           <div className="flex items-center gap-1.5">
             <KeyRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <Input
@@ -321,7 +323,7 @@ function CredentialCard({
           </div>
           <SecretPicker names={secretNames} onPick={(k) => onChange({ secretKey: k })} />
         </Field>
-        <Field label="模型列表" hint="逗号分隔；会话详情里的模型下拉读的就是这个列表">
+        <Field label="Model list" hint="Comma-separated. The model dropdown in session details reads this list.">
           <Input
             value={c.models.join(', ')}
             onChange={(e) => onChange({ models: e.target.value.split(',').map((m) => m.trim()).filter(Boolean) })}
@@ -329,9 +331,9 @@ function CredentialCard({
             className="h-9 font-mono"
           />
         </Field>
-        <Field label="默认模型" hint="用这个凭据的 backend 不另外指定时用它。留空取列表第一个。">
+        <Field label="Default model" hint="Used when a backend on this credential names none of its own. Blank takes the first in the list.">
           <Input value={c.defaultModel ?? ''} onChange={(e) => onChange({ defaultModel: e.target.value })}
-            placeholder={c.models[0] ?? '列表第一个'} className="h-9 font-mono" />
+            placeholder={c.models[0] ?? 'first in the list'} className="h-9 font-mono" />
         </Field>
       </div>
     </section>
@@ -341,7 +343,7 @@ function CredentialCard({
 /**
  * Compose a credential.
  *
- * Adds to the list on this page; the page's 保存 is what writes it to the
+ * Adds to the list on this page; the page's Save is what writes it to the
  * machine. That is deliberately the same as every other edit here — delete and
  * every field already work that way, and making ONLY add write immediately
  * would be the odd one out, and would commit half-finished edits sitting in
@@ -370,7 +372,7 @@ function CredentialDialog({
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>添加模型来源</DialogTitle>
+          <DialogTitle>Add model source</DialogTitle>
           <DialogDescription>
             An endpoint plus the <span className="font-medium text-foreground/80">name</span> of a secret in this
             machine’s store — never the key itself.
@@ -379,7 +381,7 @@ function CredentialDialog({
 
         <div className="grid max-h-[55vh] grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2">
           <label className="block sm:col-span-2">
-            <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">预设</span>
+            <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Preset</span>
             {/* Fills the fields and nothing else — everything below stays editable,
                 so a preset is a head start rather than a mode. */}
             <Select
@@ -389,7 +391,7 @@ function CredentialDialog({
             >
               <SelectTrigger className="mt-1.5 h-9" aria-label="credential preset">
                 <SelectValue>
-                  {(v: string | null) => CREDENTIAL_PRESETS.find((p) => p.key === v)?.label ?? '自定义'}
+                  {(v: string | null) => CREDENTIAL_PRESETS.find((p) => p.key === v)?.label ?? 'Custom'}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -399,15 +401,15 @@ function CredentialDialog({
             <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground/70">{preset.hint}</span>
           </label>
 
-          <Field label="名称" hint="picker 和 backend 列表里显示的名字。留空用 Provider ID。">
+          <Field label="Name" hint="What the picker and the backend list call it. Blank uses the Provider ID.">
             <Input value={form.label} onChange={(e) => set({ label: e.target.value })}
               placeholder={form.provider || 'hyqubit'} className="h-9" aria-label="credential name" />
           </Field>
-          <Field label="Provider ID" hint="harness 里的 provider 名，例如 hyqubit / openrouter / zai">
+          <Field label="Provider ID" hint="The provider name inside the harness — hyqubit / openrouter / zai.">
             <Input value={form.provider} onChange={(e) => set({ provider: e.target.value })}
               placeholder="hyqubit" className="h-9 font-mono" aria-label="provider id" />
           </Field>
-          <Field label="API 类型" hint="端点说的是哪套协议">
+          <Field label="API type" hint="Which protocol the endpoint speaks.">
             <Select value={form.api} onValueChange={(v) => set({ api: v ?? DEFAULT_API })} modal={false}>
               <SelectTrigger className="h-9 font-mono" aria-label="api type">
                 <SelectValue>
@@ -419,11 +421,11 @@ function CredentialDialog({
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Base URL" hint="留空表示这套 harness 自带端点（dsh 的 DeepSeek 目录就是这样）">
+          <Field label="Base URL" hint="Blank means the harness brings its own endpoint (dsh’s DeepSeek catalog does).">
             <Input value={form.baseUrl} onChange={(e) => set({ baseUrl: e.target.value })}
               placeholder="https://litellm.hyqubit.com" className="h-9 font-mono" aria-label="base url" />
           </Field>
-          <Field label="API Key" hint="填 secrets store 里的 key 名，不是 key 本身">
+          <Field label="API Key" hint="The key’s NAME in the secrets store — never the key itself.">
             <div className="flex items-center gap-1.5">
               <KeyRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <Input
@@ -441,25 +443,25 @@ function CredentialDialog({
             </div>
             <SecretPicker names={secretNames} onPick={(k) => set({ secretKey: k })} />
           </Field>
-          <Field label="模型列表" hint="逗号分隔；会话详情里的模型下拉读的就是这个列表">
+          <Field label="Model list" hint="Comma-separated. The model dropdown in session details reads this list.">
             <Input value={form.models} onChange={(e) => set({ models: e.target.value })}
               placeholder="claude-opus-5, claude-sonnet-5" className="h-9 font-mono" aria-label="models" />
           </Field>
-          <Field label="默认模型" hint="用这个凭据的 backend 不另外指定时用它。留空取列表第一个。">
+          <Field label="Default model" hint="Used when a backend on this credential names none of its own. Blank takes the first in the list.">
             <Input value={form.defaultModel} onChange={(e) => set({ defaultModel: e.target.value })}
-              placeholder={preview?.models[0] ?? '列表第一个'} className="h-9 font-mono" aria-label="default model" />
+              placeholder={preview?.models[0] ?? 'first in the list'} className="h-9 font-mono" aria-label="default model" />
           </Field>
         </div>
 
         <p className="text-[11px] leading-relaxed text-muted-foreground/70">
           {preview
-            ? <>存为 <span className="font-mono text-foreground/80">{preview.id}</span> —— backend 引用的就是这个 id。加进列表后按页面底部的「保存」写入本机。</>
-            : <>Provider ID 是必填的：没有它，任何 harness 都注册不了这个端点。</>}
+            ? <>Saved as <span className="font-mono text-foreground/80">{preview.id}</span> — that id is what a backend references. Adding it puts it in the list below; Save at the bottom of the page writes it to this machine.</>
+            : <>Provider ID is required: without one, no harness can register this endpoint.</>}
         </p>
 
         <DialogFooter>
-          <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
-          <Button disabled={!ready} onClick={() => onAdd(form)}>添加</Button>
+          <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+          <Button disabled={!ready} onClick={() => onAdd(form)}>Add</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -492,20 +494,21 @@ function VisionCard({ config, secretNames }: { config: ImageConfig | null; secre
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">图片识别兜底</h3>
+          <h3 className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">Vision fallback</h3>
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/70">
-            端点丢掉图片块时用的两次调用（OCR + 布局描述）。跟凭据无关，是整台机器一份。
+            The two calls used when an endpoint drops image blocks — OCR, then a layout description. Nothing to
+            do with any one credential: this is one setting for the whole machine.
           </p>
         </div>
         <label className="flex shrink-0 items-center gap-2 text-xs">
           <input type="checkbox" checked={!!img.enabled}
             onChange={(e) => setImg({ ...img, enabled: e.target.checked })} aria-label="enable vision fallback" />
-          启用
+          Enable
         </label>
       </div>
       {img.enabled && (
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="识别 Provider">
+          <Field label="Vision provider">
             <Select value={provider} onValueChange={(v) => setImg({ ...img, provider: (v ?? 'openrouter') as ImageProvider })} modal={false}>
               <SelectTrigger className="h-9" aria-label="vision provider">
                 <SelectValue>{(v: string | null) => v ?? 'openrouter'}</SelectValue>
@@ -517,18 +520,18 @@ function VisionCard({ config, secretNames }: { config: ImageConfig | null; secre
               </SelectContent>
             </Select>
           </Field>
-          <Field label="API Key" hint="同样填 key 名。两次调用共用这一个">
+          <Field label="API Key" hint="A key name again. Both calls share this one.">
             <Input value={img.apiKeySecret ?? ''} onChange={(e) => setImg({ ...img, apiKeySecret: e.target.value })}
               placeholder={defaults?.secret ?? 'OPENROUTER_API_KEY'} className="h-9 font-mono" />
             <SecretPicker names={secretNames} onPick={(k) => setImg({ ...img, apiKeySecret: k })} />
           </Field>
           {defaults && (
             <>
-              <Field label="OCR 模型" hint="逐行提取文字。留空用默认">
+              <Field label="OCR model" hint="Pulls the text out line by line. Blank uses the default.">
                 <Input value={img.ocrModel ?? ''} onChange={(e) => setImg({ ...img, ocrModel: e.target.value })}
                   placeholder={defaults.ocr} className="h-9 font-mono" />
               </Field>
-              <Field label="布局描述模型" hint="描述界面结构。留空用默认">
+              <Field label="Layout model" hint="Describes how the screen is put together. Blank uses the default.">
                 <Input value={img.describeModel ?? ''} onChange={(e) => setImg({ ...img, describeModel: e.target.value })}
                   placeholder={defaults.describe} className="h-9 font-mono" />
               </Field>
@@ -538,9 +541,9 @@ function VisionCard({ config, secretNames }: { config: ImageConfig | null; secre
       )}
       <div className="mt-4 flex items-center gap-3">
         <Button size="sm" variant="outline" onClick={() => save.mutate({ image: img })} disabled={save.isPending}>
-          {save.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}保存
+          {save.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}Save
         </Button>
-        {saved && <span className="text-xs text-emerald-600">已保存</span>}
+        {saved && <span className="text-xs text-emerald-600">Saved</span>}
       </div>
     </section>
   );

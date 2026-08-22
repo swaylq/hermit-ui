@@ -80,7 +80,7 @@ export function BackendPicker({
               <div className="flex items-center gap-1.5 flex-wrap">
                 <span className="text-sm font-medium text-foreground">{b.label}</span>
                 {b.builtIn && (
-                  <span className="text-[9px] uppercase tracking-wide text-muted-foreground">订阅</span>
+                  <span className="text-[9px] uppercase tracking-wide text-muted-foreground">subscription</span>
                 )}
                 {agentDefault === b.id && (
                   <span className="text-[9px] uppercase tracking-wide text-muted-foreground">default</span>
