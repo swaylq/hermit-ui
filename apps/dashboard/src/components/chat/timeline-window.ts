@@ -42,6 +42,42 @@ export type WindowInput = {
   threshold: number;
 };
 
+/**
+ * Is a list worth windowing?
+ *
+ * Not "does it have many rows". `foldRuns` collapses a whole tool chain into one
+ * capsule, so a row count says nothing about what the rows weigh: an agent that
+ * mostly runs tools folds around thirteen messages into each row, and one real
+ * 6,941-message session became 279 rows — under any sane row threshold — while
+ * carrying 4,818 DOM nodes and sixty-four screens of content. Measured on that
+ * session with windowing off: 189ms per frame, every frame over budget. On: 17ms.
+ *
+ * Content far taller than the viewport is the honest question, because it means
+ * most of the list is off screen whatever the row count — which is the whole
+ * premise of windowing. The row count stays as a second way in, for a very long
+ * list of very short rows.
+ */
+export type WindowDecision = {
+  rows: number;
+  scrollHeight: number;
+  clientHeight: number;
+  /** Above this many rows, window regardless of weight. */
+  rowLimit: number;
+  /** ...or once the content is this many viewports tall. */
+  screens: number;
+  /** Never on a list shorter than this, however tall it got. */
+  minRows: number;
+};
+
+export function shouldWindow(d: WindowDecision): boolean {
+  if (d.rows > d.rowLimit) return true;
+  if (d.rows < d.minRows) return false;
+  // clientHeight is 0 on a pane that has not been laid out yet, and a ratio
+  // against zero would window every conversation on its first paint.
+  if (d.clientHeight <= 0) return false;
+  return d.scrollHeight > d.clientHeight * d.screens;
+}
+
 /** Render everything: what a short timeline gets, and the safe fallback. */
 export function fullWindow(count: number): WindowPlan {
   return { start: 0, end: count, padTop: 0, padBottom: 0 };

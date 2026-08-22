@@ -10,6 +10,7 @@ import {
   type WindowInput,
   clampPlan,
   visibleSlice,
+  shouldWindow,
 } from './timeline-window';
 
 const uniform = (n: number, h = 100): number[] => new Array(n).fill(h);
@@ -354,4 +355,53 @@ test('planWindow output is always in range for its own list', () => {
       assert.ok(c.end >= c.start && c.end <= n, `end ${c.end} out of range for ${n}`);
     }
   }
+});
+
+// --- shouldWindow: window on weight, not on row count -----------------------
+
+const decide = (o: Partial<WindowDecisionish> & { rows: number }) =>
+  shouldWindow({ scrollHeight: 0, clientHeight: 844, rowLimit: 400, screens: 12, minRows: 60, ...o });
+type WindowDecisionish = { rows: number; scrollHeight: number; clientHeight: number; rowLimit: number; screens: number; minRows: number };
+
+test('an ordinary conversation is left alone', () => {
+  // Forty rows, six screens: everything mounted, exactly as before. This is the
+  // case the row threshold was protecting and it must not change.
+  assert.equal(decide({ rows: 40, scrollHeight: 844 * 6 }), false);
+  assert.equal(decide({ rows: 120, scrollHeight: 844 * 6 }), false);
+});
+
+test('few rows but a huge amount of content DOES window', () => {
+  // The session that scrolled at five frames a second: 279 rows, 54,156px,
+  // sixty-four screens — invisible to any row count.
+  assert.equal(decide({ rows: 279, scrollHeight: 54156 }), true);
+});
+
+test('many rows window whatever they weigh', () => {
+  assert.equal(decide({ rows: 401, scrollHeight: 0, clientHeight: 0 }), true);
+});
+
+test('a short list is never windowed on height alone', () => {
+  // One enormous message is not a long list. Windowing a handful of rows costs
+  // measuring and spacers to save nothing.
+  assert.equal(decide({ rows: 3, scrollHeight: 844 * 200 }), false);
+  assert.equal(decide({ rows: 59, scrollHeight: 844 * 200 }), false);
+  assert.equal(decide({ rows: 60, scrollHeight: 844 * 200 }), true);
+});
+
+test('a pane that has not been laid out yet windows nothing', () => {
+  // clientHeight is 0 before layout, and a ratio against zero would window every
+  // conversation on its first paint.
+  assert.equal(decide({ rows: 300, scrollHeight: 99999, clientHeight: 0 }), false);
+  assert.equal(decide({ rows: 300, scrollHeight: 0, clientHeight: 0 }), false);
+});
+
+test('the boundary is exclusive, so it cannot flap on an exact multiple', () => {
+  assert.equal(decide({ rows: 100, scrollHeight: 844 * 12, clientHeight: 844 }), false);
+  assert.equal(decide({ rows: 100, scrollHeight: 844 * 12 + 1, clientHeight: 844 }), true);
+});
+
+test('a tall phone and a short laptop pane decide by ratio, not pixels', () => {
+  // 40,000px is a lot on a phone and ordinary on a wall-mounted display.
+  assert.equal(decide({ rows: 200, scrollHeight: 40000, clientHeight: 400 }), true);
+  assert.equal(decide({ rows: 200, scrollHeight: 40000, clientHeight: 4000 }), false);
 });

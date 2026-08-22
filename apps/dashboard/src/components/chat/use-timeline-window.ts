@@ -27,6 +27,7 @@ import {
   heightsFor,
   liftFromSettled,
   clampPlan,
+  shouldWindow,
   fitProseHeights,
   type ProseFit,
   type SettledRow,
@@ -36,8 +37,30 @@ import { loadTextHeight, textHeightReady, proseHeight, fontOf } from '@/lib/text
 import { getHeights, putHeights, evictHeightsLru, widthBucket } from '@/lib/chat-cache/db';
 import { currentScope } from '@/lib/chat-cache/sync';
 
-/** Below this many rows, render the whole thing and touch nothing. */
+/**
+ * When to window at all.
+ *
+ * A row count is the wrong question, and asking it is what left a real session
+ * scrolling at five frames a second. `foldRuns` collapses a tool chain into one
+ * capsule, so how many rows a conversation has says nothing about what they
+ * weigh: an agent that mostly runs tools folds around thirteen messages into
+ * each row, and 6,941 messages became 279 rows — under any sane row threshold —
+ * carrying 4,818 DOM nodes and sixty-four screens of content. Measured on that
+ * session with windowing off: 189ms per frame. With it on: 17ms.
+ *
+ * So ask what is actually expensive. Content far taller than the viewport means
+ * most of it is off screen whatever the row count, and that is exactly the
+ * condition windowing exists for.
+ */
 const THRESHOLD = 400;
+/** ...or this many viewports of content, whichever comes first. */
+const WINDOW_SCREENS = 12;
+/**
+ * Never window a list this short, however tall it managed to get. One enormous
+ * message is not a long list, and windowing a handful of rows costs measuring
+ * and spacers to save nothing.
+ */
+const MIN_WINDOW_ROWS = 60;
 /** Screens of extra rows kept mounted above and below the viewport. */
 const OVERSCAN_SCREENS = 3;
 /** Height assumed for a row nothing has been measured for yet. */
@@ -133,6 +156,10 @@ export function useTimelineWindow(
   const proseMetrics = useRef<{ font: string; lineHeight: number; width: number } | null>(null);
   const fit = useRef<ProseFit | null>(null);
   const idleHandle = useRef<number | null>(null);
+  // Latched: once a conversation is worth windowing it stays windowed. The
+  // height half of the test is read from the DOM, and a decision that could flip
+  // back and forth would mount and unmount most of the list each time it did.
+  const windowedRef = useRef(false);
   // Correction that asked for more room than the scroller had — see below.
   const owed = useRef(0);
   // Bookkeeping for keeping measured heights across a reload.
@@ -156,11 +183,30 @@ export function useTimelineWindow(
     textAtRef.current = textAt;
   });
 
+  /**
+   * Is this list worth windowing? Row count OR content height, latched once true.
+   */
+  const isWindowed = useCallback((): boolean => {
+    if (windowedRef.current) return true;
+    const ks = keysRef.current;
+    const vp = getViewport();
+    const yes = shouldWindow({
+      rows: ks.length,
+      scrollHeight: vp ? vp.scrollHeight : 0,
+      clientHeight: vp ? vp.clientHeight : 0,
+      rowLimit: THRESHOLD,
+      screens: WINDOW_SCREENS,
+      minRows: MIN_WINDOW_ROWS,
+    });
+    if (yes) windowedRef.current = true;
+    return yes;
+  }, [getViewport]);
+
   const recompute = useCallback(() => {
     const vp = getViewport();
     const ks = keysRef.current;
     const sig = signature(ks);
-    if (!vp || ks.length <= THRESHOLD) {
+    if (!vp || !isWindowed()) {
       setPlan((prev) =>
         prev.sig === sig && prev.start === 0 && prev.end === ks.length && prev.padTop === 0 && prev.padBottom === 0
           ? prev
@@ -173,14 +219,16 @@ export function useTimelineWindow(
       scrollTop: vp.scrollTop,
       viewportHeight: vp.clientHeight,
       overscan: vp.clientHeight * OVERSCAN_SCREENS,
-      threshold: THRESHOLD,
+      // The decision was made above; the planner must not second-guess it with a
+      // row count of its own.
+      threshold: 0,
     });
     setPlan((prev) =>
       prev.sig === sig && prev.start === next.start && prev.end === next.end && prev.padTop === next.padTop && prev.padBottom === next.padBottom
         ? prev
         : { ...next, sig, startKey: ks[next.start] ?? null }
     );
-  }, [getViewport]);
+  }, [getViewport, isWindowed]);
 
   // Recompute on scroll and on resize. Cheap: a walk over an array of numbers,
   // never over the DOM.
@@ -211,7 +259,7 @@ export function useTimelineWindow(
   // above the viewport would have.
   const sig = signature(keys);
   useIsoLayoutEffect(() => {
-    if (keys.length > THRESHOLD && plan.startKey && plan.sig !== sig) {
+    if (isWindowed() && plan.startKey && plan.sig !== sig) {
       const at = keys.indexOf(plan.startKey);
       if (at >= 0) {
         const span = Math.max(1, plan.end - plan.start);
@@ -243,7 +291,7 @@ export function useTimelineWindow(
     // `padTop` did, and the difference between them is not a measurement error
     // to be corrected — it is the prepend itself, which the prepend anchor is
     // already holding. Correcting it too moved the view by ~2,400px in one frame.
-    if (!vp || ks.length <= THRESHOLD || p.sig !== signature(ks)) return;
+    if (!vp || !isWindowed() || p.sig !== signature(ks)) return;
     const heights = heightsFor(ks, measured.current, FALLBACK_ROW, prose.current, fit.current);
     let padTopNow = 0;
     for (let i = 0; i < p.start; i++) padTopNow += heights[i];
@@ -276,7 +324,7 @@ export function useTimelineWindow(
     let padBottomNow = 0;
     for (let i = p.end; i < heights.length; i++) padBottomNow += heights[i];
     setPlan((prev) => (prev.sig === p.sig ? { ...prev, padTop: padTopNow, padBottom: padBottomNow } : prev));
-  }, [getViewport]);
+  }, [getViewport, isWindowed]);
 
   // Predicting the rows nobody has seen.
   //
@@ -322,7 +370,7 @@ export function useTimelineWindow(
     const ks = keysRef.current;
     const textOf = textAtRef.current;
     const m = proseMetrics.current;
-    if (!m || !textOf || ks.length <= THRESHOLD || !textHeightReady()) return;
+    if (!m || !textOf || !isWindowed() || !textHeightReady()) return;
     const deadline = performance.now() + PROSE_BUDGET_MS;
     let did = 0;
     let more = false;
@@ -341,7 +389,7 @@ export function useTimelineWindow(
     refit();
     applyMeasured();
     if (more) schedulePredict();
-  }, [applyMeasured, refit, schedulePredict]);
+  }, [applyMeasured, refit, schedulePredict, isWindowed]);
 
   // Declared after `predict` on purpose: an idle slice that runs out of budget
   // queues the next one through this ref, and a callback cannot name itself in
@@ -414,13 +462,13 @@ export function useTimelineWindow(
 
   // Kick the loader once, and only for lists big enough to be windowed at all.
   useEffect(() => {
-    if (keys.length > THRESHOLD) loadTextHeight();
-  }, [keys.length]);
+    if (isWindowed()) loadTextHeight();
+  }, [keys.length, isWindowed]);
 
   useEffect(() => {
-    if (keys.length <= THRESHOLD) return;
+    if (!isWindowed()) return;
     schedulePredict();
-  }, [keys.length, sig, schedulePredict]);
+  }, [keys.length, sig, schedulePredict, isWindowed]);
 
   useEffect(
     () => () => {
@@ -492,7 +540,7 @@ export function useTimelineWindow(
     // auto-translate on is exactly that case: every English reply is replaced by
     // a shorter Chinese one seconds after it renders, and until now nothing gave
     // those pixels back because the observer was inside the windowing branch.
-    const windowed = keys.length > THRESHOLD;
+    const windowed = isWindowed();
     if (windowed && plan.sig !== sig) return;
     let ro = rowObserver.current;
     if (!ro && typeof ResizeObserver !== 'undefined') {
@@ -541,7 +589,7 @@ export function useTimelineWindow(
         // `applyMeasured` and the write-back are about ESTIMATES, which only
         // exist when the list is windowed. The lift above is about the reader,
         // who is there either way.
-        if (dirty && keysRef.current.length > THRESHOLD) {
+        if (dirty && windowedRef.current) {
           applyMeasured();
           scheduleSave();
         }
@@ -616,5 +664,9 @@ export function useTimelineWindow(
   // state, and the replan is a layout effect — so every consumer would otherwise
   // have to remember, and one of them not remembering is what took the dashboard
   // down. See clampPlan.
-  return { ...clampPlan(plan, keys.length), active: keys.length > THRESHOLD };
+  // Derived from the plan rather than read off the latch: a ref may not be read
+  // during render, and "are we rendering less than the whole list" is the same
+  // answer anyway.
+  const clamped = clampPlan(plan, keys.length);
+  return { ...clamped, active: clamped.end - clamped.start < keys.length };
 }
