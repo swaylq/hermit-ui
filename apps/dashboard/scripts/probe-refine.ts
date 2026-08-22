@@ -24,14 +24,11 @@
 //
 // Usage (from apps/dashboard):
 //   secret exec DASHSCOPE_API_KEY -- ../../node_modules/.bin/tsx scripts/probe-refine.ts
-//   …add `rewrite` to probe that style instead of the realtime default `minimal`.
 
 import { dashscopeChat } from '../src/server/dashscope';
 import { refineSystem, refinePrompt, acceptRefine } from '../src/server/transcribe-refine';
-import type { PolishStyle } from '../src/server/transcribe-polish';
 
 const MODEL = process.env.DASHSCOPE_POLISH_MODEL || 'qwen-flash';
-const style: PolishStyle = process.argv.includes('rewrite') ? 'rewrite' : 'minimal';
 
 interface Case {
   name: string;
@@ -67,7 +64,7 @@ interface Case {
 
 const CASES: Case[] = [
   {
-    // The one that started this. Real dictation, 2026-08-21, minimal style:
+    // The one that started this. Real dictation, 2026-08-21:
     // seven "sentences" that are one thought about a page of runtimes.
     name: 'the fragmented one (real)',
     passage:
@@ -159,7 +156,7 @@ async function main() {
   const key = process.env.DASHSCOPE_API_KEY;
   if (!key) throw new Error('DASHSCOPE_API_KEY not set — run under `secret exec`');
 
-  console.log(`model=${MODEL} style=${style}\n`);
+  console.log(`model=${MODEL}\n`);
   const refineRatios: number[] = [];
   let leaks = 0;
   const summaryRatios: number[] = [];
@@ -170,7 +167,7 @@ async function main() {
       key,
       MODEL,
       [
-        { role: 'system', content: refineSystem(style) },
+        { role: 'system', content: refineSystem() },
         { role: 'user', content: refinePrompt(c.passage, c.context ?? '', c.preceding ?? '') },
       ],
       { temperature: 0, timeoutMs: 30_000 },

@@ -174,42 +174,34 @@ test('audio sent after stop is dropped — it belongs to no sentence', { timeout
   await h.close();
 });
 
-test('the run gets the conversation context and the minimal style by default', { timeout: 5000 }, async () => {
+test('the run gets the conversation context', { timeout: 5000 }, async () => {
   const h = harness();
   const port = await h.listen();
   const ws = connect(port, `/api/asr/${SESSION}`, KEY);
   await new Promise((r) => ws.on('open', r));
   await new Promise((r) => setTimeout(r, 20));
   const { opts } = h.stream()!;
-  assert.equal(opts.style, 'minimal');
   assert.equal(opts.polish, true);
   assert.match(opts.context, /rathole/);
   await h.close();
 });
 
-test('?style=rewrite is honoured; anything else falls back to minimal', { timeout: 5000 }, async () => {
+// A query string is no longer read for anything, but a client that sends one
+// must still connect rather than 404 on the path match.
+test('a query string is tolerated', { timeout: 5000 }, async () => {
   const h = harness();
   const port = await h.listen();
-
-  const a = connect(port, `/api/asr/${SESSION}?style=rewrite`, KEY);
-  await new Promise((r) => a.on('open', r));
+  const ws = connect(port, `/api/asr/${SESSION}?whatever=1`, KEY);
+  await new Promise((r) => ws.on('open', r));
   await new Promise((r) => setTimeout(r, 20));
-  assert.equal(h.stream()!.opts.style, 'rewrite');
-  a.close();
-
-  const b = connect(port, `/api/asr/${SESSION}?style=nonsense`, KEY);
-  await new Promise((r) => b.on('open', r));
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(h.stream()!.opts.style, 'minimal');
-  b.close();
-
+  assert.ok(h.stream());
   await h.close();
 });
 
 test('matches() only claims its own paths', () => {
   const { asr } = harness();
   assert.ok(asr.matches('/api/asr/abc'));
-  assert.ok(asr.matches('/api/asr/abc?style=rewrite'));
+  assert.ok(asr.matches('/api/asr/abc?whatever=1'));
   assert.ok(!asr.matches('/api/term/abc'));
   assert.ok(!asr.matches('/api/asr/'));
   assert.ok(!asr.matches('/api/asr/a/b'));

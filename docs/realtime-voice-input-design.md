@@ -92,7 +92,7 @@
        │
        ├─ voice-capture.startStreaming()  麦克风 → 16k mono PCM16，每 ~85ms 一包
        │                                   + RMS 静音门控 + 「上一句之后」的兜底缓冲
-       └─ asr-socket  WSS /api/asr/<sessionId>?style=…
+       └─ asr-socket  WSS /api/asr/<sessionId>
                       auth: Sec-WebSocket-Protocol: hermit-key.<token>
                       上行二进制音频，下行 JSON
                           ▲
@@ -153,7 +153,6 @@
 | 松手 ≥ 400ms | 是「按住说话」→ 松手即结束 |
 | 上滑 ≥ 56px | 取消，手不用抬起来（微信那套） |
 | 早期移动 | 是拖动 → 挪 FAB，顺手丢掉刚开的那次听写 |
-| 双击 | 打开风格设置；第一下开的那次听写被撤销 —— 300ms 内说不出话，没有损失 |
 | 右 Option（桌面） | 按住说话，同上 |
 
 好处是没有歧义：快点一下就留着继续说，真按住就松手结束，两种人不用先学规则。
@@ -190,7 +189,7 @@ ASR 是**一坨一坨**给的：400ms 什么都没有，然后一次蹦四个字
 
 ## 纠错这一步
 
-用户要的是「**精准识别用户的原句**」，所以这一步是**纠错**不是改写：realtime 默认 `minimal`（保留原话），`rewrite` 仍可选；整段模式的默认不动。
+用户要的是「**精准识别用户的原句**」，所以这一步是**纠错**不是改写。原来有「改写润色 / 保留原话」两档、双击麦克风切换；2026-08-22 砍掉了选择：只剩纠错这一档，全部路径（逐句、整段、批量兜底）共用同一个 prompt。给用户一个「要不要被改写」的开关，等于要求他每次口述前先想清楚，而想清楚的答案永远是「别改我的话」。
 
 复用 `transcribe-polish.ts` 已有的一切 —— fence、no-answer 铁律、`acceptPolish` 长度兜底。新增三样：
 
@@ -211,7 +210,7 @@ ASR 是**一坨一坨**给的：400ms 什么都没有，然后一次蹦四个字
 | 「道克」→ `Docker`（从中文变出来的，没挤掉任何英文词） | 放行 |
 | `pady` → `JUPYTER`（无据，且原文的 `pady` 从输出里消失了） | **拒绝，保留原句** |
 
-整段模式**不用**这道兜底：它走另一个 ASR、`rewrite` 风格本来就该更自由，也从没出现过这种错。保真是实时这条路的本职。
+整段模式（降级兜底那条）**不用**这道闸：它走另一个 ASR，也从没出现过这种错。保真是实时这条路的本职。
 
 ---
 
@@ -324,16 +323,15 @@ final   "帮我把 japan-dev 上的 PADI 重启一下。然后检查一下证书
 | 文件 | |
 |---|---|
 | `src/server/asr-stream.ts` | **新** DashScope 流式会话：懒开/回收/重连上限、`sentence_end` fork 逐句纠错 |
-| `src/server/transcribe-refine.ts` (+ `.test.ts`) | **新** 收尾整段通读：两种风格的提示词、`<passage>` 围栏、上下两道长度闸 |
+| `src/server/transcribe-refine.ts` (+ `.test.ts`) | **新** 收尾整段通读：提示词、`<passage>` 围栏、上下两道长度闸 |
 | `src/app/api/transcribe/refine/route.ts` | **新** 文本进文本出的收尾端点（鉴权 / 归属 / provider 选择与整段路由同款） |
 | `scripts/probe-refine.ts` | **新** 拿真模型量那两道闸：每段跑一遍通读，再跑一遍「总结」作对照 |
 | `src/server/asr-ws.ts` | **新** `/api/asr/<sessionId>` 端点：鉴权、路由、帧转发、依赖全注入 |
-| `src/server/asr-ws.test.ts` | **新** 真 socket + 假 ASR，8 个用例（401/404/未配置/收发/stop 之后的音频/style/context） |
+| `src/server/asr-ws.test.ts` | **新** 真 socket + 假 ASR（401/404/未配置/收发/stop 之后的音频/context） |
 | `src/server/dashscope.ts` | **新** 抽出的 DashScope chat 客户端（整段路由与实时路由共用） |
 | `src/lib/asr-socket.ts` | **新** 浏览器 WS 客户端 + segment 状态机 |
 | `src/lib/dictation-text.ts` (+ `.test.ts`) | **新** `joinSegments` / `foldTail`；后加 `replaceTail` / `worthRefining`，23 个用例 |
 | `src/lib/typewriter.ts` (+ `.test.ts`) | **新** 逐字揭示 / 一帧回退 / 上游跳变，12 个用例 |
-| `src/lib/voice-style.ts` | **新** 风格常量，麦克风与听写台共用 |
 | `src/components/chat/dictation-bar.tsx` | **新** 听写控制条（录音指示 / 电平 / 计时 / 校对数 / ✕✓；不显示文字）；后加 `refining` 态 |
 | `src/components/chat/dictation-dock.tsx` | **新** 听写台：麦克风流 + socket + 打字机 + 降级，state 关在这里，SessionPane 只收到 start/stop |
 | `src/lib/voice-capture.ts` | `startStreaming()` + 有状态重采样 + 静音门控 + 兜底缓冲。**整段录制器 `startRecording` 已删** —— 没有调用者了（降级路径复用同一个流的缓冲） |

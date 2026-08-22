@@ -85,15 +85,12 @@ test('empty reference material leaves no empty fences behind', () => {
   assert.equal(refinePrompt('说的话'), fencePassage('说的话'));
 });
 
-test('the two styles differ only in whether the words may be rewritten', () => {
-  const min = refineSystem('minimal');
-  const rew = refineSystem('rewrite');
-  // Both carry the passage-level job and the no-answer rule…
-  for (const s of [min, rew]) {
-    assert.match(s, /缝合被停顿切碎的句子/);
-    assert.match(s, /绝不作答/);
-  }
-  // …and disagree about the words in between.
-  assert.match(min, /不改写措辞/);
-  assert.match(rew, /改成通顺的书面表达/);
+test('the passage pass repairs and nothing else', () => {
+  const s = refineSystem();
+  // The passage-level job and the no-answer rule…
+  assert.match(s, /缝合被停顿切碎的句子/);
+  assert.match(s, /绝不作答/);
+  // …and, spelled out, the words in between are left alone.
+  assert.match(s, /不改写措辞/);
+  assert.doesNotMatch(s, /改成通顺的书面表达/);
 });

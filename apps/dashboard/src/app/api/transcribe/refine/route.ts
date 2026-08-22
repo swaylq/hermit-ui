@@ -18,7 +18,6 @@
 // Body (JSON):
 //   sessionId  string   the ChatSession being dictated into
 //   text       string   the passage as the composer has it
-//   style      'rewrite' | 'minimal'   this device's setting; unknown → rewrite
 //   preceding  string?  what was in the composer before the run (reference only)
 //
 // Returns { text, refined } — `text` is what the composer should show, which on
@@ -29,7 +28,7 @@ import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
 import { dashscopeChat } from '@/server/dashscope';
 import { openrouterChat, type ORMessage } from '@/server/openrouter';
-import { inventedTerm, type PolishStyle } from '@/server/transcribe-polish';
+import { inventedTerm } from '@/server/transcribe-polish';
 import { refineSystem, refinePrompt, acceptRefine } from '@/server/transcribe-refine';
 import { loadContext } from '@/server/transcribe-context';
 
@@ -49,7 +48,7 @@ export async function POST(req: NextRequest) {
   const scope = await resolveKey(req.headers.get('x-asst-key') ?? '');
   if (!scope) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  let body: { sessionId?: unknown; text?: unknown; style?: unknown; preceding?: unknown };
+  let body: { sessionId?: unknown; text?: unknown; preceding?: unknown };
   try {
     body = await req.json();
   } catch (e) {
@@ -58,7 +57,6 @@ export async function POST(req: NextRequest) {
 
   const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
   const text = typeof body.text === 'string' ? body.text : '';
-  const style: PolishStyle = body.style === 'minimal' ? 'minimal' : 'rewrite';
   const preceding = (typeof body.preceding === 'string' ? body.preceding : '').slice(-MAX_PRECEDING_CHARS);
   if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 });
   if (!text.trim()) return NextResponse.json({ error: 'text required' }, { status: 400 });
@@ -80,7 +78,7 @@ export async function POST(req: NextRequest) {
 
   const context = await loadContext(prisma, sessionId);
   const messages: ORMessage[] = [
-    { role: 'system', content: refineSystem(style) },
+    { role: 'system', content: refineSystem() },
     { role: 'user', content: refinePrompt(text, context, preceding) },
   ];
 

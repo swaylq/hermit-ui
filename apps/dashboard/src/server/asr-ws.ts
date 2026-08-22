@@ -18,7 +18,6 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket as WSWebSocket, type RawData } from 'ws';
 import { createAsrStream, type AsrStream, type AsrStreamEvents, type AsrStreamOpts } from './asr-stream';
-import type { PolishStyle } from './transcribe-polish';
 
 const ASR_PATH_RE = /^\/api\/asr\/([^/?#]+)(?:\?([^#]*))?$/;
 
@@ -67,7 +66,7 @@ export function createAsrWsServer(deps: AsrWsDeps): AsrWsServer {
     },
   });
 
-  wss.on('connection', (sock: WSWebSocket, _req: IncomingMessage, ctx: { sessionId: string; context: string; style: PolishStyle }) => {
+  wss.on('connection', (sock: WSWebSocket, _req: IncomingMessage, ctx: { sessionId: string; context: string }) => {
     const send = (payload: unknown) => {
       if (sock.readyState !== sock.OPEN) return;
       try { sock.send(JSON.stringify(payload)); } catch { /* socket vanished mid-send */ }
@@ -82,11 +81,11 @@ export function createAsrWsServer(deps: AsrWsDeps): AsrWsServer {
       return;
     }
 
-    log(`connected sid=${ctx.sessionId.slice(-8)} style=${ctx.style} ctx=${ctx.context.length}B`);
+    log(`connected sid=${ctx.sessionId.slice(-8)} ctx=${ctx.context.length}B`);
     let finishing = false;
 
     const stream = makeStream(
-      { apiKey: key, context: ctx.context, style: ctx.style, polish: true },
+      { apiKey: key, context: ctx.context, polish: true },
       {
         onReady: () => send({ type: 'ready' }),
         onPartial: (text) => send({ type: 'partial', text }),
@@ -154,15 +153,10 @@ export function createAsrWsServer(deps: AsrWsDeps): AsrWsServer {
       const sessionId = decodeURIComponent(m[1]);
       if (!(await deps.sessionBelongsTo(sessionId, machineId))) { reject(socket, 404); return; }
 
-      // Which polish the user picked on this device. Not a secret, so the query
-      // string is fine; anything unrecognized resolves to the realtime default,
-      // which is `minimal` — the ask is the user's own sentence, recognized
-      // accurately, and a per-sentence rewrite works against that.
-      const style: PolishStyle = new URLSearchParams(m[2] ?? '').get('style') === 'rewrite' ? 'rewrite' : 'minimal';
       const context = await deps.loadContext(sessionId);
 
       wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit('connection', ws, req, { sessionId, context, style });
+        wss.emit('connection', ws, req, { sessionId, context });
       });
     },
 

@@ -69,13 +69,9 @@ const PREOPEN_MAX_BYTES = 4 * 16_000 * 2;
 /** stop() waits this long for the tail + corrections before giving up on them. */
 const DONE_TIMEOUT_MS = 12_000;
 
-export function openAsrSocket(
-  sessionId: string,
-  style: 'minimal' | 'rewrite',
-  events: AsrSocketEvents,
-): AsrSocket {
+export function openAsrSocket(sessionId: string, events: AsrSocketEvents): AsrSocket {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const url = `${proto}://${location.host}/api/asr/${encodeURIComponent(sessionId)}?style=${style}`;
+  const url = `${proto}://${location.host}/api/asr/${encodeURIComponent(sessionId)}`;
 
   const segs: Seg[] = [];
   let partial = '';

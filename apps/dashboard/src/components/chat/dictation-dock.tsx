@@ -41,7 +41,6 @@ import {
 import { authedFetch } from '@/lib/asst-fetch';
 import { openAsrSocket, type AsrSocket } from '@/lib/asr-socket';
 import { startStreaming, releaseWarmMic, type VoiceStream } from '@/lib/voice-capture';
-import { readRealtimeStyle } from '@/lib/voice-style';
 import { joinSegments, worthRefining } from '@/lib/dictation-text';
 import { typeFrame, TYPE_TICK_MS } from '@/lib/typewriter';
 import { DictationBar, type DictationStatus } from '@/components/chat/dictation-bar';
@@ -204,7 +203,6 @@ export const DictationDock = forwardRef<DictationHandle, {
       const fd = new FormData();
       fd.append('sessionId', sessionId);
       fd.append('wav', wav, 'voice.wav');
-      fd.append('style', readRealtimeStyle());
       const r = await authedFetch('/api/transcribe', { method: 'POST', body: fd });
       if (!r.ok) return '';
       return ((await r.json()) as { text?: string }).text?.trim() ?? '';
@@ -255,7 +253,6 @@ export const DictationDock = forwardRef<DictationHandle, {
         body: JSON.stringify({
           sessionId,
           text: passage,
-          style: readRealtimeStyle(),
           preceding: composerRef.current?.dictationBase() ?? '',
         }),
       });
@@ -341,7 +338,7 @@ export const DictationDock = forwardRef<DictationHandle, {
     // that isn't in the gesture's own call stack loses its privilege.
     if (modeRef.current === 'stream') {
       try {
-        sockRef.current = openAsrSocket(sessionId, readRealtimeStyle(), {
+        sockRef.current = openAsrSocket(sessionId, {
           onReady: () => setPhase('listening'),
           onState: (st) => {
             setPending(st.pending);

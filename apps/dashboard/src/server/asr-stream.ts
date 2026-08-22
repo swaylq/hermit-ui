@@ -47,12 +47,10 @@ import { dashscopeChat } from './dashscope';
 import type { ORMessage } from './openrouter';
 import {
   POLISH_SYSTEM,
-  MINIMAL_POLISH_SYSTEM,
   SENTENCE_SYSTEM_SUFFIX,
   polishPrompt,
   acceptPolish,
   inventedTerm,
-  type PolishStyle,
 } from './transcribe-polish';
 
 const WS_URL = process.env.DASHSCOPE_REALTIME_WS_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference';
@@ -93,7 +91,6 @@ export interface AsrStreamOpts {
   apiKey: string;
   /** Recent conversation, from transcribe-context. Reference for the polish step. */
   context: string;
-  style: PolishStyle;
   /** false = pass raw ASR straight through (the P1 behaviour / a debug switch). */
   polish: boolean;
 }
@@ -168,9 +165,8 @@ export function createAsrStream(opts: AsrStreamOpts, events: AsrStreamEvents): A
   // ── polish ────────────────────────────────────────────────────────────────
 
   function polishMessages(raw: string, preceding: string): ORMessage[] {
-    const base = opts.style === 'minimal' ? MINIMAL_POLISH_SYSTEM : POLISH_SYSTEM;
     return [
-      { role: 'system', content: base + SENTENCE_SYSTEM_SUFFIX },
+      { role: 'system', content: POLISH_SYSTEM + SENTENCE_SYSTEM_SUFFIX },
       { role: 'user', content: polishPrompt(raw, opts.context, preceding) },
     ];
   }

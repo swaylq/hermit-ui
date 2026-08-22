@@ -33,7 +33,7 @@
 // is the single most likely way for this specific step to go wrong, and a
 // summary is exactly a much shorter text that reads perfectly well.
 
-import { fenceContext, fencePreceding, type PolishStyle } from './transcribe-polish';
+import { fenceContext, fencePreceding } from './transcribe-polish';
 
 /** Fence the whole dictated passage — material to be corrected, never instruction. */
 export function fencePassage(text: string): string {
@@ -83,22 +83,17 @@ const REFINE_SYSTEM = `你是语音输入的**通读校对器**。用户刚口�
 - **英文词只在有据可查时才改。** 把段里某个英文词换成另一个写法时，新的写法必须在这段口述里、或者 <context> / <preceding> 里出现过；没把握就原样留着。猜错比不改更糟。（把中文谐音还原成英文词——「道克」→ Docker、「阿森克」→ async——不受这条限制，它没有挤掉任何英文词。）
 - 只输出校对后的整段正文，不加引号、前缀、标签或解释。`;
 
-// What the two styles mean HERE. The passage-level job (stitch, unify, restore)
-// is the same either way — it is repair, and the user asked for it. What the
-// style decides is whether the words in between may be rewritten, which is the
-// same line the per-sentence prompts draw.
-const REFINE_STYLE_SUFFIX: Record<PolishStyle, string> = {
-  rewrite: `
+// The passage-level job (stitch, unify, restore) is repair, and the user asked
+// for it. Everything else stays the user's own, which is the same line the
+// per-sentence prompt draws — stated again here because a model handed a whole
+// passage is far more tempted to improve it than one handed a single sentence.
+const REFINE_KEEP_THE_WORDS = `
 
-【改写润色】缝合之后，可以顺手把明显口语化、语序混乱的地方改成通顺的书面表达，删掉语气词和口头禅（嗯、呃、那个、就是说）——前提仍然是原意不变、信息不减。`,
-  minimal: `
+【保留原话】除上面四类之外一律不动：不改写措辞、不调整语序、不删口语词、不合并本来就该分开的句子。缝合碎句时尽量用用户自己的原词，只补最基本的标点。用户说得啰嗦不是错误。`;
 
-【保留原话】除上面四类之外一律不动：不改写措辞、不调整语序、不删口语词、不合并本来就该分开的句子。缝合碎句时尽量用用户自己的原词，只补最基本的标点。用户说得啰嗦不是错误。`,
-};
-
-/** The system prompt for this device's chosen style. */
-export function refineSystem(style: PolishStyle): string {
-  return REFINE_SYSTEM + REFINE_STYLE_SUFFIX[style];
+/** The system prompt for the passage-level pass. */
+export function refineSystem(): string {
+  return REFINE_SYSTEM + REFINE_KEEP_THE_WORDS;
 }
 
 // ── the two length gates ────────────────────────────────────────────────────
