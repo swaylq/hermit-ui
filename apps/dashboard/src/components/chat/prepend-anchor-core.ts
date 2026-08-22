@@ -124,7 +124,10 @@ export type BottomHold = {
 };
 
 export type BottomFrameInput = {
+  /** Natural/visual scroll coordinate (`physical scrollTop + deviation`). */
   scrollTop: number;
+  /** Coordinate with app compensation removed; defaults to scrollTop. */
+  userScrollTop?: number;
   scrollHeight: number;
   clientHeight: number;
   epsilon?: number;
@@ -139,7 +142,7 @@ export type BottomFramePlan = {
 
 export function planBottomFrame(hold: BottomHold, input: BottomFrameInput): BottomFramePlan {
   const eps = input.epsilon ?? EPSILON;
-  const userDelta = input.scrollTop - hold.lastTop;
+  const userDelta = (input.userScrollTop ?? input.scrollTop) - hold.lastTop;
   const gap = hold.gap - userDelta;
   const raw = input.scrollHeight - input.scrollTop - input.clientHeight - gap;
   return { correction: Math.abs(raw) < eps ? 0 : raw, gap, raw };

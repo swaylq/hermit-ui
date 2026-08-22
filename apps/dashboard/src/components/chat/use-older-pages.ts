@@ -85,32 +85,6 @@ export function pageBefore<T extends { id: string; createdAt: string | Date }>(
 }
 
 /**
- * EVERYTHING the store holds strictly before `edge`, oldest→newest.
- *
- * The counterpart to `pageBefore`, and the reason the reader stops seeing the
- * list jump under them. Paging history in while someone scrolls means the height
- * above them changes mid-gesture, and every pixel of it has to be given back by
- * a correction landing in the right frame; the correction is exact when it runs
- * on time and catastrophic when it does not. Handing over the whole of what is
- * already on disk, once, before the reader touches anything, removes the
- * question rather than answering it more carefully.
- *
- * No minimum, unlike `pageBefore`: a partial answer is refused there because a
- * short page cannot tell a seam from the beginning of the conversation, but here
- * everything available is exactly what is wanted, and whatever lies beyond it is
- * still reachable by scrolling into the server path.
- */
-export function allBefore<T extends { id: string; createdAt: string | Date }>(
-  rows: T[],
-  edge: { createdAt: string; id: string }
-): T[] {
-  return rows.filter((r) => {
-    const at = typeof r.createdAt === 'string' ? r.createdAt : r.createdAt.toISOString();
-    return at !== edge.createdAt ? at < edge.createdAt : r.id < edge.id;
-  });
-}
-
-/**
  * Split a page (oldest→newest) into commit chunks, NEWEST chunk first.
  *
  * The newest chunk sits right above what the reader already has — it is the
@@ -223,61 +197,6 @@ export function useOlderPages(
     },
     [sessionId, utils]
   );
-
-  // ── the whole of what is already on disk, once, before anyone scrolls ──────
-  //
-  // History used to arrive a page at a time WHILE the reader scrolled, and every
-  // page changed the height above them by thousands of pixels — 2,481px, 3,053px,
-  // 7,398px were all measured on one session. Each one has to be given back by a
-  // correction landing in the right frame. It is exact when it lands on time
-  // (17,853px of prepends compensated to 1px) and it loses hundreds of pixels
-  // when it does not, which on a warm cache is a coin toss: a cached page is
-  // prepended with no network call at all, so it can resolve inside the very
-  // frame that asked for it.
-  //
-  // So hand it all over at mount instead. Nothing is prepended while the reader
-  // is scrolling, so there is nothing to compensate and no frame to lose. What
-  // lies beyond the cache is still reachable — `loadMore` below keeps working,
-  // it just has much further to go before it is needed.
-  const preloadedFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!anchorAt || !anchorId || preloadedFor.current === sessionId) return;
-    const scope = currentScope();
-    if (!scope) return;
-    preloadedFor.current = sessionId;
-    let cancelled = false;
-    void (async () => {
-      const [full, digest] = await Promise.all([
-        getFullRows(scope, sessionId),
-        getDigestRows(scope, sessionId),
-      ]);
-      // Both stores, merged, because they cover different stretches: `full` is
-      // the live window at full fidelity, `digest` is the history walked in
-      // behind it. Where both hold a row, `full` wins — it is the one with the
-      // tool bodies still in it.
-      const byId = new Map<string, CachedFullRow>();
-      for (const r of digest) byId.set(r.id, r);
-      for (const r of full) byId.set(r.id, r);
-      const older = allBefore([...byId.values()], { createdAt: anchorAt, id: anchorId }).sort((a, b) =>
-        a.createdAt === b.createdAt ? (a.id < b.id ? -1 : 1) : a.createdAt < b.createdAt ? -1 : 1
-      );
-      if (cancelled || older.length === 0) return;
-      // One commit, not chunks. Chunking exists so each slice's markdown parse
-      // stays under a frame, which mattered when every row mounted; the window
-      // mounts about thirty of them whatever the list length, so the parse cost
-      // no longer scales with the page. One commit is also one height change
-      // rather than several, and it happens while the reader is still pinned to
-      // the bottom.
-      setRows((prev) => (prev.length > 0 ? prev : older));
-      setServedFromCache(true);
-    })().catch(() => {
-      // A store that will not open (private browsing, evicted, disabled) simply
-      // leaves the pager to do what it always did.
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, anchorAt, anchorId]);
 
   const loadMore = useCallback(() => {
     if (inFlight.current || !anchorId) return;

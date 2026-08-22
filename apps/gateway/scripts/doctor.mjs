@@ -147,14 +147,9 @@ if (sdkPkg) {
 const tmuxBin = which('tmux');
 if (tmuxBin) {
   const v = capture('tmux', ['-V']) ?? '';
-  const num = Number.parseFloat((v.match(/(\d+\.\d+)/) ?? [])[1] ?? '0');
-  // `new-session -e KEY=VAL` is 3.2+. Below that the env silently does not
-  // reach the pane, so the permission hook never receives the dashboard key —
-  // a failure that looks like the agent ignoring web-permission requests
-  // rather than like an old tmux. Debian 11 ships 3.1c and is NOT enough.
-  if (num >= 3.2) line('ok', 'tmux', `${tmuxBin} (${v})`);
-  else line('warn', 'tmux ≥ 3.2', `${v} — new-session -e is 3.2+; pane env is dropped silently, so pane-backed sessions lose the dashboard key`,
-    isLinux ? 'use Ubuntu 22.04+ (3.2a) or build tmux from source' : 'brew upgrade tmux');
+  // Pane variables now use update-environment + a client-only environment;
+  // unlike the removed `new-session -e`, this does not impose a tmux 3.2 floor.
+  line('ok', 'tmux', `${tmuxBin} (${v})`);
 } else {
   line('warn', 'tmux', 'missing — no claude-tmux sessions, cron panes, /usage scrape or browser terminal', install('tmux'));
 }

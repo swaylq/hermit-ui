@@ -27,6 +27,17 @@ export type WindowPlan = {
   padBottom: number;
 };
 
+/** The timeline container's 0.75rem gap at the dashboard's 16px root size. */
+export const TIMELINE_ROW_GAP = 12;
+
+/**
+ * A spacer already represents row extents that include their trailing gap. The
+ * flex container adds the boundary gap itself, so the spacer box gives one back.
+ */
+export function spacerBoxHeight(extent: number): number {
+  return Math.max(0, extent - TIMELINE_ROW_GAP);
+}
+
 export type WindowInput = {
   /** Each item's height INCLUDING the gap below it — measured, or estimated. */
   heights: number[];
@@ -41,6 +52,22 @@ export type WindowInput = {
    */
   threshold: number;
 };
+
+export type WindowDecision = {
+  rows: number;
+  scrollHeight: number;
+  clientHeight: number;
+  rowLimit: number;
+  screens: number;
+  minRows: number;
+};
+
+/** A long list can be expensive by row count or by rendered weight. */
+export function shouldWindow(d: WindowDecision): boolean {
+  if (d.rows > d.rowLimit) return true;
+  if (d.rows < d.minRows || d.clientHeight <= 0) return false;
+  return d.scrollHeight > d.clientHeight * d.screens;
+}
 
 /**
  * Is a list worth windowing?
@@ -57,27 +84,6 @@ export type WindowInput = {
  * premise of windowing. The row count stays as a second way in, for a very long
  * list of very short rows.
  */
-export type WindowDecision = {
-  rows: number;
-  scrollHeight: number;
-  clientHeight: number;
-  /** Above this many rows, window regardless of weight. */
-  rowLimit: number;
-  /** ...or once the content is this many viewports tall. */
-  screens: number;
-  /** Never on a list shorter than this, however tall it got. */
-  minRows: number;
-};
-
-export function shouldWindow(d: WindowDecision): boolean {
-  if (d.rows > d.rowLimit) return true;
-  if (d.rows < d.minRows) return false;
-  // clientHeight is 0 on a pane that has not been laid out yet, and a ratio
-  // against zero would window every conversation on its first paint.
-  if (d.clientHeight <= 0) return false;
-  return d.scrollHeight > d.clientHeight * d.screens;
-}
-
 /** Render everything: what a short timeline gets, and the safe fallback. */
 export function fullWindow(count: number): WindowPlan {
   return { start: 0, end: count, padTop: 0, padBottom: 0 };
@@ -189,14 +195,21 @@ export type SettledRow = {
  */
 export function liftFromSettled(rows: SettledRow[], viewportTop: number): number {
   let lift = 0;
-  for (const r of rows) {
+  let cumulativeChange = 0;
+  // ResizeObserver reports post-layout boxes. A row's post-layout bottom already
+  // includes every changed sibling before it, so reconstruct each pre-layout
+  // edge with the cumulative delta in DOM order rather than subtracting only
+  // that row's own change.
+  const ordered = [...rows].sort((a, b) => a.bottom - b.bottom);
+  for (const r of ordered) {
     const grew = r.now - r.was;
+    cumulativeChange += grew;
     if (grew === 0) continue;
     // Where the bottom edge was BEFORE the change. A row that was fully above
     // the reader pushed them by `grew` whether or not the push then carried its
     // own bottom edge down past the top of the viewport — testing the post-change
     // edge would drop exactly the biggest pushes.
-    if (r.bottom - grew > viewportTop) continue;
+    if (r.bottom - cumulativeChange > viewportTop) continue;
     lift += grew;
   }
   return lift;

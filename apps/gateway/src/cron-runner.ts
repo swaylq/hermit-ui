@@ -22,7 +22,7 @@ import {
   kill as killSession,
   type TranscriptInfo,
 } from '@hermit-ui/tmux-driver';
-import { AGENTS_ROOT } from './config';
+import { AGENTS_ROOT, ASST_KEY, DASHBOARD_URL } from './config';
 import { api } from './api';
 import { paneIsWorking } from './pane';
 import { extractText, CcEvent, CcBlock } from './claude-code';
@@ -66,6 +66,19 @@ type Cron = {
    */
   runtime?: string | null;
 };
+
+/** Environment inherited by one Claude cron pane. Hermit credentials exist
+ * only when the same branch installs the hermit/Brain MCP that consumes them. */
+export function cronPaneEnv(isOrchestrator: boolean, runSessionId: string): Record<string, string> {
+  return {
+    ...(isOrchestrator ? {
+      HERMIT_DASHBOARD_URL: DASHBOARD_URL,
+      HERMIT_KEY: ASST_KEY,
+      HERMIT_SESSION_ID: runSessionId,
+    } : {}),
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+  };
+}
 
 // The per-cron re-entrancy guard ('cron' lock, keyed by cronId) lives in the shared
 // op-locks owner (./op-locks): a cron must not fire again while its previous run is
@@ -285,9 +298,10 @@ async function fireInner(c: Cron): Promise<void> {
       // Same as chat-runner: Claude Code's built-in auto-memory is retired
       // fleet-wide (authoritative switch is ~/.claude/settings.json); agents
       // read and write their own <agent>/memory/.
-      env: {
-        CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
-      },
+      // Only Brain receives the hermit MCP above. A headless ordinary cron has
+      // no consumer for the dashboard machine key, so do not widen that secret
+      // into its Claude process or tool subprocesses.
+      env: cronPaneEnv(!!c.isOrchestrator, runSessionId),
     });
     jsonlPath = path.join(encodedProjectDir(cwd), `${claudeUuid}.jsonl`);
     // We pinned --session-id <claudeUuid>, so claude should write exactly this

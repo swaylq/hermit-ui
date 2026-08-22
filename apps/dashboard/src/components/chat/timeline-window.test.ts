@@ -10,6 +10,8 @@ import {
   type WindowInput,
   clampPlan,
   visibleSlice,
+  spacerBoxHeight,
+  TIMELINE_ROW_GAP,
   shouldWindow,
 } from './timeline-window';
 
@@ -174,6 +176,20 @@ test('several rows settling in one frame are summed', () => {
     100,
   );
   assert.equal(lift, -30);
+});
+
+test('a batch reconstructs each pre-layout edge with earlier sibling changes', () => {
+  const lift = liftFromSettled(
+    [
+      { was: 100, now: 300, bottom: 50 },
+      { was: 100, now: 120, bottom: 170 },
+    ],
+    0,
+  );
+  // Before the batch, the rows ended at -150px and -50px. Both changes were
+  // entirely above the reader; subtracting each row's own delta would miss the
+  // second one's 20px because its post-layout edge includes the first +200px.
+  assert.equal(lift, 220);
 });
 
 test('a row that did not actually change contributes nothing', () => {
@@ -357,51 +373,40 @@ test('planWindow output is always in range for its own list', () => {
   }
 });
 
-// --- shouldWindow: window on weight, not on row count -----------------------
-
-const decide = (o: Partial<WindowDecisionish> & { rows: number }) =>
-  shouldWindow({ scrollHeight: 0, clientHeight: 844, rowLimit: 400, screens: 12, minRows: 60, ...o });
-type WindowDecisionish = { rows: number; scrollHeight: number; clientHeight: number; rowLimit: number; screens: number; minRows: number };
-
-test('an ordinary conversation is left alone', () => {
-  // Forty rows, six screens: everything mounted, exactly as before. This is the
-  // case the row threshold was protecting and it must not change.
-  assert.equal(decide({ rows: 40, scrollHeight: 844 * 6 }), false);
-  assert.equal(decide({ rows: 120, scrollHeight: 844 * 6 }), false);
+test('a spacer gives back the boundary gap already included in row extents', () => {
+  assert.equal(spacerBoxHeight(300), 300 - TIMELINE_ROW_GAP);
+  assert.equal(spacerBoxHeight(TIMELINE_ROW_GAP), 0);
+  assert.equal(spacerBoxHeight(0), 0);
 });
 
-test('few rows but a huge amount of content DOES window', () => {
-  // The session that scrolled at five frames a second: 279 rows, 54,156px,
-  // sixty-four screens — invisible to any row count.
-  assert.equal(decide({ rows: 279, scrollHeight: 54156 }), true);
+test('top and bottom spacer states preserve one exact list height', () => {
+  const content = [40, 70, 30, 90];
+  const extents = content.map((h) => h + TIMELINE_ROW_GAP);
+  const whole = content.reduce((a, b) => a + b, 0) + TIMELINE_ROW_GAP * (content.length - 1);
+
+  // Render the middle two rows. The top spacer owns row 0's content+gap; the
+  // bottom one owns row 3's content+its synthetic trailing gap.
+  const top = extents[0];
+  const bottom = extents[3];
+  const dom = spacerBoxHeight(top) + TIMELINE_ROW_GAP
+    + content[1] + TIMELINE_ROW_GAP + content[2] + TIMELINE_ROW_GAP
+    + spacerBoxHeight(bottom);
+  assert.equal(dom, whole);
+
+  const topOnly = spacerBoxHeight(extents[0] + extents[1]) + TIMELINE_ROW_GAP
+    + content[2] + TIMELINE_ROW_GAP + content[3];
+  assert.equal(topOnly, whole);
+
+  const bottomOnly = content[0] + TIMELINE_ROW_GAP + content[1] + TIMELINE_ROW_GAP
+    + spacerBoxHeight(extents[2] + extents[3]);
+  assert.equal(bottomOnly, whole);
 });
 
-test('many rows window whatever they weigh', () => {
-  assert.equal(decide({ rows: 401, scrollHeight: 0, clientHeight: 0 }), true);
-});
-
-test('a short list is never windowed on height alone', () => {
-  // One enormous message is not a long list. Windowing a handful of rows costs
-  // measuring and spacers to save nothing.
-  assert.equal(decide({ rows: 3, scrollHeight: 844 * 200 }), false);
-  assert.equal(decide({ rows: 59, scrollHeight: 844 * 200 }), false);
-  assert.equal(decide({ rows: 60, scrollHeight: 844 * 200 }), true);
-});
-
-test('a pane that has not been laid out yet windows nothing', () => {
-  // clientHeight is 0 before layout, and a ratio against zero would window every
-  // conversation on its first paint.
-  assert.equal(decide({ rows: 300, scrollHeight: 99999, clientHeight: 0 }), false);
-  assert.equal(decide({ rows: 300, scrollHeight: 0, clientHeight: 0 }), false);
-});
-
-test('the boundary is exclusive, so it cannot flap on an exact multiple', () => {
-  assert.equal(decide({ rows: 100, scrollHeight: 844 * 12, clientHeight: 844 }), false);
-  assert.equal(decide({ rows: 100, scrollHeight: 844 * 12 + 1, clientHeight: 844 }), true);
-});
-
-test('a tall phone and a short laptop pane decide by ratio, not pixels', () => {
-  // 40,000px is a lot on a phone and ordinary on a wall-mounted display.
-  assert.equal(decide({ rows: 200, scrollHeight: 40000, clientHeight: 400 }), true);
-  assert.equal(decide({ rows: 200, scrollHeight: 40000, clientHeight: 4000 }), false);
+test('windowing keeps both the row-count and rendered-weight safety valves', () => {
+  const base = { scrollHeight: 0, clientHeight: 844, rowLimit: 400, screens: 12, minRows: 60 };
+  assert.equal(shouldWindow({ ...base, rows: 40, scrollHeight: 844 * 100 }), false);
+  assert.equal(shouldWindow({ ...base, rows: 279, scrollHeight: 54_156 }), true);
+  assert.equal(shouldWindow({ ...base, rows: 401, clientHeight: 0 }), true);
+  assert.equal(shouldWindow({ ...base, rows: 200, scrollHeight: 844 * 12 }), false);
+  assert.equal(shouldWindow({ ...base, rows: 200, scrollHeight: 844 * 12 + 1 }), true);
 });

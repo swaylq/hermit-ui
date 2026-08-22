@@ -9,7 +9,7 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DASHBOARD_URL, ASST_KEY } from './config';
+import { DASHBOARD_URL } from './config';
 
 // MCP stub gives the session's claude these tools: set_session_title, log_status,
 // attach_image, attach_file, ask. Spawned as a stdio child of the claude process.
@@ -35,7 +35,10 @@ export function buildMcpServers(chatSessionId: string, isBrain = false) {
       env: {
         HERMIT_SESSION_ID: chatSessionId,
         HERMIT_DASHBOARD_URL: DASHBOARD_URL,
-        HERMIT_KEY: ASST_KEY,
+        // Claude Code expands ${VAR} in stdio MCP env entries from its own
+        // environment. Keeping only the variable name in the config prevents the
+        // machine key from being serialized into `--mcp-config` argv.
+        HERMIT_KEY: '${HERMIT_KEY}',
         // The orchestrator ("义脑") session gets HERMIT_BRAIN=1 — the stub then
         // registers the brain-only cross-agent tools (roster/dispatch/...).
         ...(isBrain ? { HERMIT_BRAIN: '1' } : {}),

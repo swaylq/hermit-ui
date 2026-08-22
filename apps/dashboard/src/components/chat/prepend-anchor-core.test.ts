@@ -184,6 +184,29 @@ test('prepend and a user scroll in the same frame: only the prepend is corrected
   assert.equal(vp.scrollTop, 2400 - 120 + 2200);
 });
 
+test('a transform compensation is not mistaken for bottom-anchor user input', () => {
+  const hold = { gap: 0, lastTop: 1000 };
+  // Content grew 400px and the shared stability controller moved the natural
+  // coordinate by the same 400px, while its reader-only coordinate stayed put.
+  const compensated = planBottomFrame(hold, {
+    scrollTop: 1400,
+    userScrollTop: 1000,
+    scrollHeight: 2000,
+    clientHeight: 600,
+  });
+  assert.equal(compensated.correction, 0);
+  assert.equal(compensated.gap, 0);
+
+  const userMoved = planBottomFrame(hold, {
+    scrollTop: 1300,
+    userScrollTop: 900,
+    scrollHeight: 2000,
+    clientHeight: 600,
+  });
+  assert.equal(userMoved.correction, 0);
+  assert.equal(userMoved.gap, 100);
+});
+
 
 // --- what a write COSTS, not just what it computes ---------------------------
 //

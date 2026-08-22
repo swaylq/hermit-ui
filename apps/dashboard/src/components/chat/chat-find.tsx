@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Search, ChevronUp, ChevronDown, X } from 'lucide-react';
 import { useChatSearch } from '@/lib/chat-cache/use-chat-cache';
+import type { ScrollStability } from './use-scroll-stability';
 
 // ── In-chat find ─────────────────────────────────────────────────────────────
 // Cmd/Ctrl+F search scoped to the OPEN session — over the WHOLE session, not
@@ -43,11 +44,13 @@ function rangeFrom(node: Text, start: number, len: number): Range | null {
 export function ChatFind({
   sessionId,
   getViewport,
+  scrollStability,
   onJump,
   onClose,
 }: {
   sessionId: string;
   getViewport: () => HTMLElement | null;
+  scrollStability: ScrollStability;
   onJump: (messageId: string) => void;
   onClose: () => void;
 }) {
@@ -127,32 +130,49 @@ export function ChatFind({
     qLenRef.current = q.length;
   }, [query, getViewport, clearHl]);
 
-  // Scroll to the rendered occurrence inside `messageId` and mark it current.
-  // Returns false when that message isn't in the DOM — the caller then jumps.
-  const focusInDom = useCallback(
-    (messageId: string): boolean => {
+  // Locate and paint the rendered occurrence without moving the viewport. The
+  // MutationObserver uses this path: windowing itself mutates the DOM while the
+  // reader scrolls, and repainting a highlight must never re-centre the result.
+  const currentInDom = useCallback(
+    (messageId: string): { rect: DOMRect; index: number } | null => {
       const root = getViewport();
-      if (!root) return false;
+      if (!root) return null;
       const host = root.querySelector(`[data-msg-id~="${CSS.escape(messageId)}"]`);
-      if (!host) return false;
+      if (!host) return null;
       const q = query.trim().toLowerCase();
       const idx = domMatchesRef.current.findIndex((m) => host.contains(m.node));
       const hit = idx === -1 ? null : domMatchesRef.current[idx];
       if (!hit || !q) {
-        host.scrollIntoView({ block: 'center' });
-        return true;
+        if (HL_OK) HL_REG.delete('chat-find-current');
+        paint(Math.max(0, idx));
+        return { rect: host.getBoundingClientRect(), index: idx };
       }
       const r = rangeFrom(hit.node, hit.start, q.length);
-      if (!r) { host.scrollIntoView({ block: 'center' }); return true; }
+      if (!r) return { rect: host.getBoundingClientRect(), index: idx };
       if (HL_OK) HL_REG.set('chat-find-current', new HL_CTOR(r));
       const rect = r.getBoundingClientRect();
-      const vp = root.getBoundingClientRect();
-      if (rect.width || rect.height) root.scrollTop += rect.top - vp.top - vp.height / 2 + rect.height / 2;
-      else host.scrollIntoView({ block: 'center' });
       paint(idx); // centre the painted band on this match
-      return true;
+      return { rect: rect.width || rect.height ? rect : host.getBoundingClientRect(), index: idx };
     },
     [getViewport, query, paint]
+  );
+
+  // Explicit find navigation owns the viewport and centres the painted target.
+  // Returns false when that message isn't in the DOM — the caller then jumps.
+  const focusInDom = useCallback(
+    (messageId: string): boolean => {
+      const root = getViewport();
+      const current = currentInDom(messageId);
+      if (!root || !current) return false;
+      const vp = root.getBoundingClientRect();
+      scrollStability.scrollBy(
+        current.rect.top - vp.top - vp.height / 2 + current.rect.height / 2,
+        'auto',
+        current.index >= 0 ? 'find-match' : 'find-message',
+      );
+      return true;
+    },
+    [currentInDom, getViewport, scrollStability]
   );
 
   const goTo = useCallback(
@@ -197,13 +217,13 @@ export function ChatFind({
       t = setTimeout(() => {
         indexDom();
         const target = hitsRef.current[posRef.current - 1];
-        if (target) focusInDom(target.id);
+        if (target) currentInDom(target.id);
         else paint(0);
       }, 200);
     });
     mo.observe(root, { childList: true, characterData: true, subtree: true });
     return () => { mo.disconnect(); if (t) clearTimeout(t); };
-  }, [getViewport, indexDom, focusInDom, paint]);
+  }, [getViewport, indexDom, currentInDom, paint]);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => () => clearHl(), [clearHl]); // clear highlights on close

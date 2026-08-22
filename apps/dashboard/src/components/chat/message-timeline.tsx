@@ -12,7 +12,8 @@
 
 import { memo, useState, useCallback, useMemo } from 'react';
 import { useTimelineWindow, WINDOW_ROW_ATTR } from '@/components/chat/use-timeline-window';
-import { visibleSlice } from '@/components/chat/timeline-window';
+import type { ScrollStability } from '@/components/chat/use-scroll-stability';
+import { spacerBoxHeight, visibleSlice } from '@/components/chat/timeline-window';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { TimeAgo } from '@/components/time-ago';
@@ -49,6 +50,8 @@ export const MessageTimeline = memo(function MessageTimeline({
   sessionId = '',
   dotClass,
   getViewport,
+  scrollStability,
+  settlePrepend,
   running = false,
   runLabel = null,
   runDetail = null,
@@ -64,6 +67,9 @@ export const MessageTimeline = memo(function MessageTimeline({
   sessionId?: string;
   dotClass?: string;
   getViewport?: () => HTMLElement | null;
+  scrollStability: ScrollStability;
+  /** Gives an active prepend anchor first ownership of a geometry change. */
+  settlePrepend?: () => boolean;
   /** A turn is in flight — the trailing run capsule shows live progress. */
   running?: boolean;
   /** Gateway-reported current activity, so the capsule label survives a long
@@ -166,7 +172,7 @@ export const MessageTimeline = memo(function MessageTimeline({
     running, runLabel, runDetail, streamingTailId, newestId,
     streamKey, sessionId, dotClass, askCardByQuestion,
   };
-  return <TimelineBody items={items} ctx={ctx} getViewport={getViewport} />;
+  return <TimelineBody items={items} ctx={ctx} getViewport={getViewport} scrollStability={scrollStability} settlePrepend={settlePrepend} />;
 });
 
 /** Messages at the tail that are re-folded on every render. */
@@ -217,7 +223,7 @@ function renderItem(it: TimelineItem, ctx: RenderContext): React.ReactNode {
       // at the seam, so the SAME row comes back taller and starting further
       // back — and a word-match lookup still finds it, which is what makes it
       // a trap. The prepend anchor uses the mark to refuse to anchor here.
-      <div key={r.key} data-msg-id={r.ids.join(' ')} data-run="" {...{ [WINDOW_ROW_ATTR]: r.key }} className="flex justify-start">
+      <div key={r.key} data-msg-id={r.ids.join(' ')} data-run="" className="flex justify-start">
         <div className="min-w-0 w-full max-w-[85%]">
           <RunCapsule ids={r.ids} steps={r.steps} from={r.from} to={r.to} running={live} label={live ? ctx.runLabel : null} detail={live ? ctx.runDetail : null} />
         </div>
@@ -246,7 +252,7 @@ function renderItem(it: TimelineItem, ctx: RenderContext): React.ReactNode {
   // every other row gets a stable `undefined` and its memo bails.
   const rowHasAsk = r.blocks.some((b) => isAskToolUse(b));
   return (
-    <div key={r.key} data-msg-id={r.ids.join(' ')} {...{ [WINDOW_ROW_ATTR]: r.key }}>
+    <div key={r.key} data-msg-id={r.ids.join(' ')}>
       <MessageRow role={r.role} authoredBy={r.authoredBy} content={r.blocks} ts={r.createdAt} streamingTail={streamingTail} typing={typing} streamKey={ctx.streamKey} sessionId={ctx.sessionId} streamingDot={streamingTail ? ctx.dotClass : undefined} askCardByQuestion={rowHasAsk ? ctx.askCardByQuestion : undefined} />
     </div>
   );
@@ -273,7 +279,19 @@ function proseOf(blocks: Block[]): string {
   return out;
 }
 
-function TimelineBody({ items, ctx, getViewport }: { items: TimelineItem[]; ctx: RenderContext; getViewport?: () => HTMLElement | null }) {
+function TimelineBody({
+  items,
+  ctx,
+  getViewport,
+  scrollStability,
+  settlePrepend,
+}: {
+  items: TimelineItem[];
+  ctx: RenderContext;
+  getViewport?: () => HTMLElement | null;
+  scrollStability: ScrollStability;
+  settlePrepend?: () => boolean;
+}) {
   const keys = items.map((it) => it.key);
   const noViewport = useCallback(() => null, []);
   // An accessor rather than an array of every row's prose. The window predicts a
@@ -286,17 +304,28 @@ function TimelineBody({ items, ctx, getViewport }: { items: TimelineItem[]; ctx:
     },
     [items],
   );
-  const win = useTimelineWindow(keys, getViewport ?? noViewport, textAt, ctx.sessionId);
+  const win = useTimelineWindow(
+    keys,
+    getViewport ?? noViewport,
+    textAt,
+    ctx.sessionId,
+    scrollStability,
+    settlePrepend,
+  );
   // visibleSlice, not an indexed loop. The plan is clamped at its source now, but
   // the thing that broke production was a hand-rolled range over React state
   // describing a list that had already changed length — so this reads the rows
   // through something that cannot express an out-of-range read at all.
-  const shown = visibleSlice(items, win).map((it) => renderItem(it, ctx));
+  const shown = visibleSlice(items, win).map((it) => (
+    <div key={it.key} {...{ [WINDOW_ROW_ATTR]: it.key }} className="flow-root">
+      {renderItem(it, ctx)}
+    </div>
+  ));
   return (
-    <div className="space-y-3">
-      {win.padTop > 0 && <div data-window-spacer="top" style={{ height: win.padTop }} aria-hidden />}
+    <div className="flex flex-col gap-3">
+      {win.padTop > 0 && <div data-window-spacer="top" style={{ height: spacerBoxHeight(win.padTop) }} aria-hidden />}
       {shown}
-      {win.padBottom > 0 && <div data-window-spacer="bottom" style={{ height: win.padBottom }} aria-hidden />}
+      {win.padBottom > 0 && <div data-window-spacer="bottom" style={{ height: spacerBoxHeight(win.padBottom) }} aria-hidden />}
     </div>
   );
 }

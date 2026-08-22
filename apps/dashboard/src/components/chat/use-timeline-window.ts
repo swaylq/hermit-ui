@@ -7,18 +7,19 @@
 // Two things make this safe to bolt onto a list that is also being scrolled,
 // anchored, and prepended to:
 //
-//   · Below the threshold nothing happens at all — same DOM, same behaviour, no
-//     measuring. Most conversations never reach it.
+//   · Below the threshold no row leaves the DOM and no spacer planning runs. A
+//     ResizeObserver still watches mounted rows, because late content changes can
+//     move a reader in a short conversation too.
 //   · The reading position is held across every window change. A row that has
 //     never been on screen is a guess until it is rendered, so replacing that
 //     guess with a measurement changes the height ABOVE the viewport, which
-//     would shove the text under the reader's eyes. Whenever that height moves,
-//     `scrollTop` moves with it, in a layout effect, before the browser paints.
+//     would shove the text under the reader's eyes. A shared compositor transform
+//     absorbs that movement; one scrollTop settlement happens only after native
+//     scrolling has stopped.
 //
-// That correction composes with the prepend anchor rather than fighting it: the
-// anchor re-measures the real element position every frame and adopts any scroll
-// change it did not make itself (see prepend-anchor-core.ts), so a correction
-// applied here reads to it as already settled and produces no delta of its own.
+// That correction composes with the prepend anchor rather than fighting it: both
+// use the same controller, whose reader-only coordinate removes app compensation
+// while leaving native input visible (see scroll-stability-core.ts).
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
@@ -27,15 +28,17 @@ import {
   heightsFor,
   liftFromSettled,
   clampPlan,
-  shouldWindow,
   fitProseHeights,
   type ProseFit,
   type SettledRow,
   type WindowPlan,
+  TIMELINE_ROW_GAP,
+  shouldWindow,
 } from './timeline-window';
 import { loadTextHeight, textHeightReady, proseHeight, fontOf } from '@/lib/text-height';
 import { getHeights, putHeights, evictHeightsLru, widthBucket } from '@/lib/chat-cache/db';
 import { currentScope } from '@/lib/chat-cache/sync';
+import type { ScrollStability } from './use-scroll-stability';
 
 /**
  * When to window at all.
@@ -53,20 +56,14 @@ import { currentScope } from '@/lib/chat-cache/sync';
  * condition windowing exists for.
  */
 const THRESHOLD = 400;
-/** ...or this many viewports of content, whichever comes first. */
 const WINDOW_SCREENS = 12;
-/**
- * Never window a list this short, however tall it managed to get. One enormous
- * message is not a long list, and windowing a handful of rows costs measuring
- * and spacers to save nothing.
- */
 const MIN_WINDOW_ROWS = 60;
 /** Screens of extra rows kept mounted above and below the viewport. */
 const OVERSCAN_SCREENS = 3;
 /** Height assumed for a row nothing has been measured for yet. */
 const FALLBACK_ROW = 90;
-/** `space-y-3` between rows — part of the height an item occupies. */
-const ROW_GAP = 12;
+/** `gap-3` between rows — part of the height an item occupies. */
+const ROW_GAP = TIMELINE_ROW_GAP;
 /**
  * Main-thread budget for one batch of prose predictions. Predicting a row costs
  * about 0.1ms warm, so a whole 4,000-row session is ~400ms — a long task and an
@@ -86,6 +83,16 @@ export const WINDOW_ROW_ATTR = 'data-window-key';
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
 function noop(): void {}
+
+type PredictHandle = { kind: 'idle' | 'timeout'; id: number };
+
+function cancelPredictHandle(handle: PredictHandle): void {
+  if (handle.kind === 'idle') {
+    (window as unknown as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback?.(handle.id);
+  } else {
+    window.clearTimeout(handle.id);
+  }
+}
 
 /**
  * The last few hundred reading-position corrections the window made.
@@ -147,6 +154,14 @@ export function useTimelineWindow(
   textAt?: (i: number) => string,
   /** Which conversation these heights belong to, for keeping them on disk. */
   sessionId?: string,
+  /** Shared with the prepend anchor so every correction respects momentum. */
+  stability?: ScrollStability,
+  /**
+   * Let an active prepend anchor consume the current geometry change. It
+   * returns true even when a previous callback in this frame already restored
+   * the anchor, making correction idempotent whichever observer runs first.
+   */
+  settlePrepend?: () => boolean,
 ): TimelineWindow {
   const measured = useRef(new Map<string, number>());
   // Predicted prose height per row key, at `proseMetrics`' width. 0 means "asked
@@ -155,117 +170,215 @@ export function useTimelineWindow(
   const prose = useRef(new Map<string, number>());
   const proseMetrics = useRef<{ font: string; lineHeight: number; width: number } | null>(null);
   const fit = useRef<ProseFit | null>(null);
-  const idleHandle = useRef<number | null>(null);
-  // Latched: once a conversation is worth windowing it stays windowed. The
-  // height half of the test is read from the DOM, and a decision that could flip
-  // back and forth would mount and unmount most of the list each time it did.
-  const windowedRef = useRef(false);
-  // Correction that asked for more room than the scroller had — see below.
-  const owed = useRef(0);
+  const idleHandle = useRef<PredictHandle | null>(null);
   // Bookkeeping for keeping measured heights across a reload.
   const saveHandle = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedKey = useRef<string | null>(null);
+  const seedGeneration = useRef(0);
   const dirtyHeights = useRef(false);
+  /** Width bucket that every entry in `measured` belongs to. */
+  const measuredWidth = useRef<number | null>(null);
+  /** Rows that stayed mounted across a width change, for exact reflow lift. */
+  const previousWidthHeights = useRef<Map<string, number> | null>(null);
+  const widthReflowRows = useRef(new Set<Element>());
+  const [heightScopeRevision, setHeightScopeRevision] = useState(0);
+  const rowObserver = useRef<ResizeObserver | null>(null);
+  const observedRows = useRef(new Set<Element>());
   const textAtRef = useRef<((i: number) => string) | undefined>(textAt);
   // `startKey` is what makes the window survive a prepend: see the remap below.
-  const [plan, setPlan] = useState<WindowPlan & { sig: string; startKey: string | null }>(() => ({
+  type PlanState = WindowPlan & { sig: string; startKey: string | null; rev: number };
+  const [plan, setPlan] = useState<PlanState>(() => ({
     ...fullWindow(keys.length),
     sig: signature(keys),
     startKey: keys[0] ?? null,
+    rev: 0,
   }));
   // Read by the scroll listener, which must not re-subscribe on every render.
   const keysRef = useRef(keys);
   // Read by the row observer below, which outlives any one render.
   const planRef = useRef(plan);
+  // Unlike planRef (which advances as soon as work is queued), this is the last
+  // geometry React has actually put in the DOM. Width resets must restart here:
+  // a queued old-width plan may be batched away and never become visible.
+  const committedPlanRef = useRef(plan);
+  const pendingPlanShifts = useRef<Array<{ rev: number; delta: number }>>([]);
+  const plannedHeights = useRef<{ sig: string; keys: string[]; values: number[] } | null>(null);
+  // Latched, but never activated during a native gesture. The old implementation
+  // flipped this inside the scroll callback and synchronously measured every DOM
+  // row there — exactly the periodic hitch reported on recent conversations.
+  const windowedRef = useRef(false);
   useIsoLayoutEffect(() => {
     keysRef.current = keys;
     planRef.current = plan;
+    committedPlanRef.current = plan;
     textAtRef.current = textAt;
   });
 
-  /**
-   * Is this list worth windowing? Row count OR content height, latched once true.
-   */
+  const compensateVisual = useCallback((delta: number, reason: string): number => {
+    // A prepend anchor and the timeline observer can see the same row growth in
+    // one frame. Always ask the anchor first, even for a zero timeline lift: a
+    // visible row can move the held tail/anchor although liftFromSettled quite
+    // correctly leaves ordinary visible content alone. If the anchor already
+    // corrected in rAF, this reassert is a no-op and still claims the change.
+    if (settlePrepend?.()) return 0;
+    if (delta === 0) return 0;
+    return stability?.compensate(delta, reason) ?? 0;
+  }, [settlePrepend, stability]);
+
   const isWindowed = useCallback((): boolean => {
     if (windowedRef.current) return true;
-    const ks = keysRef.current;
     const vp = getViewport();
+    const rows = keysRef.current.length;
+    if (!vp) return false;
+    // A 279-row tool-heavy session can still carry 4,800 DOM nodes and sixty-four
+    // screens. Keep the weight trigger, but only engage it after momentum stops;
+    // the ResizeObserver has measured the mounted rows by then, so activation is
+    // an exact spacer swap rather than a scroll-time guessing pass.
+    if (stability?.isScrolling()) return false;
     const yes = shouldWindow({
-      rows: ks.length,
-      scrollHeight: vp ? vp.scrollHeight : 0,
-      clientHeight: vp ? vp.clientHeight : 0,
+      rows,
+      scrollHeight: vp.scrollHeight,
+      clientHeight: vp.clientHeight,
       rowLimit: THRESHOLD,
       screens: WINDOW_SCREENS,
       minRows: MIN_WINDOW_ROWS,
     });
     if (yes) {
-      windowedRef.current = true;
-      // The instant it flips, measure everything on screen.
-      //
-      // Until this moment the list was NOT being windowed, which means every row
-      // of it is mounted and its real height is there for the taking. The first
-      // windowed plan replaces most of them with spacers, and if those spacers
-      // are built from guesses the list changes total height under the reader —
-      // measured at 805px of displacement from a row that grew by 240px, because
-      // the growth is what tipped the decision in the first place.
-      //
-      // Measuring here makes that first plan exact: same rows, same heights,
-      // same layout, and nothing to correct. It is one forced pass over rows
-      // that are already laid out, once per conversation.
-      if (vp) {
-        for (const node of vp.querySelectorAll(`[${WINDOW_ROW_ATTR}]`)) {
-          const key = node.getAttribute(WINDOW_ROW_ATTR);
-          if (!key || measured.current.has(key)) continue;
-          const h = (node as HTMLElement).getBoundingClientRect().height + ROW_GAP;
-          if (h > ROW_GAP) measured.current.set(key, h);
-        }
+      // Activation replaces a fully-mounted list with spacers. Take an exact
+      // snapshot while every row is still present, but only in this quiet path —
+      // never from the native scroll callback that discovered the height.
+      for (const node of vp.querySelectorAll(`[${WINDOW_ROW_ATTR}]`)) {
+        const key = node.getAttribute(WINDOW_ROW_ATTR);
+        if (!key || measured.current.has(key)) continue;
+        const h = (node as HTMLElement).getBoundingClientRect().height + ROW_GAP;
+        if (h > ROW_GAP) measured.current.set(key, h);
       }
+      windowedRef.current = true;
     }
     return yes;
-  }, [getViewport]);
+  }, [getViewport, stability]);
+
+  const queuePlan = useCallback((next: Omit<PlanState, 'rev'>, shiftAfterCommit = 0) => {
+    const current = planRef.current;
+    if (
+      current.sig === next.sig && current.start === next.start && current.end === next.end
+      && current.padTop === next.padTop && current.padBottom === next.padBottom
+      && current.startKey === next.startKey
+    ) return;
+    const queued = { ...next, rev: current.rev + 1 };
+    planRef.current = queued;
+    if (shiftAfterCommit !== 0) pendingPlanShifts.current.push({ rev: queued.rev, delta: shiftAfterCommit });
+    setPlan(queued);
+  }, []);
+
+  const resetHeightScope = useCallback((vp: HTMLElement): boolean => {
+    const nextWidth = widthBucket(vp.clientWidth);
+    if (measuredWidth.current === null) {
+      measuredWidth.current = nextWidth;
+      return false;
+    }
+    if (measuredWidth.current === nextWidth) return false;
+
+    // Cancel any old-width plan that React has not committed. Clearing its
+    // compensation ledger alone is insufficient: the queued geometry could
+    // still commit and move the reader with no matching correction. Re-queue
+    // the last DOM-confirmed geometry at a newer revision so React either keeps
+    // what is already visible or supersedes an old-width update atomically.
+    const committed = committedPlanRef.current;
+    const resetPlan = {
+      ...committed,
+      rev: Math.max(planRef.current.rev, committed.rev) + 1,
+    };
+    planRef.current = resetPlan;
+    setPlan(resetPlan);
+
+    // A row height is only true at the width where it was measured. Keeping the
+    // old map after a rotation makes every off-screen spacer wrong, and those
+    // errors arrive later as large corrections during a perfectly ordinary
+    // fling. Keep the old values only long enough to compensate rows that were
+    // physically mounted across this reflow; planners immediately see a fresh
+    // map scoped to the new width.
+    previousWidthHeights.current = measured.current;
+    widthReflowRows.current = new Set(observedRows.current);
+    measured.current = new Map();
+    measuredWidth.current = nextWidth;
+    prose.current.clear();
+    proseMetrics.current = null;
+    fit.current = null;
+    plannedHeights.current = null;
+    pendingPlanShifts.current = [];
+    savedKey.current = null;
+    seedGeneration.current += 1;
+    dirtyHeights.current = false;
+    if (saveHandle.current !== null) {
+      clearTimeout(saveHandle.current);
+      saveHandle.current = null;
+    }
+    if (idleHandle.current !== null) {
+      cancelPredictHandle(idleHandle.current);
+      idleHandle.current = null;
+    }
+    setHeightScopeRevision((revision) => revision + 1);
+    return true;
+  }, []);
 
   const recompute = useCallback(() => {
     const vp = getViewport();
     const ks = keysRef.current;
     const sig = signature(ks);
     if (!vp || !isWindowed()) {
-      setPlan((prev) =>
-        prev.sig === sig && prev.start === 0 && prev.end === ks.length && prev.padTop === 0 && prev.padBottom === 0
-          ? prev
-          : { ...fullWindow(ks.length), sig, startKey: ks[0] ?? null }
-      );
+      queuePlan({ ...fullWindow(ks.length), sig, startKey: ks[0] ?? null });
       return;
     }
+    const heights = heightsFor(ks, measured.current, FALLBACK_ROW, prose.current, fit.current);
+    plannedHeights.current = { sig, keys: ks, values: heights };
     const next = planWindow({
-      heights: heightsFor(ks, measured.current, FALLBACK_ROW, prose.current, fit.current),
-      scrollTop: vp.scrollTop,
+      heights,
+      scrollTop: stability?.logicalScrollTop() ?? vp.scrollTop,
       viewportHeight: vp.clientHeight,
       overscan: vp.clientHeight * OVERSCAN_SCREENS,
       // The decision was made above; the planner must not second-guess it with a
       // row count of its own.
       threshold: 0,
     });
-    setPlan((prev) =>
-      prev.sig === sig && prev.start === next.start && prev.end === next.end && prev.padTop === next.padTop && prev.padBottom === next.padBottom
-        ? prev
-        : { ...next, sig, startKey: ks[next.start] ?? null }
-    );
-  }, [getViewport, isWindowed]);
+    queuePlan({ ...next, sig, startKey: ks[next.start] ?? null });
+  }, [getViewport, isWindowed, queuePlan, stability]);
 
-  // Recompute on scroll and on resize. Cheap: a walk over an array of numbers,
-  // never over the DOM.
+  // Recompute at most once per animation frame. A WebKit scroll event can arrive
+  // faster than paint; walking thousands of heights for every one made the odd
+  // event burst show up as a periodic long frame.
   useEffect(() => {
     const vp = getViewport();
     if (!vp) return;
-    const onScroll = () => recompute();
+    let raf = 0;
+    let quietTimer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        recompute();
+      });
+    };
+    const onScroll = () => {
+      schedule();
+      if (quietTimer !== null) clearTimeout(quietTimer);
+      // Gives the stability controller's 180ms quiet detector time to close
+      // before a weight-based window is allowed to activate.
+      quietTimer = setTimeout(recompute, 220);
+    };
     vp.addEventListener('scroll', onScroll, { passive: true });
-    const ro = new ResizeObserver(onScroll);
+    const ro = new ResizeObserver(() => {
+      resetHeightScope(vp);
+      schedule();
+    });
     ro.observe(vp);
     return () => {
       vp.removeEventListener('scroll', onScroll);
       ro.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+      if (quietTimer !== null) clearTimeout(quietTimer);
     };
-  }, [getViewport, recompute]);
+  }, [getViewport, recompute, resetHeightScope]);
 
   // The row list changed — a page prepended, a turn streamed, the mode toggled.
   //
@@ -281,22 +394,25 @@ export function useTimelineWindow(
   // above the viewport would have.
   const sig = signature(keys);
   useIsoLayoutEffect(() => {
-    if (isWindowed() && plan.startKey && plan.sig !== sig) {
-      const at = keys.indexOf(plan.startKey);
+    const currentKeys = keysRef.current;
+    const current = planRef.current;
+    if (isWindowed() && current.startKey && current.sig !== sig) {
+      const at = currentKeys.indexOf(current.startKey);
       if (at >= 0) {
-        const span = Math.max(1, plan.end - plan.start);
-        const heights = heightsFor(keys, measured.current, FALLBACK_ROW, prose.current, fit.current);
-        const end = Math.min(keys.length, at + span);
+        const span = Math.max(1, current.end - current.start);
+        const heights = heightsFor(currentKeys, measured.current, FALLBACK_ROW, prose.current, fit.current);
+        plannedHeights.current = { sig, keys: currentKeys, values: heights };
+        const end = Math.min(currentKeys.length, at + span);
         let padTop = 0;
         for (let i = 0; i < at; i++) padTop += heights[i];
         let padBottom = 0;
-        for (let i = end; i < keys.length; i++) padBottom += heights[i];
-        setPlan({ start: at, end, padTop, padBottom, sig, startKey: plan.startKey });
+        for (let i = end; i < currentKeys.length; i++) padBottom += heights[i];
+        queuePlan({ start: at, end, padTop, padBottom, sig, startKey: current.startKey });
         return;
       }
     }
     recompute();
-  }, [sig, recompute]);
+  }, [sig, recompute, isWindowed, queuePlan]);
 
   // Fold whatever has been measured into the plan, and hold the reading position
   // if the space above the viewport turned out to be a different size than we
@@ -318,35 +434,42 @@ export function useTimelineWindow(
     let padTopNow = 0;
     for (let i = 0; i < p.start; i++) padTopNow += heights[i];
     const delta = padTopNow - p.padTop;
-    if (Math.abs(delta) < 1) return;
-    // Grow or shrink the space above the viewport and move with it, so the row
-    // the reader is looking at does not move at all.
-    const before = vp.scrollTop;
-    vp.scrollTop += delta;
-    // A correction that GROWS the space above the reader is asking `scrollTop`
-    // to move somewhere the scroller cannot reach yet: the taller spacer is
-    // still the plan's old height until React commits the setPlan below, so the
-    // browser clamps the write and silently drops the rest. Shrinking never hits
-    // this — a smaller `scrollTop` is always reachable — which is why it shows up
-    // as a one-sided slide, only ever upward, and only on lists long enough for
-    // the guesses above to be wrong by real distances. Measured on a 1,718-row
-    // session: a correction of 25,430px landed 1,727px of itself and the reader
-    // lost the other 23,703px in one frame.
-    //
-    // So keep the remainder and pay it in the layout effect below, once the
-    // spacer that makes room for it exists.
-    const applied = vp.scrollTop - before;
-    if (Math.abs(delta - applied) >= 1) owed.current += delta - applied;
-    logWindow({
-      t: Date.now(), wanted: delta, applied: vp.scrollTop - before,
-      start: p.start, end: p.end, padTopPlan: p.padTop, padTopNow,
-      scrollTop: vp.scrollTop, scrollHeight: vp.scrollHeight,
-      rows: ks.length, measured: measured.current.size, fit: fit.current ? fit.current.samples : 0,
-    });
     let padBottomNow = 0;
     for (let i = p.end; i < heights.length; i++) padBottomNow += heights[i];
-    setPlan((prev) => (prev.sig === p.sig ? { ...prev, padTop: padTopNow, padBottom: padBottomNow } : prev));
-  }, [getViewport, isWindowed]);
+    if (delta === 0 && padBottomNow === p.padBottom) return;
+    // The transform must land only AFTER React has committed the new spacer.
+    // Applying it against the old DOM would create the very one-frame jump this
+    // path exists to prevent.
+    queuePlan({
+      start: p.start, end: p.end, padTop: padTopNow, padBottom: padBottomNow,
+      sig: p.sig, startKey: p.startKey,
+    }, delta);
+  }, [getViewport, isWindowed, queuePlan]);
+
+  // Drain geometry shifts for every plan React folded into this commit. The new
+  // spacer exists now, but the browser has not painted it yet.
+  useIsoLayoutEffect(() => {
+    let shift = 0;
+    const rest: Array<{ rev: number; delta: number }> = [];
+    for (const pending of pendingPlanShifts.current) {
+      if (pending.rev <= plan.rev) shift += pending.delta;
+      else rest.push(pending);
+    }
+    pendingPlanShifts.current = rest;
+    if (shift !== 0) {
+      const applied = compensateVisual(shift, 'window-pad');
+      const vp = getViewport();
+      if (vp) {
+        logWindow({
+          t: Date.now(), wanted: shift, applied,
+          start: plan.start, end: plan.end, padTopPlan: plan.padTop - shift, padTopNow: plan.padTop,
+          scrollTop: vp.scrollTop, scrollHeight: vp.scrollHeight,
+          rows: keysRef.current.length, measured: measured.current.size,
+          fit: fit.current ? fit.current.samples : 0,
+        });
+      }
+    }
+  }, [plan.rev, compensateVisual, getViewport]);
 
   // Predicting the rows nobody has seen.
   //
@@ -381,11 +504,22 @@ export function useTimelineWindow(
   const predictRef = useRef<() => void>(noop);
   const schedulePredict = useCallback(() => {
     if (idleHandle.current !== null) return;
-    const run = () => predictRef.current();
+    const run = () => {
+      // The callback that owned this handle is running now. Clear it before
+      // choosing a successor so reset/unmount always cancels the right API.
+      idleHandle.current = null;
+      if (stability?.isScrolling()) {
+        idleHandle.current = { kind: 'timeout', id: window.setTimeout(run, 200) };
+        return;
+      }
+      predictRef.current();
+    };
     const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number })
       .requestIdleCallback;
-    idleHandle.current = ric ? ric(run, { timeout: 500 }) : (setTimeout(run, 50) as unknown as number);
-  }, []);
+    idleHandle.current = ric
+      ? { kind: 'idle', id: ric(run, { timeout: 500 }) }
+      : { kind: 'timeout', id: window.setTimeout(run, 50) };
+  }, [stability]);
 
   const predict = useCallback(() => {
     idleHandle.current = null;
@@ -393,6 +527,10 @@ export function useTimelineWindow(
     const textOf = textAtRef.current;
     const m = proseMetrics.current;
     if (!m || !textOf || !isWindowed() || !textHeightReady()) return;
+    if (stability?.isScrolling()) {
+      schedulePredict();
+      return;
+    }
     const deadline = performance.now() + PROSE_BUDGET_MS;
     let did = 0;
     let more = false;
@@ -411,7 +549,7 @@ export function useTimelineWindow(
     refit();
     applyMeasured();
     if (more) schedulePredict();
-  }, [applyMeasured, refit, schedulePredict, isWindowed]);
+  }, [applyMeasured, refit, schedulePredict, isWindowed, stability]);
 
   // Declared after `predict` on purpose: an idle slice that runs out of budget
   // queues the next one through this ref, and a callback cannot name itself in
@@ -433,10 +571,19 @@ export function useTimelineWindow(
     const scope = currentScope();
     if (!vp || !scope || !sessionId) return;
     const width = widthBucket(vp.clientWidth);
+    resetHeightScope(vp);
     const key = `${sessionId}:${width}`;
     if (savedKey.current === key) return;
     savedKey.current = key;
+    const generation = ++seedGeneration.current;
     const stored = await getHeights(scope, sessionId, width);
+    const liveViewport = getViewport();
+    if (
+      generation !== seedGeneration.current
+      || savedKey.current !== key
+      || liveViewport !== vp
+      || widthBucket(liveViewport.clientWidth) !== width
+    ) return;
     let added = 0;
     for (const [k, h] of Object.entries(stored)) {
       // Never overwrite something measured in THIS session: the row may have
@@ -449,12 +596,16 @@ export function useTimelineWindow(
     }
     if (!added) return;
     refit();
-    recompute();
-  }, [getViewport, sessionId, refit, recompute]);
+    applyMeasured();
+  }, [getViewport, sessionId, refit, applyMeasured, resetHeightScope]);
 
   useEffect(() => {
     void seedFromDisk();
-  }, [seedFromDisk]);
+  }, [seedFromDisk, heightScopeRevision]);
+
+  useEffect(() => () => {
+    seedGeneration.current += 1;
+  }, []);
 
   const scheduleSave = useCallback(() => {
     dirtyHeights.current = true;
@@ -466,9 +617,14 @@ export function useTimelineWindow(
       const vp = getViewport();
       const scope = currentScope();
       if (!vp || !scope || !sessionId || measured.current.size === 0) return;
+      const width = measuredWidth.current;
+      // `measured` belongs to one width bucket. A resize can change clientWidth
+      // just before its ResizeObserver resets the map; never write that old map
+      // under the already-new DOM width during this narrow interval.
+      if (width === null || widthBucket(vp.clientWidth) !== width) return;
       const snapshot: Record<string, number> = {};
       for (const [k, h] of measured.current) snapshot[k] = h;
-      void putHeights(scope, sessionId, vp.clientWidth, snapshot)
+      void putHeights(scope, sessionId, width, snapshot)
         .then(() => evictHeightsLru(scope))
         .catch(() => {});
     }, HEIGHTS_SAVE_MS);
@@ -495,43 +651,11 @@ export function useTimelineWindow(
   useEffect(
     () => () => {
       if (idleHandle.current === null) return;
-      const cic = (window as unknown as { cancelIdleCallback?: (h: number) => void }).cancelIdleCallback;
-      if (cic) cic(idleHandle.current);
-      else clearTimeout(idleHandle.current);
+      cancelPredictHandle(idleHandle.current);
       idleHandle.current = null;
     },
     [],
   );
-
-  // Pay back whatever the correction above could not fit.
-  //
-  // By now the plan it was computed for has been committed, so the top spacer is
-  // its new height and the scroller is finally tall enough to hold the position
-  // it was asked to hold. This is a layout effect on the plan itself, so it runs
-  // in the same commit — before the browser paints, and therefore before the
-  // reader could see the frame where it had not been paid.
-  //
-  // One attempt. If it still will not fit, something other than the spacer is
-  // wrong and re-trying every commit would be a scroll that fights the reader
-  // rather than a correction that holds them.
-  useIsoLayoutEffect(() => {
-    const debt = owed.current;
-    if (!debt) return;
-    owed.current = 0;
-    const vp = getViewport();
-    if (!vp) return;
-    const before = vp.scrollTop;
-    vp.scrollTop += debt;
-    const paid = vp.scrollTop - before;
-    if (Math.abs(debt - paid) >= 1) {
-      logWindow({
-        t: Date.now(), wanted: debt, applied: paid,
-        start: plan.start, end: plan.end, padTopPlan: plan.padTop, padTopNow: plan.padTop,
-        scrollTop: vp.scrollTop, scrollHeight: vp.scrollHeight,
-        rows: keysRef.current.length, measured: measured.current.size, fit: fit.current ? fit.current.samples : 0,
-      });
-    }
-  }, [plan, getViewport]);
 
   // A row's height is wanted for two different reasons, and they want it at two
   // different moments:
@@ -551,8 +675,6 @@ export function useTimelineWindow(
   // So: measure the new ones here, and let a ResizeObserver hand us the rest.
   // It reports sizes the browser has already computed — no forced layout — and
   // it fires whether or not anything re-rendered.
-  const rowObserver = useRef<ResizeObserver | null>(null);
-  const observedRows = useRef(new Set<Element>());
   useIsoLayoutEffect(() => {
     const vp = getViewport();
     if (!vp) return;
@@ -577,11 +699,15 @@ export function useTimelineWindow(
         const viewportTop = vp ? vp.getBoundingClientRect().top : 0;
         const settled: SettledRow[] = [];
         for (const entry of entries) {
-          const key = (entry.target as HTMLElement).getAttribute(WINDOW_ROW_ATTR);
+          const target = entry.target as HTMLElement;
+          const key = target.getAttribute(WINDOW_ROW_ATTR);
           if (!key) continue;
           const h = (entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height) + ROW_GAP;
           if (h <= ROW_GAP) continue;
           const was = measured.current.get(key);
+          const crossedWidth = widthReflowRows.current.has(target);
+          const beforeWidth = crossedWidth ? previousWidthHeights.current?.get(key) : undefined;
+          if (crossedWidth) widthReflowRows.current.delete(target);
           if (was === h) continue;
           measured.current.set(key, h);
           dirty = true;
@@ -589,8 +715,9 @@ export function useTimelineWindow(
           // was a guess in `padTop` until this moment, and undoing a guess is
           // `applyMeasured`'s job, not this one. Counting it here would correct
           // the same pixels twice.
-          if (was !== undefined && vp) {
-            settled.push({ was, now: h, bottom: (entry.target as HTMLElement).getBoundingClientRect().bottom });
+          const before = was ?? beforeWidth;
+          if (before !== undefined && vp) {
+            settled.push({ was: before, now: h, bottom: target.getBoundingClientRect().bottom });
           }
         }
         if (vp && settled.length) {
@@ -598,10 +725,9 @@ export function useTimelineWindow(
           // Reads to the prepend anchor as a scroll it did not make — i.e. as
           // the user — which is exactly how it already treats `applyMeasured`'s
           // correction, so the two compose instead of fighting.
-          const beforeLift = vp.scrollTop;
-          if (lift !== 0) vp.scrollTop += lift;
+          const applied = compensateVisual(lift, 'settled-row');
           logWindow({
-            t: Date.now(), wanted: lift, applied: vp.scrollTop - beforeLift,
+            t: Date.now(), wanted: lift, applied,
             start: -1, end: settled.length, padTopPlan: 0, padTopNow: 0,
             scrollTop: vp.scrollTop, scrollHeight: vp.scrollHeight,
             rows: keysRef.current.length, measured: measured.current.size,
@@ -619,6 +745,11 @@ export function useTimelineWindow(
       rowObserver.current = ro;
     }
     let changed = false;
+    const firstMounted: SettledRow[] = [];
+    const viewportTop = vp.getBoundingClientRect().top;
+    const snapshot = plannedHeights.current?.sig === sig
+      ? plannedHeights.current
+      : { sig, keys: keysRef.current, values: heightsFor(keysRef.current, measured.current, FALLBACK_ROW, prose.current, fit.current) };
     // What the prose predictor lays text out with, taken from a row that is
     // actually on screen rather than assumed: the font follows the theme and
     // whatever next/font named the family this build, and the width follows the
@@ -642,9 +773,21 @@ export function useTimelineWindow(
       if (!windowed || measured.current.has(key)) continue;
       const h = (node as HTMLElement).getBoundingClientRect().height + ROW_GAP;
       if (h > ROW_GAP) {
+        const at = snapshot.keys.indexOf(key);
+        const crossedWidth = widthReflowRows.current.has(node);
+        const beforeWidth = crossedWidth ? previousWidthHeights.current?.get(key) : undefined;
+        if (crossedWidth) widthReflowRows.current.delete(node);
+        const was = beforeWidth ?? (at >= 0 ? snapshot.values[at] : FALLBACK_ROW);
+        if (was !== h) {
+          firstMounted.push({ was, now: h, bottom: (node as HTMLElement).getBoundingClientRect().bottom });
+        }
         measured.current.set(key, h);
         changed = true;
       }
+    }
+    if (firstMounted.length) {
+      const lift = liftFromSettled(firstMounted, viewportTop);
+      compensateVisual(lift, 'first-mounted-row');
     }
     if (firstRow && windowed) {
       const width = firstRow.getBoundingClientRect().width;

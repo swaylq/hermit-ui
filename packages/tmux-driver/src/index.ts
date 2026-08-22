@@ -29,8 +29,10 @@ import { join } from 'node:path';
  * Run a tmux subcommand. Returns { ok, stdout, stderr }. Doesn't throw on
  * non-zero exit — caller decides what to do.
  */
-function tmux(args: string[], opts: { timeoutMs?: number } = {}): { ok: boolean; stdout: string; stderr: string; status: number } {
-  const r = spawnSync('tmux', args, { encoding: 'utf8', timeout: opts.timeoutMs ?? 5_000 });
+function tmux(args: string[], opts: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {}): { ok: boolean; stdout: string; stderr: string; status: number } {
+  const r = spawnSync('tmux', args, {
+    encoding: 'utf8', timeout: opts.timeoutMs ?? 5_000, ...(opts.env ? { env: opts.env } : {}),
+  });
   return {
     ok: r.status === 0,
     stdout: (r.stdout || '').trim(),
@@ -159,11 +161,9 @@ export interface EnsureOpts {
   width?: number;
   height?: number;
   /**
-   * Extra environment variables for the pane, passed via `tmux new-session -e
-   * K=V`. claude AND every subprocess it spawns (notably PreToolUse hooks)
-   * inherit these — so the permission hook gets the dashboard URL + key without
-   * them ever touching the command line. Values are passed as literal argv
-   * entries (no shell), so no quoting is needed.
+   * Extra environment variables for the pane. They are supplied in the tmux
+   * client's process environment and copied by tmux's `update-environment`
+   * mechanism, so values never appear in `tmux new-session` argv.
    */
   env?: Record<string, string>;
 }
@@ -222,22 +222,50 @@ export function ensureSession(opts: EnsureOpts): { name: string; created: boolea
     .map((a) => shellQuote(a))
     .join(' ');
 
-  // `-e K=V` per env entry — sets the pane's session environment, inherited by
-  // claude and its hook subprocesses. Literal argv (no shell), so no quoting.
-  const envFlags: string[] = [];
-  for (const [k, v] of Object.entries(opts.env ?? {})) {
-    if (v != null && v !== '') envFlags.push('-e', `${k}=${v}`);
+  const paneEnv: Record<string, string> = {};
+  for (const [name, value] of Object.entries(opts.env ?? {})) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error(`invalid environment variable name: ${name}`);
+    if (value !== '') paneEnv[name] = value;
+  }
+  const clientEnv: NodeJS.ProcessEnv = { ...process.env, ...paneEnv };
+  const names = Object.keys(paneEnv);
+  const tmuxPrelude: string[] = [];
+  if (names.length > 0) {
+    // Teach new-session which variables to copy from THIS client. The setup and
+    // new-session live in one tmux command queue: separate invocations allow two
+    // simultaneous sessions to overwrite one another's session id/key.
+    const shown = tmux(['show-options', '-gv', 'update-environment'], { env: clientEnv });
+    if (shown.ok) {
+      const merged = new Set(shown.stdout.split(/\s+/).filter(Boolean));
+      for (const name of names) merged.add(name);
+      tmuxPrelude.push('set-option', '-g', 'update-environment', [...merged].join(' '), ';');
+    } else {
+      // A fresh server has no options to read yet. Append names to tmux's
+      // defaults after it starts rather than replacing the default list.
+      tmuxPrelude.push('set-option', '-ag', 'update-environment', ` ${names.join(' ')}`, ';');
+    }
+  }
+
+  // A fresh tmux server inherits the whole client environment before it runs
+  // its first command. Remove per-pane values (and the gateway's source key)
+  // from that GLOBAL environment before creating the session. update-environment
+  // above still copies only the requested aliases from this client into the new
+  // session. Keeping unset + new-session in one queue also makes this safe when
+  // two gateways create panes concurrently.
+  const globalSecrets = new Set([...names, 'ASST_KEY']);
+  for (const name of globalSecrets) {
+    tmuxPrelude.push('set-environment', '-gu', name, ';');
   }
 
   const r = tmux([
+    ...tmuxPrelude,
     'new-session', '-d',
     '-s', name,
     '-c', opts.cwd,
     '-x', String(opts.width ?? 200),
     '-y', String(opts.height ?? 50),
-    ...envFlags,
     claudeCmd,
-  ]);
+  ], { env: clientEnv });
   if (!r.ok) {
     throw new Error(`tmux new-session failed: ${r.stderr || 'exit ' + r.status}`);
   }

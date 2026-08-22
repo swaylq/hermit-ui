@@ -37,6 +37,7 @@ import { ChatFind } from '@/components/chat/chat-find';
 import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
 import { useOlderPages } from '@/components/chat/use-older-pages';
 import { usePrependAnchor } from '@/components/chat/use-prepend-anchor';
+import { useScrollStability } from '@/components/chat/use-scroll-stability';
 import { useCachedTimeline, useTimelineWriteThrough } from '@/lib/chat-cache/use-chat-cache';
 import { applyMessagePush } from '@/lib/chat-cache/merge-messages';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
@@ -727,12 +728,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       '[data-slot="scroll-area-viewport"]',
     ) as HTMLElement | null;
   }, []);
+  const scrollStability = useScrollStability(getViewport);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = getViewport();
     if (!el) return;
     autoScrollRef.current = true;
-    el.scrollTo({ top: el.scrollHeight, behavior });
+    scrollStability.scrollTo(el.scrollHeight, behavior, 'latest-button');
     setPinned(true);
     // A smooth scroll animates toward the offset captured RIGHT NOW. Fine on a
     // settled conversation — but while a reply streams in, the bubble keeps
@@ -747,7 +749,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       settleKickRef.current?.(SETTLE_CHASE_FRAMES);
     }
     requestAnimationFrame(() => { autoScrollRef.current = false; });
-  }, [getViewport, setPinned]);
+  }, [getViewport, scrollStability, setPinned]);
 
   // ── Local cache: first paint from disk, and the write-through that fills it ──
   // `cachedRows` is null until the IndexedDB lookup resolves, [] when there's
@@ -772,7 +774,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // message the user was looking at and HELD there while the new history lays
   // out — see use-prepend-anchor.ts for why a one-shot height restore isn't
   // enough.
-  const prependAnchor = usePrependAnchor(getViewport);
+  const prependAnchor = usePrependAnchor(getViewport, scrollStability);
   // Read by the scroll listener and the bottom-pin observer, neither of which
   // should re-subscribe when the anchor object identity changes.
   const prependAnchorRef = useRef(prependAnchor);
@@ -821,7 +823,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
   // Anchored mode: viewing a window around one specific message (a search hit).
   // Frozen — see use-anchored-window.ts.
-  const anchored = useAnchoredWindow(sessionId, anchorMessageId, getViewport);
+  const anchored = useAnchoredWindow(sessionId, anchorMessageId, getViewport, scrollStability);
   // Read by the sticky-bottom effect, which must not re-subscribe per render.
   const anchoredActiveRef = useRef(false);
   anchoredActiveRef.current = anchored.active;
@@ -889,9 +891,24 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     if (!el) return;
     const content = el.firstElementChild as HTMLElement | null;
     if (!content) return;
+    let deferredBottomTimer: ReturnType<typeof setTimeout> | null = null;
     const toBottom = () => {
+      if (!pinnedRef.current || prependAnchorRef.current?.isHolding() || anchoredActiveRef.current) return;
+      // Auto-follow never owns a native gesture. During the first 60px away
+      // from the tail the pin state intentionally stays true, so a streaming
+      // ResizeObserver can otherwise write scrollTop between touch events and
+      // cancel WebKit momentum before the intent detector gets to unpin.
+      if (scrollStability.isScrolling() && !scrollStability.isProgrammatic()) {
+        if (deferredBottomTimer === null) {
+          deferredBottomTimer = setTimeout(() => {
+            deferredBottomTimer = null;
+            toBottom();
+          }, 220);
+        }
+        return;
+      }
       autoScrollRef.current = true;
-      el.scrollTop = el.scrollHeight;
+      scrollStability.scrollTo(el.scrollHeight, 'auto', 'sticky-bottom');
       requestAnimationFrame(() => { autoScrollRef.current = false; });
     };
     // Anchored mode positions the viewport on a specific message; jumping to the
@@ -951,9 +968,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     return () => {
       ro.disconnect();
       if (raf) cancelAnimationFrame(raf);
+      if (deferredBottomTimer !== null) clearTimeout(deferredBottomTimer);
       settleKickRef.current = null;
     };
-  }, [getViewport]);
+  }, [getViewport, scrollStability]);
 
 
   // Track the user's scroll intent. Ignore scrolls WE triggered (autoScrollRef)
@@ -969,23 +987,29 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       // Update the baselines FIRST, even for scrolls we caused — otherwise the
       // next comparison is made against a stale position.
       const st = el.scrollTop;
+      const logicalSt = scrollStability.logicalScrollTop();
       const wentUp = st < lastScrollTopRef.current - 2;
       lastScrollTopRef.current = st;
       const h = el.clientHeight;
       const resized = h !== lastClientHeightRef.current;
       lastClientHeightRef.current = h;
-      if (autoScrollRef.current) return;
+      if (autoScrollRef.current || scrollStability.isProgrammatic()) return;
+      const readerTookOver = wentUp && scrollStability.hasReaderIntent();
 
       // The pane changed size under us — growing the composer shrinks this
       // viewport from the bottom. That's layout, not a decision to read history.
-      if (resized) paneResizedUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
+      // A real touch/wheel/drag wins even inside that protection window. Without
+      // this, an immediate upward gesture after sending or resizing the composer
+      // was swallowed for 400ms and sticky bottom pulled it back after momentum.
+      if (readerTookOver) paneResizedUntilRef.current = 0;
+      else if (resized) paneResizedUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
       // Inside the settling window nothing is a verdict on intent; the rAF loop
       // started by the ResizeObserver is holding the bottom.
       if (Date.now() < paneResizedUntilRef.current) {
         if (pinnedRef.current) {
-          autoScrollRef.current = true;
-          el.scrollTop = el.scrollHeight;
-          requestAnimationFrame(() => { autoScrollRef.current = false; });
+          // The sticky-bottom observer owns the physical write and defers it
+          // until native scrolling is quiet. This listener only wakes its chase.
+          settleKickRef.current?.(SETTLE_CHASE_FRAMES);
         }
         return;
       }
@@ -999,8 +1023,12 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       // late event would arrive after the composer had grown, see a large gap
       // nobody asked for, and quietly unpin — stranding the conversation short
       // of the end with a "↓ latest" pill.
-      const gap = el.scrollHeight - st - h;
-      if (gap < 60) setPinned(true);
+      const gap = el.scrollHeight - logicalSt - h;
+      // The 60px geometry slack must never swallow a real, small upward gesture.
+      // Without this reader-intent check, sticky bottom waited for momentum to
+      // end and then visibly pulled any sub-60px movement back to the tail.
+      if (readerTookOver) setPinned(false);
+      else if (gap < 60) setPinned(true);
       else if (wentUp) setPinned(false);
 
       // Infinite scroll up: pull the next page of history BEFORE the top is
@@ -1011,7 +1039,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       // reader gets there, which is the whole difference between this and a
       // native chat app. loadEarlier anchors the scroll so the prepend doesn't
       // yank the viewport.
-      if (st < pullMargin(h)) pullEarlier();
+      if (logicalSt < pullMargin(h)) pullEarlier();
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     // A scroll event is not enough on its own. Once the viewport is clamped at
@@ -1020,7 +1048,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     // have fetched the next page never gets a chance to run. The raw gesture
     // still arrives, so use it as the second entry point.
     const onReach = (e: Event) => {
-      if (el.scrollTop >= pullMargin(el.clientHeight)) return;
+      if (scrollStability.logicalScrollTop() >= pullMargin(el.clientHeight)) return;
       if (e.type === 'wheel' && (e as WheelEvent).deltaY >= 0) return; // scrolling away, not into, the top
       pullEarlier();
     };
@@ -1031,10 +1059,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       el.removeEventListener('wheel', onReach);
       el.removeEventListener('touchmove', onReach);
     };
-  }, [getViewport, setPinned, pullEarlier]);
+  }, [getViewport, setPinned, pullEarlier, scrollStability]);
 
-  // Hard initial scroll-to-bottom, fired ONCE when messages first land for this
-  // session (keyed remount resets the guard). The RO+pinned chain above follows
+  // Hard initial scroll-to-bottom, fired ONCE when the first visible rows land
+  // for this session (keyed remount resets the guard). This includes IndexedDB
+  // rows: waiting only for the server result let someone start reading the cache
+  // and then get yanked to the bottom when the network answered.
+  // The RO+pinned chain above follows
   // ongoing growth, but the *initial* anchor is fragile on open: firstScrollRef
   // can be consumed while the list is still empty/pending, and async markdown /
   // image layout (or browser scroll-anchoring) can fire a scroll that unpins
@@ -1045,21 +1076,24 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const didInitialScrollRef = useRef(false);
   useEffect(() => {
     if (didInitialScrollRef.current) return;
-    if (!messages.data || messages.data.length === 0) return;
+    if (view.length === 0 || anchored.active) return;
     didInitialScrollRef.current = true;
     const el = getViewport();
     if (!el) return;
     const pin = (force: boolean) => {
-      if (!force && !pinnedRef.current) return;
+      if (!pinnedRef.current) return;
+      // Cached rows can already be interactive when the server result arrives.
+      // Even the nominally "forced" first pin yields to a gesture in flight.
+      if (scrollStability.isScrolling() && !scrollStability.isProgrammatic()) return;
       autoScrollRef.current = true;
-      el.scrollTop = el.scrollHeight;
+      scrollStability.scrollTo(el.scrollHeight, 'auto', 'initial-bottom');
       if (force) setPinned(true);
       requestAnimationFrame(() => { autoScrollRef.current = false; });
     };
     pin(true);
     const timers = [60, 200, 500].map((ms) => setTimeout(() => pin(false), ms));
     return () => timers.forEach(clearTimeout);
-  }, [messages.data, getViewport, setPinned]);
+  }, [view.length, anchored.active, getViewport, scrollStability, setPinned]);
 
   // Optimistic "awaiting reply" — the newest loaded message is a user row with no
   // assistant answer yet, so we can show "working" the instant you send (before the
@@ -1854,7 +1888,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       </div>
 
       {findOpen && (
-        <ChatFind sessionId={sessionId} getViewport={getViewport} onJump={anchored.jumpTo} onClose={() => setFindOpen(false)} />
+        <ChatFind
+          sessionId={sessionId}
+          getViewport={getViewport}
+          scrollStability={scrollStability}
+          onJump={anchored.jumpTo}
+          onClose={() => setFindOpen(false)}
+        />
       )}
 
       {/* Mounted only once opened, so an untouched chat never pays for the
@@ -1882,7 +1922,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         {/* overflow-x-clip guarantees the conversation never scrolls sideways as
             a whole; wide content (tables, code) scrolls within its own message.
             `clip` (not hidden) avoids forcing overflow-y to auto. */}
-        <div className="px-4 py-4 max-w-3xl mx-auto overflow-x-clip [overflow-anchor:none]">
+        <div data-scroll-stability-layer className="px-4 py-4 max-w-3xl mx-auto overflow-x-clip [overflow-anchor:none]">
           {(anchored.active ? anchored.loading : messages.isPending && !baseRows) ? (
             <Skeleton className="h-32" />
           ) : view.length === 0 ? (
@@ -1923,6 +1963,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   sessionId={sessionId}
                   dotClass={status.dot}
                   getViewport={getViewport}
+                  scrollStability={scrollStability}
+                  settlePrepend={prependAnchor.reassert}
                   running={turnRunning}
                   runLabel={runActivity.label}
                   runDetail={runActivity.detail}

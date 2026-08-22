@@ -21,7 +21,7 @@ import path from 'node:path';
 
 // config.ts exits the process without a key; nothing here talks to the dashboard.
 process.env.ASST_KEY ||= 'test-key-unused';
-const { adoptDriftTranscript, capOutput } = await import('./cron-runner');
+const { adoptDriftTranscript, capOutput, cronPaneEnv } = await import('./cron-runner');
 
 const CWD = '/Users/test/agent';
 const PINNED = '11111111-1111-4111-8111-111111111111';       // this fire's own uuid
@@ -145,5 +145,22 @@ describe('capOutput', () => {
   it('a 14k report at the new 32K cap is delivered whole', () => {
     const report = 'r'.repeat(14_101);
     assert.equal(capOutput(report, 32_768), report);
+  });
+});
+
+describe('cronPaneEnv', () => {
+  it('keeps the machine credential out of an ordinary headless cron', () => {
+    const env = cronPaneEnv(false, 'ordinary-run');
+    assert.equal(Object.hasOwn(env, 'HERMIT_KEY'), false);
+    assert.equal(Object.hasOwn(env, 'HERMIT_DASHBOARD_URL'), false);
+    assert.equal(Object.hasOwn(env, 'HERMIT_SESSION_ID'), false);
+    assert.equal(env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+  });
+
+  it('supplies hermit variables only to an orchestrator cron with its MCP', () => {
+    const env = cronPaneEnv(true, 'brain-run');
+    assert.equal(Object.hasOwn(env, 'HERMIT_KEY'), true);
+    assert.equal(Object.hasOwn(env, 'HERMIT_DASHBOARD_URL'), true);
+    assert.equal(env.HERMIT_SESSION_ID, 'brain-run');
   });
 });

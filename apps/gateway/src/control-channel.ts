@@ -6,16 +6,15 @@
 //   browser xterm.js
 //     ⇄ wss://dash.swaylab.ai/api/term/<sid>   ← per-tab transient WS
 //   dashboard custom server (apps/dashboard/server.ts)
-//     ⇄ ws  /api/gateway/ws?key=…              ← THIS module, persistent + outbound
+//     ⇄ ws  /api/gateway/ws + x-asst-key       ← THIS module, persistent + outbound
 //   Mac gateway (this process)
 //     ⇄ node-pty → `tmux attach -t hermit-<paneN>`
 //
 // We open from the Mac side so the dashboard never needs to reach the Mac
 // (which it can't anyway — Mac has no public hostname; the rathole tunnel is
 // for Caddy:8443, not arbitrary inbound TCP). Reconnect with capped
-// exponential backoff. Auth is the gateway's existing ASST_KEY in query
-// string — keeps consistent with how api.ts already authenticates to the
-// dashboard via the x-asst-key header.
+// exponential backoff. Auth is the gateway's existing ASST_KEY in the same
+// x-asst-key request header used by the ordinary sync API; it never enters a URL.
 //
 // Protocol (JSON frames, multiplexed by termId):
 //   inbound (dashboard → gateway):
@@ -72,13 +71,13 @@ let ws: WebSocket | null = null;
 let backoffMs = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 
-function dashboardWsUrl(): string {
+export function dashboardWsUrl(base = DASHBOARD_URL): string {
   // DASHBOARD_URL is http(s)://…; convert scheme + append our WS path.
   // The dashboard's custom server upgrades /api/gateway/ws to a WS handler.
-  const u = new URL(DASHBOARD_URL);
+  const u = new URL(base);
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
   u.pathname = '/api/gateway/ws';
-  u.search = `?key=${encodeURIComponent(ASST_KEY)}`;
+  u.search = '';
   return u.toString();
 }
 
@@ -285,13 +284,11 @@ function connect() {
     return;
   }
   const url = dashboardWsUrl();
-  // Don't log the key — bake the redaction in so an accidental copy never
-  // leaks the secret to logs.
-  const redacted = url.replace(/key=[^&]+/, 'key=***');
-  console.log(`[control] connecting to ${redacted}`);
+  console.log(`[control] connecting to ${url}`);
 
   ws = new WebSocket(url, {
     handshakeTimeout: 10_000,
+    headers: { 'x-asst-key': ASST_KEY },
   });
 
   const pingTimer = setInterval(() => {

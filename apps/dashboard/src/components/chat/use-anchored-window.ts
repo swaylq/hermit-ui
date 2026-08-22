@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { trpc } from '@/lib/trpc';
+import type { ScrollStability } from './use-scroll-stability';
 
 const STEP = 60;
 const FLASH_MS = 1600;
@@ -37,7 +38,8 @@ export type AnchoredWindow = {
 export function useAnchoredWindow(
   sessionId: string,
   initialMessageId: string | null,
-  getViewport: () => HTMLElement | null
+  getViewport: () => HTMLElement | null,
+  stability: ScrollStability,
 ): AnchoredWindow {
   const [anchorId, setAnchorId] = useState<string | null>(initialMessageId);
   const [before, setBefore] = useState(STEP);
@@ -79,16 +81,31 @@ export function useAnchoredWindow(
     let cancelled = false;
     let waits = 0;
     const timers: number[] = [];
+    let expectedReaderTop: number | null = null;
+    let settleAborted = false;
 
     const centre = (flash: boolean): boolean => {
       const root = getViewport();
       const el = root?.querySelector(`[data-msg-id~="${CSS.escape(anchorId)}"]`) as HTMLElement | null;
       if (!root || !el) return false;
+      if (!flash) {
+        const readerMoved = expectedReaderTop !== null
+          && Math.abs(stability.readerScrollTop() - expectedReaderTop) > 1;
+        const nativeMoving = stability.isScrolling() && !stability.isProgrammatic();
+        if (settleAborted || readerMoved || nativeMoving) {
+          // The delayed passes exist only for async layout settling. Once the
+          // reader touches or moves the viewport, that position belongs to them
+          // and no 120/400/900ms retry may take it back.
+          settleAborted = true;
+          return true;
+        }
+      }
       const r = el.getBoundingClientRect();
       const vp = root.getBoundingClientRect();
       // A third from the top, not the middle: the interesting part of a hit is
       // usually the reply that follows it.
-      root.scrollTop += r.top - vp.top - vp.height / 3;
+      stability.scrollBy(r.top - vp.top - vp.height / 3, 'auto', flash ? 'anchor-jump' : 'anchor-settle');
+      expectedReaderTop = stability.readerScrollTop();
       if (flash) {
         el.classList.add('chat-anchor-flash');
         timers.push(window.setTimeout(() => el.classList.remove('chat-anchor-flash'), FLASH_MS));
@@ -115,7 +132,7 @@ export function useAnchoredWindow(
       cancelled = true;
       for (const t of timers) window.clearTimeout(t);
     };
-  }, [anchorId, q.data, getViewport]);
+  }, [anchorId, q.data, getViewport, stability]);
 
   const clear = useCallback(() => {
     setAnchorId(null);

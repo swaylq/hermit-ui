@@ -196,6 +196,60 @@ describe('ensureSession vs a stale $TMUX', () => {
     }
   });
 
+  it('passes pane env without putting values in tmux or pane argv', { skip: !haveTmux }, async () => {
+    const o = opts();
+    const sentinel = `dummy-${Math.random().toString(36).slice(2)}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmux-env-'));
+    const out = path.join(dir, 'seen');
+    const sourceOut = path.join(dir, 'source-seen');
+    const saved = process.env.TMUX;
+    const savedTmp = process.env.TMUX_TMPDIR;
+    const savedSourceKey = process.env.ASST_KEY;
+    delete process.env.TMUX;
+    // An isolated socket guarantees this exercises the fresh-server path.
+    process.env.TMUX_TMPDIR = dir;
+    process.env.ASST_KEY = `dummy-source-${Math.random().toString(36).slice(2)}`;
+    try {
+      const r = ensureSession({
+        ...o,
+        claudeArgs: ['-c', 'printf %s "$HERMIT_TEST_SENTINEL" > "$HERMIT_TEST_OUT"; printf %s "${ASST_KEY-unset}" > "$HERMIT_TEST_SOURCE_OUT"; sleep 30'],
+        env: { HERMIT_TEST_SENTINEL: sentinel, HERMIT_TEST_OUT: out, HERMIT_TEST_SOURCE_OUT: sourceOut },
+      } as Parameters<typeof ensureSession>[0]);
+      for (let i = 0; i < 30 && (!fs.existsSync(out) || !fs.existsSync(sourceOut)); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(fs.readFileSync(out, 'utf8'), sentinel, 'pane inherited the client-only value');
+      assert.equal(fs.readFileSync(sourceOut, 'utf8'), 'unset', 'pane never inherits the gateway source key');
+      const pid = spawnSync(
+        'tmux', ['display-message', '-p', '-t', `${r.name}.0`, '#{pane_pid}'], { encoding: 'utf8' },
+      ).stdout.trim();
+      const command = spawnSync('ps', ['-ww', '-o', 'command=', '-p', pid], { encoding: 'utf8' }).stdout;
+      assert.doesNotMatch(command, new RegExp(sentinel), 'secret value must not appear in pane argv');
+      const globalProbe = spawnSync(
+        'tmux', ['show-environment', '-g', 'HERMIT_TEST_SENTINEL'], { encoding: 'utf8' },
+      );
+      const globalEnv = globalProbe.stdout;
+      assert.doesNotMatch(globalEnv, new RegExp(sentinel), 'fresh server must not retain pane secrets globally');
+      assert.ok(
+        globalProbe.status !== 0 || /^-HERMIT_TEST_SENTINEL/m.test(globalEnv),
+        'the global entry should be absent or explicitly unset',
+      );
+      const sourceProbe = spawnSync('tmux', ['show-environment', '-g', 'ASST_KEY'], { encoding: 'utf8' });
+      assert.ok(
+        sourceProbe.status !== 0 || /^-ASST_KEY/m.test(sourceProbe.stdout),
+        'fresh server must scrub the gateway source key globally',
+      );
+      spawnSync('tmux', ['kill-server']);
+    } finally {
+      if (saved !== undefined) process.env.TMUX = saved;
+      if (savedTmp === undefined) delete process.env.TMUX_TMPDIR;
+      else process.env.TMUX_TMPDIR = savedTmp;
+      if (savedSourceKey === undefined) delete process.env.ASST_KEY;
+      else process.env.ASST_KEY = savedSourceKey;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // Production shape: the socket path inherited from $TMUX sits in a directory that no
   // longer exists (a reboot cleared /tmp). tmux only mkdirs the socket dir when IT
   // derives the path — given one, it just binds, gets ENOENT, and still exits 0.

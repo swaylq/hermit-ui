@@ -248,11 +248,9 @@ export function hermitMcpConfigFor(session: RuntimeSession): NonNullable<CodexOp
       hermit: {
         command: 'node',
         args: [MCP_STUB_PATH],
-        env: {
-          HERMIT_SESSION_ID: session.id,
-          HERMIT_DASHBOARD_URL: DASHBOARD_URL,
-          HERMIT_KEY: ASST_KEY,
-        },
+        // Codex copies only these named variables from its own process into the
+        // MCP child. Names are safe in `--config`; values stay out of argv.
+        env_vars: ['HERMIT_SESSION_ID', 'HERMIT_DASHBOARD_URL', 'HERMIT_KEY'],
         // Seconds. `ask` blocks until a human clicks a button in the dashboard,
         // for up to the stub's own 4h ceiling — a default tool timeout would
         // kill it long before, and the user's answer would land on a call that
@@ -262,6 +260,32 @@ export function hermitMcpConfigFor(session: RuntimeSession): NonNullable<CodexOp
         startup_timeout_sec: 30,
       },
     },
+  };
+}
+
+/** Environment for the Codex CLI child. The SDK replaces, rather than merges,
+ * process.env when this option is present, so preserve every defined entry. */
+export function codexChildEnv(session: RuntimeSession): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (typeof value === 'string') env[name] = value;
+  }
+  // The gateway's source credential is never needed by Codex. The MCP receives
+  // only the HERMIT_KEY alias below, which its env_vars entry explicitly copies.
+  delete env.ASST_KEY;
+  env.HERMIT_SESSION_ID = session.id;
+  env.HERMIT_DASHBOARD_URL = DASHBOARD_URL;
+  env.HERMIT_KEY = ASST_KEY;
+  return env;
+}
+
+/** Keep the MCP-only key out of ordinary shell tool processes. `exclude` alone
+ * is bypassed by a login shell re-reading the user's profile, so both controls
+ * are required. env_vars still explicitly copies HERMIT_KEY into the MCP child. */
+export function codexShellIsolationConfig(): NonNullable<CodexOptions['config']> {
+  return {
+    allow_login_shell: false,
+    shell_environment_policy: { exclude: ['HERMIT_KEY'] },
   };
 }
 
@@ -345,7 +369,12 @@ function client(session: RuntimeSession): Codex {
   const override = process.env.HERMIT_CODEX_BIN?.trim();
   return new Codex({
     ...(override ? { codexPathOverride: override } : {}),
-    config: { ...hermitMcpConfigFor(session), ...httpsTransportConfig() },
+    config: {
+      ...hermitMcpConfigFor(session),
+      ...httpsTransportConfig(),
+      ...codexShellIsolationConfig(),
+    },
+    env: codexChildEnv(session),
   });
 }
 

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   CodexExecRuntime, readRolloutTokens, findRolloutFile, resolveCodexModel,
-  clampEffort, hermitMcpConfigFor, httpsTransportConfig,
+  clampEffort, codexChildEnv, codexShellIsolationConfig, hermitMcpConfigFor, httpsTransportConfig,
 } from './codex-exec';
 
 // ── the rollout file, which is how a restarted gateway gets its baseline ──────
@@ -373,11 +373,26 @@ test('a codex session is given the hermit MCP server', () => {
 
 // The stub reads its identity from the env; without the session id it cannot
 // post an attachment anywhere, and the tool would fail at the last step.
-test('the stub is told which session it is serving', () => {
+test('the stub inherits identity by variable name, with no values in Codex argv config', () => {
   const cfg = hermitMcpConfigFor({
     id: 'sess-42', agentName: 'a', agentDirectory: '/tmp', externalSessionId: null, model: null, mode: null,
   });
-  assert.equal((cfg.mcp_servers as any).hermit.env.HERMIT_SESSION_ID, 'sess-42');
+  const hermit = (cfg.mcp_servers as any).hermit;
+  assert.deepEqual(hermit.env_vars, ['HERMIT_SESSION_ID', 'HERMIT_DASHBOARD_URL', 'HERMIT_KEY']);
+  assert.equal(hermit.env, undefined);
+  assert.doesNotMatch(JSON.stringify(cfg), /sess-42/);
+  const child = codexChildEnv({
+    id: 'sess-42', agentName: 'a', agentDirectory: '/tmp', externalSessionId: null, model: null, mode: null,
+  });
+  assert.equal(child.HERMIT_SESSION_ID, 'sess-42');
+  assert.ok(Object.hasOwn(child, 'HERMIT_KEY'));
+  assert.equal(Object.hasOwn(child, 'ASST_KEY'), false, 'gateway source key is not inherited');
+});
+
+test('ordinary Codex shell tools cannot inherit the MCP-only key', () => {
+  const cfg = codexShellIsolationConfig() as any;
+  assert.equal(cfg.allow_login_shell, false, 'a login shell could reload the key from a profile');
+  assert.deepEqual(cfg.shell_environment_policy.exclude, ['HERMIT_KEY']);
 });
 
 // `ask` blocks until a human clicks a button, up to the stub's 4h ceiling. A

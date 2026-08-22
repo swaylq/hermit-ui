@@ -43,6 +43,7 @@ import {
   type AnchorHold,
   type BottomHold,
 } from './prepend-anchor-core';
+import type { ScrollStability } from './use-scroll-stability';
 
 // How long after the LAST activity (a chunk commit, or a content resize) we keep
 // correcting. Short enough that once the content is truly quiet we let go; long
@@ -83,7 +84,8 @@ export type PrependAnchor = {
    * frame too late, and when the prepend is large enough to block the main
    * thread it can be many frames too late.
    */
-  reassert: () => void;
+  /** Returns true when a live anchor found its geometry and owns this change. */
+  reassert: () => boolean;
   /** Extend the settle window — called after each chunk lands and on content
    *  resize, so the deadline never expires before the work it guards has run. */
   rearm: (ms?: number) => void;
@@ -128,7 +130,10 @@ function logCorrection(e: AnchorLogEntry): void {
   }
 }
 
-export function usePrependAnchor(getViewport: () => HTMLElement | null): PrependAnchor {
+export function usePrependAnchor(
+  getViewport: () => HTMLElement | null,
+  stability: ScrollStability,
+): PrependAnchor {
   const held = useRef<Held | null>(null);
   const raf = useRef<number | null>(null);
   const ro = useRef<ResizeObserver | null>(null);
@@ -147,32 +152,30 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
 
   const reassert = useCallback(() => {
     const h = held.current;
-    if (!h) return;
+    if (!h) return false;
     if (Date.now() > h.maxUntil || Date.now() > h.until) {
       release();
-      return;
+      return false;
     }
     const root = getViewport();
-    if (!root) return;
+    if (!root) return false;
 
     if (h.mode === 'bottom') {
+      const logicalTop = stability.logicalScrollTop();
       const { correction, gap, raw } = planBottomFrame(h.hold, {
-        scrollTop: root.scrollTop,
+        scrollTop: logicalTop,
+        userScrollTop: stability.readerScrollTop(),
         scrollHeight: root.scrollHeight,
         clientHeight: root.clientHeight,
       });
-      const before = root.scrollTop;
-      if (correction !== 0) root.scrollTop += correction;
-      // What the viewport actually did, which is not always what we asked: it
-      // quantises `scrollTop` and clamps it at both ends. Adopting the shortfall
-      // is what stops the same correction being re-issued every frame.
-      h.hold.gap = settledHold(gap, raw, root.scrollTop - before);
-      h.hold.lastTop = root.scrollTop;
+      const applied = correction !== 0 ? stability.compensate(correction, 'prepend-bottom') : 0;
+      h.hold.gap = settledHold(gap, raw, applied);
+      h.hold.lastTop = stability.readerScrollTop();
       if (correction !== 0) {
-        logCorrection({ t: Date.now(), mode: 'bottom', raw, applied: root.scrollTop - before, scrollTop: root.scrollTop, scrollHeight: root.scrollHeight });
+        logCorrection({ t: Date.now(), mode: 'bottom', raw, applied, scrollTop: root.scrollTop, scrollHeight: root.scrollHeight });
       }
       quiet.current = correction === 0 ? quiet.current + 1 : 0;
-      return;
+      return true;
     }
 
     const el = root.querySelector(`[data-msg-id~="${CSS.escape(h.id)}"]`) as HTMLElement | null;
@@ -183,22 +186,25 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
       // recording either way: a stretch of these around a jump would say the
       // reader was displaced while the anchor had nothing to measure.
       logCorrection({ t: Date.now(), mode: 'lost', raw: 0, applied: 0, scrollTop: root.scrollTop, scrollHeight: root.scrollHeight });
-      return;
+      return false;
     }
     const anchorTop = el.getBoundingClientRect().top - root.getBoundingClientRect().top;
-    const { correction, offset, raw } = planFrame(h.hold, { scrollTop: root.scrollTop, anchorTop });
-    const before = root.scrollTop;
-    if (correction !== 0) root.scrollTop += correction;
-    h.hold.offset = settledHold(offset, raw, root.scrollTop - before);
+    const { correction, offset, raw } = planFrame(h.hold, {
+      scrollTop: stability.readerScrollTop(),
+      anchorTop,
+    });
+    const applied = correction !== 0 ? stability.compensate(correction, 'prepend-top') : 0;
+    h.hold.offset = settledHold(offset, raw, applied);
     if (correction !== 0) {
-      logCorrection({ t: Date.now(), mode: 'top', raw, applied: root.scrollTop - before, scrollTop: root.scrollTop, scrollHeight: root.scrollHeight });
+      logCorrection({ t: Date.now(), mode: 'top', raw, applied, scrollTop: root.scrollTop, scrollHeight: root.scrollHeight });
     }
     // Read the position back instead of predicting it: the browser clamps at
     // both ends, and a predicted value that never happened would read as a user
     // scroll on the next frame and shift the anchor by the difference.
-    h.hold.lastTop = root.scrollTop;
+    h.hold.lastTop = stability.readerScrollTop();
     quiet.current = correction === 0 ? quiet.current + 1 : 0;
-  }, [getViewport, release]);
+    return true;
+  }, [getViewport, release, stability]);
 
   // A ResizeObserver only fires when the observed box changes. An image decoding
   // inside an already-sized row, a font swap, a code block gaining a scrollbar —
@@ -247,10 +253,11 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
     // Pinned to the bottom → hold the TAIL, so a prefill prepends history above
     // and leaves the last messages where they were instead of jumping the view
     // to the top of what just arrived.
-    if (root.scrollHeight - root.scrollTop - root.clientHeight < BOTTOM_SLACK) {
+    const logicalTop = stability.logicalScrollTop();
+    if (root.scrollHeight - logicalTop - root.clientHeight < BOTTOM_SLACK) {
       held.current = {
         mode: 'bottom',
-        hold: { gap: root.scrollHeight - root.scrollTop - root.clientHeight, lastTop: root.scrollTop },
+        hold: { gap: root.scrollHeight - logicalTop - root.clientHeight, lastTop: stability.readerScrollTop() },
         until,
         maxUntil,
       };
@@ -298,7 +305,7 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
         held.current = {
           mode: 'top',
           id: anchor.id,
-          hold: { offset: anchor.offset, lastTop: root.scrollTop },
+          hold: { offset: anchor.offset, lastTop: stability.readerScrollTop() },
           until,
           maxUntil,
         };
@@ -321,7 +328,7 @@ export function usePrependAnchor(getViewport: () => HTMLElement | null): Prepend
         ro.current = obs;
       }
     }
-  }, [getViewport, pump, rearm]);
+  }, [getViewport, pump, rearm, stability]);
 
   // A sleeping pump is not running `reassert`, so it is not the thing that
   // notices the window has closed. Anyone asking whether we are still holding

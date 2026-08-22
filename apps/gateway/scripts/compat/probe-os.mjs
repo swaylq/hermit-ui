@@ -140,19 +140,23 @@ const PANE = `hermitprobe-${process.pid}`;
 if (tv.status === 0) {
   const paneCwd = path.join(TMP, 'cwd');
   fs.mkdirSync(paneCwd, { recursive: true });
-  // The gateway launches: new-session -d -s N -c CWD -x 200 -y 50 -e K=V '<cmd>'
-  // Command below echoes the injected env into a file so we can prove `-e` works.
+  // The gateway registers a variable NAME, scrubs its global value, then creates
+  // the session in one tmux command queue. The client environment supplies the
+  // value only to that new session — never to argv or tmux's global environment.
   const marker = path.join(TMP, 'env-marker.txt');
   const cmd = `sh -c 'printf "%s" "$HERMIT_PROBE_VAR" > ${marker}; sleep 60'`;
-  const ns = sh('tmux', ['new-session', '-d', '-s', PANE, '-c', paneCwd, '-x', '200', '-y', '50',
-    '-e', 'HERMIT_PROBE_VAR=injected-ok', cmd]);
-  rec('driver/ensureSession', 'tmux', "new-session -d -s N -c CWD -x 200 -y 50 -e K=V '<cmd>'",
+  const ns = sh('tmux', [
+    'set-option', '-ag', 'update-environment', ' HERMIT_PROBE_VAR', ';',
+    'set-environment', '-gu', 'HERMIT_PROBE_VAR', ';',
+    'new-session', '-d', '-s', PANE, '-c', paneCwd, '-x', '200', '-y', '50', cmd,
+  ], { env: { ...process.env, HERMIT_PROBE_VAR: 'injected-ok' } });
+  rec('driver/ensureSession', 'tmux', 'update-environment NAME ; unset-global NAME ; new-session ...',
     ns.status === 0 ? 'OK' : 'FAIL', ns.status !== 0 ? ns.stderr.slice(0, 200) : 'created');
 
   if (ns.status === 0) {
     await new Promise((r) => setTimeout(r, 700));
     const envOk = fs.existsSync(marker) && fs.readFileSync(marker, 'utf8').trim() === 'injected-ok';
-    rec('driver/paneEnvInject', 'tmux', 'new-session -e K=V → child env',
+    rec('driver/paneEnvInject', 'tmux', 'client env NAME → child env (global unset)',
       envOk ? 'OK' : 'FAIL', envOk ? 'pane child saw HERMIT_PROBE_VAR' : 'env NOT visible to pane child');
 
     const hs = sh('tmux', ['has-session', '-t', `=${PANE}`]);

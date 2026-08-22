@@ -6,10 +6,9 @@
 //   /api/gateway/ws       — persistent inbound from each Mac gateway. One slot
 //                            per machineId (multiple hosts coexist; each Mac
 //                            opens its own and only routes for its own
-//                            ChatSessions). Auth: ?key=<ASST_KEY> (the gateway's
-//                            keychain key), validated via bcrypt.compare against
-//                            Machine.keyHash, same as x-asst-key on every other
-//                            sync route.
+//                            ChatSessions). Auth: x-asst-key request header,
+//                            validated via bcrypt.compare against Machine.keyHash.
+//                            The old ?key= form remains a rolling-upgrade fallback.
 //
 //   /api/asr/<sessionId>  — realtime voice input. The browser streams 16 kHz mono
 //                            PCM16 up as binary frames and gets partial / final /
@@ -50,6 +49,7 @@ import { setGatewaySocket, clearGatewaySocket, resolveFsResponse } from './src/s
 import { createAsrWsServer } from './src/server/asr-ws';
 import { loadContext } from './src/server/transcribe-context';
 import { tmuxPaneName } from './src/lib/pane-name';
+import { gatewayUpgradeKey } from './src/server/gateway-ws-auth';
 
 const port = parseInt(process.env.PORT || '4101', 10);
 const dev = process.env.NODE_ENV !== 'production';
@@ -312,7 +312,7 @@ app.prepare().then(() => {
     try {
       if (url.startsWith(GATEWAY_PATH)) {
         const u = parseUrl(url, true);
-        const key = String(u.query.key ?? '');
+        const key = gatewayUpgradeKey(req.headers, u.query.key);
         const machineId = await resolveMachineByKey(key);
         if (!machineId) {
           socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
