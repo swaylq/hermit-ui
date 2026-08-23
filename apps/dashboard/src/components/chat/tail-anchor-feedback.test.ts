@@ -29,7 +29,9 @@ const TRUE_CONTENT = 1349;
  * 0, and what the anchor then mistakes for the reader scrolling up.
  */
 function laidOutContent(frame: number): number {
-  return frame === 0 ? CLIENT : TRUE_CONTENT;
+  // Frame 4 is a second collapse: the list is rebuilt short again as a later
+  // chunk commits, which is what the live logs show happening repeatedly.
+  return frame === 0 || frame === 4 ? CLIENT : TRUE_CONTENT;
 }
 
 type Engine = { latched: number; transformOn: boolean; laidOut: number };
@@ -48,7 +50,7 @@ function observedScrollHeight(engine: Engine, laidOut: number, deviation: number
 
 type Run = { corrections: number[]; deviations: number[] };
 
-function run(frames: number, opts: { honestHeight: boolean; clamp: boolean }): Run {
+function run(frames: number, opts: { honestHeight: boolean; clamp: boolean; guard?: boolean }): Run {
   // The frame the browser clamped: physically at the top, tail hold intact.
   // Nothing here writes scrollTop — that is the point of the transform — so the
   // physical offset stays where the clamp left it until a later settlement.
@@ -63,26 +65,28 @@ function run(frames: number, opts: { honestHeight: boolean; clamp: boolean }): R
     const laidOut = laidOutContent(i);
     const observed = observedScrollHeight(engine, laidOut, deviation);
     const honest = contentHeight({ layerHeight: laidOut, scrollHeight: observed, clientHeight: CLIENT });
+    const measurable = !opts.guard || honest > CLIENT;
     const plan = planBottomFrame(hold, {
       scrollTop: physical + deviation,
       userScrollTop: physical + deviation - compensated,
       scrollHeight: opts.honestHeight ? honest : observed,
       clientHeight: CLIENT,
     });
+    const wanted = measurable ? plan.correction : 0;
     const accepted = opts.clamp
       ? acceptableCompensation({
         scrollTop: physical,
         deviation,
-        delta: plan.correction,
+        delta: wanted,
         minTop: 0,
         maxTop: Math.max(0, honest - CLIENT),
       })
-      : plan.correction;
+      : wanted;
     deviation += accepted;
     compensated += accepted;
     hold.gap = settledHold(plan.gap, plan.raw, accepted);
     hold.lastTop = physical + deviation - compensated;
-    out.corrections.push(plan.correction);
+    out.corrections.push(wanted);
     out.deviations.push(deviation);
   }
   return out;
@@ -91,8 +95,8 @@ function run(frames: number, opts: { honestHeight: boolean; clamp: boolean }): R
 test('the tail anchor flies when it measures against its own transform', () => {
   const before = run(8, { honestHeight: false, clamp: false });
   // Same shape as the live log (−697, +1529, −1516, +1638 …), smaller only
-  // because this model holds the content still after the first frame while the
-  // real one was still committing rows every frame.
+  // because this model holds the content still between the collapses while the
+  // real one was committing rows every frame.
   assert.ok(Math.min(...before.deviations) <= -600, JSON.stringify(before));
   const swing = Math.max(...before.deviations.map((d, i) => (
     i === 0 ? 0 : Math.abs(d - before.deviations[i - 1])
@@ -100,24 +104,36 @@ test('the tail anchor flies when it measures against its own transform', () => {
   assert.ok(swing >= 1300, `expected a visible flight between frames, got ${swing}px`);
 });
 
-test('the clamp is what keeps a mis-measured correction off the screen', () => {
-  const after = run(20, { honestHeight: true, clamp: true });
-  // Never negative: a negative deviation paints blank space above the first
-  // message, which is the flicker. And it goes quiet rather than ringing.
-  //
-  // This pair tests the CLAMP. The other half of the fix — measuring the layer
-  // rather than the scroller — is what stops a reader standing on the end from
-  // being told they are 500px short of it, and is tested against the real
-  // latched WebKit numbers in scroll-stability-core.test.ts.
-  assert.ok(Math.min(...after.deviations) >= 0, JSON.stringify(after.deviations));
-  assert.deepEqual(after.corrections.slice(2).filter((c) => c !== 0), []);
-});
-
 test('the honest height alone is not enough — the clamp is what stops the flight', () => {
   const halfFixed = run(8, { honestHeight: true, clamp: false });
   // The anchor still paints the full −697 of a browser clamp it mistook for
   // reader input, i.e. 697px of blank above the first message.
   assert.ok(Math.min(...halfFixed.deviations) <= -600, JSON.stringify(halfFixed.deviations));
+});
+
+test('the clamp keeps a mis-measured correction off the screen, but not the collapse', () => {
+  const clamped = run(8, { honestHeight: true, clamp: true });
+  // No blank above the first message any more.
+  assert.ok(Math.min(...clamped.deviations) >= 0, JSON.stringify(clamped.deviations));
+  // But frame 4's collapse still convinces the anchor the end moved to zero, so
+  // it gives back its whole correction and takes it again on the recovery — the
+  // ±900-1,150px yank still visible on a live open after the first two fixes.
+  const swing = Math.max(...clamped.deviations.map((d, i) => (
+    i === 0 ? 0 : Math.abs(d - clamped.deviations[i - 1])
+  )));
+  assert.ok(swing >= 600, `expected the collapse to move the reader, got ${swing}px`);
+});
+
+test('a frame where the list is shorter than the viewport paints nothing', () => {
+  const shipped = run(8, { honestHeight: true, clamp: true, guard: true });
+  assert.equal(shipped.corrections[4], 0, 'the collapsed frame must issue nothing');
+  assert.ok(Math.min(...shipped.deviations) >= 0, JSON.stringify(shipped.deviations));
+  // One movement — the correction that reaches the tail — and then stillness,
+  // across both collapses.
+  const moves = shipped.deviations.map((d, i) => (i === 0 ? d : Math.abs(d - shipped.deviations[i - 1])));
+  assert.equal(moves.filter((m) => m > 1).length, 1, JSON.stringify(shipped));
+  // And the hold is not left believing the reader scrolled: it ends on the end.
+  assert.equal(shipped.deviations[shipped.deviations.length - 1], TRUE_CONTENT - CLIENT);
 });
 
 test('a real correction is applied in full when there is room to spare', () => {

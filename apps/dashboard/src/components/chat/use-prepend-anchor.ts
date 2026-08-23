@@ -214,6 +214,18 @@ export function usePrependAnchor(
       // it cannot even be corrected arithmetically. See contentHeight() in
       // scroll-stability-core.ts, which measures the layer instead.
       const honestHeight = stability.contentHeight();
+      // A frame where the whole conversation is shorter than the viewport says
+      // nothing about where its tail is: the list is briefly rebuilt short as a
+      // chunk commits, and the browser clamps scrollTop to 0 underneath.
+      // Correcting from it paints a full-viewport yank that the next frame
+      // takes straight back — measured at ±900-1,150px, twice, on a plain open,
+      // and it survived both the honest measurement and the clamp.
+      //
+      // Plan anyway, and book the result: `settledHold` below is what absorbs
+      // the browser's clamp, and skipping it outright would leave the hold
+      // believing the reader had scrolled up by the clamped distance, forever.
+      // Just do not PAINT anything from a frame this one cannot measure.
+      const measurable = honestHeight > root.clientHeight;
       const { correction, gap, raw } = planBottomFrame(h.hold, {
         scrollTop: logicalTop,
         userScrollTop: stability.readerScrollTop(),
@@ -222,7 +234,9 @@ export function usePrependAnchor(
       });
       // Bounded: this is the caller whose own correction used to feed the next
       // frame, and `settledHold` below is built to adopt whatever was refused.
-      const applied = correction !== 0 ? stability.compensate(correction, 'prepend-bottom', true) : 0;
+      const applied = correction !== 0 && measurable
+        ? stability.compensate(correction, 'prepend-bottom', true)
+        : 0;
       h.hold.gap = settledHold(gap, raw, applied);
       h.hold.lastTop = stability.readerScrollTop();
       if (correction !== 0) {
@@ -230,7 +244,9 @@ export function usePrependAnchor(
         // one — otherwise the log cannot explain its own corrections.
         logCorrection({ t: Date.now(), mode: 'bottom', raw, applied, scrollTop: root.scrollTop, scrollHeight: honestHeight });
       }
-      quiet.current = correction === 0 ? quiet.current + 1 : 0;
+      // An unmeasurable frame is not a quiet one: the recovery is coming and the
+      // pump has to still be running when it does.
+      quiet.current = correction === 0 && measurable ? quiet.current + 1 : 0;
       return true;
     }
 
