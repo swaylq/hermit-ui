@@ -38,6 +38,7 @@ import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
 import { useOlderPages } from '@/components/chat/use-older-pages';
 import { usePrependAnchor } from '@/components/chat/use-prepend-anchor';
 import { useScrollStability } from '@/components/chat/use-scroll-stability';
+import { isVerticalWheelInput, readerMovedUp } from '@/components/chat/scroll-stability-core';
 import { useCachedTimeline, useTimelineWriteThrough } from '@/lib/chat-cache/use-chat-cache';
 import { applyMessagePush } from '@/lib/chat-cache/merge-messages';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
@@ -688,8 +689,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // Viewport height as of the last scroll event — how the scroll listener tells
   // "the pane resized under me" from "the user scrolled".
   const lastClientHeightRef = useRef(0);
-  // Scroll position as of the last scroll event, so we can tell which DIRECTION
-  // the user moved. Only an upward move means "I want to read history".
+  // Reader-only coordinate as of the last scroll event, so app compensation and
+  // its later physical settlement cannot be mistaken for either direction.
+  // Only an upward reader move means "I want to read history".
   const lastScrollTopRef = useRef(0);
   // While the pane is settling after a size change, the bottom is re-asserted
   // every frame and NOTHING is read as user intent. Needed because a composer
@@ -982,19 +984,23 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     const el = getViewport();
     if (!el) return;
     lastClientHeightRef.current = el.clientHeight;
-    lastScrollTopRef.current = el.scrollTop;
+    lastScrollTopRef.current = scrollStability.readerScrollTop();
     const onScroll = () => {
       // Update the baselines FIRST, even for scrolls we caused — otherwise the
       // next comparison is made against a stale position.
-      const st = el.scrollTop;
       const logicalSt = scrollStability.logicalScrollTop();
-      const wentUp = st < lastScrollTopRef.current - 2;
-      lastScrollTopRef.current = st;
+      const readerSt = scrollStability.readerScrollTop();
+      // Reader intent already excludes app-owned movement, so no per-event
+      // deadband belongs here. WebKit commonly reports a slow drag as 1–2px
+      // events; advancing the baseline after each one used to make the whole
+      // gesture invisible and let sticky bottom pull it back.
+      const wentUp = readerMovedUp(lastScrollTopRef.current, readerSt);
+      lastScrollTopRef.current = readerSt;
       const h = el.clientHeight;
       const resized = h !== lastClientHeightRef.current;
       lastClientHeightRef.current = h;
       if (autoScrollRef.current || scrollStability.isProgrammatic()) return;
-      const readerTookOver = wentUp && scrollStability.hasReaderIntent();
+      const readerTookOver = wentUp && scrollStability.hasUpwardReaderIntent();
 
       // The pane changed size under us — growing the composer shrinks this
       // viewport from the bottom. That's layout, not a decision to read history.
@@ -1028,7 +1034,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       // Without this reader-intent check, sticky bottom waited for momentum to
       // end and then visibly pulled any sub-60px movement back to the tail.
       if (readerTookOver) setPinned(false);
-      else if (gap < 60) setPinned(true);
+      // Keep the 60px tolerance only while already following. Once the reader
+      // has left, a WebKit bounce inside that band must not silently re-arm the
+      // deferred bottom timer; re-pin only at the actual tail.
+      else if (gap < 60 && (pinnedRef.current || gap <= 1)) setPinned(true);
       else if (wentUp) setPinned(false);
 
       // Infinite scroll up: pull the next page of history BEFORE the top is
@@ -1048,16 +1057,41 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     // have fetched the next page never gets a chance to run. The raw gesture
     // still arrives, so use it as the second entry point.
     const onReach = (e: Event) => {
+      if (e.type === 'wheel') {
+        const wheel = e as WheelEvent;
+        if (wheel.deltaY >= 0 || !isVerticalWheelInput(wheel.deltaX, wheel.deltaY, wheel.ctrlKey)) return;
+        // At a transform-held physical boundary there may be no scroll event at
+        // all. The raw negative wheel is nevertheless an unambiguous request to
+        // leave the tail, so disarm sticky bottom before its deferred timer fires.
+        if (scrollStability.hasBlockedUpwardIntent()) {
+          paneResizedUntilRef.current = 0;
+          if (pinnedRef.current) setPinned(false);
+        }
+      } else if (e.type === 'pointermove') {
+        // Mouse movement bubbles through the viewport too. It neither means
+        // "load history" nor "leave the tail" unless the controller recorded a
+        // real pointer pan that was blocked by transform-held history.
+        if (!scrollStability.hasBlockedUpwardIntent()) return;
+        paneResizedUntilRef.current = 0;
+        if (pinnedRef.current) setPinned(false);
+      } else if (scrollStability.hasBlockedUpwardIntent()) {
+        // Touch can be clamped before producing even one native scroll event.
+        // The stability listener runs first and records this touchmove's raw
+        // direction, so the same no-scroll boundary case can still leave tail.
+        paneResizedUntilRef.current = 0;
+        if (pinnedRef.current) setPinned(false);
+      }
       if (scrollStability.logicalScrollTop() >= pullMargin(el.clientHeight)) return;
-      if (e.type === 'wheel' && (e as WheelEvent).deltaY >= 0) return; // scrolling away, not into, the top
       pullEarlier();
     };
     el.addEventListener('wheel', onReach, { passive: true });
     el.addEventListener('touchmove', onReach, { passive: true });
+    el.addEventListener('pointermove', onReach, { passive: true });
     return () => {
       el.removeEventListener('scroll', onScroll);
       el.removeEventListener('wheel', onReach);
       el.removeEventListener('touchmove', onReach);
+      el.removeEventListener('pointermove', onReach);
     };
   }, [getViewport, setPinned, pullEarlier, scrollStability]);
 

@@ -19,6 +19,22 @@ export type SubpixelCompensation = {
   compensated: number;
 };
 
+export type BoundaryRebaseInput = {
+  /** Physical scroll offset owned by the browser. */
+  scrollTop: number;
+  /** Correction currently held in the content transform. */
+  deviation: number;
+  minTop: number;
+  maxTop: number;
+  /**
+   * Signed movement the reader is still asking for, in scrollTop coordinates:
+   * negative heads toward the top, positive heads toward the bottom.
+   */
+  readerDelta: number;
+  /** Physical-boundary and meaningful-deviation tolerance. */
+  epsilon?: number;
+};
+
 export function logicalScrollTop(scrollTop: number, deviation: number): number {
   return scrollTop + deviation;
 }
@@ -30,6 +46,20 @@ export function logicalScrollTop(scrollTop: number, deviation: number): number {
  */
 export function readerScrollTop(scrollTop: number, deviation: number, compensated: number): number {
   return scrollTop + deviation - compensated;
+}
+
+/**
+ * Reader coordinates contain no app-owned movement, so every negative change is
+ * real upward input. Do not apply a per-event deadband: WebKit can split one slow
+ * drag into arbitrarily many sub-2px scroll events.
+ */
+export function readerMovedUp(previous: number, current: number): boolean {
+  return current < previous;
+}
+
+/** Pinch zoom and horizontal trackpad swipes are not timeline wheel input. */
+export function isVerticalWheelInput(deltaX: number, deltaY: number, ctrlKey: boolean): boolean {
+  return !ctrlKey && deltaY !== 0 && Math.abs(deltaY) >= Math.abs(deltaX);
 }
 
 /**
@@ -63,4 +93,41 @@ export function settleCompensation(
   const nextTop = Math.max(minTop, Math.min(maxTop, wantedTop));
   const applied = nextTop - scrollTop;
   return { wantedTop, nextTop, applied, deviation: deviation - applied };
+}
+
+/**
+ * Plan the one settlement that restores native scroll runway at a boundary.
+ *
+ * A positive transform deviation makes the logical position farther down than
+ * physical `scrollTop`. If native upward input reaches physical zero first, the
+ * browser cannot expose the older logical content: more input is clamped even
+ * though `scrollTop + deviation` is still positive. The bottom/negative case is
+ * symmetric.
+ *
+ * Rebase only once the reader is actively asking to cross the blocked boundary.
+ * Away from that boundary the remaining physical runway is valuable native
+ * motion, so the controller must keep holding the transform and return `null`.
+ */
+export function planBoundaryRebase(input: BoundaryRebaseInput): CompensationSettlement | null {
+  const epsilon = Math.max(0, input.epsilon ?? 1);
+  const meaningfulDeviation = Math.abs(input.deviation) >= epsilon && input.deviation !== 0;
+  if (!meaningfulDeviation || input.readerDelta === 0) return null;
+
+  const blockedAtTop = input.readerDelta < 0
+    && input.deviation > 0
+    && input.scrollTop <= input.minTop + epsilon;
+  const blockedAtBottom = input.readerDelta > 0
+    && input.deviation < 0
+    && input.scrollTop >= input.maxTop - epsilon;
+  if (!blockedAtTop && !blockedAtBottom) return null;
+
+  const plan = settleCompensation(
+    input.scrollTop,
+    input.deviation,
+    input.minTop,
+    input.maxTop,
+  );
+  // A temporarily collapsed scroll range may have nowhere to put the transform.
+  // Do not recommend a no-op setter; a later resize can ask again.
+  return plan.applied === 0 ? null : plan;
 }
