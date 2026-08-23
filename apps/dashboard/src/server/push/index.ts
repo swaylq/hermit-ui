@@ -29,6 +29,14 @@
 // discrete events and go out immediately; `blocked` in particular must, since that
 // one means the turn has stopped and is waiting on you.
 //
+// "No longer working" had a hole in it, closed 2026-08-23: backgrounding a Bash
+// or a subagent ENDS the turn, so the CLI reports idle a millisecond after the
+// agent says "let me kick this off" and stays that way for as long as the task
+// takes. That is the same mid-turn preamble arriving through a different door,
+// and it is the common shape on the claude-sdk backend — every Agent call is
+// backgrounded by default. The gate now holds those too, bounded, because a
+// background task is not guaranteed to ever end.
+//
 // State (the held events) is process-local. That's sound here: the dashboard runs
 // as a single pm2 fork (`ecosystem.config.cjs` — no `instances`/cluster), and the
 // worst case on restart is one duplicate notification — or, now that a hold can
@@ -36,7 +44,7 @@
 // it still marks the session unread in the sidebar and in the inbox.
 
 import { prisma } from '@/server/db';
-import { shouldPush, isUrgentKind, turnStillRunning } from './suppress';
+import { shouldPush, isUrgentKind, turnStillRunning, backgroundOutstanding } from './suppress';
 import { anyTransportConfigured, transportFor } from './transport';
 import type { PushEvent } from './types';
 
@@ -103,8 +111,16 @@ function arm(event: PushEvent, heldSince: number, reported: boolean): void {
   const timer = setTimeout(() => {
     void (async () => {
       const session = event.sessionId ? await readSession(event.sessionId) : null;
-      if (turnStillRunning({ state: session?.state, snapshotAt: session?.snapshotAt, now: Date.now() })) {
-        const held = Date.now() - heldSince;
+      const held = Date.now() - heldSince;
+      if (
+        turnStillRunning({
+          state: session?.state,
+          snapshotAt: session?.snapshotAt,
+          activity: session?.activity,
+          heldMs: held,
+          now: Date.now(),
+        })
+      ) {
         const worthReporting = !reported && held >= HOLD_REPORT_MS;
         if (worthReporting) {
           console.warn(
@@ -113,6 +129,16 @@ function arm(event: PushEvent, heldSince: number, reported: boolean): void {
         }
         arm(event, heldSince, reported || worthReporting);
         return;
+      }
+      // The one release worth explaining: the turn ended long ago and the only
+      // thing that kept this back was a background task that has still not
+      // finished. Past BACKGROUND_HOLD_MAX_MS it is read as a resident process
+      // (a dev server someone left running) rather than a step in the answer,
+      // and holding any longer would mute the session for the rest of its life.
+      if (session?.state === 'idle' && backgroundOutstanding(session.activity)) {
+        console.warn(
+          `[push] chat notification for session ${event.sessionId} released after ${Math.round(held / 60_000)} min — background work still running, treating it as resident`,
+        );
       }
       pending.delete(event.collapseKey);
       await deliver(event, session);
@@ -123,12 +149,18 @@ function arm(event: PushEvent, heldSince: number, reported: boolean): void {
   pending.set(event.collapseKey, { timer, event, heldSince, reported });
 }
 
-type SessionState = { lastReadAt: Date | null; state: string | null; snapshotAt: Date | null };
+type SessionState = {
+  lastReadAt: Date | null;
+  state: string | null;
+  snapshotAt: Date | null;
+  /** Opaque Json — read for one fact, see backgroundOutstanding in ./suppress. */
+  activity: unknown;
+};
 
 async function readSession(sessionId: string): Promise<SessionState | null> {
   return prisma.chatSession.findUnique({
     where: { id: sessionId },
-    select: { lastReadAt: true, state: true, snapshotAt: true },
+    select: { lastReadAt: true, state: true, snapshotAt: true, activity: true },
   });
 }
 

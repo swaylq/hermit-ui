@@ -81,6 +81,13 @@ export interface SessionRuntimeLike {
    * recognise, which is also what a payload from a newer gateway looks like.
    */
   activity?: unknown;
+  /**
+   * The one fact out of `activity` that the 5s sidebar poll needs, pre-chewed by
+   * chat.listSessions so the blob itself does not ride that payload. Callers
+   * that already have `activity` (getSession, sessionDetail) leave it undefined
+   * and the blob answers instead — see backgroundStillRunning.
+   */
+  backgroundBusy?: boolean | null;
   claudeSessionId?: string | null;
   closedAt?: Date | string | null;
   // Set by chat.requestSessionRestart, cleared by the gateway once the pane is
@@ -103,6 +110,43 @@ function shortDuration(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return s ? `${m}m ${s}s` : `${m}m`;
+}
+
+/**
+ * Did this session start work that has outlived the turn that started it?
+ *
+ * A backgrounded Bash and a backgrounded subagent both END THE TURN: measured
+ * against claude 2.1.241, the model fires the tool, says a sentence, and the CLI
+ * emits `result` and then `session_state_changed: idle` ~1ms later, while the
+ * task runs on. The CLI re-invokes the model when it finishes, so the reply that
+ * answers the question is one or more turns away — but for the seconds or
+ * minutes in between, every "is it working" signal there is says no.
+ *
+ * That is why this exists as a fact separate from `state`. It must NOT be folded
+ * into the gateway's `isWorking()`: that verdict also gates message DELIVERY
+ * (the chat runner queues a message rather than interrupt a live turn), and a
+ * session parked next to a long-lived background process would then swallow
+ * everything typed at it. What it does gate is the two places that claim the
+ * work is FINISHED — the status dot here, and the push in server/push/suppress.
+ *
+ * Shape-reading only, no judgement: `activity` is an opaque Json column, so a
+ * payload from a newer gateway reads as "cannot say", never as "no".
+ */
+export function backgroundOutstanding(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const n = (raw as SessionActivity).backgroundCount;
+  return typeof n === 'number' && n > 0;
+}
+
+/**
+ * The same question as `backgroundOutstanding`, asked of a whole session row —
+ * whichever of the two doors that row came through. Neither source may say
+ * "no" on behalf of a payload it does not carry, so this is an OR: the sidebar
+ * row has only the boolean, the chat header has only the blob, and a row with
+ * neither means the backend cannot say, which is not the same as idle.
+ */
+function backgroundStillRunning(s: SessionRuntimeLike): boolean {
+  return s.backgroundBusy === true || backgroundOutstanding(s.activity);
 }
 
 /**
@@ -288,6 +332,14 @@ export function sessionStatusView(
   }
   // yellow — working, as the gateway last observed it.
   if (s.state === 'working') return working();
+  // yellow — the turn ended, the work it started did not. A backgrounded Bash or
+  // subagent lands the CLI in `idle` within a millisecond of firing, and the
+  // model only wakes again when the task reports back. Falling through from here
+  // reached 'unread' — the red dot whose whole meaning is "the agent FINISHED
+  // work you have not read" — for a session that had done nothing but say "let
+  // me kick this off". Ranked with `working` rather than below it because that
+  // is what it is: something is running, and the reply is still to come.
+  if (s.state === 'idle' && backgroundStillRunning(s)) return working();
   // sky — recycling: a restart was requested; the pane is being killed and will
   // respawn on the next message. Outranks the !alive check below, since `alive`
   // flips false mid-restart and we want "restarting", not "exited".

@@ -12,6 +12,7 @@ import { prisma } from '../db';
 import { fire as fireChat } from '../chat-bus';
 import { QUEUE_LIMIT } from '../../lib/chat-queue';
 import { sessionRecencyMs } from '../../lib/session-recency';
+import { backgroundOutstanding } from '../../lib/session-status';
 import { stripNulDeep } from '../sanitize';
 import { capMessageContent } from '../message-cap';
 import { digestMessageContent } from '../message-digest';
@@ -235,6 +236,13 @@ export const chatRouter = router({
         // (21KB across the machine's sessions), yet the only client reader is
         // the *current* session's LoopBar, which now sources loopState from
         // chat.getSession (page.tsx). Don't re-add it to this list query.
+
+        // Read, but NOT returned — the row below collapses it to one boolean.
+        // The sidebar needs one fact out of this blob: whether the session has
+        // background work outstanding, which is what stops an agent that just
+        // said "let me kick this off" from showing the red "finished, go read
+        // it" dot. The blob itself still never rides the 5s poll.
+        activity: true,
         // Resource governance: per-session memory + hibernation state, read by
         // the sidebar rows (rss + 💤) and the Host-health panel.
         rssMb: true,
@@ -307,7 +315,11 @@ export const chatRouter = router({
       // …and against what this machine offers, so an inherited default the
       // machine has switched off resolves to one it can actually run.
       const backends = runtimeContextOf(ctx.machine);
-      return rows.map((r) => ({ ...r, ...resolveRuntime(r, byName.get(r.agentName), backends) }));
+      return rows.map(({ activity, ...r }) => ({
+        ...r,
+        backgroundBusy: backgroundOutstanding(activity),
+        ...resolveRuntime(r, byName.get(r.agentName), backends),
+      }));
     }),
 
   // Single-session meta for the chat HEADER (title / agentName / state / preview /

@@ -330,3 +330,63 @@ test('silence is never negative', () => {
   assert.equal(snapshotSilenceMs(null, { observedAt: NOW }), null);
   assert.equal(snapshotSilenceMs('not a date', { observedAt: NOW }), null);
 });
+
+// ── the turn ended, the work did not ────────────────────────────────────────
+//
+// On claude-sdk, backgrounding a Bash or a subagent ends the turn immediately —
+// `result` and `session_state_changed: idle` land ~1ms after the tool fires,
+// while the task runs on. Falling through to 'unread' told sway the agent had
+// FINISHED something, when all it had done was start it. Every Agent call is
+// backgrounded by default, so this is the common shape, not an edge case.
+
+test('idle with background work still running reads as working, not unread', () => {
+  const v = sessionStatusView(
+    { alive: true, state: 'idle', activity: { kind: 'background', label: 'background', detail: 'rebuild v5', backgroundCount: 2 } },
+    { unread: true },
+  );
+  assert.equal(v.key, 'working');
+  assert.equal(v.label, 'background +2 bg');
+  assert.equal(v.detail, 'rebuild v5');
+});
+
+test('idle with background work is not "ready" either', () => {
+  const v = sessionStatusView({ alive: true, state: 'idle', activity: { kind: 'background', backgroundCount: 1 } });
+  assert.equal(v.key, 'working');
+});
+
+test('idle with nothing in the background is unchanged', () => {
+  assert.equal(sessionStatusView({ alive: true, state: 'idle' }, { unread: true }).key, 'unread');
+  assert.equal(sessionStatusView({ alive: true, state: 'idle' }).key, 'ready');
+  assert.equal(
+    sessionStatusView({ alive: true, state: 'idle', activity: { kind: 'tool', label: 'Bash' } }).key,
+    'ready',
+    'a leftover non-background payload on an idle session says nothing is running',
+  );
+});
+
+test('background work does not outrank needs-you, closed, or a stale gateway', () => {
+  const activity = { kind: 'background', backgroundCount: 1 };
+  assert.equal(sessionStatusView({ alive: true, state: 'idle', activity }, { needsYou: true }).key, 'needs-you');
+  assert.equal(sessionStatusView({ alive: true, state: 'idle', activity, closedAt: new Date() }).key, 'down');
+  const now = Date.now();
+  assert.equal(
+    sessionStatusView(
+      { alive: true, state: 'idle', activity, snapshotAt: new Date(now - SNAPSHOT_STALE_MS - 1) },
+      { now },
+    ).key,
+    'stale',
+  );
+});
+
+test('the sidebar row learns the same fact through its pre-chewed boolean', () => {
+  // chat.listSessions collapses `activity` to `backgroundBusy` rather than
+  // shipping the blob on the 5s poll. Both doors must reach the same verdict,
+  // or the sidebar dot and the chat header disagree about the same session.
+  assert.equal(sessionStatusView({ alive: true, state: 'idle', backgroundBusy: true }, { unread: true }).key, 'working');
+  assert.equal(sessionStatusView({ alive: true, state: 'idle', backgroundBusy: false }, { unread: true }).key, 'unread');
+  assert.equal(
+    sessionStatusView({ alive: true, state: 'idle', backgroundBusy: null }, { unread: true }).key,
+    'unread',
+    'a row that cannot say falls through to what it always did',
+  );
+});
