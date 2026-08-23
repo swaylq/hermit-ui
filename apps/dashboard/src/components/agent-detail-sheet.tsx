@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useEffect, useRef, lazy, Suspense } from 'react';
 import Link from 'next/link';
-import { Pencil, Check, X, ChevronDown, Download, Trash2, Package, Info, Folder } from 'lucide-react';
+import { Pencil, Check, X, ChevronDown, Download, Trash2, Package, Info, Folder, Eye, EyeOff } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -25,6 +25,8 @@ import { sessionStatusView } from '@/lib/session-status';
 import { dashboardReach } from '@/lib/dashboard-reach';
 import { useLiveStatus } from '@/lib/session-live';
 import { isSessionUnread } from '@/lib/session-read';
+import { isSessionPutAway } from '@/lib/session-put-away';
+import { usePins } from '@/lib/session-pins';
 import { removeAgentSkill } from '@/lib/optimistic-skills';
 import { useScope } from '@/lib/use-scope';
 import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
@@ -456,6 +458,12 @@ function SessionsSection({
   const confirm = useConfirm();
   // What a chat page open on a session says about it, if one is (lib/session-live).
   const liveStatus = useLiveStatus();
+  const pins = usePins();
+  // Put-away sessions (archived or hidden) are dropped by default, exactly as the
+  // sidebar drops them — most of an old agent's history is archived, and a list
+  // that leads with dozens of `closed` rows buries the handful you actually work
+  // in. Nothing is lost: the header toggle brings them back, dimmed and badged.
+  const [showPutAway, setShowPutAway] = useState(false);
   // Recycle bin (docs/session-cleanup-design.md): recoverable, and it hibernates
   // the pane instead of leaving a ~500MB claude with no row able to kill it.
   const deleteSession = trpc.chat.trashSessions.useMutation({
@@ -466,21 +474,43 @@ function SessionsSection({
     },
   });
 
+  const all = sessions ?? [];
+  const putAwayCount = all.filter((s) => isSessionPutAway(s, pins)).length;
+  const rows = showPutAway ? all : all.filter((s) => !isSessionPutAway(s, pins));
+
   return (
     <section>
-      <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
-        sessions · {sessions?.length ?? 0}
-      </h3>
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <h3 className="text-xs uppercase tracking-wide text-muted-foreground">
+          sessions · {rows.length}
+        </h3>
+        {putAwayCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowPutAway((v) => !v)}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground/70 hover:text-foreground/80 transition-colors cursor-pointer"
+          >
+            {showPutAway ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+            <span>{showPutAway ? 'hide put-away' : `hidden & archived (${putAwayCount})`}</span>
+          </button>
+        )}
+      </div>
       {loading ? (
         <div className="space-y-2">
           <Skeleton className="h-12" />
           <Skeleton className="h-12" />
         </div>
-      ) : !sessions || sessions.length === 0 ? (
-        <p className="text-xs text-muted-foreground">no chat sessions for this agent yet.</p>
+      ) : rows.length === 0 ? (
+        // Distinguish "this agent has never been chatted with" from "every one of
+        // its chats is put away" — the second reads as data loss without the count.
+        <p className="text-xs text-muted-foreground">
+          {all.length === 0
+            ? 'no chat sessions for this agent yet.'
+            : `no open sessions — all ${putAwayCount} are hidden or archived.`}
+        </p>
       ) : (
         <ul className="space-y-1.5">
-          {sessions.map((s) => {
+          {rows.map((s) => {
             // Prefer what a chat page open on this session reports, exactly as
             // the sidebar does — this sheet sits over both of them, so a third
             // opinion here would be the most visible disagreement of the lot.
@@ -498,7 +528,10 @@ function SessionsSection({
               <li key={s.id}>
                 <Link
                   href={`/chat?session=${encodeURIComponent(s.id)}`}
-                  className="block rounded border bg-card px-2.5 py-1.5 hover:bg-accent/40 hover:border-foreground/30 transition-colors cursor-pointer"
+                  className={cn(
+                    'block rounded border bg-card px-2.5 py-1.5 hover:bg-accent/40 hover:border-foreground/30 transition-colors cursor-pointer',
+                    isSessionPutAway(s, pins) && 'opacity-60',
+                  )}
                 >
                   <div className="flex items-center gap-2">
                     <span
@@ -510,6 +543,9 @@ function SessionsSection({
                         <span className="truncate text-foreground/90">{s.title || s.preview || s.agentName || s.id.slice(0, 8)}</span>
                         {s.closedAt && (
                           <Badge variant="outline" className="text-[9px] py-0 h-4">closed</Badge>
+                        )}
+                        {s.hiddenAt && (
+                          <EyeOff className="h-3 w-3 shrink-0 text-muted-foreground/60" aria-label="hidden" />
                         )}
                         {status.key !== 'ready' && (
                           <Badge variant="outline" className="text-[9px] py-0 h-4 font-mono">{status.label}</Badge>

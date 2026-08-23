@@ -29,6 +29,7 @@ import { dashboardReach } from '@/lib/dashboard-reach';
 import { isSessionUnread } from '@/lib/session-read';
 import { useLiveWorking, useLiveStatus, type LiveStatus } from '@/lib/session-live';
 import { usePins, togglePin } from '@/lib/session-pins';
+import { isSessionPutAway } from '@/lib/session-put-away';
 import { useSessionView, setSessionView, useAgentDrawers, setAgentDrawer, type SessionView } from '@/lib/session-view';
 import { useLongPress } from '@/lib/use-long-press';
 import { readChatFilter, writeChatFilter } from '@/lib/chat-filter';
@@ -505,17 +506,9 @@ export function RecentSessions() {
   // together. Archiving used to leave the session in place wearing a `closed` badge,
   // which meant the tidying action didn't actually tidy the list.
   //
-  // A PINNED session is never put away, whatever its flags say. Pins live in
-  // localStorage (session-pins.ts), so `computeCleanup` cannot see them and cannot
-  // spare a pinned chat the way it spares a grouped or human-named one — a pin is
-  // the strongest "keep this in front of me" signal in the product and the only one
-  // the server is blind to. Honouring it here is what stops an archive sweep from
-  // silently removing something the human explicitly pinned. (Archiving it is still
-  // fine: it stays visible, wearing its `closed` badge, one click from reopening.)
-  const isPutAway = useCallback(
-    (s: SessionListItem) => !pins.has(s.id) && (Boolean(s.hiddenAt) || Boolean(s.closedAt)),
-    [pins],
-  );
+  // The rule itself (incl. why a pin overrides both flags) lives in
+  // lib/session-put-away.ts — the agent detail sessions list applies the same one.
+  const isPutAway = useCallback((s: SessionListItem) => isSessionPutAway(s, pins), [pins]);
   // Hide/unhide optimistically so the row vanishes (or reappears) on the click,
   // not on the next 5s poll — then reconcile on settle.
   const setHidden = trpc.chat.setHidden.useMutation({
