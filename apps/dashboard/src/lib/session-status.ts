@@ -88,6 +88,12 @@ export interface SessionRuntimeLike {
    * and the blob answers instead — see backgroundStillRunning.
    */
   backgroundBusy?: boolean | null;
+  /**
+   * When the agent last said anything. Read for one purpose: deciding that an
+   * outstanding background task has stopped being part of an answer — see
+   * BACKGROUND_RESIDENT_MS.
+   */
+  lastMessageAt?: Date | string | null;
   claudeSessionId?: string | null;
   closedAt?: Date | string | null;
   // Set by chat.requestSessionRestart, cleared by the gateway once the pane is
@@ -139,14 +145,45 @@ export function backgroundOutstanding(raw: unknown): boolean {
 }
 
 /**
+ * When a background task stops counting as part of the answer.
+ *
+ * Nothing guarantees a background task ever ends. Measured on the fleet the
+ * afternoon this was written, four sessions sat idle with one outstanding —
+ * "Wait for codex review to finish" (1h), a gateway watchdog (9h), and a
+ * "Wait for smoke completion" left over from the previous DAY. Treating those as
+ * work-in-progress for ever would replace the lie this fixes with its mirror
+ * image: a session that looks busy and is not, and that can never go red or ring
+ * a phone again.
+ *
+ * So half an hour after the agent's last word, an outstanding task is read as a
+ * resident process — a dev server someone left running — rather than a step in
+ * the answer.
+ *
+ * EXPORTED AND SHARED with the push gate, unlike every other threshold in this
+ * file, which server/push/suppress deliberately keeps its own copy of. The
+ * reason is specific: the dot and the notification must call a task resident at
+ * the SAME moment. Two numbers means a window where the sidebar says a session
+ * is still working while its phone notification has already gone out, or the
+ * reverse — a red dot and silence.
+ */
+export const BACKGROUND_RESIDENT_MS = 30 * 60_000;
+
+/**
  * The same question as `backgroundOutstanding`, asked of a whole session row —
  * whichever of the two doors that row came through. Neither source may say
  * "no" on behalf of a payload it does not carry, so this is an OR: the sidebar
  * row has only the boolean, the chat header has only the blob, and a row with
  * neither means the backend cannot say, which is not the same as idle.
  */
-function backgroundStillRunning(s: SessionRuntimeLike): boolean {
-  return s.backgroundBusy === true || backgroundOutstanding(s.activity);
+function backgroundStillRunning(s: SessionRuntimeLike, now: number): boolean {
+  if (s.backgroundBusy !== true && !backgroundOutstanding(s.activity)) return false;
+  // Since the agent's last word, not since the task started: what is being asked
+  // is whether a reply is still coming, and the agent going quiet for half an
+  // hour is the evidence that one is not. A row with no lastMessageAt has never
+  // been spoken in, so there is no silence to measure and nothing to expire.
+  const last = toMs(s.lastMessageAt);
+  if (last != null && now - last >= BACKGROUND_RESIDENT_MS) return false;
+  return true;
 }
 
 /**
@@ -338,8 +375,10 @@ export function sessionStatusView(
   // reached 'unread' — the red dot whose whole meaning is "the agent FINISHED
   // work you have not read" — for a session that had done nothing but say "let
   // me kick this off". Ranked with `working` rather than below it because that
-  // is what it is: something is running, and the reply is still to come.
-  if (s.state === 'idle' && backgroundStillRunning(s)) return working();
+  // is what it is: something is running, and the reply is still to come. Bounded
+  // by BACKGROUND_RESIDENT_MS, so a task nobody is waiting on cannot pin a
+  // session amber for a day.
+  if (s.state === 'idle' && backgroundStillRunning(s, opts.now ?? Date.now())) return working();
   // sky — recycling: a restart was requested; the pane is being killed and will
   // respawn on the next message. Outranks the !alive check below, since `alive`
   // flips false mid-restart and we want "restarting", not "exited".

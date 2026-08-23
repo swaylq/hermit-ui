@@ -6,6 +6,7 @@ import {
   isRestingState,
   snapshotSilenceMs,
   SNAPSHOT_STALE_MS,
+  BACKGROUND_RESIDENT_MS,
 } from './session-status';
 
 // ── the label a working session shows ───────────────────────────────────────
@@ -389,4 +390,33 @@ test('the sidebar row learns the same fact through its pre-chewed boolean', () =
     'unread',
     'a row that cannot say falls through to what it always did',
   );
+});
+
+test('a background task nobody is waiting on stops pinning the session amber', () => {
+  // The mirror-image lie. Measured on the fleet the day this was written: four
+  // sessions idle with one outstanding task, the oldest left over from the
+  // PREVIOUS day ("Wait for smoke completion"). Without a bound, each would read
+  // as working for ever and could never go red or ring a phone again.
+  const now = Date.now();
+  const activity = { kind: 'background', backgroundCount: 1 };
+  const stale = { alive: true, state: 'idle', activity, lastMessageAt: new Date(now - BACKGROUND_RESIDENT_MS) };
+  assert.equal(sessionStatusView(stale, { now, unread: true }).key, 'unread');
+  assert.equal(sessionStatusView(stale, { now }).key, 'ready');
+  // A minute short of the bound it is still part of the answer.
+  assert.equal(
+    sessionStatusView(
+      { alive: true, state: 'idle', activity, lastMessageAt: new Date(now - BACKGROUND_RESIDENT_MS + 60_000) },
+      { now, unread: true },
+    ).key,
+    'working',
+  );
+});
+
+test('a session that has never been spoken in has no silence to expire', () => {
+  const now = Date.now();
+  const v = sessionStatusView(
+    { alive: true, state: 'idle', backgroundBusy: true, lastMessageAt: null },
+    { now, unread: true },
+  );
+  assert.equal(v.key, 'working');
 });

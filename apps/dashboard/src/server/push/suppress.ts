@@ -26,12 +26,13 @@
 // per-schedule, and visible to the person they affect. The urgency signal this
 // file still exports is what lets those modes make the decision — see below.
 
-// Imported, where STATE_TRUSTED_MS below is deliberately duplicated, because the
-// two are different kinds of thing: that constant is a JUDGEMENT this file is
-// free to move without asking the browser, while this is the SHAPE of the
-// `activity` Json column, and two readers of one column disagreeing about its
-// shape is a bug in both.
-import { backgroundOutstanding } from '@/lib/session-status';
+// Imported, where STATE_TRUSTED_MS below is deliberately duplicated, because
+// these two are not that kind of thing. `backgroundOutstanding` is the SHAPE of
+// the `activity` Json column, and two readers of one column disagreeing about
+// its shape is a bug in both. BACKGROUND_RESIDENT_MS is a judgement, but one the
+// dot and the notification are required to reach at the same instant — see its
+// comment. STATE_TRUSTED_MS has neither property and stays local.
+import { backgroundOutstanding, BACKGROUND_RESIDENT_MS } from '@/lib/session-status';
 import type { PushKind } from './types';
 
 // Re-exported so the delivery side reads the same fact through the same door as
@@ -102,14 +103,16 @@ export const STATE_TRUSTED_MS = 45_000;
  * ever ends: an agent that leaves `npm run dev` running in the background has an
  * outstanding task for the rest of the session's life, and an unbounded rule
  * would make that session silent for ever — no lock screen, no sound, for any
- * reply, indefinitely. Past this the task is treated as a resident process
- * rather than a step in the answer, and the last thing the agent said is
- * delivered.
+ * reply, indefinitely. Past this the task is read as a resident process rather
+ * than a step in the answer, and the last thing the agent said is delivered.
  *
- * 30 minutes is chosen to match HOLD_REPORT_MS in ./index.ts, so the release and
- * the log line explaining it happen together.
+ * This is the ONE threshold this file shares with the browser's copy of the
+ * judgement instead of keeping its own — see BACKGROUND_RESIDENT_MS for why the
+ * dot and the notification have to expire a task at the same instant. It also
+ * happens to equal HOLD_REPORT_MS in ./index.ts, so the release and the log line
+ * explaining it land together.
  */
-export const BACKGROUND_HOLD_MAX_MS = 30 * 60_000;
+export const BACKGROUND_HOLD_MAX_MS = BACKGROUND_RESIDENT_MS;
 
 export interface TurnInput {
   /** ChatSession.state as the gateway last wrote it. */
