@@ -541,7 +541,11 @@ function SessionsSection({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 text-sm">
                         <span className="truncate text-foreground/90">{s.title || s.preview || s.agentName || s.id.slice(0, 8)}</span>
-                        {s.closedAt && (
+                        {/* An archived row already reads `closed` in its status badge
+                            below — print the flag only when the status is saying
+                            something else (a chat page open on it reports live), so
+                            revealed rows don't say "closed closed". */}
+                        {s.closedAt && status.label !== 'closed' && (
                           <Badge variant="outline" className="text-[9px] py-0 h-4">closed</Badge>
                         )}
                         {s.hiddenAt && (
