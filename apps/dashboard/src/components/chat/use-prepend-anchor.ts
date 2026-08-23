@@ -36,6 +36,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import {
+  classifyTailFrame,
   planFrame,
   planBottomFrame,
   settledHold,
@@ -214,18 +215,22 @@ export function usePrependAnchor(
       // it cannot even be corrected arithmetically. See contentHeight() in
       // scroll-stability-core.ts, which measures the layer instead.
       const honestHeight = stability.contentHeight();
-      // A frame where the whole conversation is shorter than the viewport says
-      // nothing about where its tail is: the list is briefly rebuilt short as a
-      // chunk commits, and the browser clamps scrollTop to 0 underneath.
-      // Correcting from it paints a full-viewport yank that the next frame
-      // takes straight back — measured at ±900-1,150px, twice, on a plain open,
-      // and it survived both the honest measurement and the clamp.
-      //
-      // Plan anyway, and book the result: `settledHold` below is what absorbs
-      // the browser's clamp, and skipping it outright would leave the hold
-      // believing the reader had scrolled up by the clamped distance, forever.
-      // Just do not PAINT anything from a frame this one cannot measure.
-      const measurable = honestHeight > root.clientHeight;
+      // Not every frame is a measurement of the conversation — see
+      // classifyTailFrame. A partial render is dropped whole; a list that is
+      // momentarily inside one viewport is planned but not painted, because
+      // the browser clamped scrollTop for the same reason and `settledHold`
+      // below is what cancels the two against each other.
+      const kind = classifyTailFrame({
+        contentHeight: honestHeight,
+        clientHeight: root.clientHeight,
+        peak: h.hold.peak,
+      });
+      if (kind === 'ignore') {
+        quiet.current = 0;
+        return true;
+      }
+      const measurable = kind === 'measure';
+      if (measurable) h.hold.peak = Math.max(h.hold.peak, honestHeight);
       const { correction, gap, raw } = planBottomFrame(h.hold, {
         scrollTop: logicalTop,
         userScrollTop: stability.readerScrollTop(),
@@ -337,7 +342,7 @@ export function usePrependAnchor(
     if (contentBottomGap < BOTTOM_SLACK) {
       held.current = {
         mode: 'bottom',
-        hold: { gap: contentBottomGap, lastTop: stability.readerScrollTop() },
+        hold: { gap: contentBottomGap, lastTop: stability.readerScrollTop(), peak: stability.contentHeight() },
         until,
         maxUntil,
       };

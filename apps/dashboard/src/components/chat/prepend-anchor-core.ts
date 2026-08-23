@@ -121,7 +121,42 @@ export type BottomHold = {
   gap: number;
   /** `scrollTop` as it stood after our last correction. */
   lastTop: number;
+  /** Tallest the conversation has measured during this hold — see classifyTailFrame. */
+  peak: number;
 };
+
+/**
+ * What a frame's geometry is worth to a tail hold.
+ *
+ * History is being prepended, so the conversation only grows. A frame that
+ * measures far shorter than the tallest this hold has seen is therefore not a
+ * measurement of it — it is a glimpse of it mid-render. The anchor's own log,
+ * on a plain open of a live session, alternated
+ * 652, 1484, 665, 1619, 778, 1690 across consecutive corrections, and the
+ * short readings pulled the reader back by 819 and 841px before the tall ones
+ * put them forward again. Every one of those was painted.
+ *
+ *   · 'measure'  — ordinary geometry, plan and correct from it.
+ *   · 'absorb'   — the whole list is inside one viewport, so the browser has
+ *                  ALSO clamped scrollTop to 0. Plan, so `settledHold` cancels
+ *                  that clamp against the correction it would imply, but paint
+ *                  nothing: the correction is a full-viewport yank the next
+ *                  frame takes straight back.
+ *   · 'ignore'   — a partial render with the scroll position untouched. Do not
+ *                  correct and do not book: `settledHold` would fold this
+ *                  frame's nonsense into the gap and hold it forever.
+ */
+export type TailFrameKind = 'measure' | 'absorb' | 'ignore';
+
+export function classifyTailFrame(input: {
+  contentHeight: number;
+  clientHeight: number;
+  peak: number;
+}): TailFrameKind {
+  if (input.contentHeight <= input.clientHeight) return 'absorb';
+  if (input.contentHeight < input.peak - input.clientHeight) return 'ignore';
+  return 'measure';
+}
 
 export type BottomFrameInput = {
   /** Natural/visual scroll coordinate (`physical scrollTop + deviation`). */

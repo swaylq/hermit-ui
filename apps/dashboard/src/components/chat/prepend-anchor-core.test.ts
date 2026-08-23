@@ -6,6 +6,7 @@ import {
   settledHold,
   EPSILON,
   shouldRecapture,
+  type BottomHold,
 } from './prepend-anchor-core';
 
 // A stand-in for the scroll viewport: content of a known height, a reading
@@ -144,7 +145,7 @@ function bottomViewport(opts: { height: number; client: number; top: number }) {
   return vp;
 }
 
-function bottomFrame(vp: ReturnType<typeof bottomViewport>, hold: { gap: number; lastTop: number }) {
+function bottomFrame(vp: ReturnType<typeof bottomViewport>, hold: BottomHold) {
   const { correction, gap, raw } = planBottomFrame(hold, {
     scrollTop: vp.scrollTop,
     scrollHeight: vp.scrollHeight,
@@ -159,7 +160,7 @@ function bottomFrame(vp: ReturnType<typeof bottomViewport>, hold: { gap: number;
 
 test('a bottom-pinned reader stays on the tail when history is prepended', () => {
   const vp = bottomViewport({ height: 600, client: 600, top: 0 });
-  const hold = { gap: 0, lastTop: 0 };
+  const hold: BottomHold = { gap: 0, lastTop: 0, peak: 0 };
   vp.prepend(2200);
   assert.equal(bottomFrame(vp, hold), 2200);
   assert.equal(vp.scrollTop, 2200); // scrolled down by exactly what arrived
@@ -168,7 +169,7 @@ test('a bottom-pinned reader stays on the tail when history is prepended', () =>
 
 test('a user scroll during a bottom hold is never undone', () => {
   const vp = bottomViewport({ height: 3000, client: 600, top: 2400 });
-  const hold = { gap: 0, lastTop: 2400 };
+  const hold: BottomHold = { gap: 0, lastTop: 2400, peak: 0 };
   vp.user(-120); // one wheel notch up, off the bottom
   assert.equal(bottomFrame(vp, hold), 0);
   assert.equal(vp.scrollTop, 2280); // the notch stands
@@ -177,7 +178,7 @@ test('a user scroll during a bottom hold is never undone', () => {
 
 test('prepend and a user scroll in the same frame: only the prepend is corrected', () => {
   const vp = bottomViewport({ height: 3000, client: 600, top: 2400 });
-  const hold = { gap: 0, lastTop: 2400 };
+  const hold: BottomHold = { gap: 0, lastTop: 2400, peak: 0 };
   vp.prepend(2200);
   vp.user(-120);
   assert.equal(bottomFrame(vp, hold), 2200);
@@ -185,7 +186,7 @@ test('prepend and a user scroll in the same frame: only the prepend is corrected
 });
 
 test('a transform compensation is not mistaken for bottom-anchor user input', () => {
-  const hold = { gap: 0, lastTop: 1000 };
+  const hold: BottomHold = { gap: 0, lastTop: 1000 , peak: 0 };
   // Content grew 400px and the shared stability controller moved the natural
   // coordinate by the same 400px, while its reader-only coordinate stayed put.
   const compensated = planBottomFrame(hold, {
@@ -270,7 +271,7 @@ test('a correction the viewport is clamped out of is not re-issued every frame',
 
 test('the same, for the tail hold', () => {
   const vp = bottomViewport({ height: 3000, client: 600, top: 2400 });
-  const hold = { gap: 0, lastTop: 2400 };
+  const hold: BottomHold = { gap: 0, lastTop: 2400, peak: 0 };
   // Content shrinks below the reader while they sit at the very bottom: the
   // correction wants to scroll further down than the content allows.
   vp.scrollHeight -= 400;
