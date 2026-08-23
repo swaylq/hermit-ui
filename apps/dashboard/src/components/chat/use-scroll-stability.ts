@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
+  acceptableCompensation,
+  contentHeight as trueContentHeight,
   discardSubpixelDeviation,
   isVerticalWheelInput,
   logicalScrollTop as logicalTop,
@@ -19,10 +21,23 @@ export type ScrollStability = {
    * Hold a would-be scrollTop correction in the compositor layer. This never
    * writes the viewport, whether the reader is touching it or momentum is still
    * running.
+   *
+   * `bounded` restores what a `scrollTop` write used to give the caller: the
+   * correction stops at the ends of the content and the return value says how
+   * much was taken. Only for callers that reconcile the shortfall — the prepend
+   * anchor does, through `settledHold`. A caller that discards the return value
+   * must stay unbounded, or a refused correction is a jump nothing undoes.
    */
-  compensate: (delta: number, reason: string) => number;
+  compensate: (delta: number, reason: string, bounded?: boolean) => number;
   /** Natural timeline coordinate currently at the viewport top. */
   logicalScrollTop: () => number;
+  /**
+   * Content height with this controller's held transform discounted. Every
+   * "how far from the end" question must use this, not `el.scrollHeight`.
+   */
+  contentHeight: () => number;
+  /** The largest honest `scrollTop`, i.e. `contentHeight() - clientHeight`. */
+  maxScrollTop: () => number;
   /** Coordinate that changes only for native reader input, not app correction. */
   readerScrollTop: () => number;
   /** Programmatic navigation that first takes over any held transform. */
@@ -97,8 +112,16 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
   const programmaticEventVersion = useRef(0);
   const smoothQuietTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const layerNode = useRef<HTMLElement | null>(null);
   const getLayer = useCallback((): HTMLElement | null => {
-    return getViewport()?.querySelector('[data-scroll-stability-layer]') as HTMLElement | null;
+    // Looked up once per pane. Every correction reads this, and so does every
+    // scroll event through contentHeight(); the node only changes when the pane
+    // remounts, which detaches the old one.
+    const cached = layerNode.current;
+    if (cached?.isConnected) return cached;
+    const found = getViewport()?.querySelector('[data-scroll-stability-layer]') as HTMLElement | null;
+    layerNode.current = found;
+    return found;
   }, [getViewport]);
 
   const paintDeviation = useCallback(() => {
@@ -173,27 +196,42 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
       return 0;
     }
     const before = vp.scrollTop;
-    programmaticMotion.current = { kind: 'instant', expectedTop: before + wanted };
-    vp.scrollTop = before + wanted;
-    const applied = vp.scrollTop - before;
-    deviation.current -= applied;
-    const normalized = discardSubpixelDeviation(
-      deviation.current,
-      compensated.current,
-      SETTLE_EPSILON,
-    );
-    deviation.current = normalized.deviation;
-    compensated.current = normalized.compensated;
+    // The visible coordinate this settlement must preserve.
+    const target = before + wanted;
+    // Take the transform OFF before writing scrollTop. WebKit recomputes the
+    // scroller's overflow only when the transform is added or removed, so a
+    // write made underneath a live one is clamped into a range that stops
+    // existing the instant we clear it — and the browser then re-clamps,
+    // silently, by as much as the transform was worth. Clearing first makes the
+    // write land in the range it will still be in afterwards. Both statements
+    // are in one task, so nothing is painted in between.
+    deviation.current = 0;
+    paintDeviation();
+    vp.scrollTop = target;
+    const landed = vp.scrollTop;
+    const applied = landed - before;
+    // The range is honest now, so anything the clamp refused was blank space
+    // the transform itself was inventing — there is no content there to settle
+    // onto, and holding it would put the reader straight back outside the
+    // conversation. Drop it, and take the same amount out of `compensated`, so
+    // the reader-only coordinate (and any live hold reading it) does not see a
+    // scroll nobody made. Measured: physical 3198 under a transform latched at
+    // +100, cleared, browser silently re-clamps to 3098 — that 100px used to be
+    // booked as the reader scrolling.
+    const dropped = target - landed;
+    deviation.current = 0;
+    compensated.current -= dropped;
     // A clamped no-op dispatches no scroll event, so there is nothing to match.
     // Leaving an instant motion behind would misclassify the next real gesture.
+    // Both writes above happen in this task, so the browser dispatches at most
+    // one scroll event, carrying the final position.
     programmaticMotion.current = applied === 0
       ? null
       : { kind: 'instant', expectedTop: vp.scrollTop };
     lastObservedTop.current = vp.scrollTop;
-    paintDeviation();
     log({
       t: Date.now(), kind: 'settle', reason,
-      wanted, applied, deviation: deviation.current, scrollTop: vp.scrollTop,
+      wanted, applied, deviation: dropped, scrollTop: vp.scrollTop,
     });
     return applied;
   }, [clearProgrammaticMotion, getViewport, paintDeviation]);
@@ -204,14 +242,40 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
     commitDeviation('native-scroll-ended');
   }, [commitDeviation, isScrolling]);
 
+  /** Content height read off the layer, where the held transform cannot reach. */
+  const measureContent = useCallback((vp: HTMLElement): number => trueContentHeight({
+    layerHeight: getLayer()?.offsetHeight ?? 0,
+    scrollHeight: vp.scrollHeight,
+    clientHeight: vp.clientHeight,
+  }), [getLayer]);
+
+  /** The far end of the range a correction may leave the visible coordinate in. */
+  const honestMaxTop = useCallback((vp: HTMLElement): number => (
+    Math.max(0, measureContent(vp) - vp.clientHeight)
+  ), [measureContent]);
+
+  const contentHeight = useCallback((): number => {
+    const vp = getViewport();
+    return vp ? measureContent(vp) : 0;
+  }, [getViewport, measureContent]);
+
+  const maxScrollTop = useCallback((): number => {
+    const vp = getViewport();
+    return vp ? honestMaxTop(vp) : 0;
+  }, [getViewport, honestMaxTop]);
+
   const hasBlockedBoundary = useCallback((readerDelta: number): boolean => {
     const vp = getViewport();
     if (!vp) return false;
     return planBoundaryRebase({
       scrollTop: vp.scrollTop,
       deviation: deviation.current,
-      minTop: 0,
+      // The browser's own max, transform inflation included: this asks whether
+      // the PHYSICAL scroller has run out of runway, and the physical clamp is
+      // computed from exactly this number. The honest content height belongs to
+      // questions about where the reader is, not about where scrollTop can go.
       maxTop: Math.max(0, vp.scrollHeight - vp.clientHeight),
+      minTop: 0,
       readerDelta,
       epsilon: SETTLE_EPSILON,
     }) !== null;
@@ -276,21 +340,42 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
     arm();
   }, [hasActiveContact, isScrolling, settle]);
 
-  const compensate = useCallback((delta: number, reason: string): number => {
+  const compensate = useCallback((delta: number, reason: string, bounded = false): number => {
     if (!Number.isFinite(delta) || delta === 0) return 0;
-    deviation.current += delta;
-    compensated.current += delta;
-    paintDeviation();
     const vp = getViewport();
+    // Corrections used to be `scrollTop` writes, which the browser clamped at
+    // both ends while the caller adopted the shortfall — that clamp is what
+    // kept the loop from running away. A transform has no ends, so apply the
+    // same limit here, or a single bad measurement is painted in full — and,
+    // through the overflow it adds, becomes an input to the next one.
+    const accepted = bounded && vp
+      ? acceptableCompensation({
+        scrollTop: vp.scrollTop,
+        deviation: deviation.current,
+        delta,
+        minTop: 0,
+        maxTop: honestMaxTop(vp),
+      })
+      : delta;
+    if (accepted !== 0) {
+      deviation.current += accepted;
+      compensated.current += accepted;
+      paintDeviation();
+    }
+    // Log the refusals too, and log what was actually taken rather than a
+    // hardcoded zero: a correction the range check threw away is precisely the
+    // frame someone reading this log after an unexplained jump needs to see.
     log({
-      t: Date.now(), kind: 'hold', reason, wanted: delta, applied: 0,
+      t: Date.now(), kind: 'hold', reason, wanted: delta, applied: accepted,
       deviation: deviation.current, scrollTop: vp?.scrollTop ?? 0,
     });
+    // Even a fully refused correction has to leave the settle armed: whatever is
+    // already held still needs writing back, and this call used to arm it.
     scheduleSettle();
-    // The transform is not clamped or quantised, so the whole visual correction
-    // landed even though scrollTop deliberately did not move.
-    return delta;
-  }, [getViewport, paintDeviation, scheduleSettle]);
+    // The transform is neither clamped nor quantised, so whatever survived the
+    // range check above landed in full even though scrollTop did not move.
+    return accepted;
+  }, [getViewport, honestMaxTop, paintDeviation, scheduleSettle]);
 
   const scrollTo = useCallback((top: number, behavior: ScrollBehavior, reason: string): number => {
     const vp = getViewport();
@@ -539,12 +624,14 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
 
   return useMemo(
     () => ({
-      compensate, logicalScrollTop, readerScrollTop, scrollTo, scrollBy,
+      compensate, logicalScrollTop, contentHeight, maxScrollTop, readerScrollTop,
+      scrollTo, scrollBy,
       getDeviation, isScrolling, hasReaderIntent, hasUpwardReaderIntent,
       hasBlockedUpwardIntent, isProgrammatic,
     }),
     [
-      compensate, logicalScrollTop, readerScrollTop, scrollTo, scrollBy,
+      compensate, logicalScrollTop, contentHeight, maxScrollTop, readerScrollTop,
+      scrollTo, scrollBy,
       getDeviation, isScrolling, hasReaderIntent, hasUpwardReaderIntent,
       hasBlockedUpwardIntent, isProgrammatic,
     ],

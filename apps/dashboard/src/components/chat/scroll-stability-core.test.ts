@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  acceptableCompensation,
+  contentHeight,
   discardSubpixelDeviation,
   isVerticalWheelInput,
   logicalScrollTop,
@@ -173,4 +175,97 @@ test('a boundary does not rebase debt that cannot block the requested direction'
     maxTop: 5000,
     readerDelta: -120,
   }), null);
+});
+
+
+test('content height is read off the layer, because WebKit latches scrollHeight', () => {
+  // Measured on the live dashboard, WebKit 390x844: natural content 3750px,
+  // viewport 652px, and the scroller's own number after each transform value
+  // change in order — 0, -500, -300, -700, +200, -200, 0. It recomputes when
+  // the transform is added and when it is removed, and not in between.
+  const layerHeight = 3750;
+  for (const scrollHeight of [3750, 4250, 4250, 4250, 4250, 4250, 3750]) {
+    assert.equal(contentHeight({ layerHeight, scrollHeight, clientHeight: 652 }), 3750);
+  }
+  // No layer to read (nothing mounted yet): the scroller is all there is.
+  assert.equal(contentHeight({ layerHeight: 0, scrollHeight: 1200, clientHeight: 652 }), 1200);
+  // Never less than one viewport, however short the conversation.
+  assert.equal(contentHeight({ layerHeight: 100, scrollHeight: 652, clientHeight: 652 }), 652);
+});
+
+test('a latched scrollHeight would unpin a reader standing on the end', () => {
+  // The WebKit state: natural content 3750, viewport 652, and scrollHeight
+  // latched at 4250 by an earlier downward correction that has since changed
+  // value. This is what the two consumers of the number do with it.
+  const layerHeight = 3750;
+  const clientHeight = 652;
+  const latched = 4250;
+  const atTheTail = layerHeight - clientHeight;
+  const honest = contentHeight({ layerHeight, scrollHeight: latched, clientHeight });
+
+  // The pin detector re-pins inside 60px of the end and shows "↓ latest" past
+  // it. Honest: the reader is on the end. Raw: 500px short of an end they are
+  // standing on, so they are unpinned and the pill appears.
+  assert.equal(honest - atTheTail - clientHeight, 0);
+  assert.equal(latched - atTheTail - clientHeight, 500);
+
+  // Same 500px from the other side: a scroll-to-bottom aimed with the raw value
+  // overshoots into blank — and the physical range, latched by the same
+  // transform, is happy to accept it.
+  assert.equal(honest - clientHeight, atTheTail);
+  assert.equal(latched - clientHeight, atTheTail + 500);
+});
+
+test('compensation stops at the ends of the content, as a scrollTop write did', () => {
+  // Room to move: taken in full.
+  assert.equal(acceptableCompensation({
+    scrollTop: 400, deviation: 0, delta: -200, minTop: 0, maxTop: 1038,
+  }), -200);
+  // The exact frame that started the oscillation: the tail anchor read a
+  // clamped scrollTop as 697px of upward reader input and asked to undo it,
+  // from a viewport already at the top.
+  assert.equal(acceptableCompensation({
+    scrollTop: 0, deviation: 0, delta: -697, minTop: 0, maxTop: 1038,
+  }), 0);
+  // Partial: only the distance left to the end is accepted, and the caller
+  // adopts the rest through settledHold.
+  assert.equal(acceptableCompensation({
+    scrollTop: 900, deviation: 0, delta: 500, minTop: 0, maxTop: 1038,
+  }), 138);
+  // Deviation counts as part of where the reader already is.
+  assert.equal(acceptableCompensation({
+    scrollTop: 0, deviation: 900, delta: 500, minTop: 0, maxTop: 1038,
+  }), 138);
+  // A boundary hold (746e650) is inside the range and must pass untouched.
+  assert.equal(acceptableCompensation({
+    scrollTop: 0, deviation: 3000, delta: 500, minTop: 0, maxTop: 40000,
+  }), 500);
+  // Content shorter than the viewport: nowhere to go, and no negative range.
+  assert.equal(acceptableCompensation({
+    scrollTop: 0, deviation: 0, delta: -300, minTop: 0, maxTop: 0,
+  }), 0);
+});
+
+test('a correction is never returned against the direction that asked for it', () => {
+  // Already outside the range — a fling to a physical end while a correction is
+  // held, which no rebase rule pulls back. A scrollTop write would have moved
+  // at most `delta` and never against it; snapping back into range instead
+  // would both jump the reader and, through settledHold, corrupt the hold.
+  //
+  // 400px of blank above the first message, asked to go further up: refuse.
+  assert.equal(acceptableCompensation({
+    scrollTop: 0, deviation: -400, delta: -100, minTop: 0, maxTop: 697,
+  }), 0);
+  // From the same place, asked to come down 300: exactly 300, not the 400 that
+  // would land back in range.
+  assert.equal(acceptableCompensation({
+    scrollTop: 0, deviation: -400, delta: 300, minTop: 0, maxTop: 697,
+  }), 300);
+  // Past the end with an upward correction held, asked to go further down.
+  assert.equal(acceptableCompensation({
+    scrollTop: 697, deviation: 500, delta: 50, minTop: 0, maxTop: 697,
+  }), 0);
+  assert.equal(acceptableCompensation({
+    scrollTop: 697, deviation: 500, delta: -50, minTop: 0, maxTop: 697,
+  }), -50);
 });

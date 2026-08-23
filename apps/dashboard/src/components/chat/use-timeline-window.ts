@@ -237,7 +237,10 @@ export function useTimelineWindow(
     if (stability?.isScrolling()) return false;
     const yes = shouldWindow({
       rows,
-      scrollHeight: vp.scrollHeight,
+      // Honest height: a held downward correction is painted as a translate,
+      // which adds its own size to vp.scrollHeight and would trip the
+      // twelve-screens test on a list that is not that tall.
+      scrollHeight: stability?.contentHeight() ?? vp.scrollHeight,
       clientHeight: vp.clientHeight,
       rowLimit: THRESHOLD,
       screens: WINDOW_SCREENS,

@@ -683,6 +683,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // read the latest value without re-subscribing; setPinned keeps both in sync.
   const pinnedRef = useRef(true);
   const setPinned = useCallback((v: boolean) => { pinnedRef.current = v; setPinnedToBottomState(v); }, []);
+  // Assigned from `anchored.active` further down, where that hook runs.
+  const anchoredActiveRef = useRef(false);
   // True while WE scroll programmatically, so the scroll listener doesn't misread
   // the in-between position and unpin the user mid-follow.
   const autoScrollRef = useRef(false);
@@ -736,7 +738,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     const el = getViewport();
     if (!el) return;
     autoScrollRef.current = true;
-    scrollStability.scrollTo(el.scrollHeight, behavior, 'latest-button');
+    // The honest end, not el.scrollHeight: with a downward correction held, the
+    // raw value is inflated by the transform's own size, and landing there and
+    // being re-clamped once the transform goes is a visible second jump.
+    scrollStability.scrollTo(scrollStability.maxScrollTop(), behavior, 'latest-button');
     setPinned(true);
     // A smooth scroll animates toward the offset captured RIGHT NOW. Fine on a
     // settled conversation — but while a reply streams in, the bubble keeps
@@ -776,7 +781,24 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // message the user was looking at and HELD there while the new history lays
   // out — see use-prepend-anchor.ts for why a one-shot height restore isn't
   // enough.
-  const prependAnchor = usePrependAnchor(getViewport, scrollStability);
+  // A prepend hold suppresses sticky bottom for its whole life (see toBottom
+  // below). Whatever the tail did in the meantime was therefore never chased,
+  // so a reader who never left the end can be left short of it with the pin
+  // still on — and because the pin is on, no "↓ latest" pill says so either.
+  // Measured on a plain open of two live sessions: 126px and 243px short,
+  // permanently. One chase when the hold ends closes it.
+  const onAnchorRelease = useCallback((mode: 'top' | 'bottom') => {
+    // Only a TAIL hold. A hold on a row up in history means the reader was
+    // reading history, and pinnedRef can be stale-true there — the scroll
+    // listener returns early inside the pane-resize window without ever
+    // updating it — so chasing the bottom after one would yank them down.
+    if (mode !== 'bottom') return;
+    if (!pinnedRef.current || anchoredActiveRef.current) return;
+    if (!getViewport()) return;
+    contentMovingUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
+    settleKickRef.current?.(SETTLE_CHASE_FRAMES);
+  }, [getViewport]);
+  const prependAnchor = usePrependAnchor(getViewport, scrollStability, onAnchorRelease);
   // Read by the scroll listener and the bottom-pin observer, neither of which
   // should re-subscribe when the anchor object identity changes.
   const prependAnchorRef = useRef(prependAnchor);
@@ -827,7 +849,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // Frozen — see use-anchored-window.ts.
   const anchored = useAnchoredWindow(sessionId, anchorMessageId, getViewport, scrollStability);
   // Read by the sticky-bottom effect, which must not re-subscribe per render.
-  const anchoredActiveRef = useRef(false);
+  // Declared far above, next to pinnedRef, because the prepend anchor's release
+  // callback is created before this line and reads it.
   anchoredActiveRef.current = anchored.active;
 
   // The rendered timeline. Summary mode collapses each turn to its final reply;
@@ -863,11 +886,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     if (anchored.active || !older.hasMore || older.loading) return;
     if (topUpsRef.current >= 5) return;
     const el = getViewport();
-    if (!el || el.scrollHeight > el.clientHeight * 3) return;
+    // Honest height: a held downward correction inflates el.scrollHeight by its
+    // own size, which would hide a short conversation from the prefill.
+    if (!el || scrollStability.contentHeight() > el.clientHeight * 3) return;
     topUpsRef.current += 1;
     const t = setTimeout(() => pullEarlier(), 0);
     return () => clearTimeout(t);
-  }, [view.length, older.hasMore, older.loading, anchored.active, getViewport, pullEarlier]);
+  }, [view.length, older.hasMore, older.loading, anchored.active, getViewport, pullEarlier, scrollStability]);
 
   // Prune optimistic rows once reflected in the cache so `pending` doesn't grow
   // over a long session. Same-ref return guards against a render loop.
@@ -910,7 +935,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         return;
       }
       autoScrollRef.current = true;
-      scrollStability.scrollTo(el.scrollHeight, 'auto', 'sticky-bottom');
+      scrollStability.scrollTo(scrollStability.maxScrollTop(), 'auto', 'sticky-bottom');
       requestAnimationFrame(() => { autoScrollRef.current = false; });
     };
     // Anchored mode positions the viewport on a specific message; jumping to the
@@ -1029,7 +1054,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       // late event would arrive after the composer had grown, see a large gap
       // nobody asked for, and quietly unpin — stranding the conversation short
       // of the end with a "↓ latest" pill.
-      const gap = el.scrollHeight - logicalSt - h;
+      // Honest height again: with a downward correction held, el.scrollHeight is
+      // inflated by |deviation| while logicalSt is lowered by the same amount,
+      // so the raw gap is wrong by twice it — enough to unpin a reader sitting
+      // at the tail.
+      const gap = scrollStability.contentHeight() - logicalSt - h;
       // The 60px geometry slack must never swallow a real, small upward gesture.
       // Without this reader-intent check, sticky bottom waited for momentum to
       // end and then visibly pulled any sub-60px movement back to the tail.
@@ -1120,7 +1149,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       // Even the nominally "forced" first pin yields to a gesture in flight.
       if (scrollStability.isScrolling() && !scrollStability.isProgrammatic()) return;
       autoScrollRef.current = true;
-      scrollStability.scrollTo(el.scrollHeight, 'auto', 'initial-bottom');
+      scrollStability.scrollTo(scrollStability.maxScrollTop(), 'auto', 'initial-bottom');
       if (force) setPinned(true);
       requestAnimationFrame(() => { autoScrollRef.current = false; });
     };

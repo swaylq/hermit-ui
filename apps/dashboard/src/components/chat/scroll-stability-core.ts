@@ -40,6 +40,74 @@ export function logicalScrollTop(scrollTop: number, deviation: number): number {
 }
 
 /**
+ * The scroller's content height, measured where a transform cannot reach it.
+ *
+ * Two engine facts, both measured in WebKit on the live dashboard:
+ *
+ *   · a DOWNWARD translate on the content layer extends the scroller's
+ *     scrollable overflow by its own size — a 3750px scroller reports 4250
+ *     under `translateY(500px)`;
+ *   · WebKit only recomputes that overflow when the transform is ADDED or
+ *     REMOVED. Changing the value leaves `scrollHeight` latched at whatever the
+ *     last add produced: 3750 → (−500) 4250 → (−300) 4250 → (−700) 4250 →
+ *     (+200) 4250 → (0) 3750. Chromium recomputes on every change; WebKit does
+ *     not, and no forced layout or extra frame shakes it loose.
+ *
+ * So `scrollHeight` cannot be corrected arithmetically — after the first
+ * correction of a hold there is no reliable relationship between it and the
+ * content. The layer's own `offsetHeight` is layout, not paint, so a transform
+ * never touches it: 3750 in every one of those states. Measure there.
+ *
+ * Everything that asks "how far from the end am I" must use this. The tail
+ * anchor asked `scrollHeight`, so its own correction became the next frame's
+ * input, and the tail flew ±1,500px for six frames on a plain open.
+ */
+export function contentHeight(input: {
+  /** `offsetHeight` of the transformed content layer, 0 when it is not there. */
+  layerHeight: number;
+  scrollHeight: number;
+  clientHeight: number;
+}): number {
+  const natural = input.layerHeight > 0 ? input.layerHeight : input.scrollHeight;
+  return Math.max(input.clientHeight, natural);
+}
+
+/**
+ * How much of a would-be correction the visible coordinate can actually take.
+ *
+ * Before corrections moved into the transform, this limit was the browser's:
+ * the correction was a `scrollTop` write, a write past either end was clamped,
+ * and the caller adopted the shortfall (see `settledHold` in
+ * prepend-anchor-core.ts). That made the loop self-limiting. A transform has no
+ * end stops, so a correction computed from a transient bad measurement is
+ * painted in full — and, through the inflation above, feeds the next one.
+ *
+ * `scrollTop + deviation` is the content coordinate at the top of the viewport.
+ * Outside `[minTop, maxTop]` it means showing blank space above the first
+ * message or below the last, which is never what any caller wanted.
+ */
+export function acceptableCompensation(input: {
+  scrollTop: number;
+  deviation: number;
+  delta: number;
+  minTop: number;
+  maxTop: number;
+}): number {
+  const current = input.scrollTop + input.deviation;
+  const hi = Math.max(input.minTop, input.maxTop);
+  const next = Math.max(input.minTop, Math.min(hi, current + input.delta));
+  const accepted = next - current;
+  // A `scrollTop` write moved AT MOST `delta`, and never against it. Starting
+  // already outside the range (a fling to a physical end while a correction is
+  // held) must therefore refuse the correction, not snap back into range: the
+  // caller books `raw - applied` as "the user scrolled", so a correction that
+  // came back with the opposite sign would corrupt the hold as well as jump.
+  return input.delta > 0
+    ? Math.max(0, Math.min(input.delta, accepted))
+    : Math.min(0, Math.max(input.delta, accepted));
+}
+
+/**
  * Coordinate used by an anchor to identify real reader input. App corrections
  * increase both the logical position and `compensated`, so they cancel here;
  * native input changes only scrollTop and remains visible.

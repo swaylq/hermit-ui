@@ -133,14 +133,28 @@ function logCorrection(e: AnchorLogEntry): void {
 export function usePrependAnchor(
   getViewport: () => HTMLElement | null,
   stability: ScrollStability,
+  /**
+   * Called once when a live hold is dropped, with the mode it was holding. A
+   * hold suppresses sticky bottom for its whole life, so whoever follows the
+   * tail has to be told it can look again — otherwise a reader who never left
+   * the end is parked short of it. A hold that is REPLACED (capture() taking a
+   * fresh one after this one expired) does not report: the replacement is still
+   * suppressing sticky bottom, and it will report when it ends.
+   */
+  onRelease?: (mode: 'top' | 'bottom') => void,
 ): PrependAnchor {
   const held = useRef<Held | null>(null);
+  const onReleaseRef = useRef(onRelease);
+  useEffect(() => { onReleaseRef.current = onRelease; }, [onRelease]);
   const raf = useRef<number | null>(null);
   const ro = useRef<ResizeObserver | null>(null);
+  /** Fires when the settle window closes — see armDeadline. */
+  const deadline = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Consecutive frames the pump found nothing to do — see QUIET_FRAMES. */
   const quiet = useRef(0);
 
   const release = useCallback(() => {
+    const wasHolding = held.current?.mode ?? null;
     held.current = null;
     if (raf.current !== null) {
       cancelAnimationFrame(raf.current);
@@ -148,7 +162,37 @@ export function usePrependAnchor(
     }
     ro.current?.disconnect();
     ro.current = null;
+    if (deadline.current !== null) clearTimeout(deadline.current);
+    deadline.current = null;
+    // After `held` is cleared, so a listener asking `isHolding()` from inside
+    // this callback gets the truthful answer.
+    if (wasHolding) onReleaseRef.current?.(wasHolding);
   }, []);
+
+  /**
+   * Wake up when the settle window closes.
+   *
+   * Expiry used to be discovered only by polling — `reassert` from the rAF pump,
+   * or `isHolding` from the sticky-bottom observer — and both of those are
+   * driven by the content moving. The pump parks itself after QUIET_FRAMES, so
+   * on a conversation that has gone quiet nothing was left to notice, and the
+   * hold simply lingered: no release, and no one told that they may follow the
+   * tail again. That is exactly the settled pane this all exists for.
+   */
+  const armDeadline = useCallback(() => {
+    if (deadline.current !== null) clearTimeout(deadline.current);
+    deadline.current = null;
+    const h = held.current;
+    if (!h) return;
+    const due = Math.max(0, Math.min(h.until, h.maxUntil) - Date.now()) + 1;
+    deadline.current = setTimeout(() => {
+      deadline.current = null;
+      const live = held.current;
+      // `rearm` pushes the deadline out and arms a fresh timer, so a firing that
+      // finds the window still open has already been superseded.
+      if (live && Date.now() >= Math.min(live.until, live.maxUntil)) release();
+    }, due);
+  }, [release]);
 
   const reassert = useCallback(() => {
     const h = held.current;
@@ -162,17 +206,29 @@ export function usePrependAnchor(
 
     if (h.mode === 'bottom') {
       const logicalTop = stability.logicalScrollTop();
+      // NOT root.scrollHeight. A downward correction is painted as a translate,
+      // which extends the scrollable overflow by its own size — so reading the
+      // raw value here made this frame's correction an input to the next one,
+      // and the tail flew ±1,500px for six frames on a plain open. Worse,
+      // WebKit latches that number until the transform is added or removed, so
+      // it cannot even be corrected arithmetically. See contentHeight() in
+      // scroll-stability-core.ts, which measures the layer instead.
+      const honestHeight = stability.contentHeight();
       const { correction, gap, raw } = planBottomFrame(h.hold, {
         scrollTop: logicalTop,
         userScrollTop: stability.readerScrollTop(),
-        scrollHeight: root.scrollHeight,
+        scrollHeight: honestHeight,
         clientHeight: root.clientHeight,
       });
-      const applied = correction !== 0 ? stability.compensate(correction, 'prepend-bottom') : 0;
+      // Bounded: this is the caller whose own correction used to feed the next
+      // frame, and `settledHold` below is built to adopt whatever was refused.
+      const applied = correction !== 0 ? stability.compensate(correction, 'prepend-bottom', true) : 0;
       h.hold.gap = settledHold(gap, raw, applied);
       h.hold.lastTop = stability.readerScrollTop();
       if (correction !== 0) {
-        logCorrection({ t: Date.now(), mode: 'bottom', raw, applied, scrollTop: root.scrollTop, scrollHeight: root.scrollHeight });
+        // The height the decision was made from, not the scroller's inflated
+        // one — otherwise the log cannot explain its own corrections.
+        logCorrection({ t: Date.now(), mode: 'bottom', raw, applied, scrollTop: root.scrollTop, scrollHeight: honestHeight });
       }
       quiet.current = correction === 0 ? quiet.current + 1 : 0;
       return true;
@@ -193,7 +249,7 @@ export function usePrependAnchor(
       scrollTop: stability.readerScrollTop(),
       anchorTop,
     });
-    const applied = correction !== 0 ? stability.compensate(correction, 'prepend-top') : 0;
+    const applied = correction !== 0 ? stability.compensate(correction, 'prepend-top', true) : 0;
     h.hold.offset = settledHold(offset, raw, applied);
     if (correction !== 0) {
       logCorrection({ t: Date.now(), mode: 'top', raw, applied, scrollTop: root.scrollTop, scrollHeight: root.scrollHeight });
@@ -226,10 +282,11 @@ export function usePrependAnchor(
       const h = held.current;
       if (!h) return;
       h.until = Math.min(Date.now() + ms, h.maxUntil);
+      armDeadline();
       // Something moved, so the pump has work again even if it had gone quiet.
       pump();
     },
-    [pump]
+    [armDeadline, pump]
   );
 
   const capture = useCallback(() => {
@@ -246,6 +303,12 @@ export function usePrependAnchor(
       rearm();
       return;
     }
+    // The old hold has expired and is about to be overwritten. Release it
+    // properly first: a silent overwrite tells nobody it ended, and the
+    // replacement's mode is decided by where the reader is NOW, so a tail hold
+    // that ended short is routinely replaced by a top hold — which owes no
+    // chase, and the tail is never followed again.
+    if (held.current) release();
     const until = Date.now() + SETTLE_MS;
     const maxUntil = Date.now() + MAX_HOLD_MS;
     let captured = false;
@@ -254,10 +317,11 @@ export function usePrependAnchor(
     // and leaves the last messages where they were instead of jumping the view
     // to the top of what just arrived.
     const logicalTop = stability.logicalScrollTop();
-    if (root.scrollHeight - logicalTop - root.clientHeight < BOTTOM_SLACK) {
+    const contentBottomGap = stability.contentHeight() - logicalTop - root.clientHeight;
+    if (contentBottomGap < BOTTOM_SLACK) {
       held.current = {
         mode: 'bottom',
-        hold: { gap: root.scrollHeight - logicalTop - root.clientHeight, lastTop: stability.readerScrollTop() },
+        hold: { gap: contentBottomGap, lastTop: stability.readerScrollTop() },
         until,
         maxUntil,
       };
@@ -314,6 +378,7 @@ export function usePrependAnchor(
     }
 
     if (captured) {
+      armDeadline();
       pump();
       // Observe the content box so a resize that lands AFTER the quiet window
       // (an image getting its intrinsic size, a font swap) re-arms the hold and
@@ -328,7 +393,7 @@ export function usePrependAnchor(
         ro.current = obs;
       }
     }
-  }, [getViewport, pump, rearm, stability]);
+  }, [armDeadline, getViewport, pump, rearm, release, stability]);
 
   // A sleeping pump is not running `reassert`, so it is not the thing that
   // notices the window has closed. Anyone asking whether we are still holding
