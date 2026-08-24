@@ -38,6 +38,22 @@ module.exports = {
           return [...extras.filter((p) => !have.has(p)), base].join(':');
         })(),
       },
+      // Nightly restart at 03:00, fleet-wide (sway, 2026-08-24). Fired by the pm2
+      // daemon's own scheduler (lib/Worker.js -> croner), NOT by a hermit cron:
+      // hermit crons are fired by the gateway's cron-runner, so a gateway asked
+      // to restart itself would be killing the thing holding the schedule. The
+      // watcher must live outside the watched, same reason gateway-watch is a
+      // LaunchAgent.
+      //
+      // croner gets no timezone argument, so this reads in the LOCAL time of the
+      // machine running the pm2 daemon. "03:00 Shanghai" is therefore only true
+      // on a box whose clock is Asia/Shanghai — check `date` before assuming.
+      //
+      // Blast radius: shutdown() exits immediately, it does not drain. Every
+      // claude-sdk session on this machine loses its in-flight turn (context
+      // survives via --resume; the interrupted tool call is written as if the
+      // user rejected it).
+      cron_restart: '0 3 * * *',
       autorestart: true,
       max_restarts: 50,
       // Exponential backoff instead of a fixed 5s loop: a gateway that exits on a
