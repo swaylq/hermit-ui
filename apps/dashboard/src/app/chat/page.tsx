@@ -2116,6 +2116,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             }
             disabled={!!session?.closedAt}
             sessionId={sessionId}
+            /* Stable (useCallback inside useAnchoredWindow), so it doesn't
+               defeat LoopBar's memo. Lets a round in the card re-centre the
+               timeline on itself instead of being reachable only in the card. */
+            onJump={anchored.jumpTo}
           />
           {/* Directly above the composer: the Brain's stated goal sits where the
               human's eyes already are when they're about to type — which is also

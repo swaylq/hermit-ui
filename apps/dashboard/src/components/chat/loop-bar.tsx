@@ -7,7 +7,7 @@
 // module-private.
 
 import { memo, useState, useMemo, useCallback } from 'react';
-import { X, ChevronDown, Bot } from 'lucide-react';
+import { X, ChevronDown, Bot, CornerDownLeft } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
@@ -57,6 +57,7 @@ export const LoopBar = memo(function LoopBar({
   takeover,
   disabled,
   sessionId,
+  onJump,
 }: {
   loopState: unknown;
   onStartLoop: () => void;
@@ -72,6 +73,17 @@ export const LoopBar = memo(function LoopBar({
   takeover?: { active: boolean; busy: boolean; onToggle: () => void } | null;
   disabled?: boolean;
   sessionId: string;
+  /**
+   * Re-centre the timeline on a message — the chat page's anchored-window
+   * `jumpTo`. Without it a round is readable only inside this card: the
+   * timeline loads the newest 60 rows, and a looping session puts 25–141 rows
+   * between consecutive rounds, so the round that just fired is usually already
+   * off the first screenful. Optional, because a card rendered outside the chat
+   * page has no timeline to move; the jump affordances hide when it is absent.
+   *
+   * Must be referentially stable — LoopBar is memo'd (see above).
+   */
+  onJump?: (messageId: string) => void;
 }) {
   const s =
     loopState && typeof loopState === 'object'
@@ -120,7 +132,7 @@ export const LoopBar = memo(function LoopBar({
           the suggestion chip's left edge lines up with the composer box. */}
       <div className="mx-auto w-full max-w-3xl px-3 flex flex-col gap-1.5">
         {loops.map((l, i) => (
-          <LoopCard key={typeof l.id === 'string' ? l.id : `loop-${i}`} loop={l} sessionId={sessionId} onDelete={onDeleteLoop} />
+          <LoopCard key={typeof l.id === 'string' ? l.id : `loop-${i}`} loop={l} sessionId={sessionId} onDelete={onDeleteLoop} onJump={onJump} />
         ))}
         {(crons.data ?? []).map((c) => (
           <ScheduleCard key={c.id} cron={c} sessionId={sessionId} />
@@ -194,7 +206,7 @@ export const LoopBar = memo(function LoopBar({
 });
 
 // One active loop, collapsed to a status line; click toggles a detail panel.
-function LoopCard({ loop, sessionId, onDelete }: { loop: LoopEntry; sessionId: string; onDelete?: (id: string) => void }) {
+function LoopCard({ loop, sessionId, onDelete, onJump }: { loop: LoopEntry; sessionId: string; onDelete?: (id: string) => void; onJump?: (messageId: string) => void }) {
   const id = typeof loop.id === 'string' ? loop.id : 'loop';
   const status = typeof loop.status === 'string' ? loop.status : 'running';
   const runCount = typeof loop.runCount === 'number' ? loop.runCount : null;
@@ -258,6 +270,7 @@ function LoopCard({ loop, sessionId, onDelete }: { loop: LoopEntry; sessionId: s
           loopId={id}
           open={open}
           fallback={typeof loop.lastResult === 'string' ? loop.lastResult : null}
+          onJump={onJump}
         />
         <div className="text-muted-foreground/60 text-[11px] pt-1.5 mt-1 border-t border-border/60">
           {id.slice(0, 12)} · results keep landing in this chat · a restart stops it
@@ -448,11 +461,13 @@ function LoopRuns({
   loopId,
   open,
   fallback,
+  onJump,
 }: {
   sessionId: string;
   loopId: string;
   open: boolean;
   fallback: string | null;
+  onJump?: (messageId: string) => void;
 }) {
   const q = trpc.chat.loopRuns.useQuery(
     { sessionId, loopId },
@@ -480,12 +495,27 @@ function LoopRuns({
     <div className="pt-1">
       <div className="flex items-center justify-between mb-1">
         <span className="text-muted-foreground/70 text-[11px]">Rounds ({runs.length})</span>
-        <span className="text-muted-foreground/40 text-[10px]">newest first · click to expand</span>
+        <div className="flex items-center gap-2">
+          {/* The newest round is the one you came here for, and it is the one
+              most likely to have scrolled out of the timeline's 60-row window. */}
+          {onJump && (
+            <button
+              type="button"
+              onClick={() => onJump(runs[0].id)}
+              title="Show the newest round in the conversation"
+              className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+            >
+              <CornerDownLeft className="h-3 w-3" aria-hidden="true" />
+              jump to newest
+            </button>
+          )}
+          <span className="text-muted-foreground/40 text-[10px]">newest first · click to expand</span>
+        </div>
       </div>
       {/* No inner max-h — the parent panel owns the single scroll region. */}
       <div className="-mx-1 px-1 space-y-1">
         {runs.map((r) => (
-          <LoopRunRow key={r.id} run={r} />
+          <LoopRunRow key={r.id} run={r} onJump={onJump} />
         ))}
       </div>
     </div>
@@ -493,7 +523,7 @@ function LoopRuns({
 }
 
 // One round: a summary line (run N · time · 摘要); click expands the full report.
-function LoopRunRow({ run }: { run: LoopRun }) {
+function LoopRunRow({ run, onJump }: { run: LoopRun; onJump?: (messageId: string) => void }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded border border-border/60 bg-background/40">
@@ -505,6 +535,26 @@ function LoopRunRow({ run }: { run: LoopRun }) {
         <span className="font-mono text-[11px] text-muted-foreground shrink-0">run {run.run}</span>
         <span className="text-muted-foreground/45 text-[10px] tabular-nums shrink-0 hidden sm:inline">{relTime(run.createdAt)}</span>
         <span className="truncate text-foreground/85 text-[12px] min-w-0 flex-1">{run.summary || '(no summary)'}</span>
+        {/* A nested <button> would be invalid HTML inside the row button, so this
+            is a span with a role — same affordance, no DOM nesting warning. */}
+        {onJump && (
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={`show run ${run.run} in the conversation`}
+            title="Show this round in the conversation"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onJump(run.id); }}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault();
+              e.stopPropagation();
+              onJump(run.id);
+            }}
+            className="inline-flex items-center justify-center h-5 w-5 shrink-0 rounded text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
+          >
+            <CornerDownLeft className="h-3 w-3" aria-hidden="true" />
+          </span>
+        )}
         <ChevronDown className={cn('h-3 w-3 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} aria-hidden="true" />
       </button>
       {open && (
