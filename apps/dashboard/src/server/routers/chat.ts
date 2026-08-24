@@ -217,6 +217,10 @@ export const chatRouter = router({
         startedAt: true,
         lastMessageAt: true,
         lastReadAt: true,
+        // 8 bytes, and the only way the sidebar can tell a FINISHED loop round
+        // from the chatter around it — lastMessageAt moves on every one of the
+        // dozens of messages between rounds. Read by hasUnreadLoopRound().
+        lastLoopRoundAt: true,
         closedAt: true,
         hiddenAt: true,
         // Which sidebar drawer this session is filed in; null = it stays in the

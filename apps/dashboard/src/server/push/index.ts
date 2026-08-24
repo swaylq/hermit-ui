@@ -25,9 +25,18 @@
 // So the debounce is the floor and `turnStillRunning` is the gate: while the
 // session is working the timer re-arms instead of delivering, and the event it is
 // holding keeps being replaced by whatever the agent says next — so what finally
-// lands is the LAST thing it said, which is the answer. The other three kinds are
+// lands is the LAST thing it said, which is the answer. The other kinds are
 // discrete events and go out immediately; `blocked` in particular must, since that
 // one means the turn has stopped and is waiting on you.
+//
+// `loop` is the one kind that is session chat and STILL goes out immediately,
+// added 2026-08-24. A loop round marker is the closing report of an iteration —
+// the loop skill mandates it as the last thing the round says — so "wait until
+// the turn is over" has nothing left to wait for, while holding it does active
+// harm: on a session with a perpetual background task the round waits out
+// BACKGROUND_HOLD_MAX_MS and is then delivered carrying whatever the agent said
+// in the meantime. Measured on one session that day: 13 hourly rounds, 4 pushes,
+// each held 30–46 min, not one of them a round report.
 //
 // "No longer working" had a hole in it, closed 2026-08-23: backgrounding a Bash
 // or a subagent ENDS the turn, so the CLI reports idle a millisecond after the
@@ -95,7 +104,27 @@ export function enqueuePush(event: PushEvent): void {
     return;
   }
 
+  // A loop round is an ANSWER, so it goes out now — and it retires the preamble
+  // it supersedes. Whatever ordinary chat event this session was holding is, by
+  // definition, something the agent said on the way to this round; delivering
+  // both would put the preamble on the lock screen right behind the conclusion.
+  if (event.kind === 'loop' && event.sessionId) dropHeldChat(event.sessionId);
+
   void deliver(event).catch((e) => console.error('[push] deliver failed', e));
+}
+
+/**
+ * Cancel the chat event held for a session, if any. Chat events collapse on the
+ * bare sessionId (see chatEvent), which is the key this looks up.
+ *
+ * Dropping rather than delivering is the point: the held event is mid-turn
+ * narration that the round report has just made redundant.
+ */
+function dropHeldChat(sessionId: string): void {
+  const held = pending.get(sessionId);
+  if (!held) return;
+  clearTimeout(held.timer);
+  pending.delete(sessionId);
 }
 
 /**

@@ -8,6 +8,7 @@ export type PushKind =
   | 'chat' // an agent replied in a session
   | 'cron' // a scheduled task finished badly (timeout / error / no_output)
   | 'host' // a machine crossed into red resource pressure
+  | 'loop' // one iteration of an in-conversation /loop reported its result
   | 'stall'; // the human asked something and nothing answered (server/unanswered.ts)
 
 export interface PushEvent {

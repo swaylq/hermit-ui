@@ -420,3 +420,58 @@ test('a session that has never been spoken in has no silence to expire', () => {
   );
   assert.equal(v.key, 'working');
 });
+
+// ── an unread loop round outranks the background hold ───────────────────────
+//
+// The failure this closes, measured on session cmt609n1 (agent humanize) on
+// 2026-08-24: an hourly `/loop` reported 13 rounds over 9 hours and the sidebar
+// never once went red. The agent's iterations end in `until … sleep 30 … done`
+// wait loops, which the gateway backgrounds at ~183s — 20 times that day — so
+// `backgroundCount > 0` was true essentially always, and the branch above kept
+// the session amber through every round. A round report is not "the reply is
+// still coming": it IS the reply.
+
+test('an unread loop round turns the session red despite outstanding background work', () => {
+  const now = Date.now();
+  const s = {
+    alive: true,
+    state: 'idle',
+    activity: { kind: 'background', backgroundCount: 1 },
+    lastMessageAt: new Date(now - 60_000),
+  };
+  assert.equal(sessionStatusView(s, { now, unread: true }).key, 'working');
+  assert.equal(sessionStatusView(s, { now, unread: true, unreadLoopRound: true }).key, 'unread');
+});
+
+test('it does not wait out BACKGROUND_RESIDENT_MS — the round is already delivered', () => {
+  // The bound exists to stop a forgotten task pinning a session amber for ever.
+  // A delivered round needs no such patience: there is nothing left to wait for.
+  const now = Date.now();
+  const s = {
+    alive: true,
+    state: 'idle',
+    backgroundBusy: true,
+    lastMessageAt: new Date(now - 1_000), // one second ago: deep inside the hold
+  };
+  assert.equal(sessionStatusView(s, { now, unread: true }).key, 'working');
+  assert.equal(sessionStatusView(s, { now, unread: true, unreadLoopRound: true }).key, 'unread');
+});
+
+test('a READ loop round changes nothing — this is about unread work only', () => {
+  // hasUnreadLoopRound() returns false once lastReadAt passes the round, so the
+  // ordinary background rule takes over again and the dot goes back to amber.
+  const now = Date.now();
+  const s = { alive: true, state: 'idle', backgroundBusy: true, lastMessageAt: new Date(now - 60_000) };
+  assert.equal(sessionStatusView(s, { now, unread: true, unreadLoopRound: false }).key, 'working');
+});
+
+test('an unread loop round still does not outrank needs-you or a working turn', () => {
+  // It answers ONE branch — idle-with-background. A turn that is genuinely
+  // running, or one parked on a decision, still outranks anything unread.
+  const s = { alive: true, state: 'working', backgroundBusy: true };
+  assert.equal(sessionStatusView(s, { unread: true, unreadLoopRound: true }).key, 'working');
+  assert.equal(
+    sessionStatusView({ alive: true, state: 'idle', backgroundBusy: true }, { unread: true, unreadLoopRound: true, needsYou: true }).key,
+    'needs-you',
+  );
+});

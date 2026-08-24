@@ -485,6 +485,14 @@ model ChatSession {
   transcriptPath    String?
   lastUserPrompt    String?   @db.Text
   lastAssistantText String?   @db.Text
+  // When a `/loop` iteration last reported a round into this session — an
+  // assistant message whose text carries the skill's `↻ loop … run N` marker.
+  // Compared against lastReadAt by the status dot: a round is a FINISHED piece
+  // of work, so an unread one outranks the amber "a background task is still
+  // running" state that would otherwise hold the session all day. Cannot be
+  // derived from lastMessageAt or preview — both move with every later message,
+  // and a looping session says dozens of things between rounds.
+  lastLoopRoundAt   DateTime?
   // Loop / scheduled-task state, pushed alongside the other runtime fields.
   // The agent's `cron` skill rewrites <AGENT_DIR>/.loop-state.json every time
   // a /loop, /schedule, CronCreate, or CronDelete fires; the gateway forwards

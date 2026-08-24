@@ -301,6 +301,19 @@ export function sessionStatusView(
   opts: {
     liveWorking?: boolean;
     unread?: boolean;
+    /**
+     * A `/loop` round landed here and has not been read — `hasUnreadLoopRound()`
+     * in lib/session-read.
+     *
+     * It exists to answer the amber background-task branch below and nothing
+     * else. That branch reads "a reply is still coming"; a round report IS the
+     * reply, so once one is sitting unread the session has finished work you
+     * have not seen, and that is a red dot however many background tasks are
+     * still ticking. Without this a looping session whose agent leaves a wait
+     * loop running — which the gateway backgrounds every ~3 minutes — never
+     * leaves amber, so no round it ever reports is announced anywhere.
+     */
+    unreadLoopRound?: boolean;
     needsYou?: boolean;
     now?: number;
     /**
@@ -378,7 +391,17 @@ export function sessionStatusView(
   // is what it is: something is running, and the reply is still to come. Bounded
   // by BACKGROUND_RESIDENT_MS, so a task nobody is waiting on cannot pin a
   // session amber for a day.
-  if (s.state === 'idle' && backgroundStillRunning(s, opts.now ?? Date.now())) return working();
+  //
+  // An unread loop round overrides it outright, without waiting for that bound.
+  // The branch's premise is "the reply is still to come"; a round report is the
+  // reply, already delivered and already unread. See `unreadLoopRound`.
+  if (
+    s.state === 'idle' &&
+    !opts.unreadLoopRound &&
+    backgroundStillRunning(s, opts.now ?? Date.now())
+  ) {
+    return working();
+  }
   // sky — recycling: a restart was requested; the pane is being killed and will
   // respawn on the next message. Outranks the !alive check below, since `alive`
   // flips false mid-restart and we want "restarting", not "exited".

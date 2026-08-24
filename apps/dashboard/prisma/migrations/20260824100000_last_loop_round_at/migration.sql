@@ -1,0 +1,16 @@
+-- When a /loop iteration last reported a round into a session.
+--
+-- The status dot had exactly two facts to work with: lastMessageAt (moves on
+-- EVERY message) and an outstanding background task. On a looping session that
+-- combination is wrong in the one direction that matters — the session sits
+-- amber "working" behind a background task that never ends, and the round the
+-- agent actually finished never turns it red.
+--
+-- Nothing already stored can stand in for this. lastMessageAt and `preview` are
+-- both overwritten by whatever the agent says next, and on the session that
+-- prompted this there were 25–141 messages between consecutive rounds.
+--
+-- Additive and nullable: every existing row reads NULL, which means "no round
+-- has ever landed here", and the dot behaves exactly as it does today until one
+-- does. Written at most once per round (hourly), not once per message.
+ALTER TABLE "ChatSession" ADD COLUMN "lastLoopRoundAt" TIMESTAMP(3);
