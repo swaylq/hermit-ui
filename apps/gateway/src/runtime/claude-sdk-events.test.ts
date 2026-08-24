@@ -273,3 +273,76 @@ test('the placeholder is one row per session, and its retraction says so', () =>
   assert.equal(r.deleted, true);
   assert.deepEqual(r.content, []);
 });
+
+// ── a loop iteration the CLI injected ───────────────────────────────────────
+//
+// The rule above skips plain user prompts because "the dashboard already wrote
+// that row when it accepted the message". That holds for anything a human
+// typed. It does NOT hold for a `/loop` iteration: the CLI's own in-session
+// cron enqueues it, nothing ever accepted it, and no row was ever written — so
+// the chat showed a loop's results with nothing that caused them. Measured on
+// session cmt609n1, 2026-08-24: 9 hourly iterations in the transcript, 0 rows
+// in the dashboard.
+
+const ITERATION = [
+  'Read silently first: run the startup command in ./CLAUDE.md',
+  '',
+  'Then do this iteration of the loop: 推进 humanize-chinese v6 重构',
+  '',
+  'Then SELF-TEST this iteration before reporting.',
+].join('\n');
+
+const metaUser = (uuid: string, text: string) => ({
+  type: 'user', uuid, session_id: 'cc-1', isMeta: true,
+  message: { role: 'user', content: [{ type: 'text', text }] }, parent_tool_use_id: null,
+} as any);
+
+test('a loop iteration becomes one system row naming the round task', () => {
+  const out = translateSdkMessage(metaUser('u-loop', ITERATION), ctx);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].role, 'system');
+  assert.equal(out[0].externalId, 'u-loop');
+  assert.deepEqual(out[0].content, [
+    { type: 'text', text: '[gateway] ↻ loop 触发 — 推进 humanize-chinese v6 重构' },
+  ]);
+});
+
+test('the row is a summary, not the 500-character prompt', () => {
+  // The rest of the iteration prompt is skill boilerplate, byte-identical every
+  // round. Pasting it hourly would trade a missing row for a wall of noise.
+  const text = (translateSdkMessage(metaUser('u-loop', ITERATION), ctx)[0].content as any)[0].text;
+  assert.ok(!text.includes('SELF-TEST'));
+  assert.ok(!text.includes('CLAUDE.md'));
+  assert.ok(text.length < 120);
+});
+
+test('it keys on the transcript uuid, so a replay upserts instead of duplicating', () => {
+  // Same contract as every other row here: /api/sync/chat-message upserts on
+  // (sessionId, externalId), and the backstop tail replays from line 1.
+  const a = translateSdkMessage(metaUser('u-loop', ITERATION), ctx);
+  const b = translateSdkMessage(metaUser('u-loop', ITERATION), ctx);
+  assert.equal(a[0].externalId, b[0].externalId);
+});
+
+test('a human-typed prompt is still skipped, isMeta or not', () => {
+  // The dashboard wrote that row already; forwarding it would duplicate the
+  // message under a different externalId. This is the rule the loop branch is
+  // an exception to, not a replacement for.
+  assert.deepEqual(translateSdkMessage(user('u-typed', [{ type: 'text', text: ITERATION }]), ctx), []);
+  assert.deepEqual(translateSdkMessage(user('u-typed', [{ type: 'text', text: '重构整个项目' }]), ctx), []);
+});
+
+test('a task notification is still skipped — it is machinery, not a round', () => {
+  const notif = '<task-notification>\n<task-id>bfjz0alz8</task-id>\n<status>completed</status>\n</task-notification>';
+  assert.deepEqual(translateSdkMessage(user('u-notif', [{ type: 'text', text: notif }]), ctx), []);
+  assert.deepEqual(translateSdkMessage(metaUser('u-notif2', notif), ctx), []);
+});
+
+test('tool results are unaffected by the loop branch', () => {
+  const out = translateSdkMessage(
+    user('u-tr', [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }]),
+    ctx,
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].role, 'user');
+});

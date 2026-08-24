@@ -16,7 +16,7 @@
 
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { SyncItem } from './types';
-import { CcBlock, hasToolResult } from '../claude-code';
+import { CcBlock, hasToolResult, loopTriggerSummary } from '../claude-code';
 
 /**
  * A message the CLI emitted but that carries no `uuid`.
@@ -93,6 +93,18 @@ export function translateSdkMessage(msg: SDKMessage, ctx: TranslateCtx): SyncIte
   // under a different externalId.
   if (m.type === 'user') {
     const content = m.message?.content;
+    // A loop iteration the CLI injected into its own queue. It IS a plain user
+    // prompt, so the rule below would drop it — but the reason that rule gives
+    // ("the dashboard already wrote that row") is only true of a message the
+    // dashboard accepted, and nobody accepted this one. Dropped, the chat showed
+    // a loop's results with nothing that caused them: an agent apparently
+    // talking to itself once an hour. Forwarded as a one-line SYSTEM row rather
+    // than the prompt itself, because the prompt is ~500 characters of skill
+    // boilerplate that is identical every round.
+    const loopTask = loopTriggerSummary(m.isMeta, content);
+    if (loopTask && m.uuid) {
+      return [systemItem(sessionId, m.uuid, `[gateway] ↻ loop 触发 — ${loopTask}`, stampUuid)];
+    }
     if (!Array.isArray(content) || !hasToolResult(content)) return [];
     if (!m.uuid) return [];
     return [{
