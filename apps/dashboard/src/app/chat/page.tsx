@@ -115,7 +115,8 @@ const NewChatPane = lazy(() => import('@/components/chat/new-chat-pane').then((m
 // toggle stays live so the screen is never a dead end.
 function NewChatFallback() {
   return (
-    <div className="flex flex-1 flex-col">
+    // min-h-0 for the same reason as the real pane's root — see there.
+    <div className="flex flex-1 flex-col min-h-0">
       <header className="h-12 px-3 flex items-center gap-2 border-b border-border shrink-0">
         <SidebarMobileToggle />
         <span className="text-sm font-medium text-foreground">New chat</span>

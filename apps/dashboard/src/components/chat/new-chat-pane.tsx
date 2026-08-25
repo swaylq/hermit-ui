@@ -73,7 +73,13 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
 
   const create = trpc.chat.createSession.useMutation({ onSuccess: (s) => onCreated(s.id) });
   return (
-    <div className="flex flex-1 flex-col">
+    // `min-h-0` HERE, not only on the scroll box below. This root is itself a
+    // flex child of <main>, so its own default `min-height:auto` let it grow to
+    // its content — measured at 1064px inside a 760px main — and the scroll
+    // container then inherited a height taller than the screen with nothing
+    // left to scroll. A scroll container is only a scroll container if every
+    // flex ancestor between it and the bounded box can shrink.
+    <div className="flex flex-1 flex-col min-h-0">
       <header className="h-12 px-3 flex items-center gap-2 border-b border-border shrink-0">
         <SidebarMobileToggle />
         <span className="text-sm font-medium text-foreground">New chat</span>
