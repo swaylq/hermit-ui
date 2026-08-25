@@ -9,6 +9,8 @@
 // dev fallback + the no-reverse-proxy production fallback.
 
 import { NextRequest } from 'next/server';
+import { makeThumb } from '@/server/image-thumb';
+import { THUMB_SUFFIX, thumbSourceCandidates } from '@/lib/thumb-url';
 import { stat, readFile, open } from 'node:fs/promises';
 import { resolve, sep, extname } from 'node:path';
 import { platform } from 'node:os';
@@ -56,18 +58,41 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ pat
     return new Response('forbidden', { status: 403 });
   }
 
-  const st = await stat(target).catch(() => null);
+  let st = await stat(target).catch(() => null);
+
+  // Missing `<uuid>.thumb.webp`: mint it from the `.safe.` sibling and cache it
+  // on disk. This is what lets the ~3.2k images already uploaded get a cheap
+  // thumbnail without rewriting a single stored message — the URL is derived by
+  // the client (lib/thumb-url.ts), so the first reader of an old picture pays
+  // ~113ms once and every reader after that is served the 16KB file.
+  if (!st && target.endsWith(THUMB_SUFFIX)) {
+    for (const src of thumbSourceCandidates(target)) {
+      if (makeThumb(src, target)) break;
+    }
+    st = await stat(target).catch(() => null);
+  }
+
   if (!st || !st.isFile()) return new Response('not found', { status: 404 });
 
   const mime = MIME_BY_EXT[extname(target).toLowerCase()] ?? 'application/octet-stream';
   const total = st.size;
+  // Weak validators from size+mtime. The uuid path already makes the bytes
+  // immutable, but without an ETag a cache revalidation can only ever be a full
+  // 200 — on a 2MB screenshot that is the whole file again.
+  const etag = `W/"${total.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
   const baseHeaders: Record<string, string> = {
     'content-type': mime,
     // Uuid path = effectively immutable; ok to cache hard.
     'cache-control': 'public, max-age=31536000, immutable',
     // Advertise range support so <audio>/<video> can seek.
     'accept-ranges': 'bytes',
+    etag,
+    'last-modified': new Date(st.mtimeMs).toUTCString(),
   };
+
+  if (_req.headers.get('if-none-match') === etag) {
+    return new Response(null, { status: 304, headers: baseHeaders });
+  }
 
   // HTTP Range (RFC 7233): media elements request byte ranges to stream + seek —
   // Safari refuses to play a <video> that doesn't answer 206. Serve only the

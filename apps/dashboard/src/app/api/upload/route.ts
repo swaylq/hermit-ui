@@ -27,6 +27,8 @@ import { spawnSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
+import { makeThumb } from '@/server/image-thumb';
+import { THUMB_SUFFIX } from '@/lib/thumb-url';
 
 // Upload size ceiling for ALL file types (image / doc / archive / audio / video
 // alike). This route buffers the whole upload in memory before writing it to disk,
@@ -201,11 +203,18 @@ export async function POST(req: NextRequest) {
     }
     const safeStatRes = await stat(safePath).catch(() => null);
     const dims = imageDims(safePath) ?? imageDims(origPath);
+    // A 640px WebP for the 320px chat box. Best-effort: `thumbUrl` is null when
+    // the encoder isn't there or the source is a GIF, and the client then keeps
+    // pointing at the .safe. url exactly as it used to.
+    const thumbable = ext !== 'gif';
+    const thumbPath = join(dir, `${uuid}${THUMB_SUFFIX}`);
+    const hasThumb = thumbable && makeThumb(safePath, thumbPath);
     return NextResponse.json({
       ok: true,
       kind: 'image',
       url: `/uploads/${sessionId}/${uuid}.safe.${ext}`,
       originalUrl: `/uploads/${sessionId}/${uuid}.${ext}`,
+      thumbUrl: hasThumb ? `/uploads/${sessionId}/${uuid}${THUMB_SUFFIX}` : null,
       mimeType: mime,
       width: dims?.width ?? null,
       height: dims?.height ?? null,

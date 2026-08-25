@@ -13,6 +13,7 @@ import { Markdown } from '@/components/markdown';
 import dynamic from 'next/dynamic';
 import { saveFile } from '@/lib/save-file';
 import { Overlay } from '@/components/overlay';
+import { thumbUrlFor } from '@/lib/thumb-url';
 
 // Lazy-load the zoomable image lightbox (a portal overlay in its own ~20KB chunk)
 // so the chat route's first paint doesn't carry it — it's only needed once an
@@ -55,6 +56,18 @@ const IMAGE_CAP_PX = 320;
 
 export function ChatImage({ url, width, height }: { url: string; width: number | null; height: number | null }) {
   const [open, setOpen] = useState(false);
+  // The box is 320 CSS px; the `.safe.` file behind `url` is up to 2000px and
+  // averages 535KB. Point the thumbnail at the derived 640px WebP (~16KB) and
+  // keep `url` for the lightbox, which is the only place the big one is worth
+  // its bytes. `thumbUrlFor` returns null for anything not thumbnail-able
+  // (data: urls, gifs) and then nothing changes.
+  const thumb = useMemo(() => thumbUrlFor(url), [url]);
+  const [src, setSrc] = useState(thumb ?? url);
+  // A thumbnail can be missing for one request only — the /uploads route mints
+  // it on demand — but if the encoder is absent on this box it never appears.
+  // Falling back to the full image keeps a picture on screen either way.
+  const onThumbError = useCallback(() => setSrc((cur) => (cur === url ? cur : url)), [url]);
+  useEffect(() => { setSrc(thumb ?? url); }, [thumb, url]);
   const alt = `attachment${width && height ? ` ${width}×${height}` : ''}`;
   // Null dimensions are the base64 `tool_result` shape, which carries none.
   // Those keep the old behaviour: nothing to reserve, so nothing is reserved.
@@ -76,7 +89,7 @@ export function ChatImage({ url, width, height }: { url: string; width: number |
         className="inline-block cursor-zoom-in overflow-hidden rounded border border-border align-bottom transition-opacity hover:opacity-90"
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={url} alt={alt} style={box} className="max-h-[320px] max-w-[320px]" loading="lazy" decoding="async" />
+        <img src={src} alt={alt} style={box} className="max-h-[320px] max-w-[320px]" loading="lazy" decoding="async" onError={onThumbError} />
       </button>
       <ImageLightbox open={open} onOpenChange={setOpen} url={url} alt={alt} siblingSelector="[data-lightbox-src]" />
     </>
