@@ -91,6 +91,22 @@ export function claudeCredentialEnv(
   // the only question is how much of it we ask for.
   env.CLAUDE_CODE_EFFORT_LEVEL = 'max';
 
+  // Two things the CLI does that only make sense when Anthropic is upstream.
+  // Both are scoped to the composed session's spawn env, so an ordinary
+  // subscription session on this machine is untouched.
+  //
+  //  · the attribution block. Claude Code prepends a short system-prompt block
+  //    carrying its version and "a fingerprint derived from the conversation".
+  //    api.anthropic.com strips it; per Anthropic's own gateway-protocol doc
+  //    "any other upstream receives it as part of the prompt" — so today it is
+  //    handed to Moonshot. It buys nothing there and it is conversation-derived.
+  //  · the non-essential telemetry. Metrics are on by default and are only
+  //    turned off automatically for the Bedrock/Vertex-style provider switches,
+  //    not for a generic base-URL gateway. A session that never touches
+  //    Anthropic has nothing to report to it.
+  env.CLAUDE_CODE_ATTRIBUTION_HEADER = '0';
+  env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1';
+
   // A window the CLI cannot infer from the model name. `k3[1m]` carries its own
   // (the bracketed suffix is a Claude Code alias it parses), so this is only
   // for the ids that do not — set `modelLimits` on the credential and the

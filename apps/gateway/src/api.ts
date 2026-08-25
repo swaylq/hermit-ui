@@ -77,6 +77,7 @@ export const api = {
   // source for the true 5h/weekly window %; ccusage is a cost estimate).
   syncPlanUsage: (planUsage: any) => post('/api/sync/plan-usage', { planUsage }),
   syncCodexUsage: (codexUsage: any) => post('/api/sync/codex-usage', { codexUsage }),
+  syncKimiUsage: (kimiUsage: any) => post('/api/sync/kimi-usage', { kimiUsage }),
   // What Claude Code on this machine can run — the SDK's own `supportedModels()`
   // answer, cached on Machine.claudeModels so the chat model picker offers the
   // aliases THIS CLI accepts instead of a list the dashboard would have to

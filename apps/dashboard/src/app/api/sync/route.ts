@@ -102,6 +102,28 @@ const CodexUsageInput = z.object({
   capturedAt: z.string().optional(),
 });
 
+const KimiUsageInput = z.object({
+  credentialId: z.string().max(64),
+  planLevel: z.string().max(64).nullable().optional(),
+  planName: z.string().max(64).nullable().optional(),
+  periodUsed: z.number().int().nullable().optional(),
+  periodLimit: z.number().int().nullable().optional(),
+  periodResetsAt: z.string().nullable().optional(),
+  // One entry per rolling rate window. Capped because it is a vendor-shaped
+  // list landing in a JSON column: today it is one 5-hour window, and a
+  // response that suddenly held hundreds is a bug, not data.
+  windows: z.array(z.object({
+    minutes: z.number().int().nullable(),
+    used: z.number().int().nullable(),
+    limit: z.number().int().nullable(),
+    resetsAt: z.string().nullable(),
+  })).max(12).optional(),
+  parallelLimit: z.number().int().nullable().optional(),
+  extraBalanceCents: z.number().int().nullable().optional(),
+  extraCurrency: z.string().max(8).nullable().optional(),
+  capturedAt: z.string().optional(),
+});
+
 const UsageInput = z.object({
   agentName: z.string(),
   hourBucket: z.string().datetime(),
@@ -121,4 +143,4 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ slu
   return NextResponse.json({ error: 'use /api/sync/<thing>' }, { status: 404 });
 }
 
-export { resolveMachine, deepStripNul, AgentInput, GlobalSkillInput, PlanUsageInput, CodexUsageInput, UsageInput };
+export { resolveMachine, deepStripNul, AgentInput, GlobalSkillInput, PlanUsageInput, CodexUsageInput, KimiUsageInput, UsageInput };

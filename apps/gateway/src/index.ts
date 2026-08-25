@@ -28,6 +28,7 @@ import { collectUsage, usageWindowStart } from './collect/usage';
 import { collectUsageWindows } from './collect/window';
 import { collectPlanUsage } from './collect/plan-usage';
 import { collectCodexUsage } from './collect/codex-usage';
+import { collectKimiUsage } from './collect/kimi-usage';
 import { api } from './api';
 import { tick as cronTick } from './cron-runner';
 import { chatTick, chatCancelTick, chatRestartTick, chatHibernateTick, shutdownChatRunner } from './chat-runner';
@@ -163,6 +164,19 @@ async function pushCodexUsage() {
   });
 }
 
+// Kimi Code subscription quota, straight from Moonshot's own `/v1/usages`.
+// One HTTP GET, no process and no scraping — but it is a NETWORK call to a
+// third party, so it rides the slow loop rather than the 2s tick.
+async function pushKimiUsage() {
+  await safe('kimi-usage', async () => {
+    const ku = await collectKimiUsage();
+    // null = this machine has no Kimi credential (or the endpoint refused).
+    // Skipping leaves the row absent, which is what makes the dashboard hide
+    // the panel rather than render an empty one.
+    if (ku) await api.syncKimiUsage(ku);
+  });
+}
+
 async function globalSkillReqTick() {
   await safe('global-skill-requests', async () => { await globalSkillRequestTick(); });
 }
@@ -283,6 +297,7 @@ function loop(fn: () => Promise<void>, ms: number) {
   await pushUsageWindows();
   await pushCronTick();
   await pushCodexUsage();
+  await pushKimiUsage();
   await pushPlanUsage(); // last — runs after the blocking ccusage scans, not starved by them
 })();
 
@@ -335,6 +350,7 @@ loop(() => safe('global-memory', globalMemoryTick), 30_000);
 // step of the startup IIFE above, so it isn't starved by the ccusage block).
 loop(pushPlanUsage, 12 * 60_000);
 loop(pushCodexUsage, 12 * 60_000); // reads codex's own rollout files; no process, no API call
+loop(pushKimiUsage, 12 * 60_000); // one GET to Moonshot; no-op on a machine with no Kimi credential
 // Usage is the dashboard's only source for spend numbers (the live ccusage
 // shell-out was removed). 30 min keeps ccusage's stdin scan light while still
 // showing fresh-enough data for human-paced quota watching.

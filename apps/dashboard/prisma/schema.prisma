@@ -102,6 +102,7 @@ model Machine {
   crons               Cron[]
   usageHourly         UsageHourly[]
   codexUsage          CodexUsage?
+  kimiUsage           KimiUsage?
   usageWindows        UsageWindow[]
   chatSessions        ChatSession[]
   agentRequests       AgentRequest[]
@@ -234,6 +235,51 @@ model CodexUsage {
   // Per-day token totals for the sparkline: `[{ day: "2026-08-11", input, output, sessions }]`.
   daily         Json?
   capturedAt    DateTime @default(now())
+}
+
+// Kimi Code subscription quota, read from Moonshot's own endpoint by the
+// gateway (`GET <baseUrl>/v1/usages` with the credential's API key — the same
+// numbers the Kimi CLI's `/usage` command shows).
+//
+// A third vendor, a third shape, and again NOT merged into PlanUsage or
+// CodexUsage. Kimi reports a 7-day subscription quota AND a rolling rate window
+// as two separate rows with their own reset clocks, plus a concurrency cap and
+// a pay-as-you-go wallet that takes over when the quota runs out. None of those
+// has a column to live in on the other two rows.
+//
+// The quota is an ACCOUNT figure, not a machine one — two machines sharing one
+// Kimi key report the same numbers. Keyed by machine anyway, exactly as
+// PlanUsage is for a Claude subscription, because that is where the credential
+// that can read it lives.
+model KimiUsage {
+  machineId    String  @id
+  machine      Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  // Which Settings → Models credential answered. A machine can hold more than
+  // one Kimi key, and a figure with no idea which account it describes is not
+  // something anyone can act on.
+  credentialId String?
+  // Membership tier as the API names it (e.g. LEVEL_ADVANCED), and the
+  // human-facing name when /me supplies one (Allegro).
+  planLevel    String?
+  planName     String?
+  // The subscription quota — refreshes every 7 days from the subscription date
+  // and does not roll over. `used`/`limit` are the vendor's own units; the UI
+  // renders the RATIO, which is the only reading that is stable if they change.
+  periodUsed     Int?
+  periodLimit    Int?
+  periodResetsAt DateTime?
+  // The rolling rate windows, `[{ minutes, used, limit, resetsAt }]`. JSON
+  // rather than columns because the endpoint returns a LIST — one 5-hour window
+  // today, and nothing promises it stays one.
+  windows        Json?
+  // Concurrent requests allowed. Not a quota, but it is the third number that
+  // makes a 429 explicable.
+  parallelLimit  Int?
+  // "Extra Usage" — the pay-as-you-go balance that keeps requests flowing after
+  // the quota is spent. Null when the account has none, which is the common case.
+  extraBalanceCents Int?
+  extraCurrency     String?
+  capturedAt   DateTime @default(now())
 }
 
 model AgentRequest {

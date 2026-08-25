@@ -99,6 +99,49 @@ at startup, so `planRuntimeSwitch` restarts a claude-sdk session whose
 credential changed, and `ensure()` retires a child whose key rotated underneath
 it.
 
+### Is pointing Claude Code elsewhere a risk to the subscription?
+
+Researched before shipping, because the fleet already refused the *opposite*
+arrangement (see the next section) and the two get confused.
+
+**Anthropic documents this direction as a supported configuration.**
+`code.claude.com/docs/en/llm-gateway` — "Any gateway that exposes a supported
+API format works" — and `llm-gateway-connect` describes the same-machine
+coexistence explicitly: "Your claude.ai login stays saved and unused while the
+variable is set; unset the variable and Claude Code goes back to it." Moonshot
+and Zhipu both publish their own Claude Code setup pages. There is a "doesn't
+support routing Claude Code to non-Claude models" line on the gateway page; it
+is product-support language in a docs page, not a prohibition in a legal one,
+and it sits in the same paragraph as "any gateway … works".
+
+**What Anthropic actually enforces is the reverse**, and it is enforced:
+`code.claude.com/docs/en/legal-and-compliance` restricts OAuth authentication to
+"ordinary use of Claude Code and other native Anthropic applications", and bars
+developers from routing requests "through Free, Pro, or Max plan credentials".
+Anthropic began blocking Max OAuth in third-party clients in January 2026. Every
+restricted act involves a claude.ai credential leaving Anthropic's own flow.
+Nothing involves the CLI talking to somebody else — a Kimi session's packets
+never reach Anthropic, and it burns no plan quota.
+
+Two things follow for this code, both in `claude-credentials.ts`:
+
+- **`CLAUDE_CODE_ATTRIBUTION_HEADER=0`.** Claude Code prepends a system-prompt
+  block carrying its version and "a fingerprint derived from the conversation";
+  `api.anthropic.com` strips it and, per Anthropic's own gateway-protocol page,
+  "any other upstream receives it as part of the prompt". It buys nothing at
+  Moonshot and it is conversation-derived.
+- **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.** Metrics are on by default
+  and are only auto-disabled for the Bedrock/Vertex-style provider switches, not
+  for a generic base-URL gateway.
+
+Both are set in the composed session's spawn env only, so an ordinary
+subscription session on the same machine is untouched.
+
+Not closed off: Anthropic's automated suspension system is opaque and has
+produced false positives against people running the stock CLI with no proxy at
+all (anthropics/claude-code#51670). That baseline exists either way; nothing
+here adds to it.
+
 ## The Claude subscription is not available to the other harnesses
 
 It used to be, and it worked. `pi-credentials.ts` injected this host's Claude

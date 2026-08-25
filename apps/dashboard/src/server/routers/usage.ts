@@ -48,4 +48,14 @@ export const usageRouter = router({
   codexUsage: machineProcedure.query(async ({ ctx }) => {
     return prisma.codexUsage.findUnique({ where: { machineId: ctx.machine.id } });
   }),
+
+  // Kimi Code subscription quota, read from Moonshot's own /v1/usages by the
+  // gateway. Null on a machine with no Kimi credential — same contract as
+  // codexUsage, and the same reason: an empty panel is noise.
+  //
+  // The token columns above are cost ESTIMATES; this one, like planUsage, is
+  // the vendor's own answer about the account.
+  kimiUsage: machineProcedure.query(async ({ ctx }) => {
+    return prisma.kimiUsage.findUnique({ where: { machineId: ctx.machine.id } });
+  }),
 });

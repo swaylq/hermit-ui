@@ -63,6 +63,24 @@ test('K3 runs at max effort', () => {
   assert.equal(claudeCredentialEnv(KIMI, 'sk-x', 'k3').CLAUDE_CODE_EFFORT_LEVEL, 'max');
 });
 
+test('a composed session tells Anthropic nothing and Kimi no fingerprint', () => {
+  const env = claudeCredentialEnv(KIMI, 'sk-x', 'k3');
+  // The attribution block is stripped by api.anthropic.com and forwarded whole
+  // by everyone else — it would hand Moonshot a conversation-derived
+  // fingerprint for no benefit.
+  assert.equal(env.CLAUDE_CODE_ATTRIBUTION_HEADER, '0');
+  // Metrics stay on for a generic base-URL gateway (only the Bedrock/Vertex
+  // switches turn them off), and a turn that never reaches Anthropic has
+  // nothing to report to it.
+  assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
+});
+
+test('the built-in backend is left alone by both', () => {
+  // Scoped to the composed spawn env on purpose: an ordinary subscription
+  // session on this machine must keep its normal behaviour.
+  assert.deepEqual(claudeCredentialEnv(null, 'sk-x', 'k3'), {});
+});
+
 test('a context window is only stated when the credential knows one', () => {
   const plain = claudeCredentialEnv(KIMI, 'sk-x', 'k3');
   assert.equal(plain.CLAUDE_CODE_MAX_CONTEXT_TOKENS, undefined);
