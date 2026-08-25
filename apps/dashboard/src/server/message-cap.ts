@@ -73,3 +73,61 @@ function capValue(content: unknown, insideToolResult: boolean): unknown {
 export function capMessageContent(content: unknown): unknown {
   return capValue(content, false);
 }
+
+// ── Storage side ────────────────────────────────────────────────────────────
+//
+// `capMessageContent` above trims what the timeline SHIPS and leaves the row in
+// the database whole. For one shape that is pure waste: a base64 image nested in
+// a `tool_result` — an agent screenshot, or an image the agent Read — which the
+// timeline renders as a text-only chip and therefore never displays. The read
+// cap already throws those bytes away on every single read.
+//
+// Measured on the deploy box 2026-08-25: 1,552 MB of the 2,218 MB ChatMessage
+// corpus was exactly this, in 7,205 blocks — 70% of the table, growing ~60 MB a
+// day, and not one byte of it reachable from the UI. The agent's own transcript
+// under ~/.claude/projects keeps the real copy, which is what `--resume` reads;
+// this column was only ever a display source.
+//
+// So: drop the same bytes the reader would have dropped, before they are stored.
+// What the timeline shows does not change — by construction, since the elided
+// shape is the one `capBlock` already produces.
+function dropBlock(b: unknown, insideToolResult: boolean): unknown {
+  if (!b || typeof b !== 'object') return b;
+  const block = b as Record<string, unknown>;
+
+  if (insideToolResult && block.type === 'image' && block.source && typeof block.source === 'object') {
+    const src = block.source as Record<string, unknown>;
+    if (typeof src.data === 'string' && src.data.length > MAX_BLOCK_CHARS) {
+      return { ...block, source: { ...src, data: '', elidedKB: Math.round(src.data.length / 1024) } };
+    }
+    return b;
+  }
+
+  if (block.type === 'tool_result' && block.content !== undefined) {
+    const dropped = dropValue(block.content, true);
+    return dropped === block.content ? b : { ...block, content: dropped };
+  }
+
+  return b;
+}
+
+function dropValue(content: unknown, insideToolResult: boolean): unknown {
+  if (!Array.isArray(content)) return content;
+  let changed = false;
+  const out = content.map((b) => {
+    const c = dropBlock(b, insideToolResult);
+    if (c !== b) changed = true;
+    return c;
+  });
+  return changed ? out : content;
+}
+
+/**
+ * Strip the base64 payload of images nested inside tool_result blocks, so they
+ * are never written to the database. Top-level `image` blocks — user uploads and
+ * agent attachments — are rendered, and pass through untouched. Returns the SAME
+ * reference when there was nothing to drop.
+ */
+export function dropStoredImageBytes(content: unknown): unknown {
+  return dropValue(content, false);
+}

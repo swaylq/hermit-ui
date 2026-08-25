@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { resolveMachine } from '../route';
 import { stripNulDeep } from '@/server/sanitize';
+import { dropStoredImageBytes } from '@/server/message-cap';
 import { enqueuePush } from '@/server/push';
 import { chatEvent, loopRoundEvent } from '@/server/push/events';
 import { loopRoundLine } from '@/lib/loop-marker';
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
     // The union schema narrows content to string|unknown[]; the column is opaque
     // JSON, so cast to its accepted type at the write boundary (same idiom as the
     // chat.send path in routers/chat.ts). Runtime validation already happened above.
-    const content = stripNulDeep(m.content) as unknown as Parameters<
+    const content = dropStoredImageBytes(stripNulDeep(m.content)) as unknown as Parameters<
       typeof prisma.chatMessage.create
     >[0]['data']['content'];
 

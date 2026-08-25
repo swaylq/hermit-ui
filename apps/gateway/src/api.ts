@@ -1,4 +1,5 @@
 import { DASHBOARD_URL, ASST_KEY } from './config';
+import { stripToolResultImageBytes } from './strip-image-bytes';
 import { dashboardBackedOff, noteDashboardSuccess, noteDashboardFailure } from './dashboard-http';
 
 // Hard ceiling on every dashboard HTTP call. Without it a hung connection (a
@@ -505,6 +506,12 @@ export const api = {
     }>,
   ) => {
     if (items.length === 0) return;
-    return post('/api/sync/chat-message', { items });
+    // Screenshots nested in a tool_result are never displayed and are dropped
+    // again on receipt; sending them was ~60MB a day up the uplink for nothing.
+    const lean = items.map((it) => {
+      const content = stripToolResultImageBytes(it.content);
+      return content === it.content ? it : { ...it, content };
+    });
+    return post('/api/sync/chat-message', { items: lean });
   },
 };
