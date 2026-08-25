@@ -33,6 +33,7 @@ export const ScheduleBar = memo(function ScheduleBar({
   onStartIterate,
   onStartCron,
   onStartAutonomy,
+  onStartPerfect,
   takeover,
   disabled,
   sessionId,
@@ -40,6 +41,7 @@ export const ScheduleBar = memo(function ScheduleBar({
   onStartIterate: () => void;
   onStartCron: () => void;
   onStartAutonomy: () => void;
+  onStartPerfect: () => void;
   /**
    * The Brain-takeover control, when this session can have one. It sits FIRST in
    * this row — handing the conversation over belongs with "iterate to done" and
@@ -117,10 +119,25 @@ export const ScheduleBar = memo(function ScheduleBar({
             <button
               type="button"
               onClick={onStartAutonomy}
+              title="Stop asking me to confirm — carry on with your own recommendation until the task is finished"
               className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
             >
               <span className="text-amber-500" aria-hidden="true">⚡</span>
               Run to done
+            </button>
+          )}
+          {/* The strictest of the three, so it sits last: "Run to done" stops when
+              the agent thinks it is finished, this one stops when a fresh critic
+              subagent runs out of complaints twice over (the perfect-goal skill). */}
+          {!disabled && (
+            <button
+              type="button"
+              onClick={onStartPerfect}
+              title="Write the goal as a checkable list, then keep going until a fresh critic finds nothing wrong — twice"
+              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
+            >
+              <span className="text-violet-500" aria-hidden="true">◎</span>
+              Perfect it
             </button>
           )}
         </div>

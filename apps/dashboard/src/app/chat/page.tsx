@@ -1571,6 +1571,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const startIterate = useCallback(() => pickPrompt(ITERATE_TEMPLATE), [pickPrompt]);
   const startCron = useCallback(() => pickPrompt(CRON_TEMPLATE), [pickPrompt]);
   const startAutonomy = useCallback(() => pickPrompt(AUTONOMY_TEMPLATE), [pickPrompt]);
+  const startPerfect = useCallback(() => pickPrompt(PERFECT_TEMPLATE), [pickPrompt]);
 
   // The header's secondary actions, rendered TWICE (inline on ≥sm, in the mobile
   // tray on phones) — one definition so the two can't drift. Only one is visible
@@ -2112,6 +2113,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             onStartIterate={startIterate}
             onStartCron={startCron}
             onStartAutonomy={startAutonomy}
+            onStartPerfect={startPerfect}
             takeover={
               showTakeover
                 ? {
@@ -2305,5 +2307,14 @@ const CRON_TEMPLATE =
 // One-shot autonomy nudge (NOT a recurring task): tells the agent to proceed with
 // its own recommendation and stop asking for confirmation until the work is done.
 // Dropped by the "Run to done" suggestion — no cadence, so it doesn't trip the
-// loop/cron skills; it's a plain directive for the current task.
+// cron skill; it's a plain directive for the current task.
 const AUTONOMY_TEMPLATE = '按照你的推荐做，不再询问我，直到做完。';
+
+// The "Perfect it" suggestion — the strict sibling of AUTONOMY_TEMPLATE. Both say
+// "carry on without me"; the difference is where they stop. Run-to-done stops when
+// the agent believes it is finished, which is the judgement this one distrusts: a
+// fresh critic subagent has to run out of complaints, twice, before it converges.
+// The wording names the mechanism (清单 / 评审 / 连续两轮 / 截图) so the
+// perfect-goal skill fires on it rather than being read as ordinary emphasis.
+const PERFECT_TEMPLATE =
+  '把这件事做到完美：<目标>。先写成一份每条都能验证的验收清单，然后一轮轮做——每轮做完自测，再交给一个全新的评审 agent 挑刺，把它提的问题改掉；连续两轮不同视角的评审都挑不出问题才算完。有界面的话每轮都要真实截图，并且评审要看过图。';
