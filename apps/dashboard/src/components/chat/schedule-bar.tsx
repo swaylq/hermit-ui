@@ -69,7 +69,15 @@ export const ScheduleBar = memo(function ScheduleBar({
         {(crons.data ?? []).map((c) => (
           <ScheduleCard key={c.id} cron={c} sessionId={sessionId} />
         ))}
-        <div className="flex items-center gap-2 flex-wrap">
+        {/* One line, always. It used to wrap, which moved the composer down by a
+            row on a phone — the thing you are about to type into jumping is worse
+            than a chip you have to swipe for. So it scrolls sideways instead.
+            `-mx-3 px-3` cancels the parent's padding for the SCROLL box only: the
+            chips still start aligned with the composer, but a chip scrolling out
+            runs off the screen edge rather than stopping 12px short of it.
+            `overscroll-x-contain` keeps a swipe past the end from turning into
+            iOS Safari's back-navigation gesture. */}
+        <div className="flex items-center gap-2 -mx-3 px-3 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {takeover && (
             <button
               type="button"
@@ -86,7 +94,7 @@ export const ScheduleBar = memo(function ScheduleBar({
                 // Icon-only, sized to match the text chips beside it so the row keeps
                 // one baseline. State lives in colour here rather than in a word,
                 // which is why the active blue has to be unmistakable.
-                'inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60',
+                'shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60',
                 takeover.active
                   ? 'border-blue-500 bg-blue-500 text-white hover:bg-blue-600'
                   : 'border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40',
@@ -99,7 +107,7 @@ export const ScheduleBar = memo(function ScheduleBar({
             <button
               type="button"
               onClick={onStartIterate}
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
+              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
             >
               <span className="text-emerald-500" aria-hidden="true">↻</span>
               Iterate to done
@@ -109,7 +117,7 @@ export const ScheduleBar = memo(function ScheduleBar({
             <button
               type="button"
               onClick={onStartCron}
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
+              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
             >
               <span className="text-sky-500" aria-hidden="true">⏰</span>
               Schedule a task
@@ -120,7 +128,7 @@ export const ScheduleBar = memo(function ScheduleBar({
               type="button"
               onClick={onStartAutonomy}
               title="Stop asking me to confirm — carry on with your own recommendation until the task is finished"
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
+              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
             >
               <span className="text-amber-500" aria-hidden="true">⚡</span>
               Run to done
@@ -134,7 +142,7 @@ export const ScheduleBar = memo(function ScheduleBar({
               type="button"
               onClick={onStartPerfect}
               title="Write the goal as a checkable list, then keep going until a fresh critic finds nothing wrong — twice"
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
+              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
             >
               <span className="text-violet-500" aria-hidden="true">◎</span>
               Perfect it
