@@ -68,6 +68,9 @@ class ChatCacheSync {
   private scope: string | null = null;
   private running = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** A poll that came due while the tab was hidden, owed on the way back. */
+  private deferred = false;
+  private onVisible: (() => void) | null = null;
   private abort: AbortController | null = null;
   private listeners = new Set<Listener>();
   private status: SyncStatus = {
@@ -108,6 +111,26 @@ class ChatCacheSync {
     this.scope = scope;
     if (this.running) return;
     this.running = true;
+    // A hidden tab has nobody to show a fresher cache to, and this poll is not
+    // cheap on the other end: `chat.syncProbe` groups EVERY message on the
+    // machine to answer "what changed", which is a parallel sequential scan —
+    // 24ms of wall time over 101,658 rows on a local fixture, and it ran every
+    // 30s in every open tab whether or not anyone was looking. Browsers throttle
+    // background timers, but not reliably and not to zero, and the cost here is
+    // the server's, not the timer's.
+    //
+    // So: stop scheduling while hidden, and remember that one was owed. Coming
+    // back runs it immediately, which is also what makes this safe — the cache
+    // is never more stale than the moment the tab is looked at again.
+    if (typeof document !== 'undefined' && !this.onVisible) {
+      this.onVisible = () => {
+        if (!this.running || document.hidden) return;
+        if (!this.deferred) return;
+        this.deferred = false;
+        void this.tick();
+      };
+      document.addEventListener('visibilitychange', this.onVisible);
+    }
     void requestPersistence();
     void this.housekeep();
     void this.tick();
@@ -115,6 +138,11 @@ class ChatCacheSync {
 
   stop(): void {
     this.running = false;
+    this.deferred = false;
+    if (this.onVisible && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.onVisible);
+    }
+    this.onVisible = null;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.abort?.abort();
@@ -136,12 +164,24 @@ class ChatCacheSync {
   private schedule(ms: number) {
     if (!this.running) return;
     if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (typeof document !== 'undefined' && document.hidden) {
+      // Owed, not armed. `onVisible` above pays it back.
+      this.deferred = true;
+      return;
+    }
     this.timer = setTimeout(() => void this.tick(), ms);
   }
 
   /** Run one full probe → reconcile pass. Safe to call at any time. */
   async tick(): Promise<void> {
     if (!this.running || !this.scope) return;
+    // A timer armed before the tab was hidden can still land after it. Same
+    // rule: owe it, do not spend it.
+    if (typeof document !== 'undefined' && document.hidden) {
+      this.deferred = true;
+      return;
+    }
     const scope = this.scope;
     this.abort?.abort();
     this.abort = new AbortController();
