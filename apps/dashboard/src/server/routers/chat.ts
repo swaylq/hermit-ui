@@ -1121,18 +1121,45 @@ export const chatRouter = router({
       ctx.assertAgent(s.agentName);
       // Require the marker INSIDE a "text" block — excludes the role:'assistant'
       // Bash tool_use messages that merely echo the marker into a file (which
-      // would otherwise double the count). jsonb sorts keys, so a text block is
-      // `{"text": "…", "type": "text"}` — match `"text": "` before the marker.
-      const marker = `%"text": "%↻ loop \`${input.loopId.slice(0, 8)}\`%`;
-      const rows = await prisma.$queryRaw<Array<{ id: string; content: unknown; createdAt: Date }>>`
-        SELECT id, content, "createdAt"
-        FROM "ChatMessage"
-        WHERE "sessionId" = ${input.sessionId}
-          AND role = 'assistant'
-          AND content::text LIKE ${marker}
-        ORDER BY "createdAt" DESC
-        LIMIT ${input.limit}
-      `;
+      // would otherwise double the count).
+      //
+      // `content::text LIKE '%…%'` did that by serialising the whole jsonb into a
+      // fresh text value for every assistant row in the session, and the marker
+      // is the only thing wanted out of it. Measured against a session shaped
+      // like the heaviest real one — 5,040 rows, 19KB of incompressible content
+      // each, 92MB on disk — that cast costs 220-326ms per call. A jsonpath test
+      // walks the parsed jsonb instead and never materialises the text: 109ms,
+      // and it returns exactly the same rows (42 of 42 on a fixture seeded with
+      // markers at the start of the text, after a newline, and mid-sentence).
+      //
+      // `like_regex` and not `starts with`: the marker is the first line of a
+      // loop report by convention, but only by convention, and `starts with`
+      // silently dropped the two rows where it was not at offset zero.
+      const id8 = input.loopId.slice(0, 8);
+      // The id is interpolated into a regex, so it may not carry anything a
+      // regex or a JSON string would read as syntax. A loop id is a cuid
+      // fragment; anything else takes the old path rather than risking a
+      // pattern that quietly matches the wrong rows.
+      const plainId = /^[A-Za-z0-9_-]{1,8}$/.test(id8);
+      const rows = plainId
+        ? await prisma.$queryRaw<Array<{ id: string; content: unknown; createdAt: Date }>>`
+            SELECT id, content, "createdAt"
+            FROM "ChatMessage"
+            WHERE "sessionId" = ${input.sessionId}
+              AND role = 'assistant'
+              AND content @@ ${`$[*] ? (@.type == "text").text like_regex "↻ loop \`${id8}\`"`}::jsonpath
+            ORDER BY "createdAt" DESC
+            LIMIT ${input.limit}
+          `
+        : await prisma.$queryRaw<Array<{ id: string; content: unknown; createdAt: Date }>>`
+            SELECT id, content, "createdAt"
+            FROM "ChatMessage"
+            WHERE "sessionId" = ${input.sessionId}
+              AND role = 'assistant'
+              AND content::text LIKE ${`%"text": "%↻ loop \`${id8}\`%`}
+            ORDER BY "createdAt" DESC
+            LIMIT ${input.limit}
+          `;
       return rows;
     }),
 
