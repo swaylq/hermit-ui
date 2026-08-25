@@ -32,12 +32,20 @@ export function isRuntimeKind(v: string | null | undefined): v is RuntimeKind {
 /**
  * The harnesses a user can build a backend out of.
  *
- * The other three are excluded because there is nothing to compose: both Claude
- * Code drivers and Codex each have exactly one credential — their own
- * subscription on this machine — so a picker offering "Claude Code + hyqubit"
- * would be offering something that does not exist.
+ * claude-sdk is here because Claude Code reads ANTHROPIC_BASE_URL and
+ * ANTHROPIC_AUTH_TOKEN from its environment, so it is not tied to this
+ * machine's login the way the pane and codex are: pointed at any
+ * Anthropic-Messages endpoint it runs that vendor's model with its own tools,
+ * skills and hooks intact. Verified against Kimi Code (api.kimi.com/coding,
+ * model `k3[1m]`) before this was added.
+ *
+ * claude-tmux and codex-exec stay out. The pane takes its model and its auth
+ * from ~/.claude/settings.json and ignores anything the gateway sets, and codex
+ * authenticates through `codex login` with no endpoint to name — so a picker
+ * offering either paired with a credential would offer something that does not
+ * exist.
  */
-export const CUSTOM_HARNESSES = ['pi-rpc', 'prime-rpc', 'dsh-exec'] as const;
+export const CUSTOM_HARNESSES = ['claude-sdk', 'pi-rpc', 'prime-rpc', 'dsh-exec'] as const;
 export type CustomHarness = (typeof CUSTOM_HARNESSES)[number];
 
 // `unknown` rather than `string | null | undefined`: the caller that matters
@@ -83,7 +91,7 @@ export function runtimeDetail(
 
 /** What each harness actually is — shown under the picker so a choice is informed. */
 export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
-  'claude-sdk': 'Claude Code via its official Agent SDK, on this machine’s subscription. Same tools and skills; typed events, no pane.',
+  'claude-sdk': 'Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.',
   'claude-tmux': 'The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.',
   'pi-rpc': 'pi or omp as an RPC child process. Small and predictable; pick the engine and recipe under Mode.',
   'prime-rpc': 'Prime Agent. One tool — a persistent IPython kernel — plus subagents and a self-refining harness.',
@@ -93,7 +101,7 @@ export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
 
 /** What a harness needs on the machine before a backend built on it will start. */
 export const RUNTIME_NEEDS: Record<RuntimeKind, string> = {
-  'claude-sdk': 'Claude Code installed and logged in. Nothing else to configure.',
+  'claude-sdk': 'Claude Code installed. The built-in backend needs it logged in; a composed one needs an Anthropic-Messages endpoint and its key instead.',
   'claude-tmux': 'Claude Code installed and logged in, plus tmux. Nothing else to configure.',
   'pi-rpc': 'pi (bundled) or omp (`bun install -g @oh-my-pi/pi-coding-agent`) on this machine.',
   'prime-rpc': 'Prime Agent installed (`curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh`) plus its Python kernel.',
@@ -151,9 +159,23 @@ export function hasTmuxPane(runtime: string | null | undefined): boolean {
  */
 const SAME_CONVERSATION: ReadonlySet<string> = new Set(['claude-tmux', 'claude-sdk']);
 
+/**
+ * One side of that comparison: which driver, and whose endpoint.
+ *
+ * The credential is half the answer since claude-sdk became composable. Two
+ * claude-sdk backends on DIFFERENT credentials write the same file and cannot
+ * read each other's history: a transcript carries provider-signed thinking
+ * blocks, and replaying Anthropic's at Kimi (or the reverse) is rejected at the
+ * first request — a 400 on every later message of a session that looked fine
+ * when it was switched.
+ */
+export type ConversationSide = { runtime?: string | null; credentialId?: string | null };
+
 export function sharesConversation(
-  before: string | null | undefined,
-  after: string | null | undefined,
+  before: ConversationSide | null | undefined,
+  after: ConversationSide | null | undefined,
 ): boolean {
-  return SAME_CONVERSATION.has(before ?? '') && SAME_CONVERSATION.has(after ?? '');
+  if (!SAME_CONVERSATION.has(before?.runtime ?? '')) return false;
+  if (!SAME_CONVERSATION.has(after?.runtime ?? '')) return false;
+  return (before?.credentialId ?? null) === (after?.credentialId ?? null);
 }

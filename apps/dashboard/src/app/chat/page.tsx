@@ -1831,8 +1831,15 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                       Not on a share link: the catalogue behind the menu is a
                       machine-wide endpoint, which a scoped key is refused (same
                       reason the terminal link below is hidden), so the menu
-                      would open empty. */}
-                  {!scope.scoped && session.runtime === 'claude-sdk' && (
+                      would open empty.
+
+                      Nor on a claude-sdk session that runs on a CREDENTIAL. The
+                      list is this machine's own `supportedModels()` — Opus,
+                      Sonnet, Haiku — and none of those names exists at a Kimi
+                      or GLM endpoint, so the menu would offer five rows that
+                      all fail. That backend's model is its own, set once in
+                      Settings → Backends, exactly like pi's and prime's. */}
+                  {!scope.scoped && session.runtime === 'claude-sdk' && !session.runtimeCredentialId && (
                     <>
                       <span className="shrink-0 text-muted-foreground/40">·</span>
                       <ModelChip

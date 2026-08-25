@@ -79,7 +79,10 @@ export function planRuntimeSwitch(
     return {
       ok: true,
       restart: true,
-      resetExternalId: !sharesConversation(before.runtime, after.runtime),
+      resetExternalId: !sharesConversation(
+        { runtime: before.runtime, credentialId: before.runtimeCredentialId },
+        { runtime: after.runtime, credentialId: after.runtimeCredentialId },
+      ),
     };
   }
 
@@ -91,6 +94,18 @@ export function planRuntimeSwitch(
   // does anyway.
   if (after.runtime === 'codex-exec' || after.runtime === 'dsh-exec') {
     return { ok: true, restart: false, resetExternalId: false };
+  }
+
+  // A claude-sdk session applies a model pin live (`setModel`, one control
+  // request) and keeps its warm context — but only its MODEL. The endpoint and
+  // the key are read from the child's environment once, at spawn, so a
+  // credential that moved under the same backend needs a fresh one.
+  if (after.runtime === 'claude-sdk') {
+    return {
+      ok: true,
+      restart: (before.runtimeCredentialId ?? null) !== (after.runtimeCredentialId ?? null),
+      resetExternalId: false,
+    };
   }
 
   // Same backend. Only the RPC harnesses bake provider/model/mode into the

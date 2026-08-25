@@ -204,9 +204,20 @@ export const CREDENTIAL_PRESETS: {
     },
   },
   {
+    key: 'kimi-code',
+    label: 'Kimi Code (订阅)',
+    hint: 'The Kimi membership endpoint. K3 at 1M context; its model ids are short (k3), not the platform’s kimi-k3.',
+    fill: {
+      label: 'Kimi Code', provider: 'kimi-coding', api: 'anthropic-messages',
+      baseUrl: 'https://api.kimi.com/coding',
+      models: ['k3', 'k3-256k', 'kimi-for-coding', 'kimi-for-coding-highspeed'],
+      secretKey: 'KIMI_API_KEY',
+    },
+  },
+  {
     key: 'kimi',
-    label: 'Kimi (Moonshot)',
-    hint: 'pi has a built-in moonshotai-cn catalog: 1M context, native vision.',
+    label: 'Kimi (Moonshot 开放平台)',
+    hint: 'Pay-as-you-go, a different key and a different id namespace from Kimi Code.',
     fill: {
       label: 'Kimi', provider: 'moonshotai-cn', api: 'anthropic-messages',
       baseUrl: 'https://api.moonshot.cn/anthropic', models: ['kimi-k3'],

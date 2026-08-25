@@ -120,6 +120,12 @@ export function SessionDetailSheet({
   // A backend id is not a harness — a composed one has an id of its own — and
   // it is the HARNESS that decides whether a switch keeps the conversation.
   const harnessOfBackend = (id: string) => backendById(cfg.data, id)?.harness ?? id;
+  // Which driver AND whose endpoint — both halves decide whether the transcript
+  // survives the move. See sharesConversation.
+  const sideOfBackend = (id: string) => ({
+    runtime: harnessOfBackend(id),
+    credentialId: backendById(cfg.data, id)?.credentialId ?? null,
+  });
   // A claude session resolves to no mode at all, so when the picker is flipped
   // to pi the mode select opens on what the AGENT would start pi in — the same
   // answer "New chat" would give — rather than snapping to the fleet default.
@@ -172,7 +178,10 @@ export function SessionDetailSheet({
     // them resumes it rather than abandoning it — the running context comes
     // along. Saying otherwise would talk a user out of a move that costs
     // nothing, which is the opposite of what this dialog is for.
-    const keepsContext = changingBackend && sharesConversation(d.backend.runtime, harnessOfBackend(shownBackend));
+    const keepsContext = changingBackend && sharesConversation(
+      { runtime: d.backend.runtime, credentialId: d.backend.runtimeCredentialId },
+      sideOfBackend(shownBackend),
+    );
     const ok = await confirm({
       title: changingBackend ? `Switch to ${backendLabelOf(shownBackend)}?` : `Switch mode to ${piModeLabel(shownMode)}?`,
       message: keepsContext ? (

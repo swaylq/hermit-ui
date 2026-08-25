@@ -68,6 +68,8 @@ import {
   newActivityState, applyActivityMessage, describeActivity, bashesRunningLongerThan, sessionBusy,
   type ActivityState, type RuntimeActivity,
 } from './claude-sdk-activity';
+import { claudeSdkEnv, applyCredentialEnv } from './claude-credentials';
+import { currentAuthFingerprint } from './pi-credentials';
 import { buildMcpServers } from '../mcp-config';
 import { api } from '../api';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from '../config';
@@ -201,6 +203,22 @@ type SdkHandle = RuntimeHandle & {
    * for a model it was already running.
    */
   modelPin: string | null;
+  /**
+   * Which Settings → Models credential this child booted against, or null for
+   * this machine's own Claude Code login.
+   *
+   * The endpoint and the key are environment variables, and a process's
+   * environment is fixed for its life — so unlike the model pin, which is one
+   * live control request, moving a session to a different credential means a
+   * new child. Compared on every ensure().
+   */
+  credentialId: string | null;
+  /**
+   * Fingerprint of the credential this child booted with — a rotated key is
+   * invisible otherwise, and the child keeps 401ing with a valid key sitting in
+   * the store. Null for the built-in backend, which has nothing to rotate.
+   */
+  authFp: string | null;
   /** What the session is doing right now — see claude-sdk-activity.ts. */
   activity: ActivityState;
   /** Stops the long-Bash watchdog. */
@@ -704,6 +722,20 @@ function teardown(h: SdkHandle, reason: string) {
   console.log(`[claude-sdk] closed session=${h.sessionId.slice(0, 8)} (${reason})`);
 }
 
+/**
+ * Has this child's credential moved since it booted?
+ *
+ * False when either side is unknown: the built-in backend has no credential to
+ * rotate, and a fingerprint the store cannot produce right now must not read as
+ * a change — that would recycle every live session on a transient failure of
+ * the `secret` binary.
+ */
+async function rotated(h: SdkHandle): Promise<boolean> {
+  if (!h.credentialId || !h.authFp) return false;
+  const now = await currentAuthFingerprint(h.credentialId);
+  return !!now && now !== h.authFp;
+}
+
 export class ClaudeSdkRuntime implements AgentRuntime {
   readonly kind = 'claude-sdk' as const;
 
@@ -715,7 +747,17 @@ export class ClaudeSdkRuntime implements AgentRuntime {
   readonly acceptsImages = true;
 
   async ensure(session: RuntimeSession, emit: (item: SyncItem) => void): Promise<RuntimeHandle> {
+    const credentialId = session.credentialId ?? null;
     const existing = live.get(session.id);
+    if (existing && !existing.closed && existing.credentialId !== credentialId) {
+      // A different credential is a different endpoint and a different key, and
+      // both are read from the environment once, at startup. Torn down here
+      // rather than left to answer on the old vendor while the header names the
+      // new one.
+      teardown(existing, 'credential changed');
+    } else if (existing && !existing.closed && credentialId && await rotated(existing)) {
+      teardown(existing, 'auth credential rotated');
+    }
     if (existing && !existing.closed) {
       // A model pin can change without touching the conversation — one control
       // request, no respawn. The pane had to be killed and re-created for this,
@@ -770,6 +812,21 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       );
     }
 
+    // The endpoint this session runs on. Empty for the built-in backend, which
+    // inherits the gateway's environment — i.e. this machine's own login.
+    const credentialEnv = await claudeSdkEnv(credentialId, session.model);
+    if (credentialId && Object.keys(credentialEnv).length === 0) {
+      console.warn(
+        `[claude-sdk] session=${session.id.slice(0, 8)} names credential ${credentialId} but resolved no ` +
+        `endpoint — starting on this machine's own Claude Code login instead`,
+      );
+    } else if (credentialId) {
+      console.log(
+        `[claude-sdk] session=${session.id.slice(0, 8)} on ${credentialEnv.ANTHROPIC_BASE_URL} ` +
+        `model=${credentialEnv.ANTHROPIC_MODEL ?? '(endpoint default)'}`,
+      );
+    }
+
     const input = makeInput();
     const q = query({
       prompt: input.stream,
@@ -785,7 +842,7 @@ export class ClaudeSdkRuntime implements AgentRuntime {
         effort: 'max',
         ...(session.model?.trim() ? { model: session.model.trim() } : {}),
         mcpServers: buildMcpServers(session.id, session.isOrchestrator ?? false),
-        env: {
+        env: applyCredentialEnv({
           ...process.env,
           HERMIT_DASHBOARD_URL: DASHBOARD_URL,
           HERMIT_KEY: ASST_KEY,
@@ -800,7 +857,10 @@ export class ClaudeSdkRuntime implements AgentRuntime {
           // (see `isWorking`). Purely additive: the frame produces no chat row,
           // and a CLI that ignores the variable simply never sends one.
           CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
-        },
+          // Last, and it deletes as well as sets: an ANTHROPIC_API_KEY the
+          // gateway itself carries would fight the token below, and the CLI
+          // warns rather than picking. No-op when there is no credential.
+        }, credentialEnv) as Record<string, string>,
         // The transcript is the backstop AND what every collector reads; never
         // turn this off.
         persistSession: true,
@@ -863,6 +923,8 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       liveOn: false,
       model: null,
       modelPin: session.model?.trim() || null,
+      credentialId,
+      authFp: credentialId ? await currentAuthFingerprint(credentialId) : null,
       activity: newActivityState(),
       stopWatchdog: () => {},
       rescued: new Set<string>(),

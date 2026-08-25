@@ -47,6 +47,58 @@ from credentials they added under Settings → Models. A machine that has compos
 none offers two backends, and that is the intended resting state rather than a
 misconfiguration.
 
+## Claude Code became composable (2026-08-26)
+
+`claude-sdk` moved from the built-in column to `CUSTOM_HARNESSES`, so it is now
+a harness you can pair with a credential like pi, prime and dsh — "Claude Code ·
+Kimi K3" is a backend a user composes, not a thing the fleet hardcodes.
+
+The reason it can be and `claude-tmux` cannot is one line long: Claude Code
+reads `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` **from its environment**,
+and an SDK child's environment is ours to set. The pane takes its endpoint, key
+and model from that machine's `~/.claude/settings.json` and ignores anything the
+gateway hands it; codex authenticates through `codex login` and has no endpoint
+to name at all. Both stay built-in.
+
+What the gateway adds (`runtime/claude-credentials.ts`):
+
+- the endpoint and the key, read from the machine's secret store at spawn;
+- **every** model slot — `ANTHROPIC_MODEL`, the four
+  `ANTHROPIC_DEFAULT_*_MODEL`s and `CLAUDE_CODE_SUBAGENT_MODEL` — pinned to the
+  one model. Not belt-and-braces: a turn is many model calls, the CLI names an
+  Anthropic model for the small ones, and `api.kimi.com` does **not reject** an
+  unknown id — it answers on something of its choosing. An unset slot therefore
+  bills a model the chat header never named, silently;
+- `CLAUDE_CODE_EFFORT_LEVEL=max`, matching the `effort: 'max'` the built-in
+  backend already runs;
+- a deletion: an inherited `ANTHROPIC_API_KEY` is removed from the child's copy
+  of the environment rather than overwritten. It is a second spelling of the
+  same slot and the CLI warns rather than picking.
+
+Refused, with a log line rather than a 404 at the first message: a credential
+whose `api` is not `anthropic-messages`, one with no `baseUrl`, and one whose
+named secret this machine does not hold. Each falls back to the machine's own
+login, which is the one thing that can always take a turn.
+
+Two things the composition changes elsewhere:
+
+- **`sharesConversation` is credential-aware.** Both Claude drivers write the
+  same `~/.claude/projects/<cwd>/<uuid>.jsonl`, but a transcript carries
+  provider-signed thinking blocks, so replaying Anthropic's at Kimi is rejected
+  at the first request. Same driver is no longer enough — the credential has to
+  match too, or the external session id is dropped and the move starts a fresh
+  transcript.
+- **The header's model chip is hidden on a credential-backed session.** Its list
+  is this machine's own `supportedModels()` — Opus, Sonnet, Haiku — and none of
+  those names exists at a Kimi or GLM endpoint. That backend's model is set once
+  in Settings → Backends, exactly like pi's and prime's.
+
+A model pin still applies live (`setModel`, one control request, warm context
+kept). A credential that moved does not: the endpoint and the key are read once,
+at startup, so `planRuntimeSwitch` restarts a claude-sdk session whose
+credential changed, and `ensure()` retires a child whose key rotated underneath
+it.
+
 ## The Claude subscription is not available to the other harnesses
 
 It used to be, and it worked. `pi-credentials.ts` injected this host's Claude
