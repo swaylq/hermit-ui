@@ -9,6 +9,7 @@ import {
   logicalScrollTop as logicalTop,
   planBoundaryRebase,
   readerScrollTop as readerTop,
+  trimOutOfRangeDeviation,
 } from './scroll-stability-core';
 
 /** No native scroll events for this long means WebKit momentum has ended. */
@@ -287,6 +288,42 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
     return true;
   }, [commitDeviation, hasBlockedBoundary]);
 
+  /**
+   * Give back the part of a held deviation the reader has just scrolled past.
+   *
+   * A negative deviation paints content downward, which leaves the physical
+   * scroller taller than the conversation: the reader keeps `scrollTop` runway
+   * after `scrollTop + deviation` has already gone above the first row, and
+   * scrolls up through space that does not exist. `planBoundaryRebase` cannot
+   * help — a setter call has nowhere to put this one, which is exactly why it
+   * returns null — so today the whole thing survives to `commitDeviation` and is
+   * discarded in one frame once scrolling stops. Measured on a conversation that
+   * loads its history when the reader reaches the top: a 245px jump (348px on a
+   * second run) with the reader's hands already off the wheel.
+   *
+   * Hand it back a frame at a time instead. Same total, spread over the gesture
+   * that is consuming it, and nothing is left to discard at the end.
+   */
+  const trimTopRunway = useCallback(() => {
+    const vp = getViewport();
+    if (!vp || deviation.current >= 0) return;
+    const trim = trimOutOfRangeDeviation({
+      scrollTop: vp.scrollTop,
+      deviation: deviation.current,
+      minTop: 0,
+    });
+    if (trim === 0) return;
+    deviation.current += trim;
+    // `commitDeviation` books a discarded correction the same way: the reader
+    // did not make this movement, so it must not show up in `readerScrollTop`.
+    compensated.current += trim;
+    paintDeviation();
+    log({
+      t: Date.now(), kind: 'settle', reason: 'top-runway-trim',
+      wanted: trim, applied: trim, deviation: deviation.current, scrollTop: vp.scrollTop,
+    });
+  }, [getViewport, paintDeviation]);
+
   const queueBoundaryRebase = useCallback((readerDelta: number, reason: string) => {
     // Ordinary scroll events should pay no microtask tax. Queue only for the
     // rare frame that actually exhausted a transform-held physical runway.
@@ -469,6 +506,11 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
       }
       lastScrollAt.current = performance.now();
       scrollVersion.current += 1;
+      // Before anything else: a deviation the reader has already scrolled past
+      // is not a correction owed to them, it is a debt to settle that no setter
+      // can pay. Take it off here and the `scheduleSettle` below has nothing to
+      // dump when the gesture ends.
+      trimTopRunway();
       if (deviation.current !== 0) scheduleSettle();
       if (physicalDelta !== 0) {
         queueBoundaryRebase(physicalDelta, 'native-boundary-runway');
@@ -595,7 +637,7 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
     };
   }, [
     clearProgrammaticMotion, getViewport, hasActiveContact, markProgrammaticEvent,
-    queueBoundaryRebase, scheduleSettle,
+    queueBoundaryRebase, scheduleSettle, trimTopRunway,
   ]);
 
   // A clamped settlement deliberately leaves its unpaid part in the transform.

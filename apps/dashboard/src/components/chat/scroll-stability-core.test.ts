@@ -10,6 +10,7 @@ import {
   readerMovedUp,
   readerScrollTop,
   settleCompensation,
+  trimOutOfRangeDeviation,
 } from './scroll-stability-core';
 
 test('logical position includes the correction held by the content transform', () => {
@@ -268,4 +269,41 @@ test('a correction is never returned against the direction that asked for it', (
   assert.equal(acceptableCompensation({
     scrollTop: 697, deviation: 500, delta: -50, minTop: 0, maxTop: 697,
   }), -50);
+});
+
+// --- trimOutOfRangeDeviation ------------------------------------------------
+
+test('a deviation that fits inside the range is left alone', () => {
+  assert.equal(trimOutOfRangeDeviation({ scrollTop: 500, deviation: -348, minTop: 0 }), 0);
+  assert.equal(trimOutOfRangeDeviation({ scrollTop: 0, deviation: 0, minTop: 0 }), 0);
+});
+
+test('a positive deviation at the top is planBoundaryRebase business, not this', () => {
+  // scrollTop 0 with deviation +400 is the case a single setter call fixes.
+  assert.equal(trimOutOfRangeDeviation({ scrollTop: 0, deviation: 400, minTop: 0 }), 0);
+});
+
+test('scrolling into space the transform invented gives that space back', () => {
+  // The reader has 100px of physical runway left but the deviation claims 348.
+  assert.equal(trimOutOfRangeDeviation({ scrollTop: 100, deviation: -348, minTop: 0 }), 248);
+  // At the very top the whole thing is surrendered.
+  assert.equal(trimOutOfRangeDeviation({ scrollTop: 0, deviation: -348, minTop: 0 }), 348);
+});
+
+test('the trim never overshoots past zero deviation', () => {
+  const t = trimOutOfRangeDeviation({ scrollTop: 0, deviation: -50, minTop: 0 });
+  assert.equal(t, 50);
+  assert.equal(-50 + t, 0, 'deviation lands exactly on zero, never positive');
+});
+
+test('trimming step by step converges to the same place as one drop', () => {
+  let scrollTop = 348;
+  let deviation = -348;
+  // The reader walks the last 348px to the top, 60px at a time.
+  for (let i = 0; i < 20 && scrollTop > 0; i++) {
+    scrollTop = Math.max(0, scrollTop - 60);
+    deviation += trimOutOfRangeDeviation({ scrollTop, deviation, minTop: 0 });
+  }
+  assert.equal(scrollTop, 0);
+  assert.equal(deviation, 0, 'nothing is left for commitDeviation to discard');
 });

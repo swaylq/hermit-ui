@@ -199,3 +199,43 @@ export function planBoundaryRebase(input: BoundaryRebaseInput): CompensationSett
   // Do not recommend a no-op setter; a later resize can ask again.
   return plan.applied === 0 ? null : plan;
 }
+
+/**
+ * How much of a held deviation has to be given back because the reader has
+ * scrolled to where it can no longer exist.
+ *
+ * A negative deviation is painted as content pushed DOWN, which makes the
+ * physical scroller taller than the conversation really is: the reader can then
+ * scroll up through `|deviation|` px of space that is not there. Nothing stops
+ * them, because `scrollTop` has runway even after `scrollTop + deviation` has
+ * gone above the top of the content.
+ *
+ * `planBoundaryRebase` does not cover this. Its two cases are a POSITIVE
+ * deviation at the top and a NEGATIVE one at the bottom — both situations where
+ * `scrollTop` still has somewhere to go, so one setter call fixes them. A
+ * negative deviation at the top has nowhere to go: `settleCompensation` would
+ * return `applied: 0`, which `planBoundaryRebase` correctly refuses to
+ * recommend. So it survives the whole gesture and `commitDeviation` discards it
+ * in a single frame when scrolling stops — measured at 245px and 348px on a
+ * conversation whose history loads when the reader reaches the top.
+ *
+ * Give it back a frame at a time instead, as the reader scrolls into it. The
+ * arithmetic is the same amount either way; the difference is that it is spread
+ * across the gesture rather than delivered in one frame after it. What the
+ * reader feels is a scroller that stops responding at the top, which is what
+ * every scroller does at the top.
+ *
+ * Returns the signed amount to ADD to the deviation, `0` when it is honest.
+ */
+export function trimOutOfRangeDeviation(input: {
+  scrollTop: number;
+  deviation: number;
+  minTop: number;
+}): number {
+  const logical = input.scrollTop + input.deviation;
+  const excess = input.minTop - logical;
+  // Only an overshoot ABOVE the top, and only ever toward zero: a deviation
+  // whose sign does not put the reader out of range is doing its job.
+  if (excess <= 0 || input.deviation >= 0) return 0;
+  return Math.min(excess, -input.deviation);
+}
