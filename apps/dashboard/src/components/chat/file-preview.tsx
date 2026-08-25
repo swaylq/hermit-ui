@@ -8,6 +8,7 @@
 // chat/page.tsx (P2-3); behaviour identical. Consumed by GroupView back there.
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import type { SyntheticEvent } from 'react';
 import { FileText, Download, X, Music, Film } from 'lucide-react';
 import { Markdown } from '@/components/markdown';
 import dynamic from 'next/dynamic';
@@ -69,16 +70,33 @@ export function ChatImage({ url, width, height }: { url: string; width: number |
   const onThumbError = useCallback(() => setSrc((cur) => (cur === url ? cur : url)), [url]);
   useEffect(() => { setSrc(thumb ?? url); }, [thumb, url]);
   const alt = `attachment${width && height ? ` ${width}×${height}` : ''}`;
-  // Null dimensions are the base64 `tool_result` shape, which carries none.
-  // Those keep the old behaviour: nothing to reserve, so nothing is reserved.
+  // Blocks that carry no dimensions — the base64 `tool_result` shape, and images
+  // arriving from the claude-sdk runtime — used to reserve nothing at all, so
+  // the row was 0px until the bytes decoded and then snapped to its full height,
+  // right under a reader who was scrolling onto it. Reserve a landscape box at
+  // the cap instead: wrong by the difference between 4:3 and the real ratio
+  // (±80px at this size) rather than wrong by the whole picture. `onLoad` then
+  // reads the real ratio off the decoded image and the row settles for good —
+  // the thumbnail is a scaled copy, so its ratio is the original's.
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  const onLoad = useCallback((e: SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+      setNatural((cur) =>
+        cur && cur.w === img.naturalWidth && cur.h === img.naturalHeight ? cur : { w: img.naturalWidth, h: img.naturalHeight },
+      );
+    }
+  }, []);
+  const w = width ?? natural?.w ?? null;
+  const h = height ?? natural?.h ?? null;
   const box =
-    width && height
+    w && h
       ? {
-          width: Math.round(width * Math.min(1, IMAGE_CAP_PX / width, IMAGE_CAP_PX / height)),
+          width: Math.round(w * Math.min(1, IMAGE_CAP_PX / w, IMAGE_CAP_PX / h)),
           height: 'auto' as const,
-          aspectRatio: `${width} / ${height}`,
+          aspectRatio: `${w} / ${h}`,
         }
-      : undefined;
+      : { width: IMAGE_CAP_PX, height: 'auto' as const, aspectRatio: '4 / 3' };
   return (
     <>
       <button
@@ -89,7 +107,7 @@ export function ChatImage({ url, width, height }: { url: string; width: number |
         className="inline-block cursor-zoom-in overflow-hidden rounded border border-border align-bottom transition-opacity hover:opacity-90"
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} style={box} className="max-h-[320px] max-w-[320px]" loading="lazy" decoding="async" onError={onThumbError} />
+        <img src={src} alt={alt} style={box} className="max-h-[320px] max-w-[320px]" loading="lazy" decoding="async" onError={onThumbError} onLoad={width && height ? undefined : onLoad} />
       </button>
       <ImageLightbox open={open} onOpenChange={setOpen} url={url} alt={alt} siblingSelector="[data-lightbox-src]" />
     </>
