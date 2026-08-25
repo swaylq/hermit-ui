@@ -20,7 +20,7 @@
 // — added in the next iteration alongside the composer wiring.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { mkdir, writeFile, stat } from 'node:fs/promises';
+import { mkdir, writeFile, stat, unlink } from 'node:fs/promises';
 import { join, extname, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -188,21 +188,28 @@ export async function POST(req: NextRequest) {
   const uuid = randomUUID();
   const bytes = Buffer.from(await file.arrayBuffer());
 
-  // ── Images: keep the original + a ≤2000px ".safe." sidecar. Both the gateway
-  // relay and the inline thumbnail consume the .safe. url; reading an oversized
-  // image wedges the model session (see evolution/lessons.md L4). ──
+  // ── Images: a ≤2000px ".safe." copy, plus a 640px thumbnail. Reading an
+  // oversized image wedges the model session (see evolution/lessons.md L4), so
+  // ".safe." is what every url points at.
+  //
+  // The full-size original used to be kept beside it, reachable as `originalUrl`
+  // — which nothing in this repo, the gateway, or the iOS app ever read. On the
+  // deploy box that was 4,747 files and 8.4 GB, against 1.7 GB of files anyone
+  // could actually reach. It is now scratch: written only as the resizer's
+  // input, deleted as soon as the ".safe." copy exists.
   if (isImage) {
     const ext = EXT_BY_MIME[mime];
-    const origPath = join(dir, `${uuid}.${ext}`);
+    const srcPath = join(dir, `${uuid}.src.${ext}`);
     const safePath = join(dir, `${uuid}.safe.${ext}`);
-    await writeFile(origPath, bytes, { mode: 0o644 });
-    const resized = resizeSafe(origPath, safePath);
+    await writeFile(srcPath, bytes, { mode: 0o644 });
+    const resized = resizeSafe(srcPath, safePath);
     if (!resized) {
       // sips/convert absent or failed: byte-for-byte copy so the url resolves.
       await writeFile(safePath, bytes, { mode: 0o644 });
     }
+    const dims = imageDims(safePath) ?? imageDims(srcPath);
+    await unlink(srcPath).catch(() => {});
     const safeStatRes = await stat(safePath).catch(() => null);
-    const dims = imageDims(safePath) ?? imageDims(origPath);
     // A 640px WebP for the 320px chat box. Best-effort: `thumbUrl` is null when
     // the encoder isn't there or the source is a GIF, and the client then keeps
     // pointing at the .safe. url exactly as it used to.
@@ -213,7 +220,9 @@ export async function POST(req: NextRequest) {
       ok: true,
       kind: 'image',
       url: `/uploads/${sessionId}/${uuid}.safe.${ext}`,
-      originalUrl: `/uploads/${sessionId}/${uuid}.${ext}`,
+      // Kept in the response shape so an older gateway reading it sees a field
+      // rather than a missing key; there is no full-size original any more.
+      originalUrl: null,
       thumbUrl: hasThumb ? `/uploads/${sessionId}/${uuid}${THUMB_SUFFIX}` : null,
       mimeType: mime,
       width: dims?.width ?? null,
