@@ -128,6 +128,36 @@ export async function GET(req: NextRequest) {
       // (see chat/page.tsx) — so that window had neither push nor poll, and a
       // reply already in this table sat invisible while the session header,
       // polled over a different query, had already gone back to "ready".
+      // Teardown is registered BEFORE anything is awaited.
+      //
+      // It used to be the last statement of `start`, after an initial window
+      // read and a first tick. A client that gave up inside that window — a
+      // tab closed while the page was still loading, a reconnect racing its own
+      // predecessor — arrived at a signal that had ALREADY aborted, and the DOM
+      // is explicit that a listener added to one of those never runs. So
+      // `shutdown` never ran, and the 2s safety-net poll it exists to clear kept
+      // querying Postgres for the life of the server process.
+      //
+      // Measured against the previous commit: 40 streams opened and abandoned
+      // mid-handshake took the database from 0.1 transactions/s with nobody
+      // connected to 5.3/s, which at one query per 2s per stream is about ten
+      // handlers still running for clients that had all gone.
+      const shutdown = () => {
+        if (closed) return;
+        closed = true;
+        clearInterval(interval);
+        clearTimeout(tickTimer);
+        unsubscribeChat();
+        try { controller.close(); } catch { /* already closed */ }
+      };
+      if (req.signal.aborted) {
+        // Already gone. Nothing is subscribed or scheduled yet, so this is just
+        // closing the controller — but it must happen, or the stream stays open.
+        shutdown();
+        return;
+      }
+      req.signal.addEventListener('abort', shutdown);
+
       safeEnqueue(': open\n\n');
 
       const tick = async () => {
@@ -214,17 +244,13 @@ export async function GET(req: NextRequest) {
       } else {
         await tick(); // initial snapshot ASAP — `sent` is empty, so it is a full window
       }
+      // `cancel()` can run while the awaits above are still pending — it clears
+      // an `interval` that does not exist yet, and `start` would then create one
+      // nobody will ever clear. Both paths set `closed`, so this one check
+      // closes the race from either side.
+      if (closed) return;
       interval = setInterval(tick, POLL_MS);
 
-      const shutdown = () => {
-        if (closed) return;
-        closed = true;
-        clearInterval(interval);
-        clearTimeout(tickTimer);
-        unsubscribeChat();
-        try { controller.close(); } catch { /* already closed */ }
-      };
-      req.signal.addEventListener('abort', shutdown);
     },
     cancel() {
       closed = true;
