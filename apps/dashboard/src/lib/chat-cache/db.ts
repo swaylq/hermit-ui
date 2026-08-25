@@ -36,7 +36,12 @@ const DB_PREFIX = 'hermit-chat-cache';
 // and column width, holding every row height that has been measured at that
 // width — so re-opening a conversation does not start by guessing the size of
 // rows it has already displayed once.
-const DB_VERSION = 5;
+const DB_VERSION = 6;
+/**
+ * `[sessionId, id]` on the row stores — what makes a session readable in pages.
+ * See `readSessionRowsBatched`. Version 6 adds it to `full` and `digest`.
+ */
+const INDEX_SESSION_ID = 'by_session_id';
 
 export const STORE_TEXT = 'text';
 export const STORE_SESSIONS = 'sessions';
@@ -130,13 +135,35 @@ function createMissingStores(db: IDBDatabase): void {
     db.createObjectStore(STORE_SESSIONS, { keyPath: 'sessionId' });
   }
   if (!db.objectStoreNames.contains(STORE_FULL)) {
-    db.createObjectStore(STORE_FULL, { keyPath: 'id' }).createIndex('by_session', 'sessionId');
+    const store = db.createObjectStore(STORE_FULL, { keyPath: 'id' });
+    store.createIndex('by_session', 'sessionId');
+    store.createIndex(INDEX_SESSION_ID, ['sessionId', 'id']);
   }
   if (!db.objectStoreNames.contains(STORE_FULL_META)) {
     db.createObjectStore(STORE_FULL_META, { keyPath: 'sessionId' });
   }
   if (!db.objectStoreNames.contains(STORE_DIGEST)) {
-    db.createObjectStore(STORE_DIGEST, { keyPath: 'id' }).createIndex('by_session', 'sessionId');
+    const store = db.createObjectStore(STORE_DIGEST, { keyPath: 'id' });
+    store.createIndex('by_session', 'sessionId');
+    store.createIndex(INDEX_SESSION_ID, ['sessionId', 'id']);
+  }
+}
+
+/**
+ * Add `[sessionId, id]` to stores that already exist from an earlier version.
+ *
+ * `createMissingStores` only ever touches stores it is creating, so a database
+ * upgraded from 5 keeps its stores and needs the index added in place. The
+ * browser backfills it from the existing records during this transaction.
+ */
+function createMissingIndexes(db: IDBDatabase, tx: IDBTransaction | null): void {
+  if (!tx) return;
+  for (const store of [STORE_FULL, STORE_DIGEST]) {
+    if (!db.objectStoreNames.contains(store)) continue;
+    const os = tx.objectStore(store);
+    if (!os.indexNames.contains(INDEX_SESSION_ID)) {
+      os.createIndex(INDEX_SESSION_ID, ['sessionId', 'id']);
+    }
   }
   if (!db.objectStoreNames.contains(STORE_TRANSLATIONS)) {
     db.createObjectStore(STORE_TRANSLATIONS, { keyPath: 'key' });
@@ -157,6 +184,7 @@ function openAt(scope: string, version: number | undefined): Promise<IDBDatabase
     req.onupgradeneeded = (e) => {
       const db = req.result;
       createMissingStores(db);
+      createMissingIndexes(db, req.transaction);
       // Re-derive everything projected by a previous version.
       if ((e as IDBVersionChangeEvent).oldVersion > 0 && (e as IDBVersionChangeEvent).oldVersion < 2) {
         const tx = req.transaction;
@@ -342,13 +370,77 @@ export async function putSession(scope: string, session: CachedSession): Promise
 
 // ── rendered layer (LRU of recent sessions) ──────────────────────────────────
 
+/**
+ * Every row of one session, read in pages the main thread can be interrupted
+ * between.
+ *
+ * `index.getAll(only(sessionId))` hands back the whole session in one success
+ * event, and rebuilding that many JS objects is a task nothing can preempt.
+ * Measured in WebKit against realistic message content — a dozen blocks per
+ * assistant turn with tool calls nested inside — the main thread loses 83ms at
+ * 20,000 rows and 121ms at 27,000. The same total BYTES as one flat string per
+ * row costs 14-19ms, so this pays for the number of objects, not the megabytes;
+ * `READ_BATCH` is therefore a row count, as it already was for `streamAllText`.
+ *
+ * Paging needs a range start that MOVES, and `by_session` cannot provide one:
+ * every row of a session shares its single index key. A cursor can page it —
+ * `continuePrimaryKey` resumes at exactly a page boundary — but cursor stepping
+ * costs ~46us per row in WebKit, which turned the same 20,000-row read into
+ * ~920ms whatever the page size. Hence `[sessionId, id]`: `getAll` stays bulk,
+ * and `bound([sid, lastId], [sid, MAX], true)` is the moving start it needs.
+ * Measured: 83ms of blocking becomes 11ms, with latency unchanged (110 -> 116ms).
+ *
+ * Falls back to the single read when the index is absent — a database whose
+ * upgrade to 6 did not run is slower here, never broken.
+ */
+async function readSessionRowsBatched<T extends { id: string }>(
+  db: IDBDatabase,
+  store: string,
+  sessionId: string,
+  batchSize = READ_BATCH,
+): Promise<T[]> {
+  const hasIndex = (() => {
+    try {
+      return db.transaction(store, 'readonly').objectStore(store).indexNames.contains(INDEX_SESSION_ID);
+    } catch {
+      return false;
+    }
+  })();
+  if (!hasIndex) {
+    const tx = db.transaction(store, 'readonly');
+    const idx = tx.objectStore(store).index('by_session');
+    const rows = await promisify(idx.getAll(IDBKeyRange.only(sessionId)) as IDBRequest<T[]>);
+    return rows ?? [];
+  }
+  const all: T[] = [];
+  let after: string | null = null;
+  for (;;) {
+    const tx = db.transaction(store, 'readonly');
+    const idx = tx.objectStore(store).index(INDEX_SESSION_ID);
+    // `\uffff` is above every character a cuid can contain, so this is "the rest
+    // of THIS session and nothing of the next one".
+    // Both annotations are required, not stylistic — the same TS7022 cycle
+    // `streamAllText` documents: `after` is assigned from `rows` at the bottom of
+    // the loop, so TypeScript sees range -> rows -> after -> range and gives up.
+    const range: IDBKeyRange = after === null
+      ? IDBKeyRange.bound([sessionId, ''], [sessionId, '\uffff'])
+      : IDBKeyRange.bound([sessionId, after], [sessionId, '\uffff'], true, false);
+    const rows: T[] = await promisify(idx.getAll(range, batchSize) as IDBRequest<T[]>);
+    if (!rows || rows.length === 0) break;
+    for (const row of rows) all.push(row);
+    if (rows.length < batchSize) break;
+    after = rows[rows.length - 1].id;
+    // Let the browser paint before rebuilding the next thousand objects.
+    await new Promise<void>((r) => setTimeout(r, 0));
+  }
+  return all;
+}
+
 export async function getFullRows(scope: string, sessionId: string): Promise<CachedFullRow[]> {
   const db = await openCache(scope);
   if (!db) return [];
-  const tx = db.transaction(STORE_FULL, 'readonly');
-  const idx = tx.objectStore(STORE_FULL).index('by_session');
-  const rows = await promisify(idx.getAll(IDBKeyRange.only(sessionId)) as IDBRequest<CachedFullRow[]>);
-  if (!rows || rows.length === 0) return [];
+  const rows = await readSessionRowsBatched<CachedFullRow>(db, STORE_FULL, sessionId);
+  if (rows.length === 0) return [];
   // Same ordering the timeline expects: (createdAt, id).
   return rows.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1));
 }
@@ -376,10 +468,8 @@ export async function putFullRows(scope: string, sessionId: string, rows: Cached
 export async function getDigestRows(scope: string, sessionId: string): Promise<CachedFullRow[]> {
   const db = await openCache(scope);
   if (!db) return [];
-  const tx = db.transaction(STORE_DIGEST, 'readonly');
-  const idx = tx.objectStore(STORE_DIGEST).index('by_session');
-  const rows = await promisify(idx.getAll(IDBKeyRange.only(sessionId)) as IDBRequest<CachedFullRow[]>);
-  if (!rows || rows.length === 0) return [];
+  const rows = await readSessionRowsBatched<CachedFullRow>(db, STORE_DIGEST, sessionId);
+  if (rows.length === 0) return [];
   return rows.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1));
 }
 
