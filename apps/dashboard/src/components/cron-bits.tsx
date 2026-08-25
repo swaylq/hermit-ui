@@ -46,9 +46,19 @@ const CRON_BADGE_CLS: Record<CronStatusTone, string> = {
   neutral: 'text-zinc-400 bg-zinc-500/10 border-zinc-500/25',
 };
 
-export function CronStatusBadge({ status, enabled }: { status?: string | null; enabled: boolean }) {
-  const text = enabled ? (status ?? 'idle') : 'off';
-  const cls = enabled ? CRON_BADGE_CLS[cronStatusTone(status)] : CRON_BADGE_CLS.neutral;
+// `done` is deliberately NOT a CRON_STATUS value: those describe how one RUN
+// ended, and this describes the cron itself — a task that iterated toward a goal,
+// reached it, printed CRON_DONE and stopped (see the Cron model's doneAt). It
+// outranks `off` in the badge because both are `enabled: false` and only one of
+// them means somebody switched it off. Green, because reaching the goal is the
+// good ending.
+export function CronStatusBadge({ status, enabled, done }: { status?: string | null; enabled: boolean; done?: boolean }) {
+  const text = done ? 'done' : enabled ? (status ?? 'idle') : 'off';
+  const cls = done
+    ? CRON_BADGE_CLS.ok
+    : enabled
+      ? CRON_BADGE_CLS[cronStatusTone(status)]
+      : CRON_BADGE_CLS.neutral;
   return (
     <span className={cn('inline-flex items-center rounded border px-1.5 py-px text-[10px] font-mono uppercase tracking-wide', cls, status === CRON_STATUS.running && enabled && 'animate-pulse')}>
       {text}

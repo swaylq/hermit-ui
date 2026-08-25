@@ -104,11 +104,13 @@ export function enqueuePush(event: PushEvent): void {
     return;
   }
 
-  // A loop round is an ANSWER, so it goes out now — and it retires the preamble
+  // A cron report is an ANSWER, so it goes out now — and it retires the preamble
   // it supersedes. Whatever ordinary chat event this session was holding is, by
-  // definition, something the agent said on the way to this round; delivering
+  // definition, something the agent said on the way to this report; delivering
   // both would put the preamble on the lock screen right behind the conclusion.
-  if (event.kind === 'loop' && event.sessionId) dropHeldChat(event.sessionId);
+  // Keyed on sessionId, which only cronReportEvent sets — the /cron failure
+  // event (cronEvent) has no session and must not evict a conversation's chat.
+  if (event.kind === 'cron' && event.sessionId) dropHeldChat(event.sessionId);
 
   void deliver(event).catch((e) => console.error('[push] deliver failed', e));
 }

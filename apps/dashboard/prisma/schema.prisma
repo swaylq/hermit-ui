@@ -897,6 +897,15 @@ model Cron {
   nextFire   DateTime? // lastFire + intervalSec ± jitter; runner reads this
   lastStatus String? // ok | fail | running
 
+  // A cron that iterates toward a goal ends ITSELF: the run prints a lone CRON_DONE
+  // line, the gateway strips it and posts { done: true } with the finish, and this is
+  // stamped while `enabled` goes false. Two reasons it is not just `enabled = false`:
+  // "reached its goal" and "a human paused it" read identically otherwise, and the UI
+  // has to say 已完成 vs 已暂停. Cleared on any re-enable, so a revived cron is not
+  // permanently labelled done. (This is what replaced the old session-scoped loop —
+  // see apps/cli/template/.claude/skills/cron/SKILL.md.)
+  doneAt DateTime?
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   runs      CronRun[]

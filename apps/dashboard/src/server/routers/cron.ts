@@ -67,6 +67,8 @@ export const cronRouter = router({
         select: {
           id: true, title: true, prompt: true, intervalSec: true,
           jitterSec: true, enabled: true, lastStatus: true, lastFire: true, nextFire: true,
+          // enabled:false alone can't say WHY it stopped — see the Cron model.
+          doneAt: true,
         },
       });
       const unread = await unreadCountByCron(crons.map((c) => c.id));
@@ -158,6 +160,11 @@ export const cronRouter = router({
       if (patch.intervalSec != null && existing.lastFire) {
         data.nextFire = new Date(existing.lastFire.getTime() + patch.intervalSec * 1000);
       }
+      // Switching a cron back on revives it, so it is no longer finished. `doneAt`
+      // is stamped when a run prints CRON_DONE (api/sync/cron-run) and is the ONLY
+      // thing separating 已完成 from 已暂停 — left behind, a re-enabled cron would
+      // fire while the page still called it done.
+      if (patch.enabled === true) data.doneAt = null;
       return prisma.cron.update({ where: { id }, data });
     }),
 
@@ -178,7 +185,12 @@ export const cronRouter = router({
     const existing = await prisma.cron.findUnique({ where: { id: input.id } });
     if (!existing || existing.machineId !== ctx.machine.id) throw new Error('not found');
     ctx.assertAgent(existing.agentName);
-    await prisma.cron.update({ where: { id: input.id }, data: { nextFire: new Date() } });
+    // doneAt unconditionally: asking for a run IS saying it isn't finished, and a
+    // cron whose next fire is now must not still be labelled 已完成.
+    await prisma.cron.update({
+      where: { id: input.id },
+      data: { nextFire: new Date(), doneAt: null },
+    });
     return { ok: true };
   }),
 
@@ -232,7 +244,7 @@ export const cronRouter = router({
         orderBy: { createdAt: 'asc' },
         select: {
           id: true, title: true, prompt: true, intervalSec: true,
-          jitterSec: true, enabled: true, lastStatus: true, lastFire: true,
+          jitterSec: true, enabled: true, lastStatus: true, lastFire: true, doneAt: true,
         },
       });
     }),
@@ -265,7 +277,7 @@ export const cronRouter = router({
         orderBy: { createdAt: 'asc' },
         select: {
           id: true, title: true, prompt: true, intervalSec: true, jitterSec: true,
-          enabled: true, lastStatus: true, lastFire: true, nextFire: true,
+          enabled: true, lastStatus: true, lastFire: true, nextFire: true, doneAt: true,
         },
       });
       const unread = await unreadCountByCron(crons.map((c) => c.id));
@@ -316,6 +328,9 @@ export const cronRouter = router({
       if (patch.intervalSec != null && cron.lastFire) {
         data.nextFire = new Date(cron.lastFire.getTime() + patch.intervalSec * 1000);
       }
+      // Same revive rule as `update` above — an agent that switches its own finished
+      // cron back on must not leave it reading 已完成.
+      if (patch.enabled === true) data.doneAt = null;
       const saved = await prisma.cron.update({ where: { id }, data });
       return {
         id: saved.id,

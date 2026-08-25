@@ -319,7 +319,7 @@ function CronDetail({ id }: { id: string }) {
               <span className="text-muted-foreground/40">·</span>
               <span>{fmtEvery(cron.intervalSec)}{cron.jitterSec > 0 ? ` ±${fmtDur(cron.jitterSec)}` : ''}</span>
               <span className="text-muted-foreground/40">·</span>
-              <CronStatusBadge status={cron.lastStatus} enabled={cron.enabled} />
+              <CronStatusBadge status={cron.lastStatus} enabled={cron.enabled} done={cron.doneAt != null} />
             </div>
           </div>
         </div>
@@ -333,7 +333,13 @@ function CronDetail({ id }: { id: string }) {
             className={cn('font-mono text-xs', cron.enabled ? 'text-emerald-600' : 'text-muted-foreground')}
             disabled={update.isPending}
             onClick={() => update.mutate({ id, enabled: !cron.enabled })}
-            title={cron.enabled ? 'disable' : 'enable'}
+            title={
+              cron.enabled
+                ? 'disable'
+                : cron.doneAt
+                  ? 'it reached its goal and stopped — switch on to start it running again'
+                  : 'enable'
+            }
           >
             {cron.enabled ? 'on' : 'off'}
           </Button>
@@ -393,10 +399,21 @@ function CronDetail({ id }: { id: string }) {
                     <span className="text-muted-foreground w-14 shrink-0">Every</span>
                     <span>{fmtDur(cron.intervalSec)}{cron.jitterSec > 0 ? ` ±${fmtDur(cron.jitterSec)}` : ''}</span>
                   </div>
-                  <div className="flex gap-2">
-                    <span className="text-muted-foreground w-14 shrink-0">Next</span>
-                    <span className="tabular-nums">{queued ? 'starting soon…' : cron.nextFire ? new Date(cron.nextFire).toLocaleString() : '—'}</span>
-                  </div>
+                  {/* A cron that ended ITSELF has no next fire — it printed
+                      CRON_DONE after checking its own finish line. Showing a stale
+                      "Next" there reads as "still scheduled", which is the one
+                      thing it is not. */}
+                  {cron.doneAt ? (
+                    <div className="flex gap-2">
+                      <span className="text-muted-foreground w-14 shrink-0">Done</span>
+                      <span className="tabular-nums">{new Date(cron.doneAt).toLocaleString()} — it reported reaching its goal</span>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <span className="text-muted-foreground w-14 shrink-0">Next</span>
+                      <span className="tabular-nums">{queued ? 'starting soon…' : cron.nextFire ? new Date(cron.nextFire).toLocaleString() : '—'}</span>
+                    </div>
+                  )}
                   {/* Where the result goes. Worth stating on the detail view: a cron
                       that reports into a conversation behaves very differently from
                       one that only files a run here, and you can't tell them apart

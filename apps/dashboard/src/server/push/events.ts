@@ -51,36 +51,43 @@ export function chatEvent(args: {
 }
 
 /**
- * One iteration of an in-conversation `/loop` reported its result.
+ * A scheduled task SUCCEEDED and its report was posted into a chat session.
+ *
+ * The failure case is cronEvent below, which points at /cron. This one points at
+ * the conversation, because a cron that reports into a chat is the thing that
+ * replaced the session-scoped loop: you asked for it in a conversation and you
+ * read the rounds there.
  *
  * Separate from chatEvent for two reasons, both about the hold in ./index.ts:
  *
- *   - it is NOT held. The marker line is the closing report of a round — the
- *     loop skill mandates it as the last thing an iteration says — so the
- *     "wait until the turn is over" rule has nothing left to wait for. Held, a
- *     round report on a session with a long-running background task waits out
- *     BACKGROUND_HOLD_MAX_MS and is then delivered carrying whatever the agent
- *     said in the meantime, which is how 13 hourly rounds produced 4 late
- *     notifications, none of them a round report (2026-08-24).
+ *   - it is NOT held. The report IS the conclusion of the run — there is no turn
+ *     left to wait for. Held, a report on a session with a long-running
+ *     background task waits out BACKGROUND_HOLD_MAX_MS and is then delivered
+ *     carrying whatever the agent said in the meantime, which is how 13 hourly
+ *     rounds produced 4 late notifications, none of them a round report
+ *     (2026-08-24, back when this was the loop).
  *   - it has its OWN collapse key. Sharing the session's key would let ordinary
  *     chatter — "let me check that", a stale task notification — replace the
- *     round on the lock screen. A round is the thing you asked the loop for; it
- *     gets its own slot.
+ *     report on the lock screen. A report is the thing you asked for; it gets
+ *     its own slot.
  */
-export function loopRoundEvent(args: {
+export function cronReportEvent(args: {
   machineId: string;
   sessionId: string;
   agentName: string;
-  /** The marker line, already collapsed to one line by lib/loop-marker. */
-  line: string;
+  /** The cron's title, or the agent name when it has none. */
+  cronName: string;
+  /** The run's output; only its first non-empty line reaches the lock screen. */
+  output: string;
 }): PushEvent {
+  const firstLine = args.output.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
   return {
-    kind: 'loop',
+    kind: 'cron',
     machineId: args.machineId,
-    title: `${args.agentName} · loop`,
-    body: args.line.slice(0, PREVIEW_LEN),
+    title: `${args.agentName} · ${args.cronName}`,
+    body: firstLine.slice(0, PREVIEW_LEN),
     path: `/chat?session=${args.sessionId}`,
-    collapseKey: `${args.sessionId}:loop`,
+    collapseKey: `${args.sessionId}:cron`,
     sessionId: args.sessionId,
   };
 }

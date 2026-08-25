@@ -59,17 +59,14 @@ export interface SessionSnapshot {
   transcriptPath: string | null;
   lastUserPrompt: string | null;
   lastAssistantText: string | null;
-  // Whatever JSON the agent's cron skill left in <AGENT_DIR>/.loop-state.json.
-  // Opaque to the gateway — dashboard renders it.
-  loopState: unknown | null;
   // Process-tree RSS (claude + mcp-stub + any Task children) of this session's
   // pane, in MB. null when the pane is dead or ps is unavailable. Drives the
   // Host-health panel's per-session memory + the reaper's "biggest first" order.
   rssMb: number | null;
   // What the session is doing right now, when its backend can say — the tool and
-  // how long it has been on it, the subagent, an API retry. Opaque here and
-  // rendered by the dashboard, exactly like loopState. Absent for the backends
-  // that only know "a child is alive".
+  // how long it has been on it, the subagent, an API retry. Opaque to the gateway
+  // and rendered by the dashboard. Absent for the backends that only know "a child
+  // is alive".
   activity?: unknown | null;
 }
 
@@ -256,19 +253,6 @@ async function lastUsageTokens(jsonl: string): Promise<{ contextTokens: number; 
 // transcriptToolRunning (the retroactive "tool in flight" signal) moved to ../pane in
 // P1-5 — it's now composed inside sessionActivity so every caller shares one verdict.
 
-// Read the per-agent loop / scheduled-task state file the cron skill maintains.
-// Absent / unparseable returns null (dashboard hides the chip). Lives at the
-// agent dir level — multiple chat sessions on the same agent see the union.
-function readLoopState(agentDir: string): unknown | null {
-  try {
-    const p = path.join(agentDir, '.loop-state.json');
-    if (!fs.existsSync(p)) return null;
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Runtime state for a non-tmux session.
  *
@@ -281,16 +265,18 @@ function readLoopState(agentDir: string): unknown | null {
 export async function probeRuntime(
   runtime: NonNullable<ReturnType<typeof runtimeFor>>,
   sessionId: string,
+  // agentName / agentDirectory are unread here — this probe gets everything from
+  // the runtime, not the agent dir. Kept so all three probes take the same
+  // arguments and the dispatcher below can hand them the same tuple.
   agentName: string,
   agentDirectory: string | null,
   claudeSessionId: string | null,
 ): Promise<SessionSnapshot> {
-  const agentDir = agentDirectory ?? path.join(AGENTS_ROOT, agentName);
   const base: SessionSnapshot = {
     sessionId, pid: null, alive: false, state: null,
     contextTokens: null, outputTokens: null, lastActivity: null,
     transcriptPath: null, lastUserPrompt: null, lastAssistantText: null,
-    loopState: readLoopState(agentDir), rssMb: null,
+    rssMb: null,
   };
 
   // A handle only exists once the session has been driven at least once; an
@@ -336,11 +322,10 @@ async function probe(
   // guess so a freshly-created agent whose directory hasn't been written back
   // yet still gets probed.
   const agentDir = agentDirectory ?? path.join(AGENTS_ROOT, agentName);
-  const loopState = readLoopState(agentDir);
   const empty = {
     sessionId, pid: null, contextTokens: null, outputTokens: null,
     lastActivity: null, transcriptPath: null, lastUserPrompt: null,
-    lastAssistantText: null, loopState, rssMb: null,
+    lastAssistantText: null, rssMb: null,
   };
 
   const alive = await paneAlive(sessionId);
@@ -374,7 +359,6 @@ async function probe(
     transcriptPath: tp,
     lastUserPrompt: t.lastUserPrompt,
     lastAssistantText: t.lastAssistantText,
-    loopState,
     rssMb,
   };
 }
@@ -508,12 +492,11 @@ export async function probeClaudeSdk(
   pidByUuid: Map<string, number>,
 ): Promise<SessionSnapshot> {
   const agentDir = agentDirectory ?? path.join(AGENTS_ROOT, agentName);
-  const loopState = readLoopState(agentDir);
   const base: SessionSnapshot = {
     sessionId, pid: null, alive: false, state: null,
     contextTokens: null, outputTokens: null, lastActivity: null,
     transcriptPath: null, lastUserPrompt: null, lastAssistantText: null,
-    loopState, rssMb: null, activity: null,
+    rssMb: null, activity: null,
   };
 
   const handle = { sessionId, externalSessionId: claudeSessionId ?? '' };

@@ -18,7 +18,6 @@ import { capMessageContent } from '../message-cap';
 import { digestMessageContent } from '../message-digest';
 import { extractSearchText, extractInteractionBlocks } from '../chat-text';
 import { generateSessionTitle } from '../session-title';
-import { loopStateForSession } from '../loop-state';
 import {
   TAKEOVER_CONCURRENCY,
   endNote,
@@ -218,10 +217,6 @@ export const chatRouter = router({
         startedAt: true,
         lastMessageAt: true,
         lastReadAt: true,
-        // 8 bytes, and the only way the sidebar can tell a FINISHED loop round
-        // from the chatter around it — lastMessageAt moves on every one of the
-        // dozens of messages between rounds. Read by hasUnreadLoopRound().
-        lastLoopRoundAt: true,
         closedAt: true,
         hiddenAt: true,
         // Which sidebar drawer this session is filed in; null = it stays in the
@@ -236,12 +231,6 @@ export const chatRouter = router({
         runtimeModel: true,
         runtimeMode: true,
         snapshotAt: true,
-        // loopState is deliberately NOT selected here (P1-2): it's the entire
-        // .loop-state.json blob and measured at 38% of this 5s-polled payload
-        // (21KB across the machine's sessions), yet the only client reader is
-        // the *current* session's LoopBar, which now sources loopState from
-        // chat.getSession (page.tsx). Don't re-add it to this list query.
-
         // Read, but NOT returned — the row below collapses it to one boolean.
         // The sidebar needs one fact out of this blob: whether the session has
         // background work outstanding, which is what stops an agent that just
@@ -363,16 +352,13 @@ export const chatRouter = router({
           runtimeModel: true,
           runtimeMode: true,
           snapshotAt: true,
-          loopState: true,
           // What the session is doing right now. getSession / sessionDetail
-          // only, NOT the 5s listSessions poll — same rule as loopState (P1-2)
-          // and for the same reason, even though this blob is two orders of
-          // magnitude smaller: the only reader is the session someone has open,
-          // so a per-session route is where it belongs. The sidebar dot needs
-          // `state`, which it already has.
+          // only, NOT the 5s listSessions poll: the only reader is the session
+          // someone has open, so a per-session route is where it belongs. The
+          // sidebar dot needs `state`, which it already has.
           activity: true,
-          // Live preview registration — getSession only, same rule as loopState:
-          // per-session payload never rides the 5s listSessions poll.
+          // Live preview registration — getSession only, same rule as `activity`:
+          // a per-session payload never rides the 5s listSessions poll.
           livePreview: true,
           rssMb: true,
           hibernatedAt: true,
@@ -403,19 +389,14 @@ export const chatRouter = router({
       // nothing visible — it's reading and deciding — and with no signal for that the
       // feature looks stalled when it's working. One PK lookup, only when a takeover
       // is actually running.
-      // `.loop-state.json` is agent-level, so this row carries every sibling
-      // session's loops too — 68% of the blob on a real four-loop agent, twelve
-      // times a minute per open tab, discarded in the browser. Cut it here; the
-      // client-side filter in LoopBar stays as the belt to this braces.
-      const loopState = loopStateForSession(s?.loopState, input.sessionId);
       if (s?.takeoverBySessionId) {
         const brain = await prisma.chatSession.findUnique({
           where: { id: s.takeoverBySessionId },
           select: { state: true },
         });
-        return { ...s, loopState, ...backend, takeoverBrainState: brain?.state ?? null };
+        return { ...s, ...backend, takeoverBrainState: brain?.state ?? null };
       }
-      return s ? { ...s, loopState, ...backend, takeoverBrainState: null } : s;
+      return s ? { ...s, ...backend, takeoverBrainState: null } : s;
     }),
 
   // Everything the session detail sheet shows, and NOTHING the chat header
@@ -1102,97 +1083,6 @@ export const chatRouter = router({
         orderBy: { createdAt: 'asc' },
         select: { id: true, content: true, createdAt: true },
       });
-    }),
-
-  // Per-round results for a loop. Each loop iteration posts its report to the chat
-  // as an assistant message starting with "↻ loop `<id8>` · run N — …". Pull just
-  // those via a SQL LIKE on the marker so it's NOT bounded by listMessages'
-  // 300-row window — the loop card can show every round. id8 = first 8 chars (the
-  // skill's marker uses the short id; a ≤8-char custom id matches itself). Newest
-  // first.
-  loopRuns: agentProcedure
-    .input(
-      z.object({
-        sessionId: z.string(),
-        loopId: z.string(),
-        limit: z.number().int().min(1).max(200).default(50),
-      }),
-    )
-    .query(async ({ ctx, input }) => {
-      const s = await prisma.chatSession.findUnique({
-        where: { id: input.sessionId },
-        select: { machineId: true, agentName: true },
-      });
-      if (!s || s.machineId !== ctx.machine.id) return [];
-      ctx.assertAgent(s.agentName);
-      // Require the marker INSIDE a "text" block — excludes the role:'assistant'
-      // Bash tool_use messages that merely echo the marker into a file (which
-      // would otherwise double the count).
-      //
-      // `content::text LIKE '%…%'` did that by serialising the whole jsonb into a
-      // fresh text value for every assistant row in the session, and the marker
-      // is the only thing wanted out of it. Measured against a session shaped
-      // like the heaviest real one — 5,040 rows, 19KB of incompressible content
-      // each, 92MB on disk — that cast costs 220-326ms per call. A jsonpath test
-      // walks the parsed jsonb instead and never materialises the text: 109ms,
-      // and it returns exactly the same rows (42 of 42 on a fixture seeded with
-      // markers at the start of the text, after a newline, and mid-sentence).
-      //
-      // `like_regex` and not `starts with`: the marker is the first line of a
-      // loop report by convention, but only by convention, and `starts with`
-      // silently dropped the two rows where it was not at offset zero.
-      const id8 = input.loopId.slice(0, 8);
-      // The id is interpolated into a regex, so it may not carry anything a
-      // regex or a JSON string would read as syntax. A loop id is a cuid
-      // fragment; anything else takes the old path rather than risking a
-      // pattern that quietly matches the wrong rows.
-      const plainId = /^[A-Za-z0-9_-]{1,8}$/.test(id8);
-      const rows = plainId
-        ? await prisma.$queryRaw<Array<{ id: string; content: unknown; createdAt: Date }>>`
-            SELECT id, content, "createdAt"
-            FROM "ChatMessage"
-            WHERE "sessionId" = ${input.sessionId}
-              AND role = 'assistant'
-              AND content @@ ${`$[*] ? (@.type == "text").text like_regex "↻ loop \`${id8}\`"`}::jsonpath
-            ORDER BY "createdAt" DESC
-            LIMIT ${input.limit}
-          `
-        : await prisma.$queryRaw<Array<{ id: string; content: unknown; createdAt: Date }>>`
-            SELECT id, content, "createdAt"
-            FROM "ChatMessage"
-            WHERE "sessionId" = ${input.sessionId}
-              AND role = 'assistant'
-              AND content::text LIKE ${`%"text": "%↻ loop \`${id8}\`%`}
-            ORDER BY "createdAt" DESC
-            LIMIT ${input.limit}
-          `;
-      return rows;
-    }),
-
-  // Per-loop delete from the dashboard: queue an agent-request the gateway
-  // applies (removes the loop from <agentDir>/.loop-state.json). The loop card is
-  // driven by that file, so this makes a stopped loop disappear everywhere for
-  // good — not just hide it locally. Only stopped loops are offered a delete in
-  // the UI, and the gateway additionally refuses to remove a running one.
-  // agentName is resolved from the session (the loop lives in that agent's file).
-  deleteLoop: agentProcedure
-    .input(z.object({ sessionId: z.string(), loopId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      const s = await prisma.chatSession.findUnique({
-        where: { id: input.sessionId },
-        select: { machineId: true, agentName: true },
-      });
-      if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
-      ctx.assertAgent(s.agentName);
-      await prisma.agentRequest.create({
-        data: {
-          machineId: ctx.machine.id,
-          kind: 'loop-delete',
-          agentName: s.agentName,
-          target: input.loopId,
-        },
-      });
-      return { ok: true };
     }),
 
   send: agentProcedure

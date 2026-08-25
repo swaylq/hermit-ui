@@ -45,10 +45,11 @@ const GUIDE: { title: string; points: string[] }[] = [
     ],
   },
   {
-    title: 'Crons & loops',
+    title: 'Crons',
     points: [
-      'Cron schedules recurring tasks that survive restarts.',
-      'Loops repeat a task inside a session and stream each round into the chat.',
+      'A cron repeats a task on a schedule and survives restarts.',
+      'Every run reports back into the chat that created it; the full history is on the Cron page.',
+      'A cron told to work toward a goal stops itself once it gets there.',
     ],
   },
   {

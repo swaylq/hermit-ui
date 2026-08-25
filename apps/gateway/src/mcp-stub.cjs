@@ -10,6 +10,8 @@
 //   - attach_image(filePath, caption) upload a local image + render inline
 //   - attach_file(filePath, caption)  upload a local file + render a download chip
 //   - cron_create(prompt, intervalMinutes, jitterMinutes?, title?)  schedule a cron
+//       (the one mechanism for every repeating task — a run ends its own cron with a
+//        lone CRON_DONE line, or re-paces it with CRON_NEXT <minutes>)
 //   - cron_list()                     list this agent's crons
 //   - cron_update(id, ...)            edit one IN PLACE (keeps its fire time)
 //   - cron_delete(id)                 delete one of this agent's crons
@@ -198,7 +200,7 @@ const TOOLS = [
   {
     name: 'cron_create',
     description:
-      "Schedule a durable recurring task for THIS agent. Every intervalMinutes (± jitterMinutes of random float), the gateway runs `prompt` as a fresh claude turn in this agent's directory — an ISOLATED turn, so a daily job never grows this conversation's context — and then posts its result back into THIS chat as a report, as well as recording it on the dashboard /cron page. It survives restarts. Because the result lands in the chat, write `prompt` so its final message IS the report you want to read: lead with the outcome, not with what you are about to do. Use when the user asks for a 定时任务 / scheduled / recurring task. For a loop whose every intermediate step streams into this chat, use the loop skill instead.",
+      "Schedule a durable repeating task for THIS agent — this is the ONE mechanism for all of them, whether the user called it a 定时任务, a routine, or a 循环 (there is no separate loop skill). Every intervalMinutes (± jitterMinutes of random float), the gateway runs `prompt` as a fresh claude turn in this agent's directory — an ISOLATED turn, so a daily job never grows this conversation's context — then posts its result back into THIS chat as a report and records it on the dashboard /cron page. It survives restarts. Because the result lands in the chat, write `prompt` so its final message IS the report you want to read: lead with the outcome, not with what you are about to do. A run can also decide the schedule: ending its reply with a line containing exactly CRON_DONE stops the cron for good (this is how a task that iterates toward a goal finishes itself — put the finish line and that instruction in `prompt`), and a line containing exactly CRON_NEXT <minutes> re-paces it. An isolated run remembers nothing, so a task whose rounds build on each other must keep its progress in a file the prompt names.",
     inputSchema: {
       type: 'object',
       properties: {

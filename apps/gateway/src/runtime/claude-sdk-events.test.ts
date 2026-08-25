@@ -274,22 +274,21 @@ test('the placeholder is one row per session, and its retraction says so', () =>
   assert.deepEqual(r.content, []);
 });
 
-// ── a loop iteration the CLI injected ───────────────────────────────────────
+// ── plain user prompts are never forwarded ──────────────────────────────────
 //
-// The rule above skips plain user prompts because "the dashboard already wrote
-// that row when it accepted the message". That holds for anything a human
-// typed. It does NOT hold for a `/loop` iteration: the CLI's own in-session
-// cron enqueues it, nothing ever accepted it, and no row was ever written — so
-// the chat showed a loop's results with nothing that caused them. Measured on
-// session cmt609n1, 2026-08-24: 9 hourly iterations in the transcript, 0 rows
-// in the dashboard.
+// The dashboard already wrote that row when it accepted the message, so
+// re-syncing it here would duplicate the text under a different externalId.
+// This held for human-typed prompts, and since the session-scoped loop was
+// retired (every repeating task is a gateway-fired cron now, which never comes
+// through this path) it holds for CLI-injected `isMeta` prompts too — there is
+// no longer any user record this translator is allowed to forward as prose.
 
-const ITERATION = [
+const INJECTED = [
   'Read silently first: run the startup command in ./CLAUDE.md',
   '',
-  'Then do this iteration of the loop: 推进 humanize-chinese v6 重构',
+  'Do this run: 推进 humanize-chinese v6 重构',
   '',
-  'Then SELF-TEST this iteration before reporting.',
+  'Then SELF-TEST before reporting.',
 ].join('\n');
 
 const metaUser = (uuid: string, text: string) => ({
@@ -297,48 +296,19 @@ const metaUser = (uuid: string, text: string) => ({
   message: { role: 'user', content: [{ type: 'text', text }] }, parent_tool_use_id: null,
 } as any);
 
-test('a loop iteration becomes one system row naming the round task', () => {
-  const out = translateSdkMessage(metaUser('u-loop', ITERATION), ctx);
-  assert.equal(out.length, 1);
-  assert.equal(out[0].role, 'system');
-  assert.equal(out[0].externalId, 'u-loop');
-  assert.deepEqual(out[0].content, [
-    { type: 'text', text: '[gateway] ↻ loop 触发 — 推进 humanize-chinese v6 重构' },
-  ]);
+test('a user prompt is skipped, isMeta or not', () => {
+  assert.deepEqual(translateSdkMessage(user('u-typed', [{ type: 'text', text: INJECTED }]), ctx), []);
+  assert.deepEqual(translateSdkMessage(user('u-typed2', [{ type: 'text', text: '重构整个项目' }]), ctx), []);
+  assert.deepEqual(translateSdkMessage(metaUser('u-meta', INJECTED), ctx), []);
 });
 
-test('the row is a summary, not the 500-character prompt', () => {
-  // The rest of the iteration prompt is skill boilerplate, byte-identical every
-  // round. Pasting it hourly would trade a missing row for a wall of noise.
-  const text = (translateSdkMessage(metaUser('u-loop', ITERATION), ctx)[0].content as any)[0].text;
-  assert.ok(!text.includes('SELF-TEST'));
-  assert.ok(!text.includes('CLAUDE.md'));
-  assert.ok(text.length < 120);
-});
-
-test('it keys on the transcript uuid, so a replay upserts instead of duplicating', () => {
-  // Same contract as every other row here: /api/sync/chat-message upserts on
-  // (sessionId, externalId), and the backstop tail replays from line 1.
-  const a = translateSdkMessage(metaUser('u-loop', ITERATION), ctx);
-  const b = translateSdkMessage(metaUser('u-loop', ITERATION), ctx);
-  assert.equal(a[0].externalId, b[0].externalId);
-});
-
-test('a human-typed prompt is still skipped, isMeta or not', () => {
-  // The dashboard wrote that row already; forwarding it would duplicate the
-  // message under a different externalId. This is the rule the loop branch is
-  // an exception to, not a replacement for.
-  assert.deepEqual(translateSdkMessage(user('u-typed', [{ type: 'text', text: ITERATION }]), ctx), []);
-  assert.deepEqual(translateSdkMessage(user('u-typed', [{ type: 'text', text: '重构整个项目' }]), ctx), []);
-});
-
-test('a task notification is still skipped — it is machinery, not a round', () => {
+test('a task notification is still skipped — it is machinery, not a message', () => {
   const notif = '<task-notification>\n<task-id>bfjz0alz8</task-id>\n<status>completed</status>\n</task-notification>';
   assert.deepEqual(translateSdkMessage(user('u-notif', [{ type: 'text', text: notif }]), ctx), []);
   assert.deepEqual(translateSdkMessage(metaUser('u-notif2', notif), ctx), []);
 });
 
-test('tool results are unaffected by the loop branch', () => {
+test('a user record carrying a tool_result IS forwarded', () => {
   const out = translateSdkMessage(
     user('u-tr', [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }]),
     ctx,

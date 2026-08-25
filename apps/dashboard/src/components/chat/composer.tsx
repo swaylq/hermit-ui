@@ -29,7 +29,7 @@ function queuePreview(content: unknown): string {
   return (t && originalFor(t)) || t;
 }
 
-// The waiting-dispatch queue strip, shown between the LoopBar and the composer
+// The waiting-dispatch queue strip, shown between the ScheduleBar and the composer
 // whenever messages are queued behind the in-flight turn. Each item can be
 // pulled (✕ → dequeue) before the gateway sends it; "清空队列" empties the lot.
 // Reuses the module-scope msgText to render a one-line preview.

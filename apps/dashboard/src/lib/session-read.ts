@@ -22,20 +22,6 @@ export function isSessionUnread(s: ReadLike | null | undefined): boolean {
   return msg > read;
 }
 
-type LoopReadLike = ReadLike & { lastLoopRoundAt?: Date | string | null };
-
-// Has a `/loop` round landed since the last read? Same comparison as
-// isSessionUnread, against a column that only a round moves — which is the
-// point: on a looping session lastMessageAt is bumped by every tool result and
-// aside in between, so it cannot say whether the unread thing is a FINISHED
-// round or the agent thinking out loud. sessionStatusView reads this to decide
-// whether an outstanding background task may keep the session amber.
-export function hasUnreadLoopRound(s: LoopReadLike | null | undefined): boolean {
-  if (!s?.lastLoopRoundAt) return false;
-  const round = new Date(s.lastLoopRoundAt).getTime();
-  const read = s.lastReadAt ? new Date(s.lastReadAt).getTime() : 0;
-  return round > read;
-}
 
 // Returns a stable `markRead(sessionId)`. Optimistically stamps `lastReadAt` in
 // the sidebar's listSessions cache so the dot drops this frame on this device,

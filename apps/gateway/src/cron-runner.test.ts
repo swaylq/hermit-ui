@@ -1,7 +1,7 @@
-// Unit tests for the two pure decisions a cron fire makes about its OWN OUTPUT:
-// which transcript is mine (adoptDriftTranscript), and how much of the result
-// survives the trip to the dashboard (capOutput). Both have shipped a wrong report
-// to a real reader.
+// Unit tests for the pure decisions a cron fire makes about its OWN OUTPUT: which
+// transcript is mine (adoptDriftTranscript), what the run asked the SCHEDULE to do
+// (parseRunMarkers), and how much of the result survives the trip to the dashboard
+// (capOutput). The first two have shipped a wrong report to a real reader.
 //
 // adoptDriftTranscript — the "my pinned transcript never showed up, which file is
 // actually mine?" pick.
@@ -21,7 +21,7 @@ import path from 'node:path';
 
 // config.ts exits the process without a key; nothing here talks to the dashboard.
 process.env.ASST_KEY ||= 'test-key-unused';
-const { adoptDriftTranscript, capOutput, cronPaneEnv } = await import('./cron-runner');
+const { adoptDriftTranscript, capOutput, cronPaneEnv, parseRunMarkers } = await import('./cron-runner');
 
 const CWD = '/Users/test/agent';
 const PINNED = '11111111-1111-4111-8111-111111111111';       // this fire's own uuid
@@ -145,6 +145,124 @@ describe('capOutput', () => {
   it('a 14k report at the new 32K cap is delivered whole', () => {
     const report = 'r'.repeat(14_101);
     assert.equal(capOutput(report, 32_768), report);
+  });
+});
+
+// parseRunMarkers — the run's own say over the SCHEDULE. A cron that iterates toward a
+// goal ends itself with a lone `CRON_DONE` last line; one that picks its own cadence
+// says `CRON_NEXT <minutes>`. Both are read from the FULL output (before capOutput,
+// which keeps the head) and stripped from the report the human reads.
+describe('parseRunMarkers', () => {
+  const REPORT = [
+    '# Nightly sweep',
+    '',
+    'Checked 41 repos, 3 needed a rebase, all 3 rebased cleanly.',
+    'Nothing needs a human.',
+  ].join('\n');
+
+  it('leaves a report with no markers exactly as it was', () => {
+    const r = parseRunMarkers(REPORT);
+    assert.equal(r.output, REPORT);
+    assert.equal(r.done, false);
+    assert.equal(r.nextIntervalSec, null);
+  });
+
+  it('CRON_DONE as the last line ends the cron and leaves the chat', () => {
+    const r = parseRunMarkers(REPORT + '\n\nCRON_DONE');
+    assert.equal(r.done, true);
+    assert.equal(r.output, REPORT, 'the report text survives intact, minus the marker');
+    assert.doesNotMatch(r.output, /CRON_DONE/);
+  });
+
+  it('a marker QUOTED mid-report never ends the cron', () => {
+    // The case this window exists for: an agent asked "how do I stop a cron?"
+    // explains the protocol, and its explanation must not execute it.
+    const explainer = [
+      'To stop a cron from inside a run, end the reply with a line reading only',
+      'CRON_DONE',
+      'and the gateway does the rest.',
+      ...Array.from({ length: 40 }, (_, i) => `detail line ${i}`),
+      'That is all for today.',
+    ].join('\n');
+    const r = parseRunMarkers(explainer);
+    assert.equal(r.done, false);
+    assert.equal(r.output, explainer, 'nothing outside the window is touched');
+  });
+
+  it('CRON_NEXT 45 re-paces to 2700 seconds', () => {
+    const r = parseRunMarkers(REPORT + '\nCRON_NEXT 45');
+    assert.equal(r.nextIntervalSec, 2700);
+    assert.equal(r.done, false);
+    assert.equal(r.output, REPORT);
+  });
+
+  it('accepts the ends of the allowed range (1 minute … 7 days)', () => {
+    assert.equal(parseRunMarkers('x\nCRON_NEXT 1').nextIntervalSec, 60);
+    assert.equal(parseRunMarkers('x\nCRON_NEXT 10080').nextIntervalSec, 604_800);
+  });
+
+  it('refuses an out-of-range interval rather than clamping it', () => {
+    // 0 would mean "fire continuously" and 99999 minutes is ~69 days: both are a
+    // typo, and falling back to the cron's stored interval beats acting on one.
+    const zero = parseRunMarkers(REPORT + '\nCRON_NEXT 0');
+    assert.equal(zero.nextIntervalSec, null);
+    const huge = parseRunMarkers(REPORT + '\nCRON_NEXT 99999');
+    assert.equal(huge.nextIntervalSec, null);
+    // …but it was still a marker line, so it does not leak into the report.
+    assert.equal(zero.output, REPORT);
+    assert.equal(huge.output, REPORT);
+  });
+
+  it('ignores a CRON_NEXT it cannot parse, and leaves that line alone', () => {
+    for (const bad of ['CRON_NEXT', 'CRON_NEXT abc', 'CRON_NEXT 45 minutes', 'CRON_NEXT 123456', 'CRON_NEXTt 5']) {
+      const r = parseRunMarkers(`${REPORT}\n${bad}`);
+      assert.equal(r.nextIntervalSec, null, bad);
+      assert.equal(r.output, `${REPORT}\n${bad}`, `${bad} is not a marker, so it stays put`);
+    }
+  });
+
+  it('handles both markers together', () => {
+    const r = parseRunMarkers(`${REPORT}\nCRON_NEXT 30\nCRON_DONE`);
+    assert.equal(r.done, true);
+    assert.equal(r.nextIntervalSec, 1800);
+    assert.equal(r.output, REPORT);
+  });
+
+  it('still sees a marker followed by blank lines', () => {
+    // A pane-captured final message routinely ends with trailing newlines.
+    const r = parseRunMarkers(`${REPORT}\nCRON_DONE\n\n   \n`);
+    assert.equal(r.done, true);
+    assert.equal(r.output, REPORT);
+  });
+
+  it('tolerates surrounding whitespace on the marker line itself', () => {
+    assert.equal(parseRunMarkers('x\n   CRON_DONE  ').done, true);
+    assert.equal(parseRunMarkers('x\n\tCRON_NEXT 15\t').nextIntervalSec, 900);
+  });
+
+  it('takes the LAST CRON_NEXT when a run emits more than one', () => {
+    const r = parseRunMarkers(`${REPORT}\nCRON_NEXT 10\nCRON_NEXT 20`);
+    assert.equal(r.nextIntervalSec, 1200);
+    assert.equal(r.output, REPORT);
+  });
+
+  it('is not fooled by a marker with anything else on its line', () => {
+    const line = 'Done for now — CRON_DONE';
+    const r = parseRunMarkers(`${REPORT}\n${line}`);
+    assert.equal(r.done, false);
+    assert.equal(r.output, `${REPORT}\n${line}`);
+  });
+
+  it('a marker-only reply reduces to an empty report', () => {
+    const r = parseRunMarkers('CRON_DONE');
+    assert.equal(r.done, true);
+    assert.equal(r.output, '');
+  });
+
+  it('is pure — the same input twice gives the same answer', () => {
+    const input = `${REPORT}\nCRON_NEXT 45`;
+    assert.deepEqual(parseRunMarkers(input), parseRunMarkers(input));
+    assert.equal(input, `${REPORT}\nCRON_NEXT 45`, 'the argument is not mutated');
   });
 });
 

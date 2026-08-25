@@ -24,7 +24,7 @@ import { type FileItem as SkillFileItem } from './file-detail';
 import { sessionStatusView } from '@/lib/session-status';
 import { dashboardReach } from '@/lib/dashboard-reach';
 import { useLiveStatus } from '@/lib/session-live';
-import { isSessionUnread, hasUnreadLoopRound } from '@/lib/session-read';
+import { isSessionUnread } from '@/lib/session-read';
 import { isSessionPutAway } from '@/lib/session-put-away';
 import { usePins } from '@/lib/session-pins';
 import { removeAgentSkill } from '@/lib/optimistic-skills';
@@ -517,7 +517,6 @@ function SessionsSection({
             const live = liveStatus(s.id);
             const status = sessionStatusView(s, {
               unread: isSessionUnread(s),
-              unreadLoopRound: hasUnreadLoopRound(s),
               liveWorking: live === 'working',
               needsYou: live === 'needs-you',
               ...dashboardReach(),

@@ -10,8 +10,7 @@ import { resolveMachine } from '../route';
 import { stripNulDeep } from '@/server/sanitize';
 import { dropStoredImageBytes } from '@/server/message-cap';
 import { enqueuePush } from '@/server/push';
-import { chatEvent, loopRoundEvent } from '@/server/push/events';
-import { loopRoundLine } from '@/lib/loop-marker';
+import { chatEvent } from '@/server/push/events';
 import { fire as fireChat } from '@/server/chat-bus';
 
 const Item = z.object({
@@ -74,11 +73,6 @@ export async function POST(req: NextRequest) {
   // rows are excluded by the same isNew test as freshSessions, so a gateway
   // restart re-tailing a transcript can't notify about hours-old replies.
   const pushable = new Map<string, { agentName: string; content: unknown }>();
-  // Loop ROUND reports in this batch, per session — tracked apart from
-  // `pushable` because that map keeps only the batch's LAST assistant message,
-  // and a round report is routinely followed by more chatter in the same batch.
-  // Losing it there is the bug this fixes, not a detail of it.
-  const loopRounds = new Map<string, { agentName: string; line: string }>();
   // Sessions this batch actually wrote rows for — new OR streamed-growth upsert.
   // The SSE stream must be woken for BOTH: an UPDATE is a growing bubble.
   const dirtySessions = new Set<string>();
@@ -158,11 +152,6 @@ export async function POST(req: NextRequest) {
     // tool calls). chatEvent() drops it later if it carries no text at all.
     if (isNew && m.role === 'assistant') {
       pushable.set(m.sessionId, { agentName: session.agentName, content });
-      // A loop round is kept separately AND is not overwritten by a later round
-      // in the same batch only because rounds are an hour apart — if two ever
-      // did land together, the last one is still the right one to announce.
-      const line = loopRoundLine(content);
-      if (line) loopRounds.set(m.sessionId, { agentName: session.agentName, line });
     }
 
     if (m.externalId) {
@@ -182,10 +171,6 @@ export async function POST(req: NextRequest) {
     inserted++;
   }
 
-  // One clock for both stamps below. Two `new Date()` calls a few ms apart would
-  // let lastLoopRoundAt land AFTER lastMessageAt, and a read marker falling
-  // between them would read as "an unread round on a session with nothing
-  // unread" — a state neither dot branch is written for.
   const arrivedAt = new Date();
 
   // Only advance lastMessageAt for sessions that actually got a NEW message —
@@ -197,33 +182,12 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Stamp when a loop round last landed, so the status dot can tell "the agent
-  // finished a round you have not read" from "a background task is still
-  // running". The dot cannot read it off `lastMessageAt` or the preview: both
-  // move with every later message, and on a looping session there are dozens
-  // between rounds. One UPDATE per round (hourly), not per message.
-  if (loopRounds.size > 0) {
-    await prisma.chatSession.updateMany({
-      where: { id: { in: [...loopRounds.keys()] } },
-      data: { lastLoopRoundAt: arrivedAt },
-    });
-  }
-
   // Notify AFTER the writes land. enqueuePush debounces chat events ~20s per
   // session, so a long streaming turn — which arrives as many of these batches —
   // still results in exactly one notification carrying its final text.
-  //
-  // A session that reported a loop round in this batch is announced by that
-  // round and NOT also by the ordinary chat event: the round is the conclusion,
-  // the chat event would be the narration on the way to it. enqueuePush also
-  // drops any chat event already held for the session for the same reason.
   for (const [sessionId, { agentName, content }] of pushable) {
-    if (loopRounds.has(sessionId)) continue;
     const event = chatEvent({ machineId: machine.id, sessionId, agentName, content });
     if (event) enqueuePush(event);
-  }
-  for (const [sessionId, { agentName, line }] of loopRounds) {
-    enqueuePush(loopRoundEvent({ machineId: machine.id, sessionId, agentName, line }));
   }
   // 广播落库信号：同进程的 /api/chat/stream SSE handler 立即 tick 推送，
   // 不再等下一次 Postgres 轮询。新增与流式增长（upsert-UPDATE）都广播——都要推。

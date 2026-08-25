@@ -45,7 +45,7 @@ import {
   tmuxPaneName,
 } from '@hermit-ui/tmux-driver';
 import { paneIsWorking, WORK_MARKER_RE, sessionTranscriptPath } from './pane';
-import { extractText, hasToolResult, loopTriggerSummary, CcEvent, CcBlock } from './claude-code';
+import { extractText, hasToolResult, CcEvent, CcBlock } from './claude-code';
 
 import { runtimeFor, allRuntimes } from './runtime';
 import type { RuntimeImage } from './runtime/types';
@@ -1329,20 +1329,6 @@ function onTranscriptEvent(chatSessionId: string, ev: any, state: SessionState) 
     // rows when it sent them, and re-syncing would create a duplicate-text
     // row with the wrong externalId.
     const blocks = ev.message.content;
-    // …except a loop iteration the CLI injected, which no dashboard row exists
-    // for. See loopTriggerSummary; kept in step with the claude-sdk runtime's
-    // copy of this branch so both backends show a loop firing.
-    const loopTask = loopTriggerSummary(ev.isMeta, blocks);
-    if (loopTask) {
-      queueSync(state, {
-        sessionId: chatSessionId,
-        role: 'system',
-        content: [{ type: CcBlock.text, text: `[gateway] ↻ loop 触发 — ${loopTask}` }],
-        externalId: ev.uuid,
-        claudeSessionId: stampUuid,
-      });
-      return;
-    }
     if (!hasToolResult(blocks)) return;
     queueSync(state, {
       sessionId: chatSessionId,

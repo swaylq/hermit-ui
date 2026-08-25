@@ -45,9 +45,9 @@ export function TakeoverBar({
         ? { text: `Waiting for ${agentName}…`, busy: true }
         : { text: 'Waiting for the next step…', busy: false };
   return (
-    // Same container as ComposeBar and LoopBar (mx-auto w-full max-w-3xl px-3), so
+    // Same container as ComposeBar and ScheduleBar (mx-auto w-full max-w-3xl px-3), so
     // this lines up with the composer box and the suggestion chips instead of running
-    // edge-to-edge under a centred column. mt-2 because LoopBar only pads its top —
+    // edge-to-edge under a centred column. mt-2 because ScheduleBar only pads its top —
     // without it the banner's border sits flush against the chips.
     //
     // No dodge for the floating mic any more: the dock is clamped above this whole

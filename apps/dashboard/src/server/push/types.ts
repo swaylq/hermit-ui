@@ -6,9 +6,9 @@
 export type PushKind =
   | 'blocked' // an agent is stopped waiting on a permission / question decision
   | 'chat' // an agent replied in a session
-  | 'cron' // a scheduled task finished badly (timeout / error / no_output)
+  | 'cron' // a scheduled task reported: its result into a chat (cronReportEvent),
+  //          or a bad ending — timeout / error / no_output — onto /cron (cronEvent)
   | 'host' // a machine crossed into red resource pressure
-  | 'loop' // one iteration of an in-conversation /loop reported its result
   | 'stall'; // the human asked something and nothing answered (server/unanswered.ts)
 
 export interface PushEvent {

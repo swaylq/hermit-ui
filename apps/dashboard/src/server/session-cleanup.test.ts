@@ -63,7 +63,6 @@ function session(over: Partial<SessionFacts> = {}): SessionFacts {
     groupId: null,
     state: 'idle',
     alive: false,
-    loopState: null,
     rssMb: null,
     contextTokens: 186_996,
     keepAt: null,
@@ -100,27 +99,6 @@ test('a flagged unanswered question blocks', () => {
 test('an unread last message blocks — never delete something never seen', () => {
   assert.equal(verdict({ lastMessageAt: ago(40), lastReadAt: ago(50) })?.blockedBy, 'unread');
   assert.equal(verdict({ lastMessageAt: ago(40), lastReadAt: null })?.blockedBy, 'unread');
-});
-
-test('a running loop blocks', () => {
-  assert.equal(verdict({ loopState: { loops: [{ status: 'running' }] } })?.blockedBy, 'loop');
-  assert.equal(verdict({ loopState: { loops: [{ status: 'running', lastRunAt: ago(2).toISOString() }] } })?.blockedBy, 'loop');
-  // A finished loop is not a reason to keep anything.
-  assert.notEqual(verdict({ loopState: { loops: [{ status: 'stopped' }] } })?.blockedBy, 'loop');
-});
-
-test('a loop that stopped firing is finished, whatever its status says', () => {
-  // `status: 'running'` is written once and never corrected when the loop dies with
-  // its pane. Measured 2026-08-09: 21 sessions carried a "running" loop while idle
-  // 3-42 days, one of them HOURLY with a lastRunAt 30 days old. Trusting the flag
-  // alone made those permanently un-archivable.
-  const dead = { loopState: { loops: [{ status: 'running', lastRunAt: ago(30).toISOString() }] } };
-  assert.notEqual(verdict(dead)?.blockedBy, 'loop');
-  assert.equal(verdict({ ...dead, lastMessageAt: ago(40), closedAt: null })?.tier, 'archive');
-});
-
-test('an undateable loop still blocks — the safe direction', () => {
-  assert.equal(verdict({ loopState: { loops: [{ status: 'running', lastRunAt: 'nonsense' }] } })?.blockedBy, 'loop');
 });
 
 test('a working session blocks', () => {

@@ -30,7 +30,7 @@ import {
 import { authedFetch } from '@/lib/asst-fetch';
 import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { useScope } from '@/lib/use-scope';
-import { LoopBar } from '@/components/chat/loop-bar';
+import { ScheduleBar } from '@/components/chat/schedule-bar';
 import { TakeoverBar } from '@/components/chat/takeover-bar';
 import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
@@ -310,10 +310,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // sessions × a per-row preview subquery) — which otherwise leaves the title
   // showing the raw id and the composer disabled. Once the list loads it takes
   // over (every existing sessionMeta.refetch keeps the header fresh), so this is
-  // the gap-filler for the header AND — since P1-2 dropped the whole-.loop-state
-  // blob from listSessions to slim that 5s payload (it was 38% of it) — the
-  // source of the current session's `loopState` for the LoopBar. So it now polls
-  // at 5s to keep the loop card as fresh as the old listSessions-driven path; a
+  // the gap-filler for the header AND the source of per-session state the slimmed
+  // 5s listSessions payload deliberately leaves out (P1-2). It polls at 5s; a
   // single-row PK query, so the extra poll is cheap and only runs on /chat.
   const sessionOne = trpc.chat.getSession.useQuery({ sessionId }, { enabled: !!sessionId, staleTime: 30_000, refetchInterval: 5_000 });
   const session = sessionMeta.data?.find((s) => s.id === sessionId) ?? sessionOne.data ?? undefined;
@@ -1561,10 +1559,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     if (!live) setSlideCancelArmed(false);
   }, []);
 
-  // Stable callbacks for the memo'd LoopBar — inline arrows here would give it a
-  // fresh prop identity on every SSE tick and defeat the memo. pickPrompt is
+  // Stable callbacks for the memo'd ScheduleBar — inline arrows here would give it
+  // a fresh prop identity on every SSE tick and defeat the memo. pickPrompt is
   // stable; the *_TEMPLATE strings are module constants.
-  const startLoop = useCallback(() => pickPrompt(LOOP_TEMPLATE), [pickPrompt]);
+  const startIterate = useCallback(() => pickPrompt(ITERATE_TEMPLATE), [pickPrompt]);
   const startCron = useCallback(() => pickPrompt(CRON_TEMPLATE), [pickPrompt]);
   const startAutonomy = useCallback(() => pickPrompt(AUTONOMY_TEMPLATE), [pickPrompt]);
 
@@ -1579,9 +1577,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // dispatch session (already the Brain's own work). The Brain-can't-drive-itself
   // case is enforced server-side, and its chats don't appear on this page anyway.
   // Read off sessionOne (getSession), not `session` — which prefers the
-  // listSessions row. Same call the LoopBar makes for `loopState`: that 5s poll is
-  // machine-wide and was deliberately slimmed (P1-2), so per-session state belongs
-  // on the single-row query, which polls at the same 5s anyway.
+  // listSessions row. That 5s poll is machine-wide and was deliberately slimmed
+  // (P1-2), so per-session state belongs on the single-row query, which polls at
+  // the same 5s anyway.
   const takeover = sessionOne.data;
   const takenOver = !!takeover?.takeoverBySessionId;
   const canTakeover =
@@ -2104,9 +2102,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             The mic goes wherever it's dragged now; the div stays because it's one
             flex item, and unwrapping it would respace the whole control column. */}
         <div>
-          <LoopBar
-            loopState={sessionOne.data?.loopState}
-            onStartLoop={startLoop}
+          <ScheduleBar
+            onStartIterate={startIterate}
             onStartCron={startCron}
             onStartAutonomy={startAutonomy}
             takeover={
@@ -2123,10 +2120,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             }
             disabled={!!session?.closedAt}
             sessionId={sessionId}
-            /* Stable (useCallback inside useAnchoredWindow), so it doesn't
-               defeat LoopBar's memo. Lets a round in the card re-centre the
-               timeline on itself instead of being reachable only in the card. */
-            onJump={anchored.jumpTo}
           />
           {/* Directly above the composer: the Brain's stated goal sits where the
               human's eyes already are when they're about to type — which is also
@@ -2284,22 +2277,22 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 //     spot (tapping "↓ latest", dismissing the keyboard), so clicks that arrive
 //     within a moment of the pill appearing are ignored. You can only stop a
 //     turn by aiming at a pill that was already there.
-// Natural-language template the "开启循环任务" suggestion drops into the
-// composer. There is no slash-command menu any more — loops are natural
-// language, so this guided starter is the entry point. The loop skill matches
-// on 循环/每 X/直到 and sets up a session-scoped recurring task whose every
-// iteration streams back into THIS conversation.
-const LOOP_TEMPLATE =
-  '开启循环任务：每 1 小时，<要做的事>。每轮做完都自己测试验证一遍，再把结果（含验证结论）发到这个对话；达成 <完成条件> 后自动停止。';
-
-// Cron sibling of LOOP_TEMPLATE. The cron skill matches on 定时/每 X/cron and creates
-// a DURABLE background task via mcp__hermit__cron_create. What separates it from a
-// loop is no longer "where the result goes" — a cron now reports into the chat that
-// created it too — it's that each run is an ISOLATED turn, so a daily job never grows
-// this conversation's context, and it survives restarts.
+// The two starters the suggestion chips drop into the composer. Both create the
+// SAME thing — a hermit cron via mcp__hermit__cron_create, durable, listed on
+// /cron, reporting each run into this chat — because a 定时任务 and a 循环 stopped
+// being different objects when the session-scoped loop was retired
+// (docs/cron-merge-design.md). What differs is the SHAPE of the task:
+//
+//   ITERATE_TEMPLATE — the runs build on each other and there is a finish line, so
+//     the task carries its progress in a file and ends itself when it gets there.
+//   CRON_TEMPLATE — a periodic check whose runs are independent and which nobody
+//     expects to finish.
 //
 // Prompt templates stay in Chinese on purpose: they are typed at the AGENT, and the
 // English rule covers the product's own UI, not what you say to an agent.
+const ITERATE_TEMPLATE =
+  '开启循环任务：每 30 分钟，<要做的事>。每轮先读上一轮留下的进展文件再接着做，做完自己测试验证一遍，把结果（含验证结论）发到这个对话；达成 <完成条件> 后自动停止。';
+
 const CRON_TEMPLATE =
   '开启定时任务：每 60 分钟（时间上下浮动 ±10 分钟），<要做的事>。每次独立后台运行（不占用本对话上下文），跑完把结果发回这个对话，完整历史在 /cron 页面。';
 

@@ -35,7 +35,7 @@ test('durable usage repairs tokens without waking an offline session', async () 
     fakeRuntime(null, stored),
     'session-id',
     'agent',
-    '/tmp/no-loop-state-here',
+    '/tmp/agent-dir',
     'codex-thread-id',
   );
   assert.equal(snapshot.contextTokens, 26_630);
@@ -49,7 +49,7 @@ test('live usage still marks an idle runtime handle alive', async () => {
     fakeRuntime(stored, null),
     'session-id',
     'agent',
-    '/tmp/no-loop-state-here',
+    '/tmp/agent-dir',
     'codex-thread-id',
   );
   assert.equal(snapshot.contextTokens, 26_630);

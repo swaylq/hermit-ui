@@ -63,7 +63,6 @@ const BLOCKER_LABEL: Record<string, string> = {
   interaction: 'waiting on an answer from you',
   queued: 'has an undelivered message',
   unanswered: 'flagged: you asked, nobody answered',
-  loop: 'running a loop',
   working: 'working right now',
   dispatch: 'wired to a Brain dispatch or takeover',
   grouped: 'filed in a group',

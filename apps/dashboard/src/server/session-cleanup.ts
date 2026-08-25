@@ -104,44 +104,12 @@ export const BLOCKER_LABEL: Record<string, string> = {
   interaction: 'waiting on an answer from you',
   queued: 'has an undelivered message',
   unanswered: 'flagged: you asked, nobody answered',
-  loop: 'running a loop',
   working: 'working right now',
   dispatch: 'wired to a Brain dispatch or takeover',
   grouped: 'filed in a group',
   named: 'you gave it a name — archived, but never auto-deleted',
   kept: 'you marked it Keep',
 };
-
-// A loop that hasn't fired in this long is finished, whatever its status says.
-//
-// `status: 'running'` is written into <agent>/.loop-state.json when a loop starts
-// and is simply never corrected if the loop dies with the pane, the agent, or the
-// machine. Measured 2026-08-09: 21 sessions carried a "running" loop while idle
-// 3–42 days, including an HOURLY loop whose own `lastRunAt` was 30 days old.
-// Trusting the flag alone made those permanently un-archivable.
-//
-// 14 days is deliberately far past any cadence in use (hourly, daily, weekly), so
-// a live loop is never mistaken for a dead one — this only catches the corpses.
-const LOOP_STALE_DAYS = 14;
-
-/**
- * Is a loop actually running in this session?
- *
- * The loop's own `lastRunAt` is the evidence; `status` is only its intent. When
- * `lastRunAt` is missing we fall back to trusting `status`, which is the safe
- * direction: a loop we can't date blocks cleanup rather than being archived out
- * from under itself.
- */
-function hasRunningLoop(loopState: unknown, nowMs: number): boolean {
-  const loops = (loopState as { loops?: Array<{ status?: string; lastRunAt?: string }> } | null)?.loops;
-  if (!Array.isArray(loops)) return false;
-  return loops.some((l) => {
-    if (l?.status !== 'running') return false;
-    const last = l.lastRunAt ? Date.parse(l.lastRunAt) : NaN;
-    if (!Number.isFinite(last)) return true;
-    return (nowMs - last) / DAY_MS < LOOP_STALE_DAYS;
-  });
-}
 
 const DAY_MS = 86_400_000;
 
@@ -179,7 +147,7 @@ export async function computeCleanup(machineId: string, opts: CleanupOptions = {
     select: {
       id: true, agentName: true, title: true, titleAuto: true, preview: true, origin: true,
       startedAt: true, lastMessageAt: true, lastReadAt: true, closedAt: true, groupId: true,
-      state: true, alive: true, loopState: true, rssMb: true, contextTokens: true, keepAt: true,
+      state: true, alive: true, rssMb: true, contextTokens: true, keepAt: true,
       unansweredMsgId: true, dispatchedBySessionId: true, takeoverBySessionId: true,
     },
   });
@@ -284,7 +252,6 @@ export interface SessionFacts {
   groupId: string | null;
   state: string | null;
   alive: boolean;
-  loopState: unknown;
   rssMb: number | null;
   contextTokens: number | null;
   keepAt: Date | null;
@@ -336,7 +303,6 @@ export function classifySession(
     : refs.hasQueued.has(s.id) ? 'queued'
     : s.unansweredMsgId ? 'unanswered'
     : unread ? 'unread'
-    : hasRunningLoop(s.loopState, nowMs) ? 'loop'
     : s.state === 'working' ? 'working'
     // A dispatch pins its session only while it is IN FLIGHT. `dispatchedBySessionId`
     // is set on every dispatch child for the lifetime of the row — it is how the

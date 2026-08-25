@@ -133,6 +133,78 @@ export function capOutput(output: string, max: number, transcriptPath?: string):
   );
 }
 
+// ── Run markers: a cron that ends itself, or re-paces itself ─────────────────
+//
+// A run may close its reply with ONE of two protocol lines (see the `cron` skill,
+// apps/cli/template/.claude/skills/cron/SKILL.md):
+//
+//   CRON_DONE            the goal is reached — stop firing (the dashboard stamps
+//                        doneAt and disables the cron, so /cron says 已完成 rather
+//                        than 已暂停)
+//   CRON_NEXT <minutes>  re-pace: run again in that many minutes instead of the
+//                        stored interval ("自调步")
+//
+// This is what replaced the session-scoped loop: iterate-until-done and
+// pick-your-own-cadence now live on a durable cron instead of a chat session.
+//
+// Only the LAST 5 NON-EMPTY lines are examined. A report that merely *quotes* a
+// marker while explaining it mid-text must not end the cron — and an agent asked
+// "how do I stop a cron?" writes exactly that. The skill mandates the marker as the
+// FINAL line of the reply, so five lines is all the slack a real one ever needs
+// (both markers together, plus a short sign-off) while nothing further up can fire.
+//
+// Pure: no I/O, no clock. The caller decides what to do with the verdict.
+const DONE_MARKER = 'CRON_DONE';
+const NEXT_MARKER_RE = /^CRON_NEXT\s+(\d{1,5})$/;
+const MARKER_WINDOW = 5;                  // trailing non-empty lines examined
+const NEXT_MIN_SEC = 60;                  // 1 minute
+const NEXT_MAX_SEC = 7 * 24 * 60 * 60;    // 7 days — the 1..10080 minutes the skill states
+
+export function parseRunMarkers(output: string): {
+  output: string;
+  done: boolean;
+  nextIntervalSec: number | null;
+} {
+  const lines = output.split('\n');
+  // Indices of the trailing window, oldest-first, so "the last CRON_NEXT wins" is
+  // just "keep overwriting as we go".
+  const window: number[] = [];
+  for (let i = lines.length - 1; i >= 0 && window.length < MARKER_WINDOW; i--) {
+    if (lines[i].trim() !== '') window.push(i);
+  }
+  window.reverse();
+
+  let done = false;
+  let nextIntervalSec: number | null = null;
+  const strip = new Set<number>();
+  for (const i of window) {
+    const line = lines[i].trim();
+    if (line === DONE_MARKER) {
+      done = true;
+      strip.add(i);
+      continue;
+    }
+    const m = NEXT_MARKER_RE.exec(line);
+    if (!m) continue;
+    // A syntactic marker line is ALWAYS stripped, even when its number is refused:
+    // the protocol line is never something a reader wants in the report.
+    strip.add(i);
+    const sec = Number(m[1]) * 60;
+    // Out of range is REFUSED, not clamped to the nearest bound. `CRON_NEXT 0` is a
+    // typo or a misunderstanding, and silently reading it as "every minute" would
+    // turn one bad line into a runaway; falling back to the cron's stored interval
+    // is the safe reading of a nonsense value.
+    nextIntervalSec = sec >= NEXT_MIN_SEC && sec <= NEXT_MAX_SEC ? sec : null;
+  }
+
+  // Untouched output stays byte-identical — only a strip earns the trailing trim.
+  const cleaned =
+    strip.size === 0
+      ? output
+      : lines.filter((_, i) => !strip.has(i)).join('\n').replace(/\s+$/, '');
+  return { output: cleaned, done, nextIntervalSec };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -412,11 +484,19 @@ async function fireInner(c: Cron): Promise<void> {
     await killSession(runSessionId).catch(() => {});
   }
 
-  const capped = capOutput(output, OUTPUT_MAX, jsonlPath || undefined);
+  // Read the markers BEFORE capping, and never the other way round: capOutput keeps
+  // the HEAD of a 32K-capped output, so a CRON_DONE on the last line of a long report
+  // would be cut off before anything could see it and the cron would go on firing
+  // forever. Ordering IS the mechanism here.
+  const { output: reported, done, nextIntervalSec } = parseRunMarkers(output);
+  const capped = capOutput(reported, OUTPUT_MAX, jsonlPath || undefined);
   const durationMs = Date.now() - startedAt;
-  if (capped.length !== output.length) {
-    console.warn(`[cron] ${c.id.slice(0, 8)}: output truncated ${output.length} → ${OUTPUT_MAX} chars`);
+  if (capped.length !== reported.length) {
+    console.warn(`[cron] ${c.id.slice(0, 8)}: output truncated ${reported.length} → ${OUTPUT_MAX} chars`);
   }
+  if (done) console.log(`[cron] ${c.id.slice(0, 8)}: run signalled CRON_DONE`);
+  if (nextIntervalSec !== null)
+    console.log(`[cron] ${c.id.slice(0, 8)}: run signalled CRON_NEXT ${nextIntervalSec / 60}m`);
   try {
     await api.cronRun({
       phase: 'finish',
@@ -425,6 +505,10 @@ async function fireInner(c: Cron): Promise<void> {
       status,
       output: capped,
       durationMs,
+      // Both optional on the dashboard side — send a field only when it fired, so an
+      // ordinary run's payload is exactly what it was before this existed.
+      ...(done ? { done: true } : {}),
+      ...(nextIntervalSec !== null ? { nextIntervalSec } : {}),
     });
   } catch (e) {
     console.error('[cron] runFinish post failed', e);

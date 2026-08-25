@@ -123,8 +123,9 @@ never plaintext files, never hard-coded.
 ## Cron / Scheduled Tasks — HARD RULE
 
 **Every scheduled or recurring task goes through the `cron` skill** — it registers on the
-dashboard `/cron` page, and the gateway's cron-runner fires each one as a fresh interactive
-Claude turn in your directory. For an in-conversation loop, use the `loop` skill.
+dashboard `/cron` page, the gateway's cron-runner fires each one as a fresh interactive
+Claude turn in your directory, and every run's report is posted back into the chat that
+created it. A 定时任务 and a 循环 are the same object here; there is no separate loop skill.
 
 **Never hand-roll an OS scheduler**: no LaunchAgents, no launchd `.plist`s, no systemd-user
 timers, no system `crontab`, and no `scripts/launchd-sync.sh` if you find one — older
