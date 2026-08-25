@@ -18,6 +18,7 @@ import { capMessageContent } from '../message-cap';
 import { digestMessageContent } from '../message-digest';
 import { extractSearchText, extractInteractionBlocks } from '../chat-text';
 import { generateSessionTitle } from '../session-title';
+import { loopStateForSession } from '../loop-state';
 import {
   TAKEOVER_CONCURRENCY,
   endNote,
@@ -402,14 +403,19 @@ export const chatRouter = router({
       // nothing visible — it's reading and deciding — and with no signal for that the
       // feature looks stalled when it's working. One PK lookup, only when a takeover
       // is actually running.
+      // `.loop-state.json` is agent-level, so this row carries every sibling
+      // session's loops too — 68% of the blob on a real four-loop agent, twelve
+      // times a minute per open tab, discarded in the browser. Cut it here; the
+      // client-side filter in LoopBar stays as the belt to this braces.
+      const loopState = loopStateForSession(s?.loopState, input.sessionId);
       if (s?.takeoverBySessionId) {
         const brain = await prisma.chatSession.findUnique({
           where: { id: s.takeoverBySessionId },
           select: { state: true },
         });
-        return { ...s, ...backend, takeoverBrainState: brain?.state ?? null };
+        return { ...s, loopState, ...backend, takeoverBrainState: brain?.state ?? null };
       }
-      return s ? { ...s, ...backend, takeoverBrainState: null } : s;
+      return s ? { ...s, loopState, ...backend, takeoverBrainState: null } : s;
     }),
 
   // Everything the session detail sheet shows, and NOTHING the chat header
