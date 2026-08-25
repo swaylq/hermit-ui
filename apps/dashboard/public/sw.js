@@ -22,6 +22,14 @@
 const VERSION = 'v3';
 const SHELL_CACHE = `asst-shell-${VERSION}`;
 const ASSET_CACHE = `asst-assets-${VERSION}`;
+// Chat image thumbnails. Separate cache so its own budget can be enforced
+// without touching the build assets, and NOT version-suffixed: the bytes at a
+// uuid url never change, so there is nothing for a deploy to invalidate and no
+// reason to make an installed phone re-download them.
+const IMAGE_CACHE = 'asst-thumbs';
+// ~400 x ~16KB ≈ 6MB. iOS evicts a whole origin's storage when it feels like
+// it, so this is a courtesy bound, not a guarantee.
+const IMAGE_CACHE_MAX = 400;
 const OFFLINE_URL = '/offline.html';
 const PRECACHE = [OFFLINE_URL, '/icon-192.png'];
 
@@ -34,7 +42,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   // Keep only the current version's caches; drop everything older (incl. the
   // previous build's hashed assets and the old asst-shell-v1).
-  const keep = new Set([SHELL_CACHE, ASSET_CACHE]);
+  const keep = new Set([SHELL_CACHE, ASSET_CACHE, IMAGE_CACHE]);
   event.waitUntil(
     caches
       .keys()
@@ -77,9 +85,44 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Everything else (/api/*, /api/trpc, /uploads, dynamic routes) → straight to
-  // the network, untouched. No respondWith ⇒ no stale dashboard data, ever.
+  // Chat image thumbnails → cache-first, on the same argument as the hashed
+  // assets above: the path carries a uuid, so the bytes for a given url never
+  // change and a hit is always correct. Without this an installed PWA refetches
+  // every picture in a conversation whenever iOS drops the HTTP cache, which it
+  // does aggressively. Only `.thumb.webp` — the full-size `.safe.` file is what
+  // the lightbox opens, and 535KB a piece has no business in a phone's cache.
+  if (url.origin === self.location.origin && url.pathname.startsWith('/uploads/') && url.pathname.endsWith('.thumb.webp')) {
+    event.respondWith(
+      caches.open(IMAGE_CACHE).then((cache) =>
+        cache.match(req).then((hit) => {
+          if (hit) return hit;
+          return fetch(req).then((res) => {
+            if (res.ok) {
+              cache.put(req, res.clone()).then(() => trimImageCache(cache));
+            }
+            return res;
+          });
+        }),
+      ),
+    );
+    return;
+  }
+
+  // Everything else (/api/*, /api/trpc, /uploads/*.safe.*, dynamic routes) →
+  // straight to the network, untouched. No respondWith ⇒ no stale data, ever.
 });
+
+// Cache Storage hands back keys in insertion order, so the front of the list is
+// the least recently ADDED. Dropping a batch rather than one at a time keeps
+// this off the hot path — it runs once per ~40 new thumbnails, not once per
+// picture.
+function trimImageCache(cache) {
+  return cache.keys().then((keys) => {
+    if (keys.length <= IMAGE_CACHE_MAX) return;
+    const excess = keys.length - IMAGE_CACHE_MAX + Math.floor(IMAGE_CACHE_MAX / 10);
+    return Promise.all(keys.slice(0, excess).map((k) => cache.delete(k)));
+  });
+}
 
 // ── Web Push ────────────────────────────────────────────────────────────────
 // The server sends ONE payload shape (src/server/push/webpush.ts): Declarative
