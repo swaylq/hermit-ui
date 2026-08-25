@@ -120,8 +120,12 @@ function NewChatFallback() {
         <SidebarMobileToggle />
         <span className="text-sm font-medium text-foreground">New chat</span>
       </header>
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 space-y-5 shadow-sm" aria-hidden="true">
+      {/* Same scroll frame as the real pane, not just the same card — so the
+          swap cannot move anything, and so the next person to copy this block
+          copies the version that survives a long backend list. */}
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+        <div className="flex min-h-full flex-col p-6">
+        <div className="w-full max-w-md mx-auto my-auto rounded-2xl border border-border bg-card p-6 space-y-5 shadow-sm" aria-hidden="true">
           <div className="flex flex-col items-center gap-2">
             <Skeleton className="h-12 w-12 rounded-2xl" />
             <Skeleton className="h-5 w-40" />
@@ -130,6 +134,7 @@ function NewChatFallback() {
           <Skeleton className="h-[38px] w-full rounded-lg" />
           <Skeleton className="h-[58px] w-full rounded-lg" />
           <Skeleton className="h-10 w-full rounded-lg" />
+        </div>
         </div>
       </div>
     </div>

@@ -78,9 +78,27 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
         <SidebarMobileToggle />
         <span className="text-sm font-medium text-foreground">New chat</span>
       </header>
-      <div className="flex-1 flex items-center justify-center p-6">
+      {/* Scrolls, and centres only when there is room to centre.
+
+          Two separate faults lived in the one class list this replaces
+          (`flex-1 flex items-center justify-center p-6`), and both needed the
+          backend list to grow past a phone screen before they showed:
+
+          · `flex-1` without `min-h-0`. A flex child's default `min-height:auto`
+            refuses to shrink below its content, so the column grew to the
+            card's full height instead of the viewport's — and since the app
+            locks the root scroll (every view scrolls in its own container),
+            there was nothing to scroll. The card simply ran off the bottom.
+
+          · `items-center`. Centring an item TALLER than the line clips it at
+            BOTH ends and the overflow is unreachable — you cannot scroll back
+            up to it. `my-auto` is the fix rather than a different justify
+            value: auto margins take the free space when there is some and
+            collapse to zero when there is not, so the top edge is never eaten. */}
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+        <div className="flex min-h-full flex-col p-6">
         <form
-          className="w-full max-w-md rounded-2xl border border-border bg-card p-6 space-y-5 shadow-sm"
+          className="w-full max-w-md mx-auto my-auto rounded-2xl border border-border bg-card p-6 space-y-5 shadow-sm"
           onSubmit={(e) => {
             e.preventDefault();
             if (!agent) return;
@@ -162,6 +180,7 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
           </div>
           {create.error && <p className="text-xs text-rose-500">{create.error.message}</p>}
         </form>
+        </div>
       </div>
     </div>
   );
