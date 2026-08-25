@@ -34,6 +34,11 @@ function which(bin: string): string | null {
  */
 export function makeThumb(inPath: string, outPath: string): boolean {
   if (!existsSync(inPath)) return false;
+  // The temp name ends in `.tmp`, and imagemagick picks its OUTPUT FORMAT from
+  // the output extension — so writing to `x.tmp` and renaming to `x.thumb.webp`
+  // produced a 407KB 16-bit PNG wearing a .webp name (measured in production,
+  // 2026-08-25). The `webp:` prefix states the format explicitly and does not
+  // care what the file is called.
   const tmp = `${outPath}.${randomUUID().slice(0, 8)}.tmp`;
   const ok = (() => {
     // imagemagick first — it is what the Linux deploy box has, and `[0]` pins
@@ -41,7 +46,16 @@ export function makeThumb(inPath: string, outPath: string): boolean {
     if (which('convert')) {
       const r = spawnSync(
         'convert',
-        [`${inPath}[0]`, '-resize', `${THUMB_LONG_EDGE}x${THUMB_LONG_EDGE}>`, '-quality', String(THUMB_QUALITY), tmp],
+        [
+          `${inPath}[0]`,
+          '-resize', `${THUMB_LONG_EDGE}x${THUMB_LONG_EDGE}>`,
+          // 16-bit sources stay 16-bit otherwise, and colour profiles / EXIF ride
+          // along; neither survives a 320px box usefully.
+          '-depth', '8',
+          '-strip',
+          '-quality', String(THUMB_QUALITY),
+          `webp:${tmp}`,
+        ],
         { encoding: 'utf8', timeout: 20_000 },
       );
       if (r.status === 0 && existsSync(tmp)) return true;

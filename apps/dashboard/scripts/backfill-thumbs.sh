@@ -8,6 +8,9 @@
 # Usage:  UPLOAD_DIR=/var/hermit-ui/uploads apps/dashboard/scripts/backfill-thumbs.sh [--dry-run]
 # Safe to re-run: existing thumbnails are skipped. GIFs are skipped on purpose
 # (a WebP re-encode either drops the animation or grows).
+#
+# The `webp:` prefix on the output is load-bearing: imagemagick takes its output
+# format from the extension, and we write to a `.tmp` name first.
 
 set -uo pipefail
 
@@ -39,7 +42,7 @@ fi
 
 printf '%s\0' "${TODO[@]}" | xargs -0 -P "$JOBS" -I{} bash -c '
   f="$1"; stem="${f%.safe.*}"; out="${stem}.thumb.webp"; tmp="${out}.$$.tmp"
-  if convert "${f}[0]" -resize "'"$LONG_EDGE"'x'"$LONG_EDGE"'>" -quality '"$QUALITY"' "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+  if convert "${f}[0]" -resize "'"$LONG_EDGE"'x'"$LONG_EDGE"'>" -depth 8 -strip -quality '"$QUALITY"' "webp:$tmp" 2>/dev/null && [ -s "$tmp" ]; then
     mv -f "$tmp" "$out"
   else
     rm -f "$tmp"
