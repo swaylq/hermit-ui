@@ -179,6 +179,9 @@ model MachineAlert {
   // Last time this alert pushed, so a persistent condition re-pushes at most
   // every REPUSH_MS instead of every sweep/tick.
   pushedAt   DateTime?
+  // Set by dismiss: the human has seen it — stay quiet (no re-open, no push)
+  // until this passes, even if the condition persists. Cleared only by time.
+  snoozedUntil DateTime?
   expiresAt  DateTime?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt

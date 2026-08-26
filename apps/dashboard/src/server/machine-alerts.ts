@@ -11,14 +11,20 @@
 // So the predicate here is about DELIVERY, not processes:
 //
 //     a message the human wrote is still waiting for the gateway to pick it up
-//     (deliveredAt IS NULL), and it is older than STUCK_MINUTES
+//     (deliveredAt IS NULL), it is older than STUCK_MINUTES, AND the machine
+//     has not picked up ANY outbound message in that window either
 //
-// A healthy gateway acks pending chat every couple of seconds, so an undelivered
-// human message past the threshold is never benign: the gateway is dead, wedged,
-// or starved. It is the same failure shape whichever of those it is, which is why
-// this one signal covers the whole class — including the shapes the host red-zone
-// cannot see (a wedged event loop stops host-stat pushes too; the row just goes
-// stale, and stale raises nothing).
+// The third clause is what keeps the bell honest. "Queued behind a busy agent"
+// is undelivered too — a follow-up sent mid-turn sits until the turn ends,
+// which on a long task is forty minutes of perfectly healthy queueing (the
+// sweep's own first hour flagged exactly that, twice). But a machine whose
+// pipeline is alive keeps draining OTHER sessions' messages while one agent
+// works; a machine whose gateway is dead, wedged, or starved drains NOTHING.
+// "Queue grows AND nothing at all is draining" has no benign shape — it is the
+// same failure whichever of those it is, which is why this one signal covers
+// the whole class, including the shapes the host red-zone cannot see (a wedged
+// event loop stops host-stat pushes too; the row just goes stale, and stale
+// raises nothing).
 //
 // This module is also the home of the MachineAlert ledger itself. Three writers:
 //   - the sweep below (kind 'stuck-messages') — owns the full lifecycle, resolves
@@ -44,6 +50,10 @@ export const SWEEP_INTERVAL_MS = 60_000;
 /** Re-push at most this often while one (machine, kind) condition keeps holding. */
 const REPUSH_MS = 30 * 60_000;
 
+/** A dismiss silences that (machine, kind) for this long, even if the condition
+ *  persists — otherwise the sweep re-opens it on the next pass and × is decorative. */
+const DISMISS_SNOOZE_MS = 4 * 60 * 60_000;
+
 /** At most one "the check itself is broken" push per hour, however often it fails. */
 const FAILURE_PUSH_INTERVAL_MS = 60 * 60_000;
 
@@ -68,9 +78,16 @@ function openWhere(now: Date) {
  * and re-pushes at most every REPUSH_MS. Pushes happen on the TRANSITION to open
  * (pushedAt null) or after the throttle — never per sweep/tick.
  *
+ * A (machine, kind) the human dismissed inside DISMISS_SNOOZE_MS is left alone:
+ * the dismissed row's message/count are refreshed (so an unsnooze later reads
+ * true) but nothing re-opens and nothing pushes.
+ *
  * `ttlMs` null = a condition alert whose lifecycle the caller owns (it must call
  * resolveAlerts when the condition clears). Non-null = an episodic report that
  * lapses on its own when the reporter stops re-reporting.
+ *
+ * Returns what happened, so callers can count honestly: 'created' | 'updated'
+ * (includes re-pushes of a held condition) | 'snoozed'.
  */
 export async function openAlert(args: {
   machineId: string;
@@ -80,7 +97,7 @@ export async function openAlert(args: {
   count?: number;
   ttlMs: number | null;
   push?: boolean;
-}): Promise<void> {
+}): Promise<'created' | 'updated' | 'snoozed'> {
   const now = new Date();
   const expiresAt = args.ttlMs == null ? null : new Date(now.getTime() + args.ttlMs);
   const existing = await prisma.machineAlert.findFirst({
@@ -102,6 +119,22 @@ export async function openAlert(args: {
       },
     });
   } else {
+    // Snoozed? A dismissed row for this (machine, kind) whose quiet period is
+    // still running. Refresh its facts but keep it resolved and silent.
+    const snoozed = await prisma.machineAlert.findFirst({
+      where: {
+        machineId: args.machineId,
+        kind: args.kind,
+        snoozedUntil: { gt: now },
+      },
+    });
+    if (snoozed) {
+      await prisma.machineAlert.update({
+        where: { id: snoozed.id },
+        data: { message: args.message, count: args.count ?? 1 },
+      });
+      return 'snoozed';
+    }
     await prisma.machineAlert.create({
       data: {
         machineId: args.machineId,
@@ -115,11 +148,8 @@ export async function openAlert(args: {
   }
 
   if (shouldPush) {
-    const machineName =
-      args.machineName ??
-      (await prisma.machine.findUnique({ where: { id: args.machineId } }))?.alias?.trim() ??
-      (await prisma.machine.findUnique({ where: { id: args.machineId } }))?.name ??
-      args.machineId;
+    const machine = await prisma.machine.findUnique({ where: { id: args.machineId } });
+    const machineName = args.machineName ?? machine?.alias?.trim() ?? machine?.name ?? args.machineId;
     enqueuePush(
       machineAlertEvent({
         machineId: args.machineId,
@@ -129,6 +159,7 @@ export async function openAlert(args: {
       }),
     );
   }
+  return existing ? 'updated' : 'created';
 }
 
 /** Resolve every open alert of a kind on a machine (condition cleared). */
@@ -151,11 +182,12 @@ export async function listOpen(machineId: string) {
   });
 }
 
-/** The human closed one by hand. */
+/** The human closed one by hand — resolved, and quiet for DISMISS_SNOOZE_MS. */
 export async function dismiss(machineId: string, id: string): Promise<void> {
+  const now = new Date();
   await prisma.machineAlert.updateMany({
     where: { id, machineId, resolvedAt: null },
-    data: { resolvedAt: new Date() },
+    data: { resolvedAt: now, snoozedUntil: new Date(now.getTime() + DISMISS_SNOOZE_MS) },
   });
 }
 
@@ -169,11 +201,16 @@ export interface StuckRow {
 }
 
 /**
- * Human messages still waiting for the gateway, grouped by machine. The same
- * four-clause "the human wrote this" definition as the unanswered sweep
- * (role='user', authoredBy NULL, externalId NULL — a synced-back tool_result and
- * a Brain takeover line are both role 'user' and neither is the human typing),
- * plus deliveredAt NULL and a session that is not closed, trashed, or a
+ * Human messages still waiting for the gateway, grouped by machine — but only
+ * machines whose pipeline has drained NOTHING in the window. The drain clause
+ * is what separates "gateway dead/wedged/starved" from "queued behind a busy
+ * agent": a healthy machine keeps acking other sessions' messages while one
+ * agent works, a stalled one acks nothing at all.
+ *
+ * The human-wrote-it clauses match the unanswered sweep exactly (role='user',
+ * authoredBy NULL, externalId NULL — a synced-back tool_result and a Brain
+ * takeover line are both role 'user' and neither is the human typing), plus
+ * deliveredAt NULL and a session that is not closed, trashed, or a
  * Brain/agent-dispatched conversation.
  */
 export async function findStuck(now: Date, thresholdMs: number): Promise<StuckRow[]> {
@@ -194,6 +231,14 @@ export async function findStuck(now: Date, thresholdMs: number): Promise<StuckRo
       AND s."closedAt" IS NULL
       AND s."trashedAt" IS NULL
       AND s.origin IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "ChatMessage" d
+        JOIN "ChatSession" ds ON ds.id = d."sessionId"
+        WHERE ds."machineId" = s."machineId"
+          AND d."deliveredAt" IS NOT NULL
+          AND d."deliveredAt" > ${cutoff}
+      )
     GROUP BY s."machineId", mac.alias, mac.name
   `;
 }
@@ -229,15 +274,15 @@ export async function sweepOnce(now: Date = new Date()): Promise<SweepResult> {
   let raised = 0;
   for (const row of rows) {
     const oldestMin = Math.round((now.getTime() - row.oldest.getTime()) / 60_000);
-    await openAlert({
+    const outcome = await openAlert({
       machineId: row.machineId,
       machineName: row.machineName,
       kind: 'stuck-messages',
-      message: `${row.n} 条消息卡住未投递到机器，最老 ${oldestMin} 分钟`,
+      message: `网关超过 ${oldestMin} 分钟没有取走任何消息（${row.n} 条在排队）`,
       count: row.n,
       ttlMs: null,
     });
-    raised++;
+    if (outcome === 'created') raised++;
   }
 
   // Resolve open stuck alerts on machines no longer over threshold.
