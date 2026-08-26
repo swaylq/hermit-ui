@@ -192,6 +192,9 @@ model MachineAlert {
   // until this passes, even if the condition persists. Cleared only by time.
   snoozedUntil DateTime?
   expiresAt  DateTime?
+  // Where tapping the banner / push should land. The stuck sweep sets it to the
+  // oldest stuck session's chat; watchdog/reaper reports default to /watchdogs.
+  linkPath   String?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
   resolvedAt DateTime?

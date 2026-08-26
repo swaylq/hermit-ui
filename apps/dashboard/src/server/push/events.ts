@@ -222,13 +222,37 @@ export function machineAlertEvent(args: {
   machineName: string;
   kind: string;
   message: string;
+  /** Deep link — the stuck sweep sends the oldest stuck session's chat. */
+  linkPath?: string | null;
 }): PushEvent {
   return {
     kind: 'host',
     machineId: args.machineId,
     title: `${args.machineName}: ${args.message}`,
     body: args.kind,
-    path: '/system',
+    // '/system' told the human nothing about the alert; the watchdogs page does.
+    path: args.linkPath ?? '/watchdogs',
+    collapseKey: `machine-alert-${args.machineId}-${args.kind}`,
+  };
+}
+
+/**
+ * The condition cleared. CRITICAL that it reuses the alert's collapseKey: iOS
+ * replaces a delivered notification only when a new one carries the same
+ * collapse id — without this the stale "stuck" push sits on the lock screen
+ * forever after the problem is gone (2026-08-26, the human reported it).
+ */
+export function machineAlertClearedEvent(args: {
+  machineId: string;
+  machineName: string;
+  kind: string;
+}): PushEvent {
+  return {
+    kind: 'host',
+    machineId: args.machineId,
+    title: `${args.machineName}: 已恢复`,
+    body: args.kind,
+    path: '/watchdogs',
     collapseKey: `machine-alert-${args.machineId}-${args.kind}`,
   };
 }

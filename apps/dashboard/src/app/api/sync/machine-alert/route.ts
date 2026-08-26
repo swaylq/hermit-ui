@@ -31,6 +31,8 @@ const Body = z.object({
   kind: z.enum(KINDS),
   message: z.string().min(1).max(500),
   count: z.number().int().min(1).max(100_000).optional(),
+  // Where tapping the banner / push lands; watchdog reports default to /watchdogs.
+  linkPath: z.string().max(200).optional(),
   // How long the alert may live without being re-reported. The watchdog runs
   // hourly, so its kinds default to just over two runs; a 5-minute gateway tick
   // should pass something short (chrome-leak passes 30m).
@@ -57,6 +59,7 @@ export async function POST(req: NextRequest) {
     message: body.message,
     count: body.count ?? 1,
     ttlMs: (body.ttlMinutes ?? DEFAULT_TTL_MINUTES) * 60_000,
+    linkPath: body.linkPath ?? '/watchdogs',
   });
   return NextResponse.json({ ok: true });
 }

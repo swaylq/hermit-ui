@@ -9,6 +9,7 @@
 // tripping over them. The banner is the visible half of the MachineAlert ledger
 // (server/machine-alerts.ts); pushes are the lock-screen half.
 
+import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { AlertTriangle, X } from 'lucide-react';
 
@@ -27,7 +28,15 @@ export function MachineAlertsBanner() {
       {alerts.map((a) => (
         <div key={a.id} className="flex items-center gap-2 text-sm text-destructive">
           <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{a.message}</span>
+          {a.linkPath ? (
+            // The whole point of the banner: one tap takes you to the stuck
+            // session (or /watchdogs) — an alert you cannot act on is noise.
+            <Link href={a.linkPath} className="min-w-0 flex-1 truncate hover:underline">
+              {a.message}
+            </Link>
+          ) : (
+            <span className="min-w-0 flex-1 truncate">{a.message}</span>
+          )}
           <button
             type="button"
             aria-label="dismiss"

@@ -45,7 +45,7 @@
 
 import { prisma } from './db';
 import { enqueuePush } from './push';
-import { machineAlertEvent, machineAlertFailureEvent } from './push/events';
+import { machineAlertClearedEvent, machineAlertEvent, machineAlertFailureEvent } from './push/events';
 import { watchdogConfigOf } from '@/lib/watchdog-config';
 
 /** Default when a machine has no watchdogConfig row (Settings → Watchdogs can
@@ -105,6 +105,8 @@ export async function openAlert(args: {
   count?: number;
   ttlMs: number | null;
   push?: boolean;
+  /** Where tapping the banner / push lands. */
+  linkPath?: string | null;
 }): Promise<'created' | 'updated' | 'snoozed'> {
   const now = new Date();
   const expiresAt = args.ttlMs == null ? null : new Date(now.getTime() + args.ttlMs);
@@ -122,6 +124,7 @@ export async function openAlert(args: {
       data: {
         message: args.message,
         count: args.count ?? 1,
+        linkPath: args.linkPath ?? existing.linkPath,
         expiresAt: args.ttlMs == null ? existing.expiresAt : expiresAt,
         ...(shouldPush ? { pushedAt: now } : {}),
       },
@@ -149,6 +152,7 @@ export async function openAlert(args: {
         kind: args.kind,
         message: args.message,
         count: args.count ?? 1,
+        linkPath: args.linkPath ?? null,
         expiresAt,
         pushedAt: shouldPush ? now : null,
       },
@@ -164,6 +168,7 @@ export async function openAlert(args: {
         machineName,
         kind: args.kind,
         message: args.message,
+        linkPath: args.linkPath,
       }),
     );
   }
@@ -173,10 +178,30 @@ export async function openAlert(args: {
 /** Resolve every open alert of a kind on a machine (condition cleared). */
 export async function resolveAlerts(machineId: string, kind: string): Promise<number> {
   const now = new Date();
-  const r = await prisma.machineAlert.updateMany({
+  const open = await prisma.machineAlert.findMany({
     where: { machineId, kind, ...openWhere(now) },
+    select: { id: true, pushedAt: true },
+  });
+  if (open.length === 0) return 0;
+  const r = await prisma.machineAlert.updateMany({
+    where: { id: { in: open.map((a) => a.id) } },
     data: { resolvedAt: now },
   });
+
+  // A stale push never leaves the lock screen on its own: the same collapseKey
+  // must carry the "it's over" note, or last night's false alarm sits there
+  // forever (2026-08-26 — the human reported exactly that). Only alert kinds
+  // that actually pushed need the clearing one.
+  if (open.some((a) => a.pushedAt)) {
+    const machine = await prisma.machine.findUnique({ where: { id: machineId } });
+    enqueuePush(
+      machineAlertClearedEvent({
+        machineId,
+        machineName: machine?.alias?.trim() || machine?.name || machineId,
+        kind,
+      }),
+    );
+  }
   return r.count;
 }
 
@@ -206,6 +231,8 @@ export interface StuckRow {
   machineName: string;
   n: number;
   oldest: Date;
+  oldestSessionId: string;
+  oldestAgentName: string;
 }
 
 /**
@@ -228,7 +255,9 @@ export async function findStuck(now: Date, thresholdMs: number): Promise<StuckRo
     SELECT s."machineId"                    AS "machineId",
            COALESCE(NULLIF(mac.alias, ''), mac.name) AS "machineName",
            COUNT(*)::int                    AS "n",
-           MIN(m."createdAt")               AS "oldest"
+           MIN(m."createdAt")               AS "oldest",
+           (ARRAY_AGG(m."sessionId" ORDER BY m."createdAt"))[1]  AS "oldestSessionId",
+           (ARRAY_AGG(s."agentName" ORDER BY m."createdAt"))[1]  AS "oldestAgentName"
     FROM "ChatMessage" m
     JOIN "ChatSession" s ON s.id = m."sessionId"
     JOIN "Machine" mac ON mac.id = s."machineId"
@@ -294,9 +323,10 @@ export async function sweepOnce(now: Date = new Date()): Promise<SweepResult> {
       machineId: row.machineId,
       machineName: row.machineName,
       kind: 'stuck-messages',
-      message: `${row.n} 条消息超过 ${oldestMin} 分钟未被网关取走`,
+      message: `${row.n} 条消息超过 ${oldestMin} 分钟未被网关取走（最老一条发给 ${row.oldestAgentName}）`,
       count: row.n,
       ttlMs: null,
+      linkPath: `/chat?session=${row.oldestSessionId}`,
     });
     if (outcome === 'created') raised++;
   }
