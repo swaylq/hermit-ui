@@ -11,20 +11,26 @@
 // So the predicate here is about DELIVERY, not processes:
 //
 //     a message the human wrote is still waiting for the gateway to pick it up
-//     (deliveredAt IS NULL), it is older than STUCK_MINUTES, AND the machine
-//     has not picked up ANY outbound message in that window either
+//     (deliveredAt IS NULL), it is older than STUCK_MINUTES, and its session is
+//     not provably busy right now (state='working' backed by a FRESH snapshotAt)
 //
-// The third clause is what keeps the bell honest. "Queued behind a busy agent"
-// is undelivered too — a follow-up sent mid-turn sits until the turn ends,
-// which on a long task is forty minutes of perfectly healthy queueing (the
-// sweep's own first hour flagged exactly that, twice). But a machine whose
-// pipeline is alive keeps draining OTHER sessions' messages while one agent
-// works; a machine whose gateway is dead, wedged, or starved drains NOTHING.
-// "Queue grows AND nothing at all is draining" has no benign shape — it is the
-// same failure whichever of those it is, which is why this one signal covers
-// the whole class, including the shapes the host red-zone cannot see (a wedged
-// event loop stops host-stat pushes too; the row just goes stale, and stale
-// raises nothing).
+// The third clause is what keeps the bell honest, and it took two tries. First
+// attempt had no clause: "queued behind a busy agent" is also undelivered — a
+// follow-up sent mid-turn sits until the turn ends, 40+ minutes of perfectly
+// healthy queueing, and the sweep fired on exactly that within minutes of
+// deploying. Second attempt required the machine to have drained ANY message in
+// the window — but cron prompts and replies never cross the outbound queue, so
+// a quiet healthy machine acks nothing for hours and that excluded nothing.
+// The honest discriminator is per-session: a session the gateway is actively
+// working gets a session-snapshot push every ~8s, so state='working' with a
+// snapshotAt under five minutes old is a genuinely busy agent and its queue is
+// benign. Every other shape — idle, starting, hibernated, never-snapshotted,
+// or "working" with a stale snapshot (a dead gateway freezes the word on the
+// row) — must drain within seconds, so a 10-minute queue is the outage itself:
+// the gateway dead, wedged, or starved. It is the same failure whichever of
+// those it is, which is why this one signal covers the class — including the
+// shapes the host red-zone cannot see (a wedged event loop stops host-stat
+// pushes too; the row just goes stale, and stale raises nothing).
 //
 // This module is also the home of the MachineAlert ledger itself. Three writers:
 //   - the sweep below (kind 'stuck-messages') — owns the full lifecycle, resolves
@@ -201,11 +207,12 @@ export interface StuckRow {
 }
 
 /**
- * Human messages still waiting for the gateway, grouped by machine — but only
- * machines whose pipeline has drained NOTHING in the window. The drain clause
- * is what separates "gateway dead/wedged/starved" from "queued behind a busy
- * agent": a healthy machine keeps acking other sessions' messages while one
- * agent works, a stalled one acks nothing at all.
+ * Human messages still waiting for the gateway, grouped by machine, excluding
+ * messages whose session is provably busy (state='working' with a snapshotAt
+ * fresher than five minutes — the gateway pushes session snapshots every ~8s,
+ * so a fresh one is proof the working claim is current and the queue is just a
+ * busy agent's backlog). A stale "working" is not trusted: a dead gateway
+ * freezes the word on the row, which is exactly the case this must catch.
  *
  * The human-wrote-it clauses match the unanswered sweep exactly (role='user',
  * authoredBy NULL, externalId NULL — a synced-back tool_result and a Brain
@@ -231,14 +238,7 @@ export async function findStuck(now: Date, thresholdMs: number): Promise<StuckRo
       AND s."closedAt" IS NULL
       AND s."trashedAt" IS NULL
       AND s.origin IS NULL
-      AND NOT EXISTS (
-        SELECT 1
-        FROM "ChatMessage" d
-        JOIN "ChatSession" ds ON ds.id = d."sessionId"
-        WHERE ds."machineId" = s."machineId"
-          AND d."deliveredAt" IS NOT NULL
-          AND d."deliveredAt" > ${cutoff}
-      )
+      AND NOT (s.state = 'working' AND s."snapshotAt" > ${new Date(now.getTime() - 5 * 60_000)})
     GROUP BY s."machineId", mac.alias, mac.name
   `;
 }
@@ -278,7 +278,7 @@ export async function sweepOnce(now: Date = new Date()): Promise<SweepResult> {
       machineId: row.machineId,
       machineName: row.machineName,
       kind: 'stuck-messages',
-      message: `网关超过 ${oldestMin} 分钟没有取走任何消息（${row.n} 条在排队）`,
+      message: `${row.n} 条消息超过 ${oldestMin} 分钟未被网关取走`,
       count: row.n,
       ttlMs: null,
     });
