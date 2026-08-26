@@ -30,7 +30,14 @@ export interface HostStatSample {
   transcriptCount: number | null;
   transcriptOrphanMb: number | null;
   transcriptOrphanCount: number | null;
+  // When THIS gateway process booted (ISO). Powers "gateway last restarted" on
+  // Settings → Watchdogs — pm2 knows it on the box, but the dashboard has no
+  // other way to see it.
+  gatewayStartedAt: string | null;
 }
+
+// Computed once: this process's own start time.
+const BOOT_AT = new Date(Date.now() - process.uptime() * 1000).toISOString();
 
 const MB = 1024 * 1024;
 
@@ -120,6 +127,7 @@ export async function collectHostStat(): Promise<HostStatSample> {
     transcriptCount: null,
     transcriptOrphanMb: null,
     transcriptOrphanCount: null,
+    gatewayStartedAt: BOOT_AT,
   };
   try {
     const extra =

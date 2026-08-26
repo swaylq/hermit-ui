@@ -265,6 +265,11 @@ export default function WatchdogsPage() {
             <Num label="Wedge: failures in a row" value={draft.gatewayWatch.wedgeFails} onChange={(v) => set('gatewayWatch', { ...draft.gatewayWatch, wedgeFails: v })} />
             <Num label="Wedge: confirm window" value={draft.gatewayWatch.confirmSec} unit="sec" onChange={(v) => set('gatewayWatch', { ...draft.gatewayWatch, confirmSec: v })} />
             <Num label="Wedge: cooldown" value={draft.gatewayWatch.cooldownSec} unit="sec" onChange={(v) => set('gatewayWatch', { ...draft.gatewayWatch, cooldownSec: v })} />
+            <p className="text-xs text-muted-foreground">
+              {status.host.gatewayStartedAt
+                ? `Gateway last restarted ${fmtWhen(status.host.gatewayStartedAt)}.`
+                : 'Gateway restart time shows here after this machine\u2019s next gateway restart.'}
+            </p>
             <LastAlert alert={alerts['gateway-wedged'] ?? alerts['high-load'] ?? alerts['gateway-resurrected'] ?? alerts['gateway-start-failed']} />
           </WatchdogCard>
         </div>

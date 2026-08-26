@@ -26,6 +26,7 @@ const Stat = z.object({
   transcriptCount: z.number().int().nullable().optional(),
   transcriptOrphanMb: z.number().int().nullable().optional(),
   transcriptOrphanCount: z.number().int().nullable().optional(),
+  gatewayStartedAt: z.string().datetime().nullable().optional(),
 });
 const Body = z.object({ stat: Stat });
 
@@ -56,7 +57,12 @@ export async function POST(req: NextRequest) {
   if (crossedIntoRed) redAlertAt = new Date();
   else if (newHealth !== 'red') redAlertAt = null;
 
-  const data = { ...body.stat, sampledAt: new Date(), redAlertAt };
+  const data = {
+    ...body.stat,
+    gatewayStartedAt: body.stat.gatewayStartedAt ? new Date(body.stat.gatewayStartedAt) : undefined,
+    sampledAt: new Date(),
+    redAlertAt,
+  };
   await prisma.hostStat.upsert({
     where: { machineId: machine.id },
     create: { machineId: machine.id, ...data },

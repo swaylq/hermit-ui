@@ -154,6 +154,10 @@ model HostStat {
   transcriptCount      Int?
   transcriptOrphanMb   Int?
   transcriptOrphanCount Int?
+  // This gateway process's boot time, reported on the 30s host-stat push.
+  // "Gateway last restarted" on Settings → Watchdogs reads this; null until
+  // the machine's gateway next restarts on code that reports it.
+  gatewayStartedAt DateTime?
   sampledAt   DateTime?
 
   // Red-pressure alert (A4). redAlertAt is stamped when the host CROSSES into red

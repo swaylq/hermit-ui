@@ -71,6 +71,7 @@ export const watchdogsRouter = router({
         sampledAt: hostStat?.sampledAt ?? null,
         health: hostStat ? hostHealth(hostStat, config.hostRed) : null,
         redAlertAt: hostStat?.redAlertAt ?? null,
+        gatewayStartedAt: hostStat?.gatewayStartedAt ?? null,
       },
       lastAlertByKind,
     };
