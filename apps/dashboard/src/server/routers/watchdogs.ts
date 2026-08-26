@@ -8,8 +8,6 @@ import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { watchdogConfigOf } from '@/lib/watchdog-config';
 import { hostHealth } from '@/lib/host-health';
-import { stuckSweepHealth } from '../machine-alerts';
-import { unansweredHealth } from '../unanswered';
 
 const ALERT_KINDS = [
   'stuck-messages',
@@ -22,7 +20,11 @@ const ALERT_KINDS = [
 
 export const watchdogsRouter = router({
   status: machineProcedure.query(async ({ ctx }) => {
-    const [machine, hostStat, alerts] = await Promise.all([
+    // Sweep liveness is NOT read from the sweeps' in-process health objects:
+    // instrumentation (which starts the sweeps) and route handlers can hold
+    // different module instances of the same file, so the route would report
+    // a running sweep as stopped. Everything here is DB truth instead.
+    const [machine, hostStat, alerts, stuckOpenCount, unansweredFlagged] = await Promise.all([
       prisma.machine.findUnique({
         where: { id: ctx.machine.id },
         select: { watchdogConfig: true },
@@ -32,6 +34,17 @@ export const watchdogsRouter = router({
         where: { machineId: ctx.machine.id, kind: { in: [...ALERT_KINDS] } },
         orderBy: { createdAt: 'desc' },
         take: 40,
+      }),
+      prisma.machineAlert.count({
+        where: {
+          machineId: ctx.machine.id,
+          kind: 'stuck-messages',
+          resolvedAt: null,
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        },
+      }),
+      prisma.chatSession.count({
+        where: { machineId: ctx.machine.id, unansweredMsgId: { not: null }, unansweredAckedMsgId: null, trashedAt: null },
       }),
     ]);
 
@@ -44,8 +57,8 @@ export const watchdogsRouter = router({
 
     return {
       config,
-      stuckHealth: stuckSweepHealth(),
-      unansweredHealth: unansweredHealth(),
+      stuckOpenCount,
+      unansweredFlagged,
       host: {
         sampledAt: hostStat?.sampledAt ?? null,
         health: hostStat ? hostHealth(hostStat, config.hostRed) : null,

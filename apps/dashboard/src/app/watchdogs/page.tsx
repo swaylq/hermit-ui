@@ -182,9 +182,9 @@ export default function WatchdogsPage() {
             <Enabled checked={draft.stuck.enabled} onChange={(v) => set('stuck', { ...draft.stuck, enabled: v })} />
             <Num label="Stuck after" value={draft.stuck.minutes} unit="min" onChange={(v) => set('stuck', { ...draft.stuck, minutes: v })} />
             <p className="text-xs text-muted-foreground">
-              Sweep {status.stuckHealth.running ? 'running' : 'stopped'}
-              {status.stuckHealth.lastOkAt ? `, last ok ${fmtWhen(status.stuckHealth.lastOkAt)}` : ''}
-              {status.stuckHealth.consecutiveFailures > 0 ? `, ${status.stuckHealth.consecutiveFailures} failures in a row` : ''}.
+              {status.stuckOpenCount > 0
+                ? `${status.stuckOpenCount} alert(s) open right now — messages are not draining.`
+                : 'Nothing stuck right now.'}
             </p>
             <LastAlert alert={alerts['stuck-messages']} />
           </WatchdogCard>
@@ -197,9 +197,9 @@ export default function WatchdogsPage() {
             <Enabled checked={draft.unanswered.enabled} onChange={(v) => set('unanswered', { ...draft.unanswered, enabled: v })} />
             <Num label="Unanswered after" value={draft.unanswered.minutes} unit="min" onChange={(v) => set('unanswered', { ...draft.unanswered, minutes: v })} />
             <p className="text-xs text-muted-foreground">
-              Sweep {status.unansweredHealth.running ? 'running' : 'stopped'}
-              {status.unansweredHealth.lastOkAt ? `, last ok ${fmtWhen(status.unansweredHealth.lastOkAt)}` : ''}
-              {status.unansweredHealth.consecutiveFailures > 0 ? `, ${status.unansweredHealth.consecutiveFailures} failures in a row` : ''}.
+              {status.unansweredFlagged > 0
+                ? `${status.unansweredFlagged} conversation(s) currently owe you a reply past the threshold.`
+                : 'No conversation currently owes you a reply past the threshold.'}
             </p>
           </WatchdogCard>
 
