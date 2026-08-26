@@ -15,6 +15,7 @@ import { secretsRouter } from './secrets';
 import { shareRouter } from './share';
 import { notificationsRouter } from './notifications';
 import { hostsRouter } from './hosts';
+import { alertsRouter } from './alerts';
 import { pushRouter } from './push';
 import { sessionGroupsRouter } from './sessionGroups';
 
@@ -35,6 +36,7 @@ export const appRouter = router({
   share: shareRouter,
   notifications: notificationsRouter,
   hosts: hostsRouter,
+  alerts: alertsRouter,
   push: pushRouter,
   sessionGroups: sessionGroupsRouter,
 });

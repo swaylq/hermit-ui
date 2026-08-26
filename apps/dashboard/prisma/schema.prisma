@@ -117,6 +117,7 @@ model Machine {
   knowledgeBases      KnowledgeBase[]
   pushDevices         PushDevice[]
   sessionGroups       SessionGroup[]
+  machineAlerts       MachineAlert[]
 }
 
 // Latest host-resource snapshot for a machine — RAM / swap / load / cpu, pushed by
@@ -155,6 +156,37 @@ model HostStat {
   alertReadAt DateTime?
 
   machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+}
+
+// A machine-health alert raised by something that noticed a machine misbehave:
+// the stuck-message sweep (server/machine-alerts.ts), the on-host gateway
+// watchdog (scripts/gateway-watch.sh), or a gateway tick that had to act
+// (stray-reaper killing leaked browsers). One OPEN row per (machineId, kind) —
+// re-occurrences update it rather than stacking — so a condition that holds for
+// six hours is one banner, not seventy-two.
+//
+// Lifecycle: condition alerts (stuck-messages) are resolved by the sweep that
+// raised them when the condition clears. Episodic alerts (everything reported
+// over /api/sync/machine-alert) carry expiresAt and lapse on their own when the
+// reporter stops re-reporting. `dismiss` (alerts.dismiss) stamps resolvedAt by
+// hand. "Open" = resolvedAt IS NULL AND (expiresAt IS NULL OR expiresAt > now).
+model MachineAlert {
+  id         String    @id @default(cuid())
+  machineId  String
+  kind       String // stuck-messages | gateway-wedged | high-load | chrome-leak | gateway-resurrected | gateway-start-failed
+  message    String
+  count      Int       @default(1)
+  // Last time this alert pushed, so a persistent condition re-pushes at most
+  // every REPUSH_MS instead of every sweep/tick.
+  pushedAt   DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  resolvedAt DateTime?
+
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@index([machineId, kind, resolvedAt])
 }
 
 // A per-agent share link: a scoped credential that grants access to ONLY this

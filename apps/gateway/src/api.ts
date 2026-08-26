@@ -67,6 +67,10 @@ export const api = {
   syncSessionSnapshots: (items: any[]) => post('/api/sync/session-snapshot', { items }),
   // Host-level RAM/swap/load/cpu snapshot → upserts HostStat (resource governance).
   syncHostStat: (stat: any) => post('/api/sync/host-stat', { stat }),
+  // A machine-health alert this gateway needs the human to see (stray-reaper
+  // kills). Dedup + push-throttle live dashboard-side in openAlert.
+  syncMachineAlert: (a: { kind: string; message: string; count?: number; ttlMinutes?: number }) =>
+    post('/api/sync/machine-alert', a),
   // `replaceSince` (first batch of a run only) tells the dashboard to drop every
   // bucket from that instant on before taking these rows — the window is a snapshot,
   // not an accumulation. See collect/usage.ts:usageWindowStart.

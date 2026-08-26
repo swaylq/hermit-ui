@@ -211,3 +211,40 @@ export function hostEvent(args: {
     collapseKey: `host-${args.machineId}`,
   };
 }
+
+/**
+ * A machine-health alert opened (server/machine-alerts.ts). kind 'host' on the
+ * wire: the iOS shell already knows that kind, and everything this carries is a
+ * machine in trouble — same lock-screen semantics, no client change.
+ */
+export function machineAlertEvent(args: {
+  machineId: string;
+  machineName: string;
+  kind: string;
+  message: string;
+}): PushEvent {
+  return {
+    kind: 'host',
+    machineId: args.machineId,
+    title: `${args.machineName}: ${args.message}`,
+    body: args.kind,
+    path: '/system',
+    collapseKey: `machine-alert-${args.machineId}-${args.kind}`,
+  };
+}
+
+/** The stuck-message check itself is failing — same reasoning as unansweredFailureEvent. */
+export function machineAlertFailureEvent(args: {
+  machineId: string;
+  message: string;
+  failures: number;
+}): PushEvent {
+  return {
+    kind: 'host',
+    machineId: args.machineId,
+    title: 'Stuck-message check is failing',
+    body: `${args.failures}x in a row · ${args.message.slice(0, 100)}`,
+    path: '/system',
+    collapseKey: `stuck-failure-${args.machineId}`,
+  };
+}

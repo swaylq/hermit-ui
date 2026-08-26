@@ -43,6 +43,7 @@ import { knowledgeRequestTick, reconcileKnowledgeOnStartup } from './knowledge';
 import { globalMemoryTick } from './global-memory';
 import { seedPiConfigFromEnv } from './pi-config';
 import { chromeReaperTick } from './chrome-reaper';
+import { strayReaperTick } from './stray-reaper';
 import { orphanPaneReaperTick } from './orphan-pane-reaper';
 import { sessionPurgeTick } from './session-purge';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
@@ -331,6 +332,7 @@ loop(pushDispatchWatch, 30_000); // reactive Brain poke on dispatch block/finish
 loop(pushTakeoverWatch, 8_000); // reactive Brain poke on takeover block/finish + cap sweep
 loop(() => safe('hibernate-tick', chatHibernateTick), 3_000); // manual hibernate requests
 loop(() => safe('chrome-reaper', chromeReaperTick), 5 * 60_000); // reap idle per-agent Chrome (~1GB each) the session-reaper leaves orphaned
+loop(() => safe('stray-reaper', strayReaperTick), 5 * 60_000); // kill NON-owned leaked headless browsers (age + count caps) — the bound a leaking script's own watchdog cannot be trusted to provide (2026-08-26, load 237 on sway003-macmini)
 loop(() => safe('cleanup-sweep', async () => {
   const r = await api.runCleanupSweep();
   if (r?.archived) console.log(`[cleanup-sweep] archived ${r.archived}`);

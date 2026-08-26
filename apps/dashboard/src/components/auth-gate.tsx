@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { AppSidebar, SidebarProvider } from '@/components/app-sidebar';
 import { SwitchArrival } from '@/components/workspace-switcher';
 import { ScopedSidebar } from '@/components/scoped-sidebar';
+import { MachineAlertsBanner } from '@/components/machine-alerts-banner';
 import { useScope } from '@/lib/use-scope';
 
 /**
@@ -129,7 +130,10 @@ function Authed({ onSignOut, children }: { onSignOut: () => void; children: Reac
       <SwitchArrival />
       <div className="flex app-h w-full overflow-hidden bg-background text-foreground pwa-safe-t pwa-safe-x">
         <AppSidebar />
-        <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">{children}</main>
+        <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+          <MachineAlertsBanner />
+          {children}
+        </main>
       </div>
     </SidebarProvider>
   );
