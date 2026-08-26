@@ -66,6 +66,26 @@ export type RuntimeSession = {
    */
   mode?: string | null;
   /**
+   * May this session hold the hermit tool surface and the machine key that
+   * authenticates it? Defaults to true — every CHAT session wants them.
+   *
+   * A cron fire sets it false, and the reason is not caution in the abstract:
+   * the hermit tools (set_session_title, log_status, attach_image, attach_file,
+   * ask) all act on HERMIT_SESSION_ID, and a cron's session id is a throwaway
+   * that has no ChatSession row behind it. So on a cron they cannot succeed —
+   * every call 404s server-side — while the machine's dashboard credential sits
+   * in the child's environment and in every tool subprocess it spawns. Useless
+   * and exposed at once. The pane path has refused this since crons existed
+   * (cron-runner.ts → cronPaneEnv, pinned by a test); this is what lets a cron
+   * keep that refusal after moving off the pane.
+   *
+   * Honoured by claude-sdk, pi-rpc, omp-rpc and prime-rpc — the four that give a
+   * child the hermit tool surface. codex-exec does not honour it yet (it has
+   * always had this, since codex crons predate the flag). dsh-exec needs no
+   * flag: it has no hermit tool surface and never receives the key.
+   */
+  hermitTools?: boolean;
+  /**
    * The orchestrator ("义脑") session, which gets the brain-only cross-agent MCP
    * tools. Only the backends that run a real Claude Code session read it; the
    * others have no equivalent tool surface to widen.

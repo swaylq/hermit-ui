@@ -12,7 +12,7 @@
 //                               cheap — collector is async (execFile) so it never
 //                               blocks the loop. The chat page still flips to
 //                               "working" instantly off its own SSE stream.)
-//   cron tick           15 s   (fires due Cron jobs via tmux + claude)
+//   cron tick           15 s   (fires due Cron jobs on their resolved backend)
 //   chat tick           2  s
 //   chat-cancel tick    1.5s
 //   chat-restart tick   2  s

@@ -91,7 +91,8 @@ export const api = {
 
   // ── Cron jobs (gateway cron-runner) ───────────────────────────────────────
   // Enabled crons joined with their agent's on-disk directory; the runner fires
-  // the due ones via tmux + claude. Mirrors pollChatPending's directory join.
+  // the due ones on the backend the dashboard resolved for each (docs/cron-backends.md).
+  // Mirrors pollChatPending's directory join.
   listCrons: async (): Promise<any[]> => {
     const r = await get<any>(
       '/api/trpc/cron.listForGateway?batch=1&input=' +

@@ -21,7 +21,7 @@ import path from 'node:path';
 
 // config.ts exits the process without a key; nothing here talks to the dashboard.
 process.env.ASST_KEY ||= 'test-key-unused';
-const { adoptDriftTranscript, capOutput, cronPaneEnv, parseRunMarkers } = await import('./cron-runner');
+const { adoptDriftTranscript, capOutput, classifyRun, cronPaneEnv, parseRunMarkers } = await import('./cron-runner');
 
 const CWD = '/Users/test/agent';
 const PINNED = '11111111-1111-4111-8111-111111111111';       // this fire's own uuid
@@ -280,5 +280,187 @@ describe('cronPaneEnv', () => {
     assert.equal(Object.hasOwn(env, 'HERMIT_KEY'), true);
     assert.equal(Object.hasOwn(env, 'HERMIT_DASHBOARD_URL'), true);
     assert.equal(env.HERMIT_SESSION_ID, 'brain-run');
+  });
+});
+
+// classifyRun — what the gateway says it OBSERVED about a fire.
+//
+// Extracted from fireInner and tested here because it was the one part of
+// cron-runner with no test at all, and it is the part that let eleven silent
+// failures across six agents read as "ok" from 2026-08-10 onward
+// (memory/notes/bug_cron_false_ok_synthetic.md). It is also now shared by two
+// call sites — the tmux pane path and the runtime-driven path — so a drift
+// between them would make the same failure report differently depending on
+// which backend happened to run it.
+describe('classifyRun', () => {
+  const CAP = 120 * 60_000; // the runner's 2h RUN_TIMEOUT_MS
+
+  it('settled with text is the only ok', () => {
+    const r = classifyRun({ settled: true, text: 'daily report: all green', timeoutMs: CAP });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.output, 'daily report: all green');
+  });
+
+  it('settled with no text is no_output, not ok', () => {
+    const r = classifyRun({ settled: true, text: '', timeoutMs: CAP });
+    assert.equal(r.status, 'no_output');
+    assert.match(r.output, /produced no final text/);
+  });
+
+  it('treats whitespace-only text as no text', () => {
+    assert.equal(classifyRun({ settled: true, text: '  \n\t \n ', timeoutMs: CAP }).status, 'no_output');
+  });
+
+  it('trims the reported text', () => {
+    assert.equal(classifyRun({ settled: true, text: '\n  done  \n', timeoutMs: CAP }).output, 'done');
+  });
+
+  // Un-observable is NOT failed. A 2h cap and a suspended laptop look identical
+  // from here, and the scheduled work may well have finished either way — the
+  // old `text ? ok : fail` reported both as a hard failure, which is what put
+  // the fleet-wide false-FAIL on the status light.
+  it('never settling is timeout even when text was captured', () => {
+    const r = classifyRun({ settled: false, text: 'partial progress', timeoutMs: CAP });
+    assert.equal(r.status, 'timeout');
+    assert.equal(r.output, 'partial progress', 'text a run DID produce beats the boilerplate');
+  });
+
+  it('never settling with no text explains what a suspended host looks like', () => {
+    const r = classifyRun({ settled: false, text: '', timeoutMs: CAP });
+    assert.equal(r.status, 'timeout');
+    assert.match(r.output, /120min cap/);
+    assert.match(r.output, /may have completed/);
+  });
+
+  it('names the cap it was actually given', () => {
+    assert.match(classifyRun({ settled: false, text: '', timeoutMs: 30 * 60_000 }).output, /30min cap/);
+  });
+
+  it('is pure — same input, same answer, argument untouched', () => {
+    const input = { settled: true, text: 'x', timeoutMs: CAP };
+    assert.deepEqual(classifyRun(input), classifyRun(input));
+    assert.deepEqual(input, { settled: true, text: 'x', timeoutMs: CAP });
+  });
+});
+
+// The half of classification that exists because backends do not throw.
+//
+// pi/omp/prime report a failed turn as `[pi error — the turn did not complete]`,
+// dsh as `[dsh could not run this turn]`, claude-sdk as `[gateway] ⚠️ 这一轮没有
+// 正常结束：…` — each of them a plain system message followed by a turn that
+// produced no assistant text and returned normally. Read for text alone, all of
+// them look identical to a cron that quietly did nothing.
+describe('classifyRun — a backend that failed without throwing', () => {
+  const CAP = 120 * 60_000;
+  const AUTH = '[pi error — the turn did not complete]\nauthentication_failed';
+
+  it('a reported failure with nothing else to show is an error', () => {
+    const r = classifyRun({ settled: true, text: '', timeoutMs: CAP, harnessNote: AUTH, harnessFailed: true });
+    assert.equal(r.status, 'error');
+    assert.equal(r.output, AUTH, 'copied through verbatim — the reason IS the report');
+  });
+
+  it('a reported failure beats a timeout: an observed failure is not un-observable', () => {
+    const r = classifyRun({ settled: false, text: '', timeoutMs: CAP, harnessNote: AUTH, harnessFailed: true });
+    assert.equal(r.status, 'error');
+    assert.equal(r.output, AUTH);
+  });
+
+  // The original false-OK, in its exact shape. "Login expired · Please run
+  // /login" arrives as perfectly ordinary assistant text, so a rule that only
+  // fired when there was NO text would record this run as `ok` — which is what
+  // happened eleven times across six agents.
+  it('a failure that DID produce text is still an error, not ok', () => {
+    const r = classifyRun({
+      settled: true, text: 'Login expired · Please run /login', timeoutMs: CAP,
+      harnessNote: '[gateway] ⚠️ 这一轮没有正常结束：authentication_failed', harnessFailed: true,
+    });
+    assert.equal(r.status, 'error');
+    assert.match(r.output, /Login expired/, 'the text the reader needs is still there');
+    assert.match(r.output, /authentication_failed/, 'and so is the reason');
+  });
+
+  // The other direction, which the first version of this got wrong: claude-sdk
+  // narrates a backgrounded command and an auto-compaction through the SAME
+  // system channel it reports a dead turn on. Treating narration as failure
+  // turns an ordinary tool-only run red and fires a failure push.
+  it('narration is not failure — a note alone does not colour the status', () => {
+    const note = '[gateway] ⏱️ 一条命令跑了 200s 还没结束，已转入后台，这一轮继续。';
+    const ok = classifyRun({ settled: true, text: 'report body', timeoutMs: CAP, harnessNote: note });
+    assert.equal(ok.status, 'ok');
+    assert.match(ok.output, /report body/);
+    assert.match(ok.output, /已转入后台/, 'still shown, just not fatal');
+
+    const quiet = classifyRun({ settled: true, text: '', timeoutMs: CAP, harnessNote: note });
+    assert.equal(quiet.status, 'no_output');
+    assert.match(quiet.output, /已转入后台/, 'a narrated no_output is far more diagnosable');
+  });
+
+  it('an empty or whitespace note changes nothing', () => {
+    const plain = classifyRun({ settled: true, text: 'body', timeoutMs: CAP });
+    assert.deepEqual(classifyRun({ settled: true, text: 'body', timeoutMs: CAP, harnessNote: '   ' }), plain);
+    assert.deepEqual(classifyRun({ settled: true, text: 'body', timeoutMs: CAP, harnessNote: '' }), plain);
+  });
+
+  it('still says no_output when the backend said nothing at all', () => {
+    assert.equal(classifyRun({ settled: true, text: '', timeoutMs: CAP, harnessNote: '' }).status, 'no_output');
+  });
+
+  it('a failure with no note at all still says so', () => {
+    const r = classifyRun({ settled: true, text: '', timeoutMs: CAP, harnessFailed: true });
+    assert.equal(r.status, 'error');
+    assert.match(r.output, /without saying why/);
+  });
+});
+
+// The interaction that nearly shipped a cron which could never stop.
+//
+// fireInner runs classifyRun and THEN parseRunMarkers, which only reads the last
+// 5 non-empty lines. A harness note appended after the agent's report pushes
+// CRON_DONE past that window, and a cron that asked to end goes on firing
+// forever — the same failure the "read markers before capping" rule prevents
+// from the other end. The note therefore leads; the agent's text stays at the
+// tail. These two functions are only ever composed in that order, so the
+// property is tested in that order.
+describe('classifyRun + parseRunMarkers — a note must not swallow the marker', () => {
+  const CAP = 120 * 60_000;
+  // A realistic multi-line note: dsh reports the stderr tail, which is long.
+  const LONG_NOTE = [
+    '[dsh could not run this turn]',
+    'stderr:',
+    '  line one of the tail',
+    '  line two of the tail',
+    '  line three of the tail',
+    '  line four of the tail',
+  ].join('\n');
+
+  it('still sees CRON_DONE when a six-line note came with the report', () => {
+    const { output } = classifyRun({
+      settled: true,
+      text: 'goal reached, nothing left to do\nCRON_DONE',
+      timeoutMs: CAP,
+      harnessNote: LONG_NOTE,
+    });
+    const markers = parseRunMarkers(output);
+    assert.equal(markers.done, true, 'the cron asked to stop and must be allowed to');
+    assert.match(markers.output, /goal reached/);
+    assert.match(markers.output, /dsh could not run this turn/, 'the warning survives too');
+  });
+
+  it('still sees CRON_NEXT when a note came with the report', () => {
+    const { output } = classifyRun({
+      settled: true,
+      text: 'nothing new this round\nCRON_NEXT 45',
+      timeoutMs: CAP,
+      harnessNote: LONG_NOTE,
+    });
+    assert.equal(parseRunMarkers(output).nextIntervalSec, 45 * 60);
+  });
+
+  it('leaves the agent text as the tail so the marker keeps its position', () => {
+    const { output } = classifyRun({
+      settled: true, text: 'body\nCRON_DONE', timeoutMs: CAP, harnessNote: 'warn',
+    });
+    assert.ok(output.endsWith('CRON_DONE'), `note must lead, not trail — got: ${JSON.stringify(output)}`);
   });
 });

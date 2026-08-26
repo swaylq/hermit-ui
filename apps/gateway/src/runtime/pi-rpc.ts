@@ -435,6 +435,12 @@ export class PiRpcRuntime implements AgentRuntime {
     // because that is the only moment pi can be told any of it — which is also
     // why changing a session's mode has to restart its child (planRuntimeSwitch).
     const mode = resolveMode(session.mode);
+    // The hermit tools and the machine key that authenticates them travel
+    // together: a child given one without the other has tools that 401 rather
+    // than tools that are absent. `hermitTools: false` — an ordinary cron fire,
+    // whose session id has no ChatSession row for these tools to act on — drops
+    // both. See RuntimeSession.hermitTools.
+    const hermitTools = session.hermitTools !== false;
     const modeArgs = buildModeArgs(mode, { agentDirectory: session.agentDirectory });
     const globalMemoryArg = globalMemoryPrompt();
     // The credential this backend was composed with — one entry of Settings →
@@ -489,7 +495,7 @@ export class PiRpcRuntime implements AgentRuntime {
       // --session last: an absolute path, so it is independent of cwd and of
       // every mode argument before it.
       args: [
-        '--extension', hermitExtensionPath(),
+        ...(hermitTools ? ['--extension', hermitExtensionPath()] : []),
         ...modeArgs,
         // pi finds the agent's own AGENTS.md/CLAUDE.md by walking CWD's
         // ancestors, but the machine's global memory lives in ~/.claude/, which
@@ -510,9 +516,11 @@ export class PiRpcRuntime implements AgentRuntime {
         ...(await providerEnv(session.provider ?? machineProvider)),
         ...machineEnv,
         ...(await visionEnv()),
-        HERMIT_DASHBOARD_URL: DASHBOARD_URL,
-        HERMIT_KEY: ASST_KEY,
-        HERMIT_SESSION_ID: session.id,
+        ...(hermitTools ? {
+          HERMIT_DASHBOARD_URL: DASHBOARD_URL,
+          HERMIT_KEY: ASST_KEY,
+          HERMIT_SESSION_ID: session.id,
+        } : {}),
       } as Record<string, string>,
     });
     await client.start();

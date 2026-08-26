@@ -344,10 +344,16 @@ export class OmpRpcRuntime implements AgentRuntime {
     // live child (rpc get_state reports both; --resume <id> reattached and the
     // reply carried context planted before the restart).
     const pointer = readPiSession(session.id);
+    // The hermit tools and the machine key that authenticates them travel
+    // together: a child given one without the other has tools that 401 rather
+    // than tools that are absent. `hermitTools: false` — an ordinary cron fire,
+    // whose session id has no ChatSession row for these tools to act on — drops
+    // both. See RuntimeSession.hermitTools.
+    const hermitTools = session.hermitTools !== false;
     const resume = resumablePiSession(session.id, undefined, { engine: 'omp' });
 
     const args = [
-      '--extension', hermitExtensionPath(),
+      ...(hermitTools ? ['--extension', hermitExtensionPath()] : []),
       ...buildModeArgs(mode, { agentDirectory: session.agentDirectory }),
       ...(modelArg ? ['--model', modelArg] : []),
       ...(resume ? ['--resume', resume.piSessionId] : []),
@@ -373,9 +379,11 @@ export class OmpRpcRuntime implements AgentRuntime {
         ...machineEnv,
         ...keyEnv,
         ...(await visionEnv()),
-        HERMIT_DASHBOARD_URL: DASHBOARD_URL,
-        HERMIT_KEY: ASST_KEY,
-        HERMIT_SESSION_ID: session.id,
+        ...(hermitTools ? {
+          HERMIT_DASHBOARD_URL: DASHBOARD_URL,
+          HERMIT_KEY: ASST_KEY,
+          HERMIT_SESSION_ID: session.id,
+        } : {}),
         // Tells the shared hermit extension which backend it is inside. It uses
         // this to skip pi's registerProvider call, which would otherwise
         // override omp's models.yml with a credential omp cannot expand.

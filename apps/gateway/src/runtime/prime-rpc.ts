@@ -267,10 +267,16 @@ export class PrimeRpcRuntime implements AgentRuntime {
     // resumes by PATH (`--resume <path|id>`), where pi takes `--session <path>`
     // and omp takes its own session id.
     const pointer = readPiSession(session.id);
+    // The hermit tools and the machine key that authenticates them travel
+    // together: a child given one without the other has tools that 401 rather
+    // than tools that are absent. `hermitTools: false` — an ordinary cron fire,
+    // whose session id has no ChatSession row for these tools to act on — drops
+    // both. See RuntimeSession.hermitTools.
+    const hermitTools = session.hermitTools !== false;
     const resume = resumablePiSession(session.id, undefined, { engine: 'prime' });
 
     const args = [
-      '--extension', hermitExtensionPath(),
+      ...(hermitTools ? ['--extension', hermitExtensionPath()] : []),
       ...(modelArg ? ['--model', modelArg] : []),
       ...(provider ? ['--provider', provider] : []),
       ...(resume?.file ? ['--resume', resume.file] : []),
@@ -298,9 +304,11 @@ export class PrimeRpcRuntime implements AgentRuntime {
         ...(await providerEnv(provider)),
         ...machineEnv,
         ...(await visionEnv()),
-        HERMIT_DASHBOARD_URL: DASHBOARD_URL,
-        HERMIT_KEY: ASST_KEY,
-        HERMIT_SESSION_ID: session.id,
+        ...(hermitTools ? {
+          HERMIT_DASHBOARD_URL: DASHBOARD_URL,
+          HERMIT_KEY: ASST_KEY,
+          HERMIT_SESSION_ID: session.id,
+        } : {}),
         // Tells the shared hermit extension which backend it is inside. Prime
         // takes pi.registerProvider, so unlike omp this one WANTS the
         // registration — but it resolves `apiKey` as a BARE env var name, not

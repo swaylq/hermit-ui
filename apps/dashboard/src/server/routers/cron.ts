@@ -1,11 +1,13 @@
 // Cron jobs — user-defined recurring tasks fired by the gateway cron-runner.
 // CRUD for the /cron page; `listForGateway` feeds the runner (enabled crons
 // joined with their agent's on-disk directory). Results land back via
-// /api/sync/cron-run. Each fire is a fresh tmux + claude turn in the agent dir.
+// /api/sync/cron-run. Each fire is a fresh, throwaway turn in the agent dir, on
+// the backend `listForGateway` resolves for it — the same one chat would use.
 
 import { z } from 'zod';
 import { router, gatewayProcedure, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
+import { resolveRuntime, runtimeContextOf } from '../runtime-resolve';
 
 // Unread finished runs per cron (status not 'running', readAt null) → the red
 // roll-up dot on the sidebar / agent-detail cron rows. One grouped query for the
@@ -389,11 +391,16 @@ export const cronRouter = router({
     const agents = names.length
       ? await prisma.agent.findMany({
           where: { machineId: ctx.machine.id, name: { in: names } },
-          select: { name: true, directory: true, isOrchestrator: true },
+          select: {
+            name: true, directory: true, isOrchestrator: true,
+            // The second resolution level — see the block below.
+            runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true,
+          },
         })
       : [];
     const dirByName = new Map(agents.map((a) => [a.name, a.directory]));
     const orchByName = new Map(agents.map((a) => [a.name, a.isOrchestrator]));
+    const agentByName = new Map(agents.map((a) => [a.name, a]));
 
     // ── Which backend runs each cron ────────────────────────────────────────
     //
@@ -404,50 +411,71 @@ export const cronRouter = router({
     // "no final text", which reads like the task timed out. (dgx-spark,
     // 2026-08-14/15: five consecutive "巡检 timeout" reports, none of them real.)
     //
-    // Resolved here rather than in the gateway because both inputs (the report
-    // session's runtime, the machine's enabled backends) are DB state the
-    // gateway does not otherwise hold.
+    // Resolved here rather than in the gateway because every input (the report
+    // session's backend, the agent's default, the machine's enabled backends and
+    // its credentials) is DB state the gateway does not otherwise hold.
+    //
+    // This uses the SAME resolveRuntime as chat.pollPending, and that is the
+    // whole point. The first version of this block was a hand-rolled two-value
+    // guess — the report session's raw `runtime` string, else claude-tmux or
+    // codex-exec — written 2026-08-15, six days before backends became "a
+    // harness PLUS a credential" (lib/backends.ts). It never caught up, so a
+    // cron reporting into a pi+Kimi or dsh+OpenRouter session resolved to that
+    // backend's id, hit cron-runner's `!== 'codex-exec'` else-branch, and ran on
+    // the Claude subscription instead — silently, because the wrong backend
+    // still answers. Sharing the resolver is what stops that drifting apart
+    // again: a backend chat can select is now a backend cron can fire on.
     const reportIds = [...new Set(crons.map((c) => c.reportSessionId).filter((x): x is string => !!x))];
     const reportSessions = reportIds.length
       ? await prisma.chatSession.findMany({
           where: { id: { in: reportIds } },
-          select: { id: true, runtime: true },
+          select: {
+            id: true, runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true,
+          },
         })
       : [];
-    const runtimeBySession = new Map(reportSessions.map((s) => [s.id, s.runtime]));
-
-    const machine = await prisma.machine.findUnique({
-      where: { id: ctx.machine.id },
-      select: { backendsConfig: true },
+    const sessionById = new Map(reportSessions.map((s) => [s.id, s]));
+    // `ctx.machine` is the full Machine row (auth.resolveKey selects no columns),
+    // so both halves — backendsConfig and modelProviders — are already in hand.
+    // The old code issued a second findUnique for backendsConfig alone and had
+    // no credentials at all, which is why it could only ever name a harness.
+    const backends = runtimeContextOf(ctx.machine);
+    return crons.map((c) => {
+      // session's own choice > agent's default > the floor. A cron with no report
+      // session passes null and lands on its agent's default, which is what
+      // "this agent's scheduled work" should mean; the old code ignored the agent
+      // entirely and guessed from machine-wide toggles.
+      const choice = resolveRuntime(
+        c.reportSessionId ? sessionById.get(c.reportSessionId) : null,
+        agentByName.get(c.agentName),
+        backends,
+      );
+      return {
+        id: c.id,
+        agentName: c.agentName,
+        agentDirectory: dirByName.get(c.agentName) ?? null,
+        // Orchestrator crons run WITH the brain MCP (cron-runner); others headless.
+        isOrchestrator: orchByName.get(c.agentName) ?? false,
+        directory: c.directory,
+        prompt: c.prompt,
+        intervalSec: c.intervalSec,
+        jitterSec: c.jitterSec,
+        enabled: c.enabled,
+        lastFire: c.lastFire?.toISOString() ?? null,
+        nextFire: c.nextFire?.toISOString() ?? null,
+        // `runtime` is the HARNESS to spawn; the rest is what authenticates it and
+        // what it runs as. Sending the harness alone is what made a custom backend
+        // unrunnable — the gateway knew to start pi but not which key or model.
+        // `backendId` is for the log line only: it is the name the user picked in
+        // the picker, and a fire that reports "[pi-rpc]" when the card says
+        // "pi + Kimi" is the kind of gap that costs an afternoon.
+        backendId: choice.backendId,
+        runtime: choice.runtime,
+        runtimeCredentialId: choice.runtimeCredentialId,
+        runtimeProvider: choice.runtimeProvider,
+        runtimeModel: choice.runtimeModel,
+        runtimeMode: choice.runtimeMode,
+      };
     });
-    const disabled = new Set(
-      ((machine?.backendsConfig as { disabled?: string[] } | null)?.disabled ?? []),
-    );
-    // Fallback is deliberately conservative: unless claude-tmux has been turned
-    // OFF for this machine, keep the historical behaviour exactly. Only a machine
-    // that opted out of claude changes what it gets.
-    const machineDefault = !disabled.has('claude-tmux')
-      ? 'claude-tmux'
-      : !disabled.has('codex-exec')
-        ? 'codex-exec'
-        : 'claude-tmux';
-    const resolveCronRuntime = (reportSessionId: string | null): string =>
-      (reportSessionId ? runtimeBySession.get(reportSessionId) : null) || machineDefault;
-    return crons.map((c) => ({
-      id: c.id,
-      agentName: c.agentName,
-      agentDirectory: dirByName.get(c.agentName) ?? null,
-      // Orchestrator crons run WITH the brain MCP (cron-runner); others headless.
-      isOrchestrator: orchByName.get(c.agentName) ?? false,
-      directory: c.directory,
-      prompt: c.prompt,
-      intervalSec: c.intervalSec,
-      jitterSec: c.jitterSec,
-      enabled: c.enabled,
-      lastFire: c.lastFire?.toISOString() ?? null,
-      nextFire: c.nextFire?.toISOString() ?? null,
-      // Two-layer: the report session's own backend wins; otherwise the machine's.
-      runtime: resolveCronRuntime(c.reportSessionId),
-    }));
   }),
 });

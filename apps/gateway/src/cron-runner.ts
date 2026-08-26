@@ -1,10 +1,12 @@
-// cron-runner.ts — fire Cron jobs as fresh tmux + claude turns in the agent dir.
+// cron-runner.ts — fire Cron jobs as fresh, throwaway turns in the agent dir.
 //
-// Replaces the happy-based system-task-runner. Each fire (2b: isolated, no
-// session reuse) spawns an interactive `claude` in a throwaway tmux pane in the
-// agent's directory, sends the cron prompt, tails the JSONL transcript for the
-// assistant turn, records a CronRun, then kills the pane. NO happy, NO
-// `claude -p` — same interactive-claude-via-tmux path the chat-runner uses.
+// Each fire is isolated: no session reuse, no history, torn down when it
+// replies. WHICH backend runs it is resolved by the dashboard, per cron, exactly
+// as it is for a chat session — see docs/cron-backends.md for the three fire
+// paths and why they are not one. The pane path below (claude-tmux, and any
+// harness this gateway does not recognise) is the original: an interactive
+// `claude` in a throwaway tmux pane, tailing the JSONL transcript for the
+// assistant turn. NO happy, NO `claude -p`.
 //
 // Scheduling is interval + jitter (1b): nextFire = lastFire + intervalSec ±
 // random(jitterSec). The dashboard is the source of truth for `nextFire`; the
@@ -29,6 +31,7 @@ import { extractText, CcEvent, CcBlock } from './claude-code';
 import { buildMcpConfigArg, chatOwnedUuids } from './chat-runner';
 import { holdCronUuid, releaseCronUuid, cronOwnedUuids } from './cron-uuids';
 import { runCodexCronTurn } from './runtime/codex-exec';
+import { canRunCronTurn, runRuntimeCronTurn } from './runtime/cron-turn';
 import { tryAcquire, release, isLocked } from './op-locks';
 
 const RUN_TIMEOUT_MS = 120 * 60_000; // hard cap per run (2h)
@@ -60,11 +63,24 @@ type Cron = {
   nextFire: string | null;
   /**
    * Which backend fires this cron, resolved by the dashboard
-   * (cron.listForGateway): the report session's runtime, else the machine's
-   * enabled backend. Absent on an older dashboard → the claude path, which is
-   * what every cron did before this field existed.
+   * (cron.listForGateway → resolveRuntime): the report session's own choice,
+   * else the agent's default, else the floor — the same chain chat resolves.
+   * Absent on an older dashboard → the pane path, which is what every cron did
+   * before this field existed.
+   *
+   * `runtime` is the HARNESS to spawn. The four below are what authenticates it
+   * and what it runs as; a custom backend is a harness PLUS a credential, so a
+   * harness on its own is not enough to fire one — sending only `runtime` is
+   * exactly why a pi+Kimi cron used to land on Claude.
    */
   runtime?: string | null;
+  /** The backend id the user actually picked, for logs. */
+  backendId?: string | null;
+  runtimeCredentialId?: string | null;
+  runtimeProvider?: string | null;
+  runtimeModel?: string | null;
+  /** pi spawn recipe; null for every other harness. */
+  runtimeMode?: string | null;
 };
 
 /** Environment inherited by one Claude cron pane. Hermit credentials exist
@@ -205,6 +221,137 @@ export function parseRunMarkers(output: string): {
   return { output: cleaned, done, nextIntervalSec };
 }
 
+// What a cron fire actually sends: the stored prompt plus the standing note that
+// this turn is the whole conversation.
+//
+// (a) keeps a run from ending with no capturable text, and (b) tells the agent
+// NOT to background long commands: the session is torn down the instant it
+// replies, so a backgrounded command's completion notification never arrives and
+// its result is lost. The model-arena matchmake cron hit exactly this — it kept
+// replying "I'll report when the background run finishes", then got killed.
+//
+// Shared by all three fire paths. It used to be inlined in the pane path's
+// sendKeys, so a codex cron never received it at all — the same hazard, minus
+// the warning, on a backend nobody had thought about.
+export function cronPrompt(prompt: string): string {
+  return (
+    `${prompt}\n\n(Scheduled cron run. This session is torn down right after you reply, so do NOT ` +
+    `end your turn while a command is still running in the background — its result could never be ` +
+    `reported. Prefer running commands in the foreground; if the harness auto-backgrounds a long one, ` +
+    `BLOCK within this same turn until it finishes (poll its output / use the Monitor tool), then read ` +
+    `the output and reply with a short result summary. Reply only once the work is ACTUALLY done.)`
+  );
+}
+
+// ── What the gateway OBSERVED about a fire ──────────────────────────────────
+//
+// Status is a statement about the TURN, not a guess at whether the scheduled
+// work succeeded — only the work knows that, and saying so is its own RESULT
+// signal's job (the `cron` skill's CRON_DONE / a report the reader can judge).
+//
+//   ok         settled cleanly AND produced final text
+//   no_output  settled cleanly but said nothing (harness exited silently, or an
+//              undetected transcript drift)
+//   timeout    never settled — hit the cap, or the host was suspended past it.
+//              Un-observable is NOT failed: the work may well have finished.
+//   error      the harness threw. Message is copied through VERBATIM.
+//
+// Pure, exported and tested on purpose. This logic used to be inlined in
+// fireInner, where it was the one part of cron-runner with no test at all —
+// which is how eleven silent failures across six agents went unnoticed from
+// 2026-08-10 (memory/notes/bug_cron_false_ok_synthetic.md). Now that a fire can
+// land on any of six backends, two paths have to classify identically or the
+// same failure reads differently depending on which backend ran it; a shared
+// pure function is the only version of that which stays true.
+export type CronStatus = 'ok' | 'no_output' | 'timeout' | 'error';
+
+export function classifyRun(o: {
+  /** Did the turn go genuinely idle, rather than fall through the deadline? */
+  settled: boolean;
+  /** Final assistant text captured, if any. */
+  text: string;
+  /** The per-run cap, for the message only. */
+  timeoutMs: number;
+  /**
+   * What the BACKEND said went wrong, in its own words.
+   *
+   * Not an exception — that is the whole point. Every runtime except codex
+   * reports an expired login, a spent quota, a dead child or a failed boot as an
+   * ordinary `system` message and then simply produces no assistant text
+   * (runtime/pi-events.ts, claude-sdk-events.ts). Read only for text, all of
+   * those look identical to a cron that quietly did nothing — which is exactly
+   * how "Login expired · Please run /login" was recorded as `ok` for eleven runs
+   * across six agents. A note with nothing else to show IS the result, and it is
+   * copied through verbatim: the 2026-08-15 codex outage stayed invisible for
+   * six hours because a real refusal had been flattened into a generic status.
+   */
+  harnessNote?: string;
+  /**
+   * Did that note actually report a FAILURE, rather than narrate?
+   *
+   * The two are different questions and conflating them broke it in both
+   * directions. Not every system message is bad news — claude-sdk narrates a
+   * backgrounded command and an auto-compaction the same way it reports a dead
+   * turn — so treating any note as failure turns an ordinary tool-only run red
+   * and fires a failure push. And a failure that DID produce text is still a
+   * failure: "Login expired · Please run /login" arrives as perfectly ordinary
+   * assistant text, which is exactly how it was recorded as `ok` eleven times.
+   * So the note decides what is SHOWN, and this decides the STATUS.
+   */
+  harnessFailed?: boolean;
+}): { status: CronStatus; output: string } {
+  const text = o.text.trim();
+  const note = (o.harnessNote ?? '').trim();
+  // A note ALONGSIDE a real answer is kept, not dropped: a turn that reported
+  // and then hit a rate limit is still an answer the reader wants, with a
+  // warning attached.
+  //
+  // It goes FIRST, and that is load-bearing, not taste. parseRunMarkers reads
+  // the last 5 non-empty lines of this output for CRON_DONE / CRON_NEXT, and the
+  // skill mandates the marker as the final line of the reply — so a note appended
+  // AFTER the report pushes the marker out of that window and a cron that asked
+  // to stop goes on firing forever. Same failure the "read the markers before
+  // capping" rule below exists to prevent, approached from the other end: the
+  // agent's own text must stay at the tail. (A warning reads better as a banner
+  // anyway.)
+  const withNote = (s: string) => (note ? (s ? `${note}\n\n${s}` : note) : s);
+  // A reported failure IS the observation. It beats "un-observable" (timeout)
+  // and it beats whatever the turn managed to say first — believe the backend
+  // when it says its own turn did not complete.
+  if (o.harnessFailed) {
+    return {
+      status: 'error',
+      output: withNote(text) || '[cron-runner] the backend reported a failed turn without saying why.',
+    };
+  }
+  if (!o.settled) {
+    // Text WITH a timeout still reports the text: a run that said something
+    // useful and then ran long is far more legible than the boilerplate.
+    return {
+      status: 'timeout',
+      output: withNote(
+        text ||
+          `[cron-runner] no final text captured before the ${Math.round(o.timeoutMs / 60_000)}min cap — ` +
+            `a frozen/suspended host looks exactly like this. The scheduled work itself may have completed; ` +
+            `check the agent's own result log.`,
+      ),
+    };
+  }
+  if (!text) {
+    // Note included: a backend that narrated (a backgrounded command, an
+    // auto-compaction) and then said nothing is a far more diagnosable
+    // no_output than the boilerplate alone.
+    return {
+      status: 'no_output',
+      output: withNote(
+        '[cron-runner] turn went idle but produced no final text (the backend may have exited silently, ' +
+        'or an undetected transcript-uuid drift).',
+      ),
+    };
+  }
+  return { status: 'ok', output: withNote(text) };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -285,10 +432,42 @@ async function fireInner(c: Cron): Promise<void> {
     console.error('[cron] runStart post failed', e);
   }
 
-  // Which backend runs this fire. Resolved by the dashboard; absent (older
-  // dashboard) means the claude path, i.e. exactly what every cron did before.
-  const runtimeKind = c.runtime ?? 'claude-tmux';
-  console.log('[cron] fire', c.id.slice(0, 8), c.agentName, 'in', cwd, `[${runtimeKind}]`);
+  // ── Which backend runs this fire ───────────────────────────────────────────
+  //
+  // The HARNESS, resolved by the dashboard (cron.listForGateway → resolveRuntime,
+  // the same resolver chat uses). Absent means an older dashboard that sends no
+  // runtime at all → the pane, i.e. exactly what every cron did before this
+  // existed.
+  //
+  // Three ways to fire, picked here and nowhere else:
+  //   codex-exec   its own one-shot `codex exec` (below) — kept bespoke because
+  //                it surfaces a refusal verbatim, which is what made the
+  //                2026-08-15 quota outage visible at all.
+  //   any other    driven through its AgentRuntime by ./runtime/cron-turn. This
+  //   AgentRuntime is what pi, omp, prime, dsh and claude-sdk crons now take;
+  //                until 2026-08-26 the `else` below swallowed every one of them
+  //                and ran it on the pane, i.e. on Claude, whatever the picker
+  //                said.
+  //   claude-tmux  the pane path, with the transcript pinning and drift
+  //                self-heal that only it needs.
+  const harness = c.runtime ?? 'claude-tmux';
+  const mode = c.runtimeMode ?? null;
+  // The name the USER picked, for the log line. A fire that logs "[pi-rpc]" when
+  // the card says "pi + Kimi" is the gap that costs an afternoon of grepping.
+  const backendLabel = c.backendId && c.backendId !== harness ? `${c.backendId}/${harness}` : harness;
+  const viaRuntime = harness !== 'codex-exec' && canRunCronTurn(harness, mode);
+  const viaPane = harness !== 'codex-exec' && !viaRuntime;
+  if (harness !== 'claude-tmux' && viaPane) {
+    // A harness this gateway has no runtime for. Falling back to the pane keeps
+    // the cron firing, but on the WRONG backend — say so once per fire rather
+    // than letting it look intentional, which is precisely how the pi/dsh crons
+    // ran on Claude unnoticed.
+    console.warn(
+      `[cron] ${c.id.slice(0, 8)}: no runtime for harness "${harness}" — falling back to the ` +
+        `claude pane. This fire does NOT run on the backend the dashboard resolved.`,
+    );
+  }
+  console.log('[cron] fire', c.id.slice(0, 8), c.agentName, 'in', cwd, `[${backendLabel}]`);
 
   let output = '';
   // Status = what the gateway OBSERVED about the turn, not a guess at whether the
@@ -303,11 +482,12 @@ async function fireInner(c: Cron): Promise<void> {
   // Pinned transcript uuid. Hoisted out of the try so `finally` can unpin it
   // however we exit.
   //
-  // Held ONLY on the claude path: the release lives in that branch's `finally`,
-  // so holding it unconditionally would leak one uuid per codex fire — forever,
-  // since nothing else ever unpins it.
+  // Held ONLY on the pane path: the release lives in that branch's `finally`, so
+  // holding it unconditionally would leak one uuid per codex or runtime fire —
+  // forever, since nothing else ever unpins it. (The runtime path holds its own
+  // id instead, reported by onStarted once the backend has picked one.)
   const claudeUuid = randomUUID();
-  if (runtimeKind !== 'codex-exec') holdCronUuid(claudeUuid);
+  if (viaPane) holdCronUuid(claudeUuid);
   // A drift-adopted transcript is just as much this fire's as the pinned one —
   // hoisted so `finally` releases whichever we ended up holding.
   let adoptedUuid: string | null = null;
@@ -328,16 +508,17 @@ async function fireInner(c: Cron): Promise<void> {
   // status is what made the 2026-08-15 outage invisible: the account had hit its
   // usage limit and every fire reported "timeout", so the logs blamed the task
   // for six hours while the real message sat in the rollout.
-  if (runtimeKind === 'codex-exec') {
+  if (harness === 'codex-exec') {
     try {
       output = await runCodexCronTurn({
         agentName: c.agentName,
         cwd,
-        prompt: c.prompt,
+        prompt: cronPrompt(c.prompt),
         signal: AbortSignal.timeout(RUN_TIMEOUT_MS),
       });
-      status = output ? 'ok' : 'no_output';
-      if (!output) output = '[cron-runner] codex turn finished without a final message.';
+      // The stream ending IS the settle: codex hands the turn back rather than
+      // going quiet, so there is no idle window to wait out.
+      ({ status, output } = classifyRun({ settled: true, text: output, timeoutMs: RUN_TIMEOUT_MS }));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       // A blown deadline is 'timeout' (un-observable ≠ failed), same vocabulary
@@ -345,6 +526,54 @@ async function fireInner(c: Cron): Promise<void> {
       const timedOut = /abort|timeout/i.test(msg);
       status = timedOut ? 'timeout' : 'error';
       output = `[cron-runner] codex: ${msg}`;
+    }
+  } else if (viaRuntime) {
+    // ── runtime path ─────────────────────────────────────────────────────────
+    //
+    // pi / omp / prime / dsh / claude-sdk. One turn through the backend's own
+    // AgentRuntime, torn down on the way out. Same verbatim-error rule as codex,
+    // for the same reason: an auth failure or a spent quota must arrive as ITS
+    // OWN message, not flattened into a generic status that sends the reader to
+    // the agent's logs for an answer that was never there.
+    let sdkUuid: string | null = null;
+    try {
+      const turn = await runRuntimeCronTurn({
+        harness,
+        mode,
+        agentName: c.agentName,
+        cwd,
+        prompt: cronPrompt(c.prompt),
+        sessionId: runSessionId,
+        credentialId: c.runtimeCredentialId ?? null,
+        provider: c.runtimeProvider ?? null,
+        model: c.runtimeModel ?? null,
+        isOrchestrator: !!c.isOrchestrator,
+        timeoutMs: RUN_TIMEOUT_MS,
+        idleMs: IDLE_DONE_MS,
+        // claude-sdk shares the agent's project dir with its chats — register the
+        // transcript as cron-owned for as long as this fire holds it.
+        onStarted: (uuid) => {
+          sdkUuid = uuid;
+          holdCronUuid(uuid);
+        },
+      });
+      ({ status, output } = classifyRun({
+        settled: turn.settled,
+        text: turn.text,
+        timeoutMs: RUN_TIMEOUT_MS,
+        // What the backend said about its own failure, if it said anything. None
+        // of these runtimes throws on an expired login or a spent quota — see
+        // CronTurnOutcome.harnessNote.
+        harnessNote: turn.harnessNote,
+        harnessFailed: turn.harnessFailed,
+      }));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const timedOut = /abort|timeout/i.test(msg);
+      status = timedOut ? 'timeout' : 'error';
+      output = `[cron-runner] ${harness}: ${msg}`;
+    } finally {
+      if (sdkUuid) releaseCronUuid(sdkUuid);
     }
   } else try {
     // The orchestrator (Brain) runs its crons (e.g. the daily dream) WITH the
@@ -424,16 +653,9 @@ async function fireInner(c: Cron): Promise<void> {
       }
     });
 
-    // Fire the prompt. The trailing nudge (a) keeps the run from ending with no
-    // capturable text, and (b) tells the agent NOT to background long commands:
-    // this throwaway session is torn down the instant it replies, so a
-    // backgrounded command's completion notification never arrives and its result
-    // is lost (the model-arena matchmake cron hit exactly this — it kept replying
-    // "I'll report when the background run finishes", then got killed).
-    sendKeys(
-      runSessionId,
-      `${c.prompt}\n\n(Scheduled cron run. This session is torn down right after you reply, so do NOT end your turn while a command is still running in the background — its result could never be reported. Prefer running commands in the foreground; if the harness auto-backgrounds a long one, BLOCK within this same turn until it finishes (poll its output / use the Monitor tool), then read the output and reply with a short result summary. Reply only once the work is ACTUALLY done.)`,
-    );
+    // Fire the prompt, with the same standing note every other path sends — see
+    // cronPrompt.
+    sendKeys(runSessionId, cronPrompt(c.prompt));
     lastEventAt = Date.now();
 
     // Settle: wait until the assistant has been quiet for IDLE_DONE_MS after
@@ -456,24 +678,11 @@ async function fireInner(c: Cron): Promise<void> {
       if (toolsOut > toolsBack || (await paneIsWorking(runSessionId))) lastEventAt = Date.now();
       if (sawAssistant && Date.now() - lastEventAt > IDLE_DONE_MS) { settled = true; break; }
     }
-    output = lastText;
     // Classify by WHY the loop ended, not by text presence alone. The old
     // `lastText ? ok : fail` reported every timeout / suspended / silent run as a
     // hard failure — the fleet-wide false-FAIL on the status light. (false-OK, the
     // reverse, is NOT the gateway's to judge — that's the work's own RESULT signal.)
-    if (settled) {
-      status = lastText ? 'ok' : 'no_output';
-      if (!lastText)
-        output =
-          '[cron-runner] turn went idle but produced no final text (claude may have exited silently, or an undetected transcript-uuid drift).';
-    } else {
-      status = 'timeout';
-      if (!lastText)
-        output =
-          `[cron-runner] no final text captured before the ${Math.round(RUN_TIMEOUT_MS / 60_000)}min cap — ` +
-          `a frozen/suspended host looks exactly like this. The scheduled work itself may have completed; ` +
-          `check the agent's own result log.`;
-    }
+    ({ status, output } = classifyRun({ settled, text: lastText, timeoutMs: RUN_TIMEOUT_MS }));
   } catch (e) {
     output = `[cron-runner] ${String(e)}`;
     status = 'error';

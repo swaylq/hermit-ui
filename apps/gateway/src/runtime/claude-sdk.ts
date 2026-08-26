@@ -827,6 +827,9 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       );
     }
 
+    // Default true: every chat session wants the hermit tools, and only a cron
+    // fire passes false.
+    const hermitTools = session.hermitTools !== false;
     const input = makeInput();
     const q = query({
       prompt: input.stream,
@@ -841,12 +844,19 @@ export class ClaudeSdkRuntime implements AgentRuntime {
         // Matches the pane's `--effort max`.
         effort: 'max',
         ...(session.model?.trim() ? { model: session.model.trim() } : {}),
-        mcpServers: buildMcpServers(session.id, session.isOrchestrator ?? false),
+        // The hermit tool surface, and the credential that authenticates it, go
+        // together — a session that gets one and not the other has tools that
+        // 401 instead of tools that are absent. `hermitTools: false` (an
+        // ordinary cron fire, whose session id has no ChatSession row for these
+        // tools to act on) therefore drops BOTH. See RuntimeSession.hermitTools.
+        mcpServers: hermitTools ? buildMcpServers(session.id, session.isOrchestrator ?? false) : {},
         env: applyCredentialEnv({
           ...process.env,
-          HERMIT_DASHBOARD_URL: DASHBOARD_URL,
-          HERMIT_KEY: ASST_KEY,
-          HERMIT_SESSION_ID: session.id,
+          ...(hermitTools ? {
+            HERMIT_DASHBOARD_URL: DASHBOARD_URL,
+            HERMIT_KEY: ASST_KEY,
+            HERMIT_SESSION_ID: session.id,
+          } : {}),
           // Built-in auto-memory is retired fleet-wide; agents keep their own
           // <agent>/memory/. Authoritative switch is ~/.claude/settings.json.
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
