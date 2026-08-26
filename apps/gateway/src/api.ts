@@ -367,6 +367,16 @@ export const api = {
     return r?.[0]?.result?.data?.json ?? null;
   },
 
+  // The machine's watchdog knobs (Settings → Watchdogs) — reaper thresholds and
+  // the launchd watchdog's values ride the same object.
+  pollWatchdogConfig: async (): Promise<unknown> => {
+    const r = await get<any>(
+      '/api/trpc/machines.pollWatchdogConfig?batch=1&input=' +
+        encodeURIComponent(JSON.stringify({ '0': { json: null } })),
+    );
+    return r?.[0]?.result?.data?.json ?? null;
+  },
+
   // The vision block, and (for a machine that has not been migrated) the legacy
   // single endpoint. Same poll-row contract as the rest.
   pollPiConfig: async (): Promise<unknown> => {

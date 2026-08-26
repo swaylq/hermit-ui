@@ -71,6 +71,15 @@ model Machine {
   // that host, and a composed backend needs its harness installed there.
   backendsConfig Json?
 
+  // The machine's watchdog knobs, edited from Settings → Watchdogs. One JSON
+  // object with a section per watchdog (stuck / unanswered / hostRed /
+  // strayReaper / chromeReaper / gatewayWatch) — see lib/watchdog-config.ts.
+  // Per machine because the right threshold genuinely is: a box that renders
+  // all night tolerates load a chat-first box should not. Read by the
+  // dashboard sweeps directly, by the gateway via machines.pollWatchdogConfig,
+  // and by the launchd watchdog through the config.env its gateway writes.
+  watchdogConfig Json?
+
   // The machine's model credentials, edited from Settings → Models. A JSON
   // ARRAY of { id, label, provider, api, baseUrl, models[], defaultModel,
   // secretKey, modelLimits } — see lib/model-credentials.ts.

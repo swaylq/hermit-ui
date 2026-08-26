@@ -22,6 +22,7 @@
 import { prisma } from './db';
 import { enqueuePush } from './push';
 import { unansweredEvent, unansweredFailureEvent } from './push/events';
+import { watchdogConfigOf } from '@/lib/watchdog-config';
 
 /** How long the human's message may sit unanswered before it's an alert. */
 export const UNANSWERED_MINUTES = clampMinutes(process.env.UNANSWERED_ALERT_MINUTES, 30);
@@ -143,7 +144,14 @@ export interface SweepResult {
  * than no monitor. Callers must treat a throw as an alert, not a retry.
  */
 export async function sweepOnce(now: Date = new Date()): Promise<SweepResult> {
-  const thresholdMs = UNANSWERED_MINUTES * 60_000;
+  // Per-machine knobs (Settings → Watchdogs): the tightest enabled threshold is
+  // the query cutoff, each machine's own threshold then decides its rows, and a
+  // machine with the watchdog off is skipped. Machines without a row get
+  // UNANSWERED_MINUTES (30) via the defaults in lib/watchdog-config.ts.
+  const machines = await prisma.machine.findMany({ select: { id: true, watchdogConfig: true } });
+  const cfgByMachine = new Map(machines.map((m) => [m.id, watchdogConfigOf(m).unanswered]));
+  const enabledMinutes = [...cfgByMachine.values()].filter((c) => c.enabled).map((c) => c.minutes);
+  const thresholdMs = (enabledMinutes.length ? Math.min(...enabledMinutes) : UNANSWERED_MINUTES) * 60_000;
 
   // Fail-closed guard: an empty result set has two very different causes, and only
   // one of them is good news. If sessions exist to watch, "nothing stalled" is a
@@ -153,13 +161,18 @@ export async function sweepOnce(now: Date = new Date()): Promise<SweepResult> {
     throw new Error('unanswered sweep sees zero chat sessions — refusing to report a clean sweep');
   }
 
-  const [rows, flagged] = await Promise.all([
+  const [rawRows, flagged] = await Promise.all([
     findUnanswered(now, thresholdMs),
     prisma.chatSession.findMany({
       where: { unansweredMsgId: { not: null }, trashedAt: null },
       select: { id: true, unansweredMsgId: true },
     }),
   ]);
+  const rows = rawRows.filter((r) => {
+    const cfg = cfgByMachine.get(r.machineId);
+    if (!cfg?.enabled) return false;
+    return isUnanswered(r, now, cfg.minutes * 60_000);
+  });
 
   const stillUnanswered = new Map(rows.map((r) => [r.sessionId, r.msgId]));
 

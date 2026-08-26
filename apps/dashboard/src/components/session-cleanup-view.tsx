@@ -87,7 +87,7 @@ export function SessionCleanupView() {
   const utils = trpc.useUtils();
 
   const cfg = trpc.chat.cleanupConfig.useQuery().data;
-  const host = trpc.hosts.stat.useQuery(undefined, { refetchInterval: 60_000 }).data;
+  const host = trpc.hosts.stat.useQuery(undefined, { refetchInterval: 60_000 }).data?.stat;
   const preview = trpc.chat.cleanupPreview.useQuery(undefined, { refetchInterval: 60_000 }).data;
   const trash = trpc.chat.listTrashed.useQuery(undefined, { enabled: showTrash }).data;
 

@@ -5,6 +5,7 @@ import { invalidateMachineCache } from '../auth';
 import { Prisma } from '@/generated/prisma/client';
 import { CUSTOM_HARNESSES } from '@/lib/runtime-labels';
 import { listBackends, backendsConfigOf } from '@/lib/backends';
+import { watchdogConfigOf } from '@/lib/watchdog-config';
 import { modelCredentialsOf, defaultModelOf } from '@/lib/model-credentials';
 import { claudeModelsOf } from '@/lib/claude-models';
 
@@ -96,6 +97,32 @@ export const BACKENDS_CONFIG_SCHEMA = z.object({
   instances: z.array(BACKEND_INSTANCE_SCHEMA).max(20).optional(),
   // Read by the migration, never written again.
   dshSource: z.enum(['deepseek', 'pi-endpoint']).optional(),
+});
+
+// Settings → Watchdogs. Bounds mirror the clamps in lib/watchdog-config.ts.
+export const WATCHDOG_CONFIG_SCHEMA = z.object({
+  stuck: z.object({ enabled: z.boolean(), minutes: z.number().min(1).max(24 * 60) }),
+  unanswered: z.object({ enabled: z.boolean(), minutes: z.number().min(1).max(24 * 60) }),
+  hostRed: z.object({
+    enabled: z.boolean(),
+    redFreeMb: z.number().min(0).max(1_000_000),
+    amberFreeMb: z.number().min(0).max(1_000_000),
+    redLoadFactor: z.number().min(0.5).max(100),
+    amberLoadFactor: z.number().min(0.1).max(100),
+  }),
+  strayReaper: z.object({
+    enabled: z.boolean(),
+    ageMinutes: z.number().min(5).max(7 * 24 * 60),
+    maxRoots: z.number().min(1).max(1000),
+  }),
+  chromeReaper: z.object({ enabled: z.boolean(), idleMinutes: z.number().min(1).max(24 * 60) }),
+  gatewayWatch: z.object({
+    loadMax: z.number().min(1).max(10000),
+    silentSec: z.number().min(60).max(86400),
+    wedgeFails: z.number().min(10).max(100000),
+    confirmSec: z.number().min(10).max(3600),
+    cooldownSec: z.number().min(300).max(7 * 86400),
+  }),
 });
 
 export const machinesRouter = router({
@@ -220,6 +247,35 @@ export const machinesRouter = router({
   getBackendsConfig: machineProcedure.query(async ({ ctx }) => {
     const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
     return backendsConfigOf(m);
+  }),
+
+  // ── Watchdog config (Settings → Watchdogs) ───────────────────────────────
+  //
+  // Whole-object replace, same as setBackendsConfig. The UI sends the full six
+  // sections; the zod schema is the only validation (lib/watchdog-config.ts
+  // supplies defaults everywhere else, so a cleared column means "all default").
+  getWatchdogConfig: machineProcedure.query(async ({ ctx }) => {
+    const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
+    return watchdogConfigOf(m);
+  }),
+
+  setWatchdogConfig: machineProcedure
+    .input(z.object({ config: WATCHDOG_CONFIG_SCHEMA.nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      await prisma.machine.update({
+        where: { id: ctx.machine.id },
+        data: { watchdogConfig: (input.config ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue },
+      });
+      // The gateway polls this off the cached machine row; do not let a stale
+      // cache sit on the old thresholds for up to the 5-minute auth TTL.
+      invalidateMachineCache(ctx.machine.id);
+      return { ok: true };
+    }),
+
+  /** Gateway-side read (Settings → Watchdogs), same shape as the browser getter. */
+  pollWatchdogConfig: gatewayProcedure.query(async ({ ctx }) => {
+    const m = await prisma.machine.findUnique({ where: { id: ctx.machine.id } });
+    return watchdogConfigOf(m);
   }),
 
   setBackendsConfig: machineProcedure

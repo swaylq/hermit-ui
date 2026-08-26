@@ -73,6 +73,11 @@
 #   GW_STATE_DIR, GW_ENV_FILE, GW_LOAD_MAX, GW_SILENT_SEC
 set -u
 
+# Values set from Settings → Watchdogs arrive via this file (the machine's
+# gateway mirrors Machine.watchdogConfig into it). Sourced BEFORE the defaults
+# below so an unset key still lands on the built-in. Missing file = defaults.
+[ -f "$HOME/.hermit/gateway-watch/config.env" ] && . "$HOME/.hermit/gateway-watch/config.env"
+
 APP="${GW_APP:-hermit-ui-gateway}"
 # mac-local keeps its state in the agent workspace (that is where the existing
 # off-switch lives, and moving it would silently disarm it). Every other machine

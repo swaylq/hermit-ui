@@ -17,11 +17,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { api } from './api';
+import { getWatchdogConfig } from './watchdog-config';
 
-// Reap a Chrome with no live browser-lock that has existed longer than this. The
-// grace also covers the launch→first-lock window so we never kill a Chrome that
-// was started microseconds ago and hasn't acquired its lock yet.
-const IDLE_MS = Number(process.env.HERMIT_CHROME_IDLE_MS ?? 10 * 60_000);
 const STOP_GRACE_MS = 2_000;
 
 function pidAlive(pid: number): boolean {
@@ -81,6 +78,11 @@ function stopChrome(pid: number, chromeJson: string): void {
 }
 
 export async function chromeReaperTick(): Promise<void> {
+  // Settings → Watchdogs: on/off + the idle grace, polled (env override for tests).
+  const cfg = (await getWatchdogConfig()).chromeReaper;
+  if (!cfg.enabled) return;
+  const idleMs = Number(process.env.HERMIT_CHROME_IDLE_MS ?? cfg.idleMinutes * 60_000);
+
   let entries: Array<{ name: string; directory: string | null }>;
   try {
     entries = await api.listAgentDirectories();
@@ -103,7 +105,7 @@ export async function chromeReaperTick(): Promise<void> {
     if (!Number.isFinite(pid) || pid <= 0 || !pidAlive(pid)) continue; // not running
     const agentName = path.basename(e.directory); // == browser-lock.sh's AGENT_NAME
     if (lockHeld(agentName)) continue; // a browser task is using it right now
-    if (now - st.mtimeMs < IDLE_MS) continue; // too fresh to be considered idle
+    if (now - st.mtimeMs < idleMs) continue; // too fresh to be considered idle
     stopChrome(pid, chromeJson);
     reaped++;
     console.log(`[chrome-reaper] stopped idle Chrome for ${agentName} (pid ${pid})`);

@@ -17,15 +17,29 @@ export interface HostHealthInput {
 const RED_FREE_MB = 1024; // < 1 GB headroom
 const AMBER_FREE_MB = 2560; // < 2.5 GB headroom
 
-export function hostHealth(s: HostHealthInput): HostHealth {
+// Settings → Watchdogs can move these per machine; the sync route and the
+// hosts router both pass the machine's stored values in. Defaults here match
+// DEFAULT_WATCHDOG_CONFIG.hostRed — the two must not drift.
+export interface HostHealthThresholds {
+  redFreeMb: number;
+  amberFreeMb: number;
+  redLoadFactor: number;
+  amberLoadFactor: number;
+}
+
+export function hostHealth(s: HostHealthInput, t?: HostHealthThresholds): HostHealth {
+  const redFree = t?.redFreeMb ?? RED_FREE_MB;
+  const amberFree = t?.amberFreeMb ?? AMBER_FREE_MB;
+  const redLoadF = t?.redLoadFactor ?? 2;
+  const amberLoadF = t?.amberLoadFactor ?? 1;
   const free = s.ramFreeMb ?? null;
   const load = s.loadAvg1 ?? null;
   const cpu = s.cpuCount ?? null;
-  const redRam = free != null && free < RED_FREE_MB;
-  const redLoad = load != null && cpu != null && load > 2 * cpu;
+  const redRam = free != null && free < redFree;
+  const redLoad = load != null && cpu != null && load > redLoadF * cpu;
   if (redRam || redLoad) return 'red';
-  const amberRam = free != null && free < AMBER_FREE_MB;
-  const amberLoad = load != null && cpu != null && load > cpu;
+  const amberRam = free != null && free < amberFree;
+  const amberLoad = load != null && cpu != null && load > amberLoadF * cpu;
   if (amberRam || amberLoad) return 'amber';
   return 'green';
 }

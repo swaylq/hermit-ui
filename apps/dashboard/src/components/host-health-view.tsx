@@ -40,7 +40,9 @@ function Bar({ usedPct, tone }: { usedPct: number; tone: string }) {
 }
 
 export function HostHealthView() {
-  const stat = trpc.hosts.stat.useQuery(undefined, { refetchInterval: 10_000 }).data;
+  const hostStat = trpc.hosts.stat.useQuery(undefined, { refetchInterval: 10_000 }).data;
+  const stat = hostStat?.stat ?? null;
+  const thresholds = hostStat?.thresholds;
   const sessions = trpc.hosts.topSessions.useQuery(undefined, { refetchInterval: 10_000 }).data ?? [];
   const utils = trpc.useUtils();
   const invalidate = () => {
@@ -50,7 +52,7 @@ export function HostHealthView() {
   const archive = trpc.chat.archiveSession.useMutation({ onSuccess: invalidate });
 
   const stale = isStale(stat?.sampledAt);
-  const health: HostHealth = stat ? hostHealth(stat) : 'green';
+  const health: HostHealth = stat ? hostHealth(stat, thresholds) : 'green';
   const ramUsedPct = stat?.ramTotalMb ? (1 - (stat.ramFreeMb ?? 0) / stat.ramTotalMb) * 100 : 0;
   const swapUsedPct = stat?.swapTotalMb ? ((stat.swapUsedMb ?? 0) / stat.swapTotalMb) * 100 : 0;
   const withRss = sessions.filter((s) => s.rssMb != null);

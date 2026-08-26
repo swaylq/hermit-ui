@@ -5,13 +5,20 @@
 import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
+import { watchdogConfigOf } from '@/lib/watchdog-config';
 import { LIVE_SESSION } from '../session-cleanup';
 
 export const hostsRouter = router({
   // Latest RAM/swap/load/cpu snapshot for this machine (null until the gateway's
-  // host-stat tick has run once). The chip + panel derive health via lib/host-health.
+  // host-stat tick has run once). The chip + panel derive health via lib/host-health,
+  // with the machine's own thresholds (Settings → Watchdogs) riding along so the
+  // client colors by the same lines the sync route alerts by.
   stat: machineProcedure.query(async ({ ctx }) => {
-    return prisma.hostStat.findUnique({ where: { machineId: ctx.machine.id } });
+    const [stat, m] = await Promise.all([
+      prisma.hostStat.findUnique({ where: { machineId: ctx.machine.id } }),
+      prisma.machine.findUnique({ where: { id: ctx.machine.id }, select: { watchdogConfig: true } }),
+    ]);
+    return { stat, thresholds: watchdogConfigOf(m).hostRed };
   }),
 
   // Read (dismiss) a pending red-pressure alert from the notifications inbox —

@@ -46,8 +46,10 @@
 import { prisma } from './db';
 import { enqueuePush } from './push';
 import { machineAlertEvent, machineAlertFailureEvent } from './push/events';
+import { watchdogConfigOf } from '@/lib/watchdog-config';
 
-/** How long a human message may sit undelivered before it's an alert. */
+/** Default when a machine has no watchdogConfig row (Settings → Watchdogs can
+ *  tighten or loosen it per machine). */
 export const STUCK_MINUTES = clampMinutes(process.env.STUCK_ALERT_MINUTES, 10);
 
 /** How often to look. 1 minute: this predicate is near-zero false-positive. */
@@ -261,14 +263,28 @@ export interface SweepResult {
  * a monitor that reports "all clear" while blind is worse than no monitor.
  */
 export async function sweepOnce(now: Date = new Date()): Promise<SweepResult> {
-  const thresholdMs = STUCK_MINUTES * 60_000;
+  // Per-machine knobs (Settings → Watchdogs): the tightest enabled threshold is
+  // the query cutoff; each machine's own threshold then filters its row. A
+  // machine with the watchdog off is skipped entirely.
+  const machines = await prisma.machine.findMany({
+    select: { id: true, watchdogConfig: true },
+  });
+  const cfgByMachine = new Map(machines.map((m) => [m.id, watchdogConfigOf(m).stuck]));
+  const enabledMinutes = [...cfgByMachine.values()].filter((c) => c.enabled).map((c) => c.minutes);
 
   const sessionCount = await prisma.chatSession.count();
   if (sessionCount === 0) {
     throw new Error('stuck sweep sees zero chat sessions — refusing to report a clean sweep');
   }
+  if (enabledMinutes.length === 0) {
+    return { stuck: 0, raised: 0, cleared: 0 }; // every machine switched this watchdog off
+  }
 
-  const rows = await findStuck(now, thresholdMs);
+  const rows = (await findStuck(now, Math.min(...enabledMinutes) * 60_000)).filter((r) => {
+    const cfg = cfgByMachine.get(r.machineId);
+    if (!cfg?.enabled) return false;
+    return now.getTime() - r.oldest.getTime() >= cfg.minutes * 60_000;
+  });
   const stuckMachines = new Set(rows.map((r) => r.machineId));
 
   let raised = 0;

@@ -29,9 +29,7 @@
 import { execFileSync } from 'node:child_process';
 import { api } from './api';
 import { psAll } from './platform';
-
-const AGE_MS = Number(process.env.HERMIT_STRAY_AGE_MS ?? 2 * 60 * 60_000);
-const MAX_ROOTS = Number(process.env.HERMIT_STRAY_MAX_ROOTS ?? 25);
+import { getWatchdogConfig } from './watchdog-config';
 
 export interface StrayProc {
   pid: number;
@@ -103,6 +101,11 @@ function kill(pid: number): void {
 }
 
 export async function strayReaperTick(): Promise<void> {
+  const cfg = (await getWatchdogConfig()).strayReaper;
+  if (!cfg.enabled) return;
+  const ageMs = Number(process.env.HERMIT_STRAY_AGE_MS ?? cfg.ageMinutes * 60_000);
+  const maxRoots = Number(process.env.HERMIT_STRAY_MAX_ROOTS ?? cfg.maxRoots);
+
   const procs = listStrays();
   if (procs.length === 0) return;
 
@@ -134,7 +137,7 @@ export async function strayReaperTick(): Promise<void> {
   const roots = rootsOf(procs).filter((r) => !owned.has(r.pid));
   if (roots.length === 0) return;
 
-  const killed = selectVictims(roots, AGE_MS, MAX_ROOTS);
+  const killed = selectVictims(roots, ageMs, maxRoots);
   if (killed.length === 0) return;
   for (const r of killed) {
     kill(r.pid);

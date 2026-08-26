@@ -16,6 +16,7 @@ import { shareRouter } from './share';
 import { notificationsRouter } from './notifications';
 import { hostsRouter } from './hosts';
 import { alertsRouter } from './alerts';
+import { watchdogsRouter } from './watchdogs';
 import { pushRouter } from './push';
 import { sessionGroupsRouter } from './sessionGroups';
 
@@ -37,6 +38,7 @@ export const appRouter = router({
   notifications: notificationsRouter,
   hosts: hostsRouter,
   alerts: alertsRouter,
+  watchdogs: watchdogsRouter,
   push: pushRouter,
   sessionGroups: sessionGroupsRouter,
 });
