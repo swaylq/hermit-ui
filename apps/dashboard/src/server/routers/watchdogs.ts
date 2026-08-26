@@ -49,10 +49,18 @@ export const watchdogsRouter = router({
     ]);
 
     const config = watchdogConfigOf(machine);
-    const lastAlertByKind: Record<string, { message: string; createdAt: Date; resolvedAt: Date | null }> = {};
+    const lastAlertByKind: Record<
+      string,
+      { message: string; createdAt: Date; resolvedAt: Date | null; expiresAt: Date | null }
+    > = {};
     for (const a of alerts) {
       if (lastAlertByKind[a.kind]) continue; // rows are newest-first
-      lastAlertByKind[a.kind] = { message: a.message, createdAt: a.createdAt, resolvedAt: a.resolvedAt };
+      lastAlertByKind[a.kind] = {
+        message: a.message,
+        createdAt: a.createdAt,
+        resolvedAt: a.resolvedAt,
+        expiresAt: a.expiresAt,
+      };
     }
 
     return {

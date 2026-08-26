@@ -17,7 +17,19 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DEFAULT_WATCHDOG_CONFIG, type WatchdogConfig } from '@/lib/watchdog-config';
 
-type AlertInfo = { message: string; createdAt: string | Date; resolvedAt: string | Date | null } | undefined;
+type AlertInfo = {
+  message: string;
+  createdAt: string | Date;
+  resolvedAt: string | Date | null;
+  expiresAt: string | Date | null;
+} | undefined;
+
+function isOpen(a: NonNullable<AlertInfo>): boolean {
+  if (a.resolvedAt) return false;
+  if (!a.expiresAt) return true;
+  const t = typeof a.expiresAt === 'string' ? new Date(a.expiresAt) : a.expiresAt;
+  return t.getTime() > Date.now();
+}
 
 function fmtWhen(d: string | Date | null | undefined): string {
   if (!d) return '—';
@@ -35,7 +47,7 @@ function LastAlert({ alert }: { alert: AlertInfo }) {
   return (
     <p className="text-xs text-muted-foreground">
       Last alert {fmtWhen(alert.createdAt)}
-      {alert.resolvedAt ? ` (cleared ${fmtWhen(alert.resolvedAt)})` : ' (still open)'}: {alert.message}
+      {isOpen(alert) ? ' (still open)' : alert.resolvedAt ? ` (cleared ${fmtWhen(alert.resolvedAt)})` : ' (lapsed)'}: {alert.message}
     </p>
   );
 }
@@ -252,7 +264,7 @@ export default function WatchdogsPage() {
             <Num label="Log silence alert" value={draft.gatewayWatch.silentSec} unit="sec" onChange={(v) => set('gatewayWatch', { ...draft.gatewayWatch, silentSec: v })} />
             <Num label="Wedge: failures in a row" value={draft.gatewayWatch.wedgeFails} onChange={(v) => set('gatewayWatch', { ...draft.gatewayWatch, wedgeFails: v })} />
             <Num label="Wedge: confirm window" value={draft.gatewayWatch.confirmSec} unit="sec" onChange={(v) => set('gatewayWatch', { ...draft.gatewayWatch, confirmSec: v })} />
-            <Num label="Wedge: restart cooldown" value={draft.gatewayWatch.cooldownSec} unit="sec" onChange={(v) => set('gatewayWatch', { ...draft.gatewayWatch, cooldownSec: v })} />
+            <Num label="Wedge: cooldown" value={draft.gatewayWatch.cooldownSec} unit="sec" onChange={(v) => set('gatewayWatch', { ...draft.gatewayWatch, cooldownSec: v })} />
             <LastAlert alert={alerts['gateway-wedged'] ?? alerts['high-load'] ?? alerts['gateway-resurrected'] ?? alerts['gateway-start-failed']} />
           </WatchdogCard>
         </div>
