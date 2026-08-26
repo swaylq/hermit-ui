@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { DEFAULT_WATCHDOG_CONFIG, type WatchdogConfig } from '@/lib/watchdog-config';
 
 type AlertInfo = {
+  id: string;
   message: string;
   createdAt: string | Date;
   resolvedAt: string | Date | null;
@@ -43,11 +44,24 @@ function fmtWhen(d: string | Date | null | undefined): string {
 }
 
 function LastAlert({ alert }: { alert: AlertInfo }) {
+  const utils = trpc.useUtils();
+  const dismiss = trpc.alerts.dismiss.useMutation({
+    onSettled: () => utils.watchdogs.status.invalidate(),
+  });
   if (!alert) return <p className="text-xs text-muted-foreground">No alerts raised yet.</p>;
   return (
     <p className="text-xs text-muted-foreground">
       Last alert {fmtWhen(alert.createdAt)}
       {isOpen(alert) ? ' (still open)' : alert.resolvedAt ? ` (cleared ${fmtWhen(alert.resolvedAt)})` : ' (lapsed)'}: {alert.message}
+      {isOpen(alert) ? (
+        <button
+          type="button"
+          className="ml-2 rounded px-1 py-0.5 text-destructive hover:bg-destructive/10"
+          onClick={() => dismiss.mutate({ id: alert.id })}
+        >
+          dismiss (quiet 4h)
+        </button>
+      ) : null}
     </p>
   );
 }
