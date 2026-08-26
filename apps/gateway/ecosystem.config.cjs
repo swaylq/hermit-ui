@@ -38,22 +38,24 @@ module.exports = {
           return [...extras.filter((p) => !have.has(p)), base].join(':');
         })(),
       },
-      // Nightly restart at 03:00, fleet-wide (sway, 2026-08-24). Fired by the pm2
-      // daemon's own scheduler (lib/Worker.js -> croner), NOT by a hermit cron:
-      // hermit crons are fired by the gateway's cron-runner, so a gateway asked
-      // to restart itself would be killing the thing holding the schedule. The
-      // watcher must live outside the watched, same reason gateway-watch is a
-      // LaunchAgent.
+      // No cron_restart here on purpose (removed 2026-08-26, sway).
       //
-      // croner gets no timezone argument, so this reads in the LOCAL time of the
-      // machine running the pm2 daemon. "03:00 Shanghai" is therefore only true
-      // on a box whose clock is Asia/Shanghai — check `date` before assuming.
+      // There WAS a `cron_restart: '0 3 * * *'` fleet-wide restart (added 2026-08-24,
+      // commit 0049cfa). It was removed because restarting on a clock pays its full
+      // cost every single night whether or not anything is wrong: shutdown() exits
+      // immediately without draining, so every claude-sdk session on the machine
+      // loses its in-flight turn (the interrupted tool call is recorded as if the
+      // user had rejected it), and --resume drops the [1m] variant so the next day's
+      // first turn re-pays the whole prompt cache write.
       //
-      // Blast radius: shutdown() exits immediately, it does not drain. Every
-      // claude-sdk session on this machine loses its in-flight turn (context
-      // survives via --resume; the interrupted tool call is written as if the
-      // user rejected it).
-      cron_restart: '0 3 * * *',
+      // What it was really buying was a bound on ONE failure: the gateway wedging
+      // its dashboard HTTP client while staying `online`. That is real — dgx-spark
+      // sat wedged for 3 days (2026-08-23 → 08-26) and the dashboard-http circuit
+      // breaker, which that build already had, never recovered it. But a nightly
+      // restart is a blunt instrument for it. scripts/gateway-watch.sh now detects
+      // that state directly and restarts only when it is actually present.
+      //
+      // If you are tempted to add a scheduled restart back, fix the wedge instead.
       autorestart: true,
       max_restarts: 50,
       // Exponential backoff instead of a fixed 5s loop: a gateway that exits on a
