@@ -2,8 +2,8 @@
 
 **Never delete this file, and never "merge it into AGENTS.md".** Claude Code discovers
 exactly two project-doc filenames — `CLAUDE.md` and `CLAUDE.local.md` — hardcoded in the
-binary, on both backends. Delete it and every session starts with zero context **and no
-error**: one agent did that on 2026-08-06 and ran blind for two weeks.
+binary. Delete it and every session starts with zero context **and no error**: one agent
+did that on 2026-08-06 and ran blind for two weeks.
 
 ## Startup: one command, then get to work
 
@@ -20,7 +20,7 @@ Silently. Don't ask permission, don't announce it.
 | Touching local services, accounts, network, APIs | `TOOLS.md` |
 | Challenging a HARD RULE, or reviewing a past failure | `references/incidents.md` |
 | Retrospective question ("earlier", "last time") | `grep -r <keyword> evolution/ memory/` |
-| Long-term recall | `memory/notes/INDEX.md`, then the note it names |
+| Long-term recall | `grep -i <keyword> memory/notes/INDEX.md`, then the note it names — **grep it, never `cat` it**: the index grows without bound, and anything `cat`-ed into context is re-paid on every later turn |
 
 Nothing is injected at startup and nothing records itself: Claude Code's built-in
 auto-memory is off machine-wide (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in

@@ -223,7 +223,7 @@ async function collectAnswers(values, positional) {
 // ── Template copy ────────────────────────────────────────────────────────────
 
 const TEXT_EXTS = new Set([
-  '.md', '.json', '.js', '.ts', '.sh', '.bash', '.zsh',
+  '.md', '.json', '.js', '.mjs', '.cjs', '.ts', '.sh', '.bash', '.zsh',
   '.toml', '.yml', '.yaml', '.tmpl', '.gitkeep', '.gitignore',
 ]);
 
@@ -257,6 +257,33 @@ function walkCopy(srcDir, destDir, vars) {
       try { chmodSync(destPath, statSync(srcPath).mode); } catch {}
     }
   }
+}
+
+// ── memory/ scaffold ─────────────────────────────────────────────────────────
+// Not shipped in the template (memory/ is gitignored there — see template/.gitignore),
+// so the scaffolder creates it: the daily-log dir plus a seeded notes/INDEX.md that
+// carries the exact line format. The format matters: the machine-wide session-start
+// indexer parses `- [Title](slug.md) — description` lines and silently sees nothing
+// if an agent drifts to another shape.
+
+const INDEX_SEED = `# INDEX.md — one line per note
+
+Every note in this directory gets exactly one line here, newest first. The
+session-start indexer parses this exact shape (keep it, or your notes turn
+invisible to future sessions):
+
+    - [Note Title](slug-of-the-note.md) — one short sentence on what's inside
+
+One *sentence*, not an abstract — this file is grepped, never read whole, and
+long lines quietly turn the index into a second copy of the notes.
+`;
+
+function writeMemoryScaffold(targetDir) {
+  const notesDir = join(targetDir, 'memory', 'notes');
+  mkdirSync(notesDir, { recursive: true });
+  const indexPath = join(notesDir, 'INDEX.md');
+  if (!existsSync(indexPath)) writeFileSync(indexPath, INDEX_SEED);
+  ok('memory/ scaffolded (daily logs + notes/INDEX.md seed)');
 }
 
 // ── settings.local.json ──────────────────────────────────────────────────────
@@ -344,6 +371,7 @@ async function main() {
   walkCopy(TEMPLATE_DIR, a.targetDir, vars);
   ok(`Template copied to ${a.targetDir}`);
 
+  writeMemoryScaffold(a.targetDir);
   writeSettingsLocal(a.targetDir, a.dashboardUrl, a.braveKey);
   preAckClaudeDialogs(a.targetDir);
 

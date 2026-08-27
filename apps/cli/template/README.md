@@ -13,7 +13,7 @@
 | `TOOLS.md` | local configs, accounts (credentials → the `secret` CLI) |
 | `references/` | the narrative half — incidents behind the HARD RULES, and `What failed`/`Why` for each lesson. **Never preloaded** |
 | `evolution/` | your slowly-accreted narrative — lessons learned the hard way, weekly reflections (codified *procedures* live in `.claude/skills/`) |
-| `scripts/` | safe-image, tmux runners, browser launchers, etc. |
+| `scripts/` | safe-image, hooks, browser launchers, etc. |
 | `start.sh` | spawn the agent in a tmux session |
 | `restart.sh` | respawn after MCP changes / wedges |
 | `.claude/settings.local.json` | dashboard URL + (optional) Brave key + permission allowlist |
@@ -25,22 +25,21 @@ cd {{AGENT_DIR}}
 ./start.sh
 ```
 
-That launches `claude` in a detached tmux session named `claude-{{AGENT_NAME}}`. The agent boots, reads its IDENTITY/USER/AGENTS/TOOLS files, and waits for messages.
+That launches `claude` in a detached tmux session named `claude-{{AGENT_NAME}}` (the standing main session). On boot it runs the startup command in `CLAUDE.md` — IDENTITY, USER, AGENTS, lessons — and waits for messages.
 
 ## Talking to {{AGENT_DISPLAY_NAME}}
 
-Open **{{DASHBOARD_URL}}/chat** in a browser. Pick `{{AGENT_NAME}}` from the sidebar (or create a new session against it). Your message → dashboard → local gateway → `tmux send-keys` into a per-chat tmux pane running `claude`. Reply streams back as the JSONL transcript grows.
+Open **{{DASHBOARD_URL}}/chat** in a browser. Pick `{{AGENT_NAME}}` from the sidebar (or create a new session against it). Your message → dashboard → local gateway, which drives each chat session as a **Claude Code Agent SDK subprocess** in this directory. Reply streams back live. (A tmux-pane backend still exists but is not what dashboard chat uses.)
 
 Paste / drag images into the composer — they're resized to ≤2000px, cached locally, and arrive in {{AGENT_DISPLAY_NAME}}'s context as a `Read <path>` command.
 
 ## Watching it work
 
 ```bash
-tmux attach -t claude-{{AGENT_NAME}}   # main pane
-tmux ls | grep hermit-                 # per-chat panes (one per dashboard session)
+tmux attach -t claude-{{AGENT_NAME}}   # the standing main session (start.sh)
 ```
 
-Detach with `Ctrl-b d` — don't `Ctrl-c` or you kill the agent.
+Detach with `Ctrl-b d` — don't `Ctrl-c` or you kill the agent. Dashboard chat sessions are gateway subprocesses, not tmux panes — watch those in the dashboard itself.
 
 ## When something's wrong
 
@@ -64,4 +63,4 @@ Changes take effect on the **next** turn — Claude Code re-reads these files at
 
 ## Scaffolded by
 
-[`create-hermit-agent`](https://github.com/swaylq/hermit-agent) — `npx create-hermit-agent` makes another one of these.
+[`create-hermit-agent`](https://github.com/swaylq/hermit-ui/tree/main/apps/cli) — `npx create-hermit-agent` makes another one of these.

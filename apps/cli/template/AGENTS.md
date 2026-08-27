@@ -2,6 +2,10 @@
 
 This folder is home. Treat it that way.
 
+**If this is the only doc your harness handed you** — some backends read AGENTS.md but not
+CLAUDE.md — run the startup command in `./CLAUDE.md` before working. Identity, user context
+and lessons live in the files it loads; this file alone is not the whole picture.
+
 Rules live here. The incidents behind them live in `references/incidents.md` — **never
 preload that file**; read it only when challenging a rule or reviewing a repeat failure.
 
@@ -42,15 +46,18 @@ English equivalents — get searched **before** they get answered:
 `grep -r <keyword> memory/ evolution/`, then the `memory/notes/INDEX.md` index. No search =
 guessing, and guessing from model memory has produced wrong answers before.
 
-### Dual-write — important events go to both
+### Where each kind of event goes
 
-When you learn something important, write it to both stores:
+When you learn something important, route it — only debugging root causes go to both stores:
 
 - Decisions / architecture changes → `evolution/lessons.md` if it's a "don't do X again",
   otherwise a reflection
 - User feedback or stated preferences → a note in `memory/notes/`, plus its line in `INDEX.md`
-- Debugging root causes → **both**
+- Debugging root causes → **both** (the rule to lessons, the facts to a note)
 - A new repeatable procedure → a skill, not a note
+
+**Maintenance:** every few days skim recent reflections and daily logs, distill what held up
+into `lessons.md` or a note, and drop entries that turned out wrong or stale.
 
 ## Image Safety — HARD RULE
 
@@ -58,11 +65,10 @@ An image with long edge > 2000px, or one the machine can't parse, wedges the ses
 API call afterwards returns 400 "Could not process image" — **including the reply path**, so
 you go dark with no way to say so. Only a restart or `/compact` clears it.
 
-**Layer 1 — mechanical.** `scripts/hooks/pre-read-image.sh` runs before every `Read`: it
-measures the image, resizes an oversized one to a sidecar, and blocks the Read pointing you
-at the sidecar. Can't measure the file at all → it blocks outright. Fail-closed both ways —
-but it only protects you if it is actually wired into `.claude/settings.local.json`, so
-check that before relying on it.
+**Layer 1 — mechanical.** `scripts/hooks/pre-read-image.sh` is wired into
+`.claude/settings.json` as a PreToolUse hook on `Read`: it measures the image, resizes an
+oversized one to a sidecar, and blocks the Read pointing you at the sidecar. Can't measure
+the file at all → it blocks outright. Fail-closed both ways.
 
 **Layer 2 — the rule.** Outside the hook's coverage, run `scripts/safe-image.sh <path>`
 yourself before Reading any png/jpg/jpeg/gif/webp/bmp/tiff, and Read the path it prints —
@@ -183,8 +189,9 @@ tappable card and the attachment (Dashboard Chat rule 5).
 **Never coin a term.** Do not invent a label for something and then use it as if it were
 established vocabulary — {{USER_NAME}} cannot look it up, cannot tell it apart from a real
 term, and quietly stops following. Say the thing in full instead. Same for an abstract word
-standing in for a fact: 「下界」 → 「至少 6 个，真实数更大」;「链路收敛了」 → 「三个入口现在
-走同一个函数」. Catch yourself having coined one? Drop it — don't defend it with a gloss.
+standing in for a fact: 「下界」 → 「重复的调用点至少 6 处，真实数更大」;「链路收敛了」 →
+「三个入口现在走同一个函数」. Catch yourself having coined one? Drop it — don't defend it
+with a gloss.
 
 **Gloss a real term once.** Vocabulary that genuinely exists but {{USER_NAME}} may not have
 met — `p95`、`backpressure`、留出集 — gets half a sentence the first time it appears and
@@ -211,17 +218,6 @@ backticks — `like_this` — and leave the prose to Chinese verbs.
 
 (If {{USER_NAME}} writes in English, mirror them — the rule is one language per sentence, not
 Chinese specifically.)
-
-## Heartbeats
-
-If you set up a heartbeat cron, default prompt: _"Follow the heartbeat instructions in your
-workspace. If nothing needs attention, reply HEARTBEAT_OK."_
-
-- **Reach out**: important event · calendar <2h · interesting find · >8h since any message
-- **Stay quiet** (HEARTBEAT_OK): late night · user busy · nothing new
-- **Proactive, no permission needed**: organize `evolution/`, `git status` checks, update docs
-- **Memory maintenance**: every few days skim recent reflections, distill into `lessons.md`
-  or a note in `memory/notes/`, drop outdated entries
 
 ---
 

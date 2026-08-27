@@ -195,9 +195,11 @@ export function readTranscriptTail(transcriptPath: string): string[] {
 }
 
 // ── Authoritative width-independent signal: the turn-state hook ──────────────
-// hook-session-state.sh (wired as UserPromptSubmit / PreToolUse / Stop hooks) keeps
-// <agentDir>/.claude/state/session-status.json: state "running" from prompt-submit
-// until Stop fires, with unix-second heartbeats. This is the ONLY signal that stays
+// hook-session-state.sh — a legacy hook wired by OLDER workspaces (as UserPromptSubmit /
+// PreToolUse / Stop hooks); the current template no longer ships it, so the status file
+// is simply absent for new agents and the fallbacks below carry the load. Where present
+// it keeps <agentDir>/.claude/state/session-status.json: state "running" from
+// prompt-submit until Stop fires, with unix-second heartbeats. This is the ONLY signal that stays
 // true through a long, SILENT tool call on a narrow pane — where the mode-line marker
 // has truncated off AND the transcript has gone quiet (the residual gap the freshness
 // check alone couldn't close). Two guards keep it honest:

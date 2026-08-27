@@ -68,8 +68,8 @@ test_json() {
   is "merge overwrites"              "$(json_get '.state' "$merged")" "running"
   is "merge adds"                    "$(json_get '.ts' "$merged")" "7"
 
-  # A round trip through quote → merge → get must survive a quote character,
-  # which is exactly what hook-session-state does with a session id.
+  # A round trip through quote → merge → get must survive a quote character
+  # (e.g. a session id or path embedding one).
   local rt
   rt=$(json_merge "{\"session_id\":$(json_quote 'a"b')}" '{}')
   is "quote survives a merge round trip" "$(json_get '.session_id' "$rt")" 'a"b'

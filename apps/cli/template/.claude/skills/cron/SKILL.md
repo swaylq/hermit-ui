@@ -6,9 +6,8 @@ user_invocable: true
 
 # Cron — every repeating task, one mechanism
 
-There used to be two skills, `cron` and `loop`. They were the same thing described twice, so
-`loop` is gone. Whatever the user calls it — 定时任务, 循环, routine, "keep going until it's
-done" — you create **a hermit cron**, and it always does all three of these:
+Whatever the user calls it — 定时任务, 循环, routine, "keep going until it's done" — you
+create **a hermit cron**, and it always does all three of these:
 
 - **fires on its own schedule**, driven by the gateway, so it survives a session restart, a
   gateway restart and a reboot;
@@ -24,7 +23,7 @@ never grow this chat without bound — but it is also the one thing you must des
 
 ## When this fires
 
-Natural language only; there is no slash command. Two families of ask, one mechanism:
+Two families of ask, one mechanism:
 
 | The user says | Shape |
 |---|---|
@@ -98,7 +97,18 @@ a file**, not in context. Pick a path when you create it and name it in the prom
 
 The prompt then reads: `先读 <path>/PROGRESS.md，接着上一轮继续；这一轮结束前把进展写回去。`
 
-This is strictly better than the old in-session loop, which lost everything on restart.
+## Heartbeat crons
+
+A heartbeat is just a recurring cron whose task is "check whether anything needs the user's
+attention". Every run's reply posts into the chat — there is no silent mode — so write the
+prompt to keep a quiet round to a single short line:
+
+- **Speak up** when something real happened: an important event, a deadline close by, a find
+  worth sharing.
+- **Nothing new** → one short line (e.g. 「一切正常，无事上报」). Never pad a quiet round into
+  a fake update.
+- A quiet round may still do upkeep silently: organize `evolution/`, run `git status`, distill
+  recent reflections into `lessons.md` (see AGENTS.md, "Where each kind of event goes").
 
 ## Ending it — three ways
 

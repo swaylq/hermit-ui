@@ -33,5 +33,3 @@ Codified *procedures* (how to DO a thing) don't belong here — write them as re
 - One-shot debugging traces (those belong in your daily working-mind, then get evicted)
 - Code samples that already live in the codebase
 - Long quotes from external docs (link instead)
-
-Modeled loosely on Hermes Agent's [self-evolution](https://github.com/NousResearch/hermes-agent-self-evolution) approach (GEPA: read execution traces → identify _why_ failures happen → produce reusable mutations), but human-curated and markdown-first — no DSPy, no genetic optimizer, no embedding store. Just careful notes.

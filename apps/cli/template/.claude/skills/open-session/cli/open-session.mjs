@@ -30,7 +30,7 @@ const USAGE = `open-session — open a new chat session in the hermit dashboard
 Blank session (no -m): appears in the dashboard sidebar, costs nothing until
 someone sends the first message. With -m: the gateway wakes it immediately.`;
 
-const DASH = (process.env.HERMIT_DASHBOARD_URL || process.env.DASHBOARD_URL || 'https://dash.swaylab.ai').replace(/\/+$/, '');
+const DASH = (process.env.HERMIT_DASHBOARD_URL || process.env.DASHBOARD_URL || '{{DASHBOARD_URL}}').replace(/\/+$/, '');
 
 function fail(msg) {
   console.error(`✗ ${msg}`);

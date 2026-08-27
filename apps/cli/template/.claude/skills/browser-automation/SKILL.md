@@ -35,23 +35,8 @@ Chrome (self-managed, CDP 19900-19999)
 
 ## Phase 1: Explore (playwright-mcp)
 
-Default: use the `mcp__playwright-browser__*` MCP tools for interactive exploration.
-
-**Core tools:**
-- `browser_navigate` — open URL
-- `browser_snapshot` — get accessibility tree (with `ref`)
-- `browser_click` — click via ref
-- `browser_type` — type via ref
-- `browser_fill_form` — fill forms
-- `browser_press_key` — press keys
-- `browser_select_option` — dropdowns
-- `browser_hover` / `browser_drag`
-- `browser_file_upload`
-- `browser_take_screenshot`
-- `browser_wait_for`
-- `browser_tabs` / `browser_navigate_back` / `browser_close`
-- `browser_console_messages` / `browser_network_requests`
-- `browser_evaluate` / `browser_run_code`
+Default: use the `mcp__playwright-browser__*` MCP tools for interactive exploration. The
+harness lists them — navigate, snapshot, click, type, evaluate and the rest; no roster here.
 
 **Exploration flow:**
 1. Ensure Chrome is running (`chrome-launcher.sh start`).
@@ -69,10 +54,13 @@ Collect Playwright snippets from the exploration and integrate into a reusable s
 1. Start from `scripts/browser/playwright-template.js`.
 2. Save as `scripts/browser/<verb>-<target>.js` (e.g. `publish-blog.js`, `read-inbox.js`).
 3. **Rules:**
-   - Use `human-like.js` helpers instead of direct operations (anti-detection).
+   - On third-party sites, use `human-like.js` helpers instead of direct operations
+     (anti-detection — see below).
    - Apply `applyStealthToContext(context)` before opening any page.
-   - `page.close()` in `finally`, **NEVER** `browser.close()`.
-   - End with `process.exit(0)`.
+   - `page.close()` in `finally`, **NEVER** `browser.close()` (the Chrome instance is shared
+     — closing the browser kills every other script's session and the login profile).
+   - End with `process.exit(0)` — the open CDP connection otherwise keeps node alive and the
+     script hangs instead of exiting.
 
 **Conversion cheatsheet:**
 

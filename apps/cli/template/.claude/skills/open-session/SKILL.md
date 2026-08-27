@@ -9,7 +9,7 @@ Create a new dashboard chat session for **any agent on this machine** (default: 
 
 Two modes:
 - **Blank** (no `-m`) — the session appears in the sidebar but stays asleep (zero cost, no process) until someone types into it. Use when the human said "开个新会话我来说" or you're pre-creating a space for them.
-- **Kick-off** (`-m` / `-f`) — the first message is queued, the gateway wakes the session, and the target agent starts on it right away. A lightweight hand-off any agent can do (the Brain has richer `dispatch` tools for orchestration — this skill is the general-purpose sibling).
+- **Kick-off** (`-m` / `-f`) — the first message is queued, the gateway wakes the session, and the target agent starts on it right away. A lightweight hand-off any agent can do.
 
 ## Run it
 
@@ -38,20 +38,17 @@ node cli/open-session.mjs -f /tmp/long-brief.md -t "竞品调研"    # long prom
 ## How it works / what you need
 
 - Talks to the dashboard tRPC API (`chat.createSession` + `chat.send`) with the **machine key** — resolved from `$HERMIT_KEY` (present in every dashboard session's env) → `$ASST_KEY` → macOS keychain `asst-gateway-vps-key`. The key is never printed; don't echo it yourself either.
-- Dashboard URL from `$HERMIT_DASHBOARD_URL` (falls back to `https://dash.swaylab.ai`).
+- Dashboard URL from `$HERMIT_DASHBOARD_URL` (falls back to this agent's configured dashboard).
 - Only reaches agents on **this machine** (the machine key is machine-scoped). Unknown `-a` name → the error lists the valid roster.
 - Sessions are created with `origin: 'agent'` (provenance) and open at `…/chat?session=<id>` — or `…/brain?session=<id>` when the target is the orchestrator.
 
 ## Permissions
 
-Opening a session **and sending the first instruction is a pre-allowed action** — don't hesitate or ask before doing it. On this fleet nothing prompts anyway (dashboard/main/cron sessions run `--dangerously-skip-permissions`, and the template's `permissions.allow` carries bare `Bash`, which the web-permission hook defers on). For a gated setup (a session running default/plan mode, or an agent whose settings dropped bare `Bash`), pre-allow the script by adding to `permissions.allow` in the agent's `.claude/settings.json` — or machine-wide in `~/.claude/settings.json`:
+Opening a session and sending the first instruction is a pre-allowed action — don't hesitate or ask before doing it. Hermit sessions normally run without a permission gate, so it just works. If an agent runs gated (default/plan mode), pre-allow the script in `permissions.allow` — the agent's `.claude/settings.json` or machine-wide `~/.claude/settings.json`:
 
 ```json
-"Bash(node ~/.claude/skills/open-session/cli/open-session.mjs:*)",
 "Bash(node */.claude/skills/open-session/cli/open-session.mjs:*)"
 ```
-
-(Already present machine-wide on this Mac. Note the hermit web-permission hook only defers on the **bare** `Bash` entry in the agent's own settings; scoped rules satisfy the harness, not that hook.)
 
 ## Gotchas
 
