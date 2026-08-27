@@ -6,6 +6,10 @@ import {
   settledHold,
   EPSILON,
   shouldRecapture,
+  planTailFrame,
+  chooseTailHold,
+  tailHoldLost,
+  forcedByClamp,
   type BottomHold,
 } from './prepend-anchor-core';
 
@@ -329,4 +333,170 @@ test('a pull long after the last one measures again', () => {
   const held: { until: number } = { until: 2500 };
   assert.equal(shouldRecapture(held, 1000), false);
   assert.equal(shouldRecapture(held, 9000), true);
+});
+
+// ── the tail-hold decision, exercised through planTailFrame ──────────────────
+//
+// These go through the WHOLE decision on purpose. Two earlier versions of this
+// rule shipped with a fully green suite because every test addressed a helper
+// and none addressed the decision the hook actually makes — the round-2 critic
+// reverted both rules in the hook and all 730 tests stayed green.
+//
+// Slack and geometry below are the real ones: BOTTOM_SLACK=60, a 723px viewport.
+
+const SLACK = 60;
+
+test('mount: the browser clamping the tail does NOT become the hold target', () => {
+  // Real frame from a 420-row session. capture() at 1273; next frame the window
+  // re-rendered, the list got shorter, and the browser clamped to the new max
+  // (1787 - 723 = 1064) to the pixel.
+  const hold: BottomHold = { gap: 0, lastTop: 1273, peak: 1787 };
+  const p = planTailFrame(hold, {
+    readerTop: 1064, scrollTop: 1064, scrollHeight: 1787, clientHeight: 723,
+    maxTop: 1064, slack: SLACK,
+  });
+  assert.equal(p.clamped, true, 'landing exactly on the new max is a clamp');
+  assert.equal(p.gap, 0, 'so the target is still the tail, not 209px above it');
+  assert.equal(p.abandon, false, 'and the hold keeps working');
+});
+
+test('streaming: a reader scrolling away from a live turn is BELIEVED', () => {
+  // The round-2 rule ("did the content re-lay out?") was true on every frame
+  // here, so it undid the reader's scroll frame after frame — measured at 40Hz,
+  // the reader asked for 1560px and the view went 570px the other way.
+  // Growth RAISES maxTop, so this can never look like a clamp.
+  const hold: BottomHold = { gap: 0, lastTop: 1082, peak: 2000 };
+  const p = planTailFrame(hold, {
+    readerTop: 822,            // the reader went up 260px …
+    scrollTop: 822,
+    scrollHeight: 1817,        // … while the streaming tail grew 6px
+    clientHeight: 723,
+    maxTop: 1094,              // 1817 - 723; note prevTop 1082 < this
+    slack: SLACK,
+  });
+  assert.equal(p.clamped, false, 'growth cannot masquerade as a clamp');
+  assert.equal(p.gap, 260, 'the reader moved 260px and the hold books it');
+  assert.equal(p.abandon, true, '260 > 60, so the hold lets go and they escape');
+});
+
+test('streaming: the escape hatch is not shut by the attribution rule', () => {
+  // The interlock the round-2 critic found: an un-adopted delta leaves gap at 0,
+  // so tailHoldLost never fires and the reader has no way out. Walk several
+  // streaming frames and assert the hold releases rather than holding forever.
+  let hold: BottomHold = { gap: 0, lastTop: 2000, peak: 3000 };
+  let height = 2723;
+  let top = 2000;
+  let released = false;
+  for (let frame = 0; frame < 6; frame++) {
+    height += 6;                       // the reply keeps arriving
+    top -= 260;                        // and the reader keeps scrolling up
+    const p = planTailFrame(hold, {
+      readerTop: top, scrollTop: top, scrollHeight: height, clientHeight: 723,
+      maxTop: height - 723, slack: SLACK,
+    });
+    if (p.abandon) { released = true; break; }
+    hold = { ...hold, gap: p.gap, lastTop: top };
+  }
+  assert.equal(released, true, 'the reader must be able to leave a streaming tail');
+});
+
+test('a nudge INSIDE the slack keeps the hold', () => {
+  // Geometry has to be self-consistent: content 1787 in a 723 viewport puts the
+  // maximum at 1064, so a reader AT the end was at 1064 — not at 1273, which is
+  // a position that scroller cannot hold. (The first version of this test said
+  // 1273 and only passed because the old yes/no clamp test ignored the number.)
+  const hold: BottomHold = { gap: 0, lastTop: 1064, peak: 1787 };
+  const p = planTailFrame(hold, {
+    readerTop: 1024, scrollTop: 1024, scrollHeight: 1787, clientHeight: 723,
+    maxTop: 1064, slack: SLACK,
+  });
+  assert.equal(p.clamped, false, 'nothing shrank; this was all the reader');
+  assert.equal(p.gap, 40);
+  assert.equal(p.abandon, false, '40px is still "at the end"');
+});
+
+test('every input device is treated the same, because none is recognised', () => {
+  // PageUp and a scrollbar drag raise no reader-intent signal at all; that is
+  // what round 1 got wrong. Distance and clamping do not care.
+  for (const [device, top] of [['PageUp', 454], ['scrollbar drag', 1428], ['wheel', 1000]] as const) {
+    const p = planTailFrame({ gap: 0, lastTop: 2144, peak: 2867 }, {
+      readerTop: top, scrollTop: top, scrollHeight: 2867, clientHeight: 723,
+      maxTop: 2144, slack: SLACK,
+    });
+    assert.equal(p.clamped, false, `${device} is not a clamp`);
+    assert.equal(p.abandon, true, `${device} must be able to leave the tail`);
+  }
+});
+
+test('forcedByClamp measures HOW MUCH the browser had to move us', () => {
+  // The old position is 209px past the end that now exists.
+  assert.equal(forcedByClamp({ lastTop: 1273, maxTopReader: 1064 }), -209);
+  // The old position still exists — nothing was forced.
+  assert.equal(forcedByClamp({ lastTop: 1000, maxTopReader: 1064 }), 0);
+  // Growth (the streaming case) raises the end, so never anything forced.
+  assert.equal(forcedByClamp({ lastTop: 2000, maxTopReader: 2600 }), 0);
+});
+
+test('a frame where the list shrank AND the reader scrolled splits the two', () => {
+  // Round 3 booked the WHOLE 330px as the reader's, because the yes/no pixel
+  // test ("did we land exactly on the maximum?") fails the moment a person also
+  // moved. The reader was then thrown out of a hold they never left.
+  const hold: BottomHold = { gap: 0, lastTop: 1273, peak: 2000 };
+  const p = planTailFrame(hold, {
+    readerTop: 943,            // 300px of clamp + 30px of reader
+    scrollTop: 943,            // no compensation painted this frame
+    scrollHeight: 1696, clientHeight: 723,
+    maxTop: 973,               // the list lost 300px
+    slack: 60,
+  });
+  assert.equal(p.clamped, true, 'the browser did force part of it');
+  assert.equal(p.gap, 30, 'but only the 30px the reader actually did is kept');
+  assert.equal(p.abandon, false, '30px is inside the slack — they did not leave');
+});
+
+test('the clamp check survives a hold that has already compensated', () => {
+  // The other half of the round-3 bug: `lastTop` is a READER coordinate and the
+  // maximum is a LOGICAL one, and inside one hold they were measured 1,080px
+  // apart. Comparing them directly made the check structurally dead after the
+  // first correction. planTailFrame now converts using the compensation that is
+  // painted right now, which is logical minus reader.
+  const hold: BottomHold = { gap: 0, lastTop: 1064, peak: 2867 };
+  const p = planTailFrame(hold, {
+    readerTop: 1064,           // reader coordinate …
+    scrollTop: 2144,           // … logical is 1080 higher: that much is a transform
+    scrollHeight: 2867, clientHeight: 723,
+    maxTop: 2144,              // logical maximum — equals logical top, i.e. AT the end
+    slack: 60,
+  });
+  assert.equal(p.gap, 0, 'at the end is at the end, whatever is painted as transform');
+  assert.equal(p.abandon, false);
+});
+
+test('tailHoldLost is exact about the boundary', () => {
+  assert.equal(tailHoldLost(0, 60), false);
+  assert.equal(tailHoldLost(60, 60), false, 'the slack itself is still the tail');
+  assert.equal(tailHoldLost(61, 60), true);
+  assert.equal(tailHoldLost(-120, 60), false, 'rubber-banding past the end is not leaving');
+});
+
+// ── which hold gets taken (the wiring two regressions hid in) ────────────────
+test('ordinary case: the geometry says we are at the end', () => {
+  assert.equal(chooseTailHold({ contentBottomGap: 0, clientHeight: 723, followingTail: false, slack: 60 }), true);
+  assert.equal(chooseTailHold({ contentBottomGap: 59, clientHeight: 723, followingTail: false, slack: 60 }), true);
+});
+
+test('cold cache: a noisy mid-assembly reading does not cost a follower the tail', () => {
+  // 109px is over the slack, but the page says they are still following and the
+  // list is only part-rendered. Round 4: taking a ROW hold here left 4 cold opens
+  // in 6 permanently 270px short, with the pin still on so no "↓ latest" either.
+  assert.equal(chooseTailHold({ contentBottomGap: 109, clientHeight: 723, followingTail: true, slack: 60 }), true);
+  // Not following → the reading is taken at face value.
+  assert.equal(chooseTailHold({ contentBottomGap: 109, clientHeight: 723, followingTail: false, slack: 60 }), false);
+});
+
+test('a stale-true pin cannot drag a history reader to the bottom', () => {
+  // One viewport is the ceiling on the second door: someone 800px up is reading,
+  // whatever a stale pin claims.
+  assert.equal(chooseTailHold({ contentBottomGap: 800, clientHeight: 723, followingTail: true, slack: 60 }), false);
+  assert.equal(chooseTailHold({ contentBottomGap: 722, clientHeight: 723, followingTail: true, slack: 60 }), true);
 });

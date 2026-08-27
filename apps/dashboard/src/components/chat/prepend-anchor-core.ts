@@ -168,6 +168,163 @@ export type BottomFrameInput = {
   epsilon?: number;
 };
 
+/**
+ * Has a tail hold stopped describing a reader who is at the tail?
+ *
+ * `capture()` only takes a tail hold when the reader is within `slack` of the
+ * end. So a hold whose target has drifted FURTHER than that slack is no longer
+ * describing the same reader, whatever moved it, and the honest thing is to
+ * abandon it rather than keep holding a position nobody chose.
+ *
+ * Two very different things land here, and the point is that neither needs to
+ * be recognised:
+ *
+ *   · The reader really left — PageUp, a scrollbar drag, a wheel, a fling.
+ *     Abandoning is right: they get to read history, and because
+ *     `onAnchorRelease` only chases the tail while the pin is still on (and
+ *     their own scrolling has already dropped it), nothing pulls them back.
+ *
+ *   · Nobody left, and `scrollTop` moved anyway — the virtualised window
+ *     re-rendered the rows above the viewport, or the browser clamped a list
+ *     that momentarily shrank. Measured on a real 420-row session (round 0):
+ *     `scrollTop` fell 209px between `capture()` and the first corrected frame.
+ *     The old code adopted that as the reader's own scrolling, so the hold's
+ *     TARGET became 209px above the end and every later frame faithfully held
+ *     them there — visible for 1.5s until sticky bottom noticed and yanked them
+ *     down. Abandoning is right here too: the pin is still on, so the release
+ *     hands the tail straight back to sticky bottom, which puts them at the end
+ *     — where the tail hold was trying to keep them in the first place.
+ *
+ * Round 1 tried to separate the two by asking `hasUpwardReaderIntent()` whether
+ * to believe the movement at all. That was worse than the bug: the predicate
+ * only rises for wheel and touch, so keyboard paging and dragging the scrollbar
+ * (a SIBLING of the viewport — its pointer events never reach the viewport's
+ * listeners) were disbelieved and silently undone. Three PageUps moved
+ * `scrollTop` 1,690px and the screen did not move at all. Distance needs no
+ * such taxonomy of inputs, and cannot be defeated by an input nobody thought of.
+ */
+export function tailHoldLost(gap: number, slack: number): boolean {
+  return gap > slack;
+}
+
+/**
+ * How much of this frame's movement did the BROWSER force?
+ *
+ * The scroller sets `overflow-anchor: none`, so growth above the viewport never
+ * shifts it. The one non-reader way `scrollTop` moves is the opposite case: the
+ * content gets SHORTER than the current offset and the browser has no choice but
+ * to clamp to the new maximum. That is a continuous quantity — exactly how far
+ * past the new end the old position was — and subtracting it leaves the reader's
+ * own contribution, whatever else happened in the same frame.
+ *
+ * Round 3 asked this as a yes/no question instead ("did the new offset land ON
+ * the maximum, to the pixel?"). Two things were wrong with it, both found by
+ * review:
+ *
+ *   · A frame where the list shrank AND the reader scrolled fails the pixel
+ *     test, so the WHOLE displacement — the browser's part included — was booked
+ *     as the reader's. Measured with the real function: a 300px shrink plus a
+ *     30px scroll came out as `gap: 330`, and the reader was thrown out of a
+ *     hold they never left.
+ *
+ *   · Worse, it compared coordinates from two different systems. `lastTop` is a
+ *     READER coordinate (the app's own compensation removed) while the maximum
+ *     is a LOGICAL one; inside one hold those were measured 1,080px apart. Once
+ *     a hold had applied its first correction, `prevTop > maxTop` could never be
+ *     true again, so the detection was structurally dead for the rest of the
+ *     hold — it only ever fired on the frame where the compensation was still 0.
+ *
+ * So: no pixel coincidence, no yes/no, and both sides converted to the same
+ * coordinates before they are compared.
+ */
+export function forcedByClamp(input: {
+  /** `scrollTop` after our last correction, in READER coordinates. */
+  lastTop: number;
+  /** The largest `scrollTop` the content allows, in READER coordinates. */
+  maxTopReader: number;
+}): number {
+  return Math.min(0, input.maxTopReader - input.lastTop);
+}
+
+/**
+ * Should this prepend hold the TAIL, or a row up in the conversation?
+ *
+ * Pure so it can be tested, because the wiring is where two regressions have now
+ * hidden. Round-4 review: reverting all three of the hook's decisions left
+ * 731/731 tests green, since every test addressed the frame arithmetic and none
+ * addressed which hold gets taken in the first place.
+ *
+ * Two ways in. The geometry says we are at the end — that is the ordinary case.
+ * Or the page says the reader is still following the tail AND the geometry is at
+ * least plausible: on a cold cache the measurement is taken while the list is
+ * still assembling, and a row hold born from that noise strands the reader for
+ * good (measured cold, 4 opens in 6 settled 270px short and STAYED, pin still
+ * on, so not even a "↓ latest" appeared).
+ *
+ * The one-viewport bound on that second door is not decoration. `pinnedRef` can
+ * be stale-true, and forcing a tail hold from thousands of pixels up would yank
+ * someone reading history down to the bottom — the same mistake pointing the
+ * other way, and a worse one.
+ */
+export function chooseTailHold(input: {
+  contentBottomGap: number;
+  clientHeight: number;
+  followingTail: boolean;
+  slack: number;
+}): boolean {
+  if (input.contentBottomGap < input.slack) return true;
+  return input.followingTail && input.contentBottomGap < input.clientHeight;
+}
+
+export type TailFrameInput = {
+  /** `scrollTop` in reader coordinates — the app's own compensation removed. */
+  readerTop: number;
+  /** Natural/visual scroll coordinate, for the geometry sums. */
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  /** The largest `scrollTop` the content currently allows. */
+  maxTop: number;
+  /** How far from the tail still counts as being at it. */
+  slack: number;
+  epsilon?: number;
+};
+
+export type TailFramePlan = BottomFramePlan & {
+  /** The hold has stopped describing a reader at the tail — let go of it. */
+  abandon: boolean;
+  /** Whether this frame's movement was the browser clamping rather than a person. */
+  clamped: boolean;
+};
+
+/**
+ * One tail-hold frame, end to end, as a pure function.
+ *
+ * Deliberately whole rather than three helpers the hook stitches together: when
+ * the decision lived in the hook, both of the wrong rules above passed a full
+ * green test suite. Reverting either one changed no test, because every test
+ * addressed a helper and none addressed the decision. This is the decision.
+ */
+export function planTailFrame(hold: BottomHold, input: TailFrameInput): TailFramePlan {
+  // Both sides into READER coordinates before anything is compared. The
+  // compensation currently painted as a transform is the difference between the
+  // two systems, and it is available right here as logical minus reader.
+  const compensated = input.scrollTop - input.readerTop;
+  const forced = forcedByClamp({ lastTop: hold.lastTop, maxTopReader: input.maxTop - compensated });
+  // Whatever moved beyond what the browser had to do is the reader.
+  const userDelta = input.readerTop - hold.lastTop - forced;
+  const gap = hold.gap - userDelta;
+  const eps = input.epsilon ?? EPSILON;
+  const raw = input.scrollHeight - input.scrollTop - input.clientHeight - gap;
+  return {
+    correction: Math.abs(raw) < eps ? 0 : raw,
+    gap,
+    raw,
+    clamped: forced < 0,
+    abandon: tailHoldLost(gap, input.slack),
+  };
+}
+
 export type BottomFramePlan = {
   correction: number;
   gap: number;

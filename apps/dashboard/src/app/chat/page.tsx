@@ -792,7 +792,27 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // still on — and because the pin is on, no "↓ latest" pill says so either.
   // Measured on a plain open of two live sessions: 126px and 243px short,
   // permanently. One chase when the hold ends closes it.
-  const onAnchorRelease = useCallback((mode: 'top' | 'bottom') => {
+  const onAnchorRelease = useCallback((mode: 'top' | 'bottom', reason: 'expired' | 'reader-left' = 'expired') => {
+    // The anchor watched the reader move more than BOTTOM_SLACK away from the
+    // tail, over frames, in reader coordinates. That IS leaving the tail — a
+    // better-evidenced verdict than the intent heuristic below, which misses the
+    // inputs that raise no pointer/wheel signal at all (keyboard paging, and
+    // dragging the scrollbar, whose events land on a SIBLING of the viewport).
+    //
+    // So drop the pin rather than merely declining to chase. Declining is not
+    // enough: sticky bottom acts on the pin every frame on its own, so a reader
+    // who dragged the scrollbar 130-250ms after opening — while `pinnedRef` is
+    // still stale-true because the scroll listener returns early inside its
+    // pane-resize window — got pulled back to the bottom anyway, with no
+    // "↓ latest" to say what happened. Measured 11 times out of 11.
+    //
+    // Clearing the resize window too: that window is what was suppressing the
+    // pin update, and it is exactly the thing this verdict overrules.
+    if (reason === 'reader-left') {
+      paneResizedUntilRef.current = 0;
+      if (pinnedRef.current) setPinned(false);
+      return;
+    }
     // Only a TAIL hold. A hold on a row up in history means the reader was
     // reading history, and pinnedRef can be stale-true there — the scroll
     // listener returns early inside the pane-resize window without ever
@@ -802,8 +822,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     if (!getViewport()) return;
     contentMovingUntilRef.current = Date.now() + SETTLE_AFTER_RESIZE_MS;
     settleKickRef.current?.(SETTLE_CHASE_FRAMES);
-  }, [getViewport]);
-  const prependAnchor = usePrependAnchor(getViewport, scrollStability, onAnchorRelease);
+  }, [getViewport, setPinned]);
+  const isFollowingTail = useCallback(() => pinnedRef.current === true, []);
+  const prependAnchor = usePrependAnchor(getViewport, scrollStability, onAnchorRelease, isFollowingTail);
   // Read by the scroll listener and the bottom-pin observer, neither of which
   // should re-subscribe when the anchor object identity changes.
   const prependAnchorRef = useRef(prependAnchor);

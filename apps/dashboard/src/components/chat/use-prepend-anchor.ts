@@ -24,7 +24,7 @@
 // message near the top (they scrolled up to read history), or the TAIL (they
 // are pinned to the bottom while a prefill thickens a short conversation).
 // `capture` decides which, and the hold keeps that one steady — the top anchor
-// via `planFrame`, the bottom anchor via `planBottomFrame`.
+// via `planFrame`, the bottom anchor via `planTailFrame`.
 //
 // The settle window here is not a fixed 1500ms from `capture()` any more. That
 // is what broke on the phone: the page was fetched and 120 rows parsed, and by
@@ -36,9 +36,10 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import {
+  chooseTailHold,
   classifyTailFrame,
   planFrame,
-  planBottomFrame,
+  planTailFrame,
   settledHold,
   shouldRecapture,
   type AnchorHold,
@@ -135,18 +136,38 @@ export function usePrependAnchor(
   getViewport: () => HTMLElement | null,
   stability: ScrollStability,
   /**
-   * Called once when a live hold is dropped, with the mode it was holding. A
+   * Called once when a live hold is dropped, with the mode it was holding and
+   * WHY. `reason: 'reader-left'` means the hold ended because the reader moved
+   * away from the tail — never chase them in that case, whatever the pin says. A
    * hold suppresses sticky bottom for its whole life, so whoever follows the
    * tail has to be told it can look again — otherwise a reader who never left
    * the end is parked short of it. A hold that is REPLACED (capture() taking a
    * fresh one after this one expired) does not report: the replacement is still
    * suppressing sticky bottom, and it will report when it ends.
    */
-  onRelease?: (mode: 'top' | 'bottom') => void,
+  onRelease?: (mode: 'top' | 'bottom', reason: 'expired' | 'reader-left') => void,
+  /**
+   * Is the session FOLLOWING the tail right now, as the page understands it?
+   *
+   * `capture()` used to decide tail-vs-row from one geometry reading, and on a
+   * cold cache that reading is taken while the list is still assembling. When it
+   * came out over the slack the anchor held a ROW — and a row hold owes the tail
+   * nothing, so `onAnchorRelease` returns early for it and nobody ever looks at
+   * the bottom again. Measured cold, 4 opens in 6: the conversation settled 270px
+   * short of the end and STAYED there, pin still on, so not even a "↓ latest"
+   * appeared to say the newest messages were below the fold.
+   *
+   * The page already tracks whether the reader is following the tail, across
+   * frames and with reader-intent in the loop. Ask it instead of re-deriving the
+   * same fact from one mid-load measurement.
+   */
+  isPinned?: () => boolean,
 ): PrependAnchor {
   const held = useRef<Held | null>(null);
   const onReleaseRef = useRef(onRelease);
   useEffect(() => { onReleaseRef.current = onRelease; }, [onRelease]);
+  const isPinnedRef = useRef(isPinned);
+  useEffect(() => { isPinnedRef.current = isPinned; }, [isPinned]);
   const raf = useRef<number | null>(null);
   const ro = useRef<ResizeObserver | null>(null);
   /** Fires when the settle window closes — see armDeadline. */
@@ -154,7 +175,7 @@ export function usePrependAnchor(
   /** Consecutive frames the pump found nothing to do — see QUIET_FRAMES. */
   const quiet = useRef(0);
 
-  const release = useCallback(() => {
+  const release = useCallback((reason: 'expired' | 'reader-left' = 'expired') => {
     const wasHolding = held.current?.mode ?? null;
     held.current = null;
     if (raf.current !== null) {
@@ -167,7 +188,7 @@ export function usePrependAnchor(
     deadline.current = null;
     // After `held` is cleared, so a listener asking `isHolding()` from inside
     // this callback gets the truthful answer.
-    if (wasHolding) onReleaseRef.current?.(wasHolding);
+    if (wasHolding) onReleaseRef.current?.(wasHolding, reason);
   }, []);
 
   /**
@@ -231,12 +252,31 @@ export function usePrependAnchor(
       }
       const measurable = kind === 'measure';
       if (measurable) h.hold.peak = Math.max(h.hold.peak, honestHeight);
-      const { correction, gap, raw } = planBottomFrame(h.hold, {
+      const { correction, gap, raw, abandon } = planTailFrame(h.hold, {
+        readerTop: stability.readerScrollTop(),
         scrollTop: logicalTop,
-        userScrollTop: stability.readerScrollTop(),
         scrollHeight: honestHeight,
         clientHeight: root.clientHeight,
+        maxTop: stability.maxScrollTop(),
+        slack: BOTTOM_SLACK,
       });
+      // The hold has stopped describing a reader at the tail — whether they left
+      // on purpose or the clamp above moved them. Let go: `onAnchorRelease`
+      // chases the tail only while the pin is still on, and a reader's own
+      // scrolling is what drops it. See planTailFrame.
+      if (abandon) {
+        // 'reader-left', not a plain expiry. The difference is load-bearing: the
+        // page chases the tail on release while the pin is still on, and the pin
+        // can be stale-true for a couple of hundred ms after mount (the scroll
+        // listener returns early inside its pane-resize window before it ever
+        // updates it). Round-4 review: drag the scrollbar 130-250ms after
+        // opening — an input that raises no reader-intent — and this release
+        // handed the page a pin it still believed, which yanked the reader back
+        // to the bottom with no "↓ latest" to say so. 11 runs out of 11.
+        // A hold that ends BECAUSE the reader moved must never ask for a chase.
+        release('reader-left');
+        return false;
+      }
       // Bounded: this is the caller whose own correction used to feed the next
       // frame, and `settledHold` below is built to adopt whatever was refused.
       const applied = correction !== 0 && measurable
@@ -339,10 +379,31 @@ export function usePrependAnchor(
     // to the top of what just arrived.
     const logicalTop = stability.logicalScrollTop();
     const contentBottomGap = stability.contentHeight() - logicalTop - root.clientHeight;
-    if (contentBottomGap < BOTTOM_SLACK) {
+    // Take a TAIL hold when the geometry says we are at the end, or when the
+    // page says the reader is still following it and the geometry is at least
+    // plausible (within one viewport). The second half is what a cold cache
+    // needs: the list is still assembling, so the reading is noise, and a row
+    // hold taken from that noise strands the reader for good. See `isPinned`.
+    //
+    // Bounded by one viewport on purpose. `pinnedRef` can be stale-true while
+    // someone reads history, and forcing a tail hold from thousands of pixels
+    // up would yank them to the bottom — the opposite mistake, and a worse one.
+    if (chooseTailHold({
+      contentBottomGap,
+      clientHeight: root.clientHeight,
+      followingTail: isPinnedRef.current?.() === true,
+      slack: BOTTOM_SLACK,
+    })) {
       held.current = {
         mode: 'bottom',
-        hold: { gap: contentBottomGap, lastTop: stability.readerScrollTop(), peak: stability.contentHeight() },
+        // The TAIL, not the incidental distance from it. This branch only runs
+        // when the reader is already within BOTTOM_SLACK of the end, and the
+        // end is where sticky bottom drives them anyway — so holding, say, the
+        // 41px they happened to be short of it just preserves a position nobody
+        // chose and that the next sticky-bottom pass would close with a visible
+        // jump. Holding 0 makes the hold agree with the thing that takes over
+        // when it ends.
+        hold: { gap: 0, lastTop: stability.readerScrollTop(), peak: stability.contentHeight() },
         until,
         maxUntil,
       };
@@ -408,6 +469,17 @@ export function usePrependAnchor(
       ro.current?.disconnect();
       if (content && typeof ResizeObserver !== 'undefined') {
         const obs = new ResizeObserver(() => {
+          // Just re-arm. Round 3 also called `reassert()` synchronously here, on
+          // the theory that a ResizeObserver callback runs before paint so the
+          // correction would land in the same frame the content grew in.
+          //
+          // Round-4 review measured it: with the call removed, paint-check is
+          // 7/7 at 0px and verify's distribution is identical, outlier included.
+          // No benefit — and it was the only place in this change that re-enters
+          // (`reassert` can `release`, which disconnects this very observer from
+          // inside its own callback). The justification cited a 857px figure
+          // that ROUNDS.md itself later recorded as a measurement error, which is
+          // how it survived three rounds unquestioned.
           if (held.current) rearm();
         });
         obs.observe(content);
