@@ -35,7 +35,7 @@ import { TakeoverBar } from '@/components/chat/takeover-bar';
 import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
 import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
-import { useOlderPages, shedRows, type TimelineRow } from '@/components/chat/use-older-pages';
+import { useOlderPages, shedRows, shouldKeepShed, type TimelineRow } from '@/components/chat/use-older-pages';
 import { usePrependAnchor } from '@/components/chat/use-prepend-anchor';
 import { useScrollStability } from '@/components/chat/use-scroll-stability';
 import { isVerticalWheelInput, readerMovedUp } from '@/components/chat/scroll-stability-core';
@@ -787,17 +787,23 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // session: 162 messages and fifteen minutes gone, the auto-compaction notice
   // among them, on a tab that had been open through the session's busy stretch.
   //
-  // So the shed rows go to the pager instead of the bin. It ignores them while
-  // the reader is at the tail (nothing to keep contiguous there).
+  // So the shed rows go to the pager instead of the bin — whenever losing them
+  // would be visible. A hole in history is one way; the other is the reader
+  // having scrolled up, where the shed row's HEIGHT leaves with it and slides
+  // everything they are reading up by that much. See shouldKeepShed.
   const absorbOlder = older.absorb;
+  const historyOnScreen = older.rows.length > 0;
   const prevWindowRef = useRef<TimelineRow[] | undefined>(undefined);
-  useEffect(() => {
+  useIsoLayoutEffect(() => {
     const prev = prevWindowRef.current;
     prevWindowRef.current = windowRows;
     if (!prev || !windowRows) return;
     const shed = shedRows(prev, windowRows);
-    if (shed.length > 0) absorbOlder(shed);
-  }, [windowRows, absorbOlder]);
+    // Before paint, not after. The row leaves the DOM in the same commit that
+    // renders the new window, so an absorb a frame later still shows one
+    // painted frame with the reader's text already shifted up.
+    if (shed.length > 0 && shouldKeepShed({ historyOnScreen, followingTail: pinnedRef.current })) absorbOlder(shed);
+  }, [windowRows, absorbOlder, historyOnScreen]);
 
   const baseRows = useMemo(
     () => (older.rows.length > 0 ? [...older.rows, ...(windowRows ?? [])] : windowRows),

@@ -164,17 +164,42 @@ export function shedRows<T extends { id: string; createdAt: string | Date }>(
 }
 
 /**
+ * Should the rows the live window just shed be kept, or dropped?
+ *
+ * Two independent reasons to keep them, and only the first was covered when
+ * shedding was first handled:
+ *
+ *   · History is on screen. `older.rows` is anchored where the window used to
+ *     start, so anything shed since belongs to neither array and the timeline's
+ *     concatenation closes over the hole.
+ *
+ *   · The reader has left the tail. Then the shed row's HEIGHT leaves with it,
+ *     and everything below — the text they are reading included — slides up by
+ *     that much, with no scroll write anywhere to explain it. Measured on the
+ *     fixture with the reader 120px above the tail: one message inserted, one
+ *     57px row gone from the head, `scrollTop` and `scrollHeight` both
+ *     unchanged, every remaining row moved up 69px. At one message every 700ms
+ *     — an ordinary streaming turn — that is 208px every two seconds.
+ *
+ * Dropping is still right in the remaining case, and it is the common one: a
+ * reader sitting at the tail sees nothing move when the head is trimmed, which
+ * is the whole point of a fixed window.
+ */
+export function shouldKeepShed(input: { historyOnScreen: boolean; followingTail: boolean }): boolean {
+  return input.historyOnScreen || !input.followingTail;
+}
+
+/**
  * Append shed rows to the history already on screen.
  *
- * A no-op while `rows` is empty: the reader is at the tail, has asked for no
- * history, and holding onto everything the window sheds would grow the page for
- * a conversation nobody is reading back through.
+ * Arithmetic only — WHETHER to keep them is `shouldKeepShed`, decided by the
+ * caller, which is the side that knows where the reader is.
  */
 export function absorbShed<T extends { id: string; createdAt: string | Date }>(
   rows: T[],
   shed: readonly T[]
 ): T[] {
-  if (rows.length === 0 || shed.length === 0) return rows;
+  if (shed.length === 0) return rows;
   const have = new Set(rows.map((r) => r.id));
   const add = shed.filter((r) => !have.has(r.id)).sort(byOrder);
   if (add.length === 0) return rows;
@@ -183,7 +208,7 @@ export function absorbShed<T extends { id: string; createdAt: string | Date }>(
   // newer than everything held and the concatenation is already ordered. Sort
   // the whole thing only when that is not true — a turn rendered out of
   // sequence is worse than one extra pass.
-  if (isOlder(add[0], rows[rows.length - 1])) out.sort(byOrder);
+  if (rows.length > 0 && isOlder(add[0], rows[rows.length - 1])) out.sort(byOrder);
   return out;
 }
 

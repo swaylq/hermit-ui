@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pageBefore, chunksBottomFirst, shedRows, absorbShed, OLDER_PAGE, COMMIT_CHUNK } from './use-older-pages';
+import { pageBefore, chunksBottomFirst, shedRows, absorbShed, shouldKeepShed, OLDER_PAGE, COMMIT_CHUNK } from './use-older-pages';
 
 // The seam between a cached page and the rest of history. Getting it wrong does
 // not throw — it shows a turn twice, or drops one, the next time someone reads
@@ -146,12 +146,30 @@ test('shed rows land after the history already on screen', () => {
   assert.deepEqual(out.map((r) => r.id), ['01', '02', '03', '04']);
 });
 
-// The reader is at the tail and has asked for no history: keeping everything
-// the window sheds would grow the page for a conversation nobody is reading
-// back through.
-test('nothing is kept while no history is on screen', () => {
+// WHETHER to keep them is the caller's call now — absorbShed is arithmetic, and
+// with nothing held it simply orders what it was given.
+test('with no history on screen the shed rows are what is left', () => {
   const empty: ReturnType<typeof win> = [];
-  assert.equal(absorbShed(empty, win('01', '02')), empty);
+  assert.deepEqual(absorbShed(empty, win('02', '01')).map((r) => r.id), ['01', '02']);
+});
+
+// A reader at the tail sees nothing move when the head is trimmed — that is the
+// whole point of a fixed window, and keeping the rows would grow the page for a
+// conversation nobody is reading back through.
+test('at the tail with no history on screen, shed rows are dropped', () => {
+  assert.equal(shouldKeepShed({ historyOnScreen: false, followingTail: true }), false);
+});
+
+// History on screen: `older.rows` is anchored where the window used to start, so
+// anything shed since belongs to neither array and the timeline closes over it.
+test('history on screen keeps them even at the tail', () => {
+  assert.equal(shouldKeepShed({ historyOnScreen: true, followingTail: true }), true);
+});
+
+// The reader has scrolled up: the shed row's HEIGHT leaves with it and slides
+// their text up by that much, with no scroll write to explain it.
+test('a reader who left the tail keeps them with no history loaded', () => {
+  assert.equal(shouldKeepShed({ historyOnScreen: false, followingTail: false }), true);
 });
 
 test('the same row twice does not appear twice', () => {
