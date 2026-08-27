@@ -35,7 +35,7 @@ import { TakeoverBar } from '@/components/chat/takeover-bar';
 import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
 import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
-import { useOlderPages } from '@/components/chat/use-older-pages';
+import { useOlderPages, shedRows, type TimelineRow } from '@/components/chat/use-older-pages';
 import { usePrependAnchor } from '@/components/chat/use-prepend-anchor';
 import { useScrollStability } from '@/components/chat/use-scroll-stability';
 import { isVerticalWheelInput, readerMovedUp } from '@/components/chat/scroll-stability-core';
@@ -777,6 +777,28 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // Older history, paged separately from the live window and served from the
   // local cache whenever it has the page. See use-older-pages.ts.
   const older = useOlderPages(sessionId, windowRows?.[0], (messages.data?.length ?? 0) >= limit);
+  // The two arrays below are concatenated with nothing checking that they meet.
+  // They stop meeting on their own: the live window is a fixed 60 rows that
+  // slides forward as a turn works, `older.rows` stays anchored where the window
+  // started, and every row shed in between is deleted from the query cache with
+  // nothing left holding it. Nothing looks wrong — the timeline just closes over
+  // the missing middle, and paging only walks backwards from the OLDEST row on
+  // screen, so no amount of scrolling brings it back. Measured on a live
+  // session: 162 messages and fifteen minutes gone, the auto-compaction notice
+  // among them, on a tab that had been open through the session's busy stretch.
+  //
+  // So the shed rows go to the pager instead of the bin. It ignores them while
+  // the reader is at the tail (nothing to keep contiguous there).
+  const absorbOlder = older.absorb;
+  const prevWindowRef = useRef<TimelineRow[] | undefined>(undefined);
+  useEffect(() => {
+    const prev = prevWindowRef.current;
+    prevWindowRef.current = windowRows;
+    if (!prev || !windowRows) return;
+    const shed = shedRows(prev, windowRows);
+    if (shed.length > 0) absorbOlder(shed);
+  }, [windowRows, absorbOlder]);
+
   const baseRows = useMemo(
     () => (older.rows.length > 0 ? [...older.rows, ...(windowRows ?? [])] : windowRows),
     [older.rows, windowRows]

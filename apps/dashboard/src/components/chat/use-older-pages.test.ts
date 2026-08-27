@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pageBefore, chunksBottomFirst, OLDER_PAGE, COMMIT_CHUNK } from './use-older-pages';
+import { pageBefore, chunksBottomFirst, shedRows, absorbShed, OLDER_PAGE, COMMIT_CHUNK } from './use-older-pages';
 
 // The seam between a cached page and the rest of history. Getting it wrong does
 // not throw — it shows a turn twice, or drops one, the next time someone reads
@@ -95,4 +95,79 @@ test('a short page still commits whole, no empty chunk', () => {
   assert.equal(chunks.length, 1);
   assert.equal(chunks[0].length, page.length);
   assert.deepEqual(chunks[0].map((r) => r.id), page.map((r) => r.id));
+});
+
+// ── The hole between the live window and the history above it ───────────────
+// The live window slides forward while a turn works; what it sheds is deleted
+// from the query cache. If the reader has paged back, `older.rows` is anchored
+// where the window used to start and the shed rows belong to neither array —
+// the timeline concatenates the two and closes over the missing middle in
+// silence. These pin the two halves of the fix.
+
+const win = (...ids: string[]) =>
+  ids.map((id) => ({ id, createdAt: `2026-08-27T10:00:${id.padStart(2, '0')}.000Z` }));
+
+test('rows the window slid past are reported as shed', () => {
+  const before = win('01', '02', '03', '04');
+  const after = win('03', '04', '05', '06');
+  assert.deepEqual(shedRows(before, after).map((r) => r.id), ['01', '02']);
+});
+
+test('a window that has not moved sheds nothing', () => {
+  const w = win('01', '02', '03');
+  assert.deepEqual(shedRows(w, w), []);
+  // Growing at the tail without dropping anything is not shedding either.
+  assert.deepEqual(shedRows(win('01', '02'), win('01', '02', '03')), []);
+});
+
+// `gone` also reports a row that was genuinely DELETED — an undelivered queue
+// row being dequeued. Those sit inside the window, not off its old end, and
+// must stay deleted rather than be resurrected as history.
+test('a row deleted from inside the window is not shed', () => {
+  const before = win('01', '02', '03', '04');
+  const after = win('02', '04', '05'); // 01 slid off; 03 was deleted mid-window
+  assert.deepEqual(shedRows(before, after).map((r) => r.id), ['01']);
+});
+
+test('shed rows land after the history already on screen', () => {
+  const held = win('01', '02');
+  const out = absorbShed(held, win('03', '04'));
+  assert.deepEqual(out.map((r) => r.id), ['01', '02', '03', '04']);
+});
+
+// The reader is at the tail and has asked for no history: keeping everything
+// the window sheds would grow the page for a conversation nobody is reading
+// back through.
+test('nothing is kept while no history is on screen', () => {
+  const empty: ReturnType<typeof win> = [];
+  assert.equal(absorbShed(empty, win('01', '02')), empty);
+});
+
+test('the same row twice does not appear twice', () => {
+  const held = win('01', '02');
+  const out = absorbShed(held, win('02', '03'));
+  assert.deepEqual(out.map((r) => r.id), ['01', '02', '03']);
+  // Nothing new at all hands the same array back, so React can bail.
+  assert.equal(absorbShed(held, win('01')), held);
+});
+
+test('out-of-order arrivals are still ordered on screen', () => {
+  const held = win('05', '06');
+  // A late absorb carrying rows OLDER than what is held: correctness beats the
+  // fast path, so the whole thing gets ordered.
+  const out = absorbShed(held, win('04', '03'));
+  assert.deepEqual(out.map((r) => r.id), ['03', '04', '05', '06']);
+});
+
+// The two halves together: page back, let the window slide, and the timeline's
+// concatenation must still be one unbroken run.
+test('paging back then letting the window slide leaves no gap', () => {
+  const history = win('01', '02');          // older.rows, fetched by paging back
+  const windowBefore = win('03', '04', '05');
+  const windowAfter = win('05', '06', '07');
+  const healed = absorbShed(history, shedRows(windowBefore, windowAfter));
+  assert.deepEqual(
+    [...healed, ...windowAfter].map((r) => r.id),
+    ['01', '02', '03', '04', '05', '06', '07'],
+  );
 });

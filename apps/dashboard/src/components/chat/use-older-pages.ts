@@ -84,6 +84,82 @@ export function pageBefore<T extends { id: string; createdAt: string | Date }>(
   return older.length >= size ? older.slice(older.length - size) : null;
 }
 
+/** `(createdAt, id)`, the total order the server pages by, as a boolean. */
+function isOlder(
+  a: { id: string; createdAt: string | Date },
+  b: { id: string; createdAt: string | Date }
+): boolean {
+  const at = typeof a.createdAt === 'string' ? a.createdAt : a.createdAt.toISOString();
+  const bt = typeof b.createdAt === 'string' ? b.createdAt : b.createdAt.toISOString();
+  return at !== bt ? at < bt : a.id < b.id;
+}
+
+function byOrder(
+  a: { id: string; createdAt: string | Date },
+  b: { id: string; createdAt: string | Date }
+): number {
+  return isOlder(a, b) ? -1 : isOlder(b, a) ? 1 : 0;
+}
+
+/**
+ * What the live window dropped off its old end between two renders.
+ *
+ * The window is a fixed 60 rows that slides forward as a turn produces
+ * messages, and the rows it sheds are deleted from the query cache — by the
+ * stream's `gone` list, or simply by the fallback poll returning a newer window.
+ * That is right while the reader is at the tail: those rows are history, and
+ * history is refetched from the server when they scroll back to it.
+ *
+ * It is wrong the moment they HAVE scrolled back. `older.rows` is anchored where
+ * the window used to start, the window has since moved on, and everything shed
+ * in between belongs to neither array — the timeline concatenates them and the
+ * gap closes over silently. Measured on a live session: a 162-message,
+ * fifteen-minute hole with the compaction notice inside it, unreachable because
+ * paging only ever walks BACKWARDS from the oldest row on screen.
+ *
+ * So the shed rows are handed to the pager instead of dropped. Exported for its
+ * test: nothing about a missing middle looks wrong on screen.
+ */
+export function shedRows<T extends { id: string; createdAt: string | Date }>(
+  prev: readonly T[],
+  // Deliberately not `readonly T[]`: the live window arrives either as server
+  // rows (Date) or as rows read back from IndexedDB (string), and a single type
+  // parameter would have to pick one of them.
+  next: readonly { id: string; createdAt: string | Date }[]
+): T[] {
+  if (prev.length === 0 || next.length === 0) return [];
+  const edge = next[0];
+  const held = new Set(next.map((r) => r.id));
+  // Older than the new window's first row, so a row DELETED from inside the
+  // window (an undelivered queue row being dequeued — the other thing `gone`
+  // reports) is still dropped rather than resurrected here.
+  return prev.filter((r) => !held.has(r.id) && isOlder(r, edge));
+}
+
+/**
+ * Append shed rows to the history already on screen.
+ *
+ * A no-op while `rows` is empty: the reader is at the tail, has asked for no
+ * history, and holding onto everything the window sheds would grow the page for
+ * a conversation nobody is reading back through.
+ */
+export function absorbShed<T extends { id: string; createdAt: string | Date }>(
+  rows: T[],
+  shed: readonly T[]
+): T[] {
+  if (rows.length === 0 || shed.length === 0) return rows;
+  const have = new Set(rows.map((r) => r.id));
+  const add = shed.filter((r) => !have.has(r.id)).sort(byOrder);
+  if (add.length === 0) return rows;
+  const out = [...rows, ...add];
+  // Shed rows come off the window that sat directly after `rows`, so they are
+  // newer than everything held and the concatenation is already ordered. Sort
+  // the whole thing only when that is not true — a turn rendered out of
+  // sequence is worse than one extra pass.
+  if (isOlder(add[0], rows[rows.length - 1])) out.sort(byOrder);
+  return out;
+}
+
 /**
  * Split a page (oldest→newest) into commit chunks, NEWEST chunk first.
  *
@@ -126,6 +202,11 @@ export type OlderPages = {
   /** True when the most recent page came from IndexedDB (no request). */
   servedFromCache: boolean;
   loadMore: () => void;
+  /**
+   * Take the rows the live window just dropped off its old end, so the two
+   * arrays the timeline concatenates keep meeting. See shedRows.
+   */
+  absorb: (shed: TimelineRow[]) => void;
   reset: () => void;
 };
 
@@ -394,6 +475,10 @@ export function useOlderPages(
     };
   }, [sessionId, utils]);
 
+  const absorb = useCallback((shed: TimelineRow[]) => {
+    setRows((prev) => absorbShed(prev, shed));
+  }, []);
+
   const reset = useCallback(() => {
     setRows([]);
     setSaysMore(null);
@@ -408,6 +493,7 @@ export function useOlderPages(
     loading,
     servedFromCache,
     loadMore,
+    absorb,
     reset,
   };
 }
