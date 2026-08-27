@@ -1673,6 +1673,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // taps to open a tray was enough friction that the sidebar's New chat, which
   // costs opening the drawer and picking the agent again, was winning. Rendered
   // once, in the persistent cluster, so it is the same button at every width.
+  // Placed immediately RIGHT of the tray toggle (sway's call) — the toggle is
+  // hidden above 40rem, so on a wide header it lands after the inline group
+  // instead, and the row reads actions-then-exits either way.
   const newChatButton = (
     <button
       type="button"
@@ -1939,7 +1942,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               <ArchiveRestore className="h-4 w-4" />
             </button>
           )}
-          {newChatButton}
           {/* Secondary actions. Inline while the header (container query — the
               chat COLUMN, which the preview split narrows) is ≥40rem; below
               that they live in the tray, same JSX in a different container. */}
@@ -1974,6 +1976,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           >
             {moreOpen ? <ChevronRight className="h-4 w-4" /> : <MoreHorizontal className="h-4 w-4" />}
           </button>
+          {newChatButton}
           {/* pi and codex sessions run as child processes with no tmux pane —
               the terminal link would attach to a pane that does not exist.
               `session.runtime` is the RESOLVED backend (getSession/listSessions
