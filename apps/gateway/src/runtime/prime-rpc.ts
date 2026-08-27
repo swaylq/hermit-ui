@@ -30,6 +30,7 @@ import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
 import { translatePiEvent } from './pi-events';
+import { globalMemoryPrompt } from './context-files';
 import { singleFlight } from './pi-rpc';
 import {
   providerEnv, visionEnv, machineProviderEnv,
@@ -274,11 +275,17 @@ export class PrimeRpcRuntime implements AgentRuntime {
     // both. See RuntimeSession.hermitTools.
     const hermitTools = session.hermitTools !== false;
     const resume = resumablePiSession(session.id, undefined, { engine: 'prime' });
+    // Prime, like pi, finds the agent's own AGENTS.md/CLAUDE.md by walking CWD's
+    // ancestors — but the machine's global memory lives in ~/.claude/, off that
+    // path, so it must be appended here exactly as pi-rpc does. Before this,
+    // prime was the one pi-family engine with no global memory at all.
+    const globalMemoryArg = globalMemoryPrompt();
 
     const args = [
       ...(hermitTools ? ['--extension', hermitExtensionPath()] : []),
       ...(modelArg ? ['--model', modelArg] : []),
       ...(provider ? ['--provider', provider] : []),
+      ...(globalMemoryArg ? ['--append-system-prompt', globalMemoryArg] : []),
       ...(resume?.file ? ['--resume', resume.file] : []),
       // No update check on every session boot. A gateway spawning children all
       // day should not be probing a release manifest to do it.
