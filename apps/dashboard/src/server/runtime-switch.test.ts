@@ -171,6 +171,26 @@ test('a prime session restarts for a new model and keeps its session id', () => 
   );
 });
 
+// kimi is one subprocess per turn, so a model change costs nothing to apply —
+// but it is the only such harness that also takes a CREDENTIAL, and a resumed
+// kimi session replays its stored reasoning to whatever endpoint is configured
+// now. Reaching here with a moved credential means the backend was re-pointed
+// in Settings under a live session.
+test('a kimi session never restarts, but drops its id when the endpoint moves', () => {
+  const kimi = (model: string, credential: string) => ({
+    backendId: 'kimi-code', runtime: 'kimi-code', runtimeCredentialId: credential,
+    runtimeProvider: 'kimi-coding', runtimeModel: model, runtimeMode: null,
+  });
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, kimi('k3', 'kimi-code'), kimi('k3-256k', 'kimi-code')),
+    { ok: true, restart: false, resetExternalId: false },
+  );
+  assert.deepEqual(
+    planRuntimeSwitch({ state: 'idle' }, kimi('k3', 'kimi-code'), kimi('k3', 'other')),
+    { ok: true, restart: false, resetExternalId: true },
+  );
+});
+
 // ── moving between the two Claude Code drivers ──────────────────────────────
 //
 // 'claude-sdk' and 'claude-tmux' are the same binary writing the same

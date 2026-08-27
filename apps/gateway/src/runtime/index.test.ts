@@ -66,8 +66,14 @@ test('dsh is its own backend and takes no mode', () => {
 test('teardown paths see every engine', () => {
   assert.deepEqual(
     allRuntimes().map((r) => r.kind).sort(),
-    ['claude-sdk', 'codex-exec', 'dsh-exec', 'omp-rpc', 'pi-rpc', 'prime-rpc'],
+    ['claude-sdk', 'codex-exec', 'dsh-exec', 'kimi-code', 'omp-rpc', 'pi-rpc', 'prime-rpc'],
   );
+});
+
+test('kimi is its own backend and takes no mode', () => {
+  assert.equal(runtimeFor('kimi-code', null)?.kind, 'kimi-code');
+  assert.equal(runtimeFor('kimi-code', 'omp')?.kind, 'kimi-code');
+  assert.equal(runtimeFor('kimi-code', null), runtimeFor('kimi-code', null));
 });
 
 test('claude-sdk is its own backend and takes no mode', () => {

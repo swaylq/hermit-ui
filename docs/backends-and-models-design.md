@@ -28,8 +28,8 @@ was a global mode switch buried in one backend's settings page.
 
 Two nouns instead of one.
 
-A **harness** is the framework that runs a turn: `claude-tmux`, `pi-rpc`,
-`prime-rpc`, `codex-exec`, `dsh-exec`. A **credential** is an endpoint plus the
+A **harness** is the framework that runs a turn: `claude-sdk`, `claude-tmux`,
+`pi-rpc`, `prime-rpc`, `codex-exec`, `dsh-exec`, `kimi-code`. A **credential** is an endpoint plus the
 NAME of a secret plus the models it serves. A **backend** — the thing you pick
 when you start a chat — is one of each.
 
@@ -181,7 +181,7 @@ model Machine {
 ```ts
 type BackendInstance = {
   id: string;            // slug, stored on Agent.runtime / ChatSession.runtime
-  harness: 'pi-rpc' | 'prime-rpc' | 'dsh-exec';
+  harness: 'claude-sdk' | 'pi-rpc' | 'prime-rpc' | 'dsh-exec' | 'kimi-code';
   credentialId: string;  // → ModelCredential.id
   label: string;
   model?: string | null; // this backend's default; blank → the credential's

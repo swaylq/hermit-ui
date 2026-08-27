@@ -39,7 +39,7 @@ export type SyncItem = {
 export type RuntimeKind =
   | 'claude-tmux' | 'claude-sdk'
   | 'pi-rpc' | 'omp-rpc' | 'prime-rpc'
-  | 'codex-exec' | 'dsh-exec';
+  | 'codex-exec' | 'dsh-exec' | 'kimi-code';
 
 export type RuntimeSession = {
   id: string;

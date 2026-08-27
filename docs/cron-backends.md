@@ -51,7 +51,7 @@ backend:
   because it surfaces a refusal verbatim, which is the only reason the
   2026-08-15 quota outage was ever diagnosed.
 - **any other AgentRuntime** (`claude-sdk`, `pi-rpc`, `omp-rpc`, `prime-rpc`,
-  `dsh-exec`) → `runtime/cron-turn.ts`: `ensure` → `submit` → wait for idle →
+  `dsh-exec`, `kimi-code`) → `runtime/cron-turn.ts`: `ensure` → `submit` → wait for idle →
   collect → `stop(handle, 'kill')`.
 - **`claude-tmux`, or a harness this gateway does not know** → the pane path,
   with the transcript pinning and drift self-heal that only it needs. An unknown
@@ -155,8 +155,9 @@ the brain tools to do their job.
 would be wrong to call their behaviour pre-existing, because **before this change
 no cron ever ran on pi, omp or prime at all** — they fell through the `else` onto
 the pane. This change is what would first have handed them the key, so it is also
-what withholds it. `dsh-exec` needs no flag (it has no hermit tool surface and
-never receives the key).
+what withholds it. `dsh-exec` and `kimi-code` need no flag (neither has a hermit
+tool surface, so neither ever receives the key — see
+[kimi-code-runtime-design.md](kimi-code-runtime-design.md) on what that costs).
 
 **Still open:** `codex-exec` injects `HERMIT_KEY` unconditionally. That one IS
 pre-existing — codex crons have run since 2026-08-15 — and is not made worse

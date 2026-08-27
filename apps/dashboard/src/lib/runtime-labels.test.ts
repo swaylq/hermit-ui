@@ -17,14 +17,16 @@ test('every harness has a label, a blurb and an install note', () => {
 
 // A harness is composable when it can be POINTED somewhere. claude-sdk can:
 // Claude Code reads ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN from its
-// environment. The pane cannot (it takes both from the machine's
+// environment. kimi-code can too, through KIMI_MODEL_BASE_URL /
+// KIMI_MODEL_API_KEY. The pane cannot (it takes both from the machine's
 // settings.json), and codex authenticates through `codex login` with no
 // endpoint to name at all.
 test('every harness that can be pointed at an endpoint is composable', () => {
-  assert.deepEqual([...CUSTOM_HARNESSES], ['claude-sdk', 'pi-rpc', 'prime-rpc', 'dsh-exec']);
+  assert.deepEqual([...CUSTOM_HARNESSES], ['claude-sdk', 'pi-rpc', 'prime-rpc', 'dsh-exec', 'kimi-code']);
   assert.equal(isCustomHarness('claude-tmux'), false);
   assert.equal(isCustomHarness('codex-exec'), false);
   assert.equal(isCustomHarness('prime-rpc'), true);
+  assert.equal(isCustomHarness('kimi-code'), true);
 });
 
 // It reads straight off a JSON column, so it has to survive a non-string.
@@ -50,6 +52,9 @@ test('detail names the endpoint for the harnesses that have one', () => {
   );
   // …and the built-in has no credential, so no provider, and reads as before.
   assert.equal(runtimeDetail('claude-sdk', null, 'opus'), 'Claude Code (Agent SDK) · opus');
+  // Moonshot's own agent, which the header renders the same way — the mark
+  // says Kimi either way, and this tooltip says which agent is running it.
+  assert.equal(runtimeDetail('kimi-code', 'kimi-coding', 'k3'), 'Kimi Code CLI · kimi-coding · k3');
 });
 
 // ── whose model answers ────────────────────────────────────────────
@@ -102,6 +107,7 @@ test('only the tmux harness has a pane', () => {
   assert.equal(hasTmuxPane('codex-exec'), false);
   assert.equal(hasTmuxPane('dsh-exec'), false);
   assert.equal(hasTmuxPane('omp-rpc'), false);
+  assert.equal(hasTmuxPane('kimi-code'), false);
 });
 
 // Absent/unknown is the tmux path in the gateway (runtimeFor returns null for

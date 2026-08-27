@@ -96,6 +96,26 @@ export function planRuntimeSwitch(
     return { ok: true, restart: false, resetExternalId: false };
   }
 
+  // kimi is the same one-subprocess-per-turn shape, so it never restarts
+  // either — but it is the only one of the three that takes a credential, and
+  // that half needs the claude-sdk treatment rather than codex's.
+  //
+  // Reaching here with a moved credential means the BACKEND was re-pointed in
+  // Settings while this session sat on it (same backend id, different
+  // endpoint). kimi keeps `[thinking] keep = "all"`, so a resumed session
+  // replays its stored reasoning to whatever endpoint is configured now — the
+  // same provider-signed-thinking trap that makes a claude-sdk transcript
+  // unusable across credentials, and it would surface as a failure on every
+  // later message of a session that looked fine when it was switched. Dropping
+  // the id starts a fresh kimi session instead, which is visible and recoverable.
+  if (after.runtime === 'kimi-code') {
+    return {
+      ok: true,
+      restart: false,
+      resetExternalId: (before.runtimeCredentialId ?? null) !== (after.runtimeCredentialId ?? null),
+    };
+  }
+
   // A claude-sdk session applies a model pin live (`setModel`, one control
   // request) and keeps its warm context — but only its MODEL. The endpoint and
   // the key are read from the child's environment once, at spawn, so a

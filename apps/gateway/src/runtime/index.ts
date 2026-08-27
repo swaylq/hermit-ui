@@ -5,6 +5,7 @@ import { PrimeRpcRuntime } from './prime-rpc';
 import { CodexExecRuntime } from './codex-exec';
 import { DshExecRuntime } from './dsh-exec';
 import { ClaudeSdkRuntime } from './claude-sdk';
+import { KimiCodeRuntime } from './kimi-code';
 import { resolveMode } from './pi-modes';
 
 const piRuntime = new PiRpcRuntime();
@@ -13,6 +14,7 @@ const primeRuntime = new PrimeRpcRuntime();
 const codexRuntime = new CodexExecRuntime();
 const dshRuntime = new DshExecRuntime();
 const claudeSdkRuntime = new ClaudeSdkRuntime();
+const kimiRuntime = new KimiCodeRuntime();
 
 /**
  * Pick the backend for a session.
@@ -28,12 +30,12 @@ const claudeSdkRuntime = new ClaudeSdkRuntime();
  * as itself against this machine's own subscription, so there is nothing to
  * compose and nothing to select.
  *
- * 'codex-exec', 'dsh-exec' and 'prime-rpc' take no mode. None has an
- * equivalent of a pi mode: codex and dsh have no spawn recipe to compose, and
- * prime has exactly one built-in tool (`ipython`), so a mode's tool allowlist —
- * written in pi's vocabulary of read/bash/edit/write — would name four tools
- * that do not exist and drop the only one that does. resolveRuntime already
- * nulls it out upstream.
+ * 'codex-exec', 'dsh-exec', 'kimi-code' and 'prime-rpc' take no mode. None has
+ * an equivalent of a pi mode: codex, dsh and kimi have no spawn recipe to
+ * compose, and prime has exactly one built-in tool (`ipython`), so a mode's tool
+ * allowlist — written in pi's vocabulary of read/bash/edit/write — would name
+ * four tools that do not exist and drop the only one that does. resolveRuntime
+ * already nulls it out upstream.
  *
  * There is one *backend* in the pi family and two *engines* under it. Which
  * engine runs is declared by the MODE, not chosen separately: from the user's
@@ -60,6 +62,7 @@ export function runtimeFor(
   if (kind === 'claude-sdk') return claudeSdkRuntime;
   if (kind === 'codex-exec') return codexRuntime;
   if (kind === 'dsh-exec') return dshRuntime;
+  if (kind === 'kimi-code') return kimiRuntime;
   if (kind === 'prime-rpc') return primeRuntime;
   if (kind !== 'pi-rpc') return null;
   return resolveMode(mode)?.engine === 'omp' ? ompRuntime : piRuntime;
@@ -76,7 +79,7 @@ export function runtimeFor(
  * the three sites, and so that adding a third never does either.
  */
 export function allRuntimes(): AgentRuntime[] {
-  return [piRuntime, ompRuntime, primeRuntime, codexRuntime, dshRuntime, claudeSdkRuntime];
+  return [piRuntime, ompRuntime, primeRuntime, codexRuntime, dshRuntime, claudeSdkRuntime, kimiRuntime];
 }
 
 export type {

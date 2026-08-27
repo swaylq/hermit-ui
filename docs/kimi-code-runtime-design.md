@@ -1,0 +1,280 @@
+# kimi-code: Moonshot's own CLI as a fifth composable harness
+
+Status: implemented, 2026-08-27. Follows the codex pattern
+([codex-runtime-design.md](codex-runtime-design.md)) for its shape and the dsh
+pattern ([dsh-runtime-design.md](dsh-runtime-design.md)) for its event
+translation. Measured against `@moonshot-ai/kimi-code` **0.38.0**.
+
+## What Kimi Code is, and why it is a harness rather than a model
+
+The fleet already runs Kimi's K3 — through `claude-sdk` pointed at
+`api.kimi.com/coding` ([arch note](https://github.com/swaylq/hermit-ui), fleet
+memory `arch_claude_sdk_composable_kimi_k3`). That gives you Kimi's *model*
+inside Anthropic's *agent*: Claude Code's tools, Claude Code's skills, Claude
+Code's system prompt.
+
+`kimi` is the other half — Moonshot's own agent. Its own tool set, its own
+sub-agents (`coder`, `explore`, `plan`), its own skills and hooks and MCP
+config, its own compaction policy, and a prompt written for the model it ships
+with. Running K3 under it is a materially different thing from running K3 under
+Claude Code, in the same way codex is a different thing from the pane.
+
+So it is a harness: `RUNTIME_KINDS` gains `kimi-code`, and because the CLI can
+be pointed at an endpoint it also joins `CUSTOM_HARNESSES` — one credential from
+Settings → Models drives it and `claude-sdk` alike.
+
+Source: [github.com/MoonshotAI/kimi-code](https://github.com/MoonshotAI/kimi-code)
+(MIT). Docs: [moonshotai.github.io/kimi-code](https://moonshotai.github.io/kimi-code/en/).
+
+## Shape: one process per turn, resumed by session id
+
+Exactly codex's and dsh's shape. Each turn spawns
+
+```
+kimi [-r <sessionId>] --output-format stream-json -p <text>
+```
+
+with `cwd` set to the agent's directory — there is **no `--cwd` flag**, the CLI
+reads `process.cwd()`. The child runs to completion and exits; the conversation
+lives in kimi's own store, and the session id rides the DB's `claudeSessionId`
+column, which is what `RuntimeSession.externalSessionId` is for.
+
+Consequences, all the same as codex's: hibernate and restart are nearly free
+(no process to drain), a gateway restart is survivable with no pointer file, and
+a model change needs no teardown — the next child is simply born with a
+different one.
+
+**The agent's `AGENTS.md` is read from that cwd** — verified, not assumed. That
+is the whole reason spawning with `cwd` set is enough: without it every hermit
+agent would run here as a stranger, with the same tools and no identity. Note it
+is `AGENTS.md`, not `CLAUDE.md`; on this fleet an agent's behavioural rules live
+in the former and the latter is the Claude-specific bootstrap, so the split
+happens to land right.
+
+## Auth: the one path that writes nothing to disk
+
+This is the part worth reading before changing anything here.
+
+**The CLI does not read `KIMI_API_KEY` from the shell.** Its docs say so three
+times. Credentials normally live in `~/.kimi-code/config.toml`, as either a
+plaintext `api_key` or an OAuth token from the device-code login — and
+`AuthSummaryService.ensureReady` refuses to start a run when neither is there,
+*before* any adapter is constructed, so the fallback that does read
+`process.env` never gets reached. Measured: a config declaring the provider with
+no key fails with `provider kimi-code has no credential configured`.
+
+Writing the fleet's key into a config file is what every other backend here
+avoids, so this backend is built on the one documented exception:
+
+| variable | effect |
+|---|---|
+| `KIMI_MODEL_NAME` | master switch; becomes the model id, and pins `defaultModel` |
+| `KIMI_MODEL_API_KEY` | the credential — the only shell-read key that survives the auth gate |
+| `KIMI_MODEL_PROVIDER_TYPE` | `anthropic` / `openai` / `openai_responses` |
+| `KIMI_MODEL_BASE_URL` | the endpoint |
+| `KIMI_MODEL_MAX_CONTEXT_SIZE` | window; **default is 262144 for every env model** |
+| `KIMI_MODEL_MAX_OUTPUT_SIZE` | read on the anthropic protocol only |
+| `KIMI_MODEL_THINKING_EFFORT` | `low`…`max` |
+
+Together these synthesise an in-memory provider `__kimi_env__` and alias
+`__kimi_env_model__`. The overlay is applied to the *effective* config only and
+stripped from every write path. Verified with a fresh empty `KIMI_CODE_HOME`:
+the run answers, and **no `config.toml` is created at all** — asserted by
+`kimi-code.itest.ts`.
+
+Three traps this mechanism sets:
+
+1. **Do not pass `--model`.** The overlay already pinned `defaultModel`, and
+   `-m` is an exact-key lookup against the `[models]` table — which is empty
+   here, so any value fails with `Model "k3" is not configured in config.toml`.
+   The model is `KIMI_MODEL_NAME`. Pinned by a test.
+2. **`KIMI_MODEL_MAX_CONTEXT_SIZE` is not optional.** Left unset, every
+   env-configured model is assumed to be 262144 — so a k3 session would compact
+   at a quarter of its real 1M window, silently. It comes from the credential's
+   `modelLimits`, falling back to the shared family table.
+3. **A blank `base_url` is not harmless.** Settings → Models allows one (for dsh
+   it means "the harness supplies its own catalog"); here the CLI would fall
+   back to the provider definition's default, which for the anthropic protocol
+   is `api.anthropic.com` — i.e. a blank field would post a Moonshot key to
+   Anthropic. `kimiSpawnEnv` refuses instead, and `submit` says which field is
+   missing.
+
+`CONFLICTING_KIMI_VARS` are deleted from the child's env for the mirror-image
+reason: with no `KIMI_MODEL_BASE_URL`, the CLI resolves the endpoint through the
+provider definition's env names, so a stray `ANTHROPIC_BASE_URL` inherited from
+the gateway would redirect a Kimi session somewhere else with nothing on screen
+to say so.
+
+### Why never `type = "kimi"`
+
+kimi's own provider type speaks OpenAI chat-completions and appends
+`/chat/completions` to the base URL, so the fleet's stored
+`https://api.kimi.com/coding` **404s** under it while the same URL answers under
+`anthropic` (both measured). Mapping from the credential's `api` field instead
+is what keeps ONE credential serving `claude-sdk` and this backend identically,
+which is the whole point of Settings → Models.
+
+## Permissions
+
+`-p` cannot be combined with `--yolo`, `--auto` or `--plan` — the CLI rejects
+the combination at startup. It does not need them: print mode installs an
+approval handler that returns `approved` and a question handler that returns
+null, so **a headless run can never block on a prompt**. Static
+`[[permission.rules]]` deny rules would still apply; there is no config.toml
+here, so there are none.
+
+That is a real difference from the claude path, where
+`--dangerously-skip-permissions` is a flag someone could forget. Here it is the
+mode's definition.
+
+## The wire: five line kinds, and one that carries the id
+
+`--output-format stream-json` writes one JSON object per line to **stdout**, in
+an OpenAI-chat-message shape:
+
+```jsonc
+{"role":"meta","type":"system.version","version":"0.38.0"}
+{"role":"assistant","content":"…","tool_calls":[{"type":"function","id":"tool_…","function":{"name":"Bash","arguments":"{\"command\":\"…\"}"}}]}
+{"role":"tool","tool_call_id":"tool_…","content":"…"}
+{"role":"meta","type":"turn.step.retrying","failed_attempt":1,…,"status_code":429}
+{"role":"meta","type":"session.resume_hint","session_id":"session_…","command":"kimi -r session_…"}
+```
+
+Five facts about it, each of which cost a measurement:
+
+- **stderr is not an error channel.** The agent's own tool output goes there
+  (`echo HELLO` prints `HELLO` on stderr while stdout stays pure JSONL), along
+  with "resuming session" notices. Merging the two would corrupt the stream;
+  treating a busy stderr as a failure would flag every turn that ran Bash.
+- **One assistant line can be two rows.** `content` and `tool_calls` are each
+  omitted when empty and both appear together when the model wrote text *and*
+  called a tool in one step. Reading it as one row drops whichever half is read
+  second.
+- **`function.arguments` is a JSON-encoded string**, not an object.
+- **Thinking never appears.** `writeThinkingDelta` is a no-op in JSON mode, so
+  there is no `thinking` block to translate and none is invented.
+- **The resume hint arrives LAST** — the opposite of dsh's `hello`. A brand-new
+  session therefore has no id at the moment its first rows are emitted, which is
+  why `externalId`s are scoped by a per-turn tag rather than by the session id.
+  kimi's tool-call ids are globally unique, so they double as `tool_use` ids and
+  no cross-turn call map is needed.
+
+`turn.step.retrying` is the one meta line that reaches the chat. It is the
+difference between a session that looks hung and one that is waiting out a 429 —
+the most common thing a Kimi subscription does under load.
+
+## Usage: read back out of kimi's own log
+
+The stream-json protocol carries **no usage at all**. The numbers exist one
+level down, in the session log the CLI keeps for its own replay:
+
+```
+$KIMI_CODE_HOME/
+  session_index.jsonl                       # sessionId → sessionDir → workDir
+  sessions/wd_<slug>_<sha256[:12]>/<sessionId>/
+    state.json
+    agents/main/wire.jsonl                  # the events
+```
+
+Two event types matter:
+
+```jsonc
+{"type":"usage.record","usage":{"inputOther":4090,"output":34,"inputCacheRead":16896,"inputCacheCreation":0}}
+{"type":"token_counting.measured","length":3,"tokens":21020}
+```
+
+The counters are **disjoint**, exactly like dsh's, so billed input is the sum of
+the three. `token_counting.measured` is live window occupancy — the context
+bar's basis; a cumulative sum there would render as a bar that only ever fills
+up.
+
+Two implementation notes:
+
+- The log is located through `session_index.jsonl`, never by rebuilding the
+  directory name. That name embeds a sha256 the CLI computes, and reproducing it
+  is the kind of coupling that breaks silently the day they change the slug rule.
+- `scanWire` reads from a remembered byte offset, so the after-every-turn
+  refresh costs only the bytes that turn appended. A truncated file (a session
+  reset) resets the offset rather than reading on from the middle of a line.
+
+`storedUsage` reads the whole log, for a session with no live handle — the
+repair path after a gateway restart, not the hot one.
+
+## What is deliberately not wired
+
+- **The hermit tool surface.** kimi has MCP (`~/.kimi-code/mcp.json` plus a
+  project-local one) and hooks, so `set_session_title` / `attach_image` / `ask`
+  could be given to it. That is a separate piece of work: the stub the other
+  backends use is written against claude's MCP config shape, and `hermitTools`
+  is honoured by nobody here yet. A kimi session today has its own tools and no
+  hermit ones.
+- **`compact`.** kimi compacts itself (`[loop_control] reserved_context_size`),
+  and its `/compact` is a TUI command — a slash command in `-p` is sent to the
+  model as literal text. The handler says so rather than no-op'ing, because a
+  silent no-op is indistinguishable from a wedged session.
+- **The context-bar denominator.** `contextWindowFor` still returns
+  `DEFAULT_CONTEXT_WINDOW` (1M) for anything that is not codex. That is right for
+  `k3` and wrong for `k3-256k`, which will read as a quarter-full bar. Fixing it
+  means teaching the dashboard about credential `modelLimits`, which is bigger
+  than this change and affects pi and dsh too.
+- **`kimi acp` and `kimi web`.** Both are real, official, and better surfaces for
+  token-level streaming and bidirectional control than screen-scraping `-p`. If
+  this backend ever needs partial-message streaming — `-p` only flushes at step
+  boundaries — ACP is where to go, not a finer parse of this protocol.
+
+## Prompts travel on argv, mostly
+
+The CLI takes its prompt as a flag argument and **reads nothing from stdin**, so
+argv is the only channel. Argv is size-limited (ARG_MAX is 1 MiB on macOS, and
+the environment shares that budget) and visible in `ps` to the user running the
+gateway. A pasted document is an ordinary chat message here, so anything over
+96 KiB is written to a 0600 temp file and the model is pointed at it instead.
+
+## Where it looks for the binary
+
+`HERMIT_KIMI_BIN`, then `PATH`, then `~/.local/bin/kimi` (where the official
+installer puts a self-contained binary), `/opt/homebrew/bin/kimi` and
+`/usr/local/bin/kimi` (npm prefixes). The fallbacks exist because a gateway
+started by launchd has none of those on its PATH — the single most-repeated
+failure on this fleet.
+
+An absent `kimi` is reported into the chat with the install command, not spawned
+and surfaced as a bare ENOENT.
+
+## Switching a live session
+
+`planRuntimeSwitch` gives `kimi-code` its own branch: never a restart (there is
+no long-lived child), but `resetExternalId` when the credential moved under the
+same backend. kimi keeps `[thinking] keep = "all"`, so a resumed session replays
+its stored reasoning to whatever endpoint is configured now — the same
+provider-signed-thinking trap that makes a claude-sdk transcript unusable across
+credentials, and it would surface as a failure on every later message of a
+session that looked fine when it was switched.
+
+## Verification
+
+`kimi-code.test.ts` covers the pure parts (argv, env mapping, binary
+resolution, log scanning) and `kimi-code-events.test.ts` the protocol, against
+lines captured verbatim from a real run.
+
+`kimi-code.itest.ts` is the one that matters — real CLI, real endpoint, no
+mocks, run with `npm run test:integration`. It asserts what a unit test cannot
+see: a turn answers, the session id is stamped back, no `config.toml` is ever
+written, the agent's `AGENTS.md` reaches the model, the next turn resumes the
+same conversation, tool calls arrive paired, a prompt too large for argv still
+arrives, a turn that dies after its first line still reports, a foreign session
+id starts fresh instead of failing forever, and the token counters come back out
+of the log both live and stored. It SKIPS (not fails) when kimi, the credential
+or the secret is absent, so a laptop without a Kimi subscription does not have a
+red suite.
+
+### The bug this nearly shipped with
+
+The exit handler first asked "did the child produce any output?" before
+reporting a failure. That reads as reasonable and is silently wrong: the CLI
+writes its `system.version` line before doing anything else, so **every** run has
+produced output by the time it fails, and a turn that died at the auth gate
+would have reached the user as an empty reply — the exact silent-degradation
+shape this codebase exists to avoid. `turnFailed()` keys on the exit code
+instead, with `/goal`'s 3-and-6 as the one documented exception, and the itest
+drives a stand-in binary that reproduces the real failure shape byte for byte.

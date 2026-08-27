@@ -1,0 +1,749 @@
+// kimi-code backend: Moonshot's Kimi Code CLI driven one subprocess per turn.
+//
+// Codex's and dsh's shape, not pi's: there is no long-lived child. Each turn
+// spawns `kimi -p <text> --output-format stream-json`, which runs to completion
+// and exits. The conversation lives in kimi's own store
+// (`$KIMI_CODE_HOME/sessions/<workDirKey>/<sessionId>/agents/main/wire.jsonl`),
+// so "the session" here is a kimi session id plus what we remember about the
+// last turn — and the id rides the DB's `claudeSessionId` column, which is
+// exactly what RuntimeSession.externalSessionId is for.
+//
+// ── auth, and why nothing lands on disk ─────────────────────────────────────
+//
+// The CLI does NOT read `KIMI_API_KEY` from the shell; its own docs say so
+// three times. Credentials normally live in `~/.kimi-code/config.toml`, either
+// as a plaintext `api_key` or as an OAuth token the device-code login writes —
+// and writing the fleet's key into a config file is exactly what every other
+// backend here avoids.
+//
+// There is one documented exception and this backend is built on it. Setting
+// `KIMI_MODEL_NAME` + `KIMI_MODEL_API_KEY` synthesises an in-memory provider
+// (`__kimi_env__`) and model alias (`__kimi_env_model__`), sets `defaultModel`
+// to that alias, and writes NOTHING back: the overlay is applied to the
+// effective config only, and stripped from every write path. Measured against
+// 0.38.0 with a fresh empty KIMI_CODE_HOME — the run answers and no
+// `config.toml` is created at all.
+//
+// Two consequences of that mechanism, both load-bearing:
+//   · Do NOT pass `--model`. The env overlay already pinned `defaultModel`, and
+//     `-m` takes an exact key from the `[models]` table — which is empty here,
+//     so any `-m` value fails with `Model "…" is not configured in config.toml`.
+//     The model is chosen by KIMI_MODEL_NAME instead.
+//   · A model change between turns needs no restart: the next child is spawned
+//     with a different KIMI_MODEL_NAME and resumes the same session id.
+//
+// ── permissions ─────────────────────────────────────────────────────────────
+//
+// `-p` cannot be combined with `--yolo`, `--auto` or `--plan`; the CLI rejects
+// the combination at startup. It does not need them: print mode installs an
+// approval handler that returns `approved` and a question handler that returns
+// null, so a headless run can never block on a prompt. Static `[[permission]]`
+// deny rules in a config.toml still apply — there is no config.toml here, so
+// there are none.
+//
+// See docs/kimi-code-runtime-design.md.
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import type {
+  AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
+} from './types';
+import { KimiEventTranslator, parseKimiLine, resumeHintId } from './kimi-code-events';
+import { readSecret } from './pi-credentials';
+import { getCredential, credentialDefaultModel, type ModelCredential } from '../pi-config';
+import { modelLimitsFor } from '../pi-model-limits';
+
+/** Cumulative token counters, on the same basis as codex's and dsh's. */
+export type KimiTotals = {
+  /** Billed input across the session: uncached + cache reads + cache creation. */
+  input: number;
+  output: number;
+  /** Live window occupancy — the latest `token_counting.measured`. */
+  contextTokens: number | null;
+  /** The latest model call's output, same basis as contextTokens. */
+  lastOutput: number | null;
+};
+
+type KimiHandle = RuntimeHandle & {
+  /** The kimi session id as the DB knows it; learned from the resume hint. */
+  stampedSessionId: string | null;
+  emit: (item: SyncItem) => void;
+  /**
+   * Where and what to spawn — refreshed on every ensure(), which chat-runner
+   * calls just before each submit, so a model pin changed from the dashboard
+   * lands on the very next turn with nothing to rebuild.
+   */
+  agentDirectory: string;
+  modelPin: string | null;
+  credentialId: string | null;
+  /** Set for the duration of a turn; the message queue's gate. */
+  working: boolean;
+  /** The in-flight turn's child. Null between turns. */
+  child: ChildProcess | null;
+  /** True once interrupt() fired for the current turn. */
+  interrupted: boolean;
+  totals: KimiTotals | null;
+  /** Bytes of wire.jsonl already accounted for — see readTurnUsage(). */
+  wireOffset: number;
+};
+
+const live = new Map<string, KimiHandle>();
+
+function handleOf(h: RuntimeHandle): KimiHandle | null {
+  return live.get(h.sessionId) ?? null;
+}
+
+function systemItem(sessionId: string, externalId: string, text: string): SyncItem {
+  return { sessionId, role: 'system', content: [{ type: 'text', text }], externalId, claudeSessionId: null };
+}
+
+/** kimi's own id shape, `session_<uuid>` — see ensure() on why this is checked. */
+const KIMI_SESSION_ID = /^session_[0-9a-f]{8}-[0-9a-f-]{20,}$/i;
+
+/**
+ * A turn that produces no output for this long is wedged.
+ *
+ * The model call inside kimi has its own retry machinery (it reports each
+ * attempt as `turn.step.retrying`), so silence this long means the process is
+ * stuck rather than thinking. Same value and same reasoning as dsh's.
+ */
+const TURN_SILENCE_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
+ * Above this, the prompt travels by file instead of on argv.
+ *
+ * The CLI takes its prompt as a FLAG argument and reads nothing from stdin, so
+ * argv is the only channel — and argv is both size-limited (ARG_MAX is 1 MiB on
+ * macOS, and the environment shares that budget) and visible in `ps` to the
+ * user running the gateway. A pasted document is an ordinary chat message here,
+ * so anything large is written to a 0600 temp file and the model is pointed at
+ * it. Well under ARG_MAX so the env has room.
+ */
+const ARGV_PROMPT_LIMIT = 96 * 1024;
+
+// ── configuration ───────────────────────────────────────────────────────────
+
+/**
+ * Where kimi keeps its sessions. `KIMI_CODE_HOME` relocates the whole tree.
+ *
+ * Shared with the human's own `kimi` runs by default, exactly as codex shares
+ * `~/.codex` — one machine, one store, one `kimi -r <id>` that works from a
+ * terminal too. `HERMIT_KIMI_HOME` splits them for a machine that wants that.
+ */
+export function kimiHome(env: NodeJS.ProcessEnv = process.env): string {
+  return env.HERMIT_KIMI_HOME?.trim()
+    || env.KIMI_CODE_HOME?.trim()
+    || path.join(os.homedir(), '.kimi-code');
+}
+
+/**
+ * The `kimi` binary.
+ *
+ * PATH is searched rather than assumed: the official installer
+ * (`code.kimi.com/kimi-code/install.sh`) drops a self-contained binary in
+ * `~/.local/bin`, while `npm i -g` puts a shim wherever that npm prefix is —
+ * `/opt/homebrew/bin` on this fleet. A gateway started by launchd has neither
+ * on its PATH, so the well-known locations are checked too.
+ */
+export function kimiFallbackPaths(home: string = os.homedir()): string[] {
+  return [path.join(home, '.local', 'bin', 'kimi'), '/opt/homebrew/bin/kimi', '/usr/local/bin/kimi'];
+}
+
+export function resolveKimiCommand(
+  env: NodeJS.ProcessEnv = process.env,
+  // A parameter so a test can ask what an unequipped machine answers; the
+  // production callers never pass it.
+  fallbacks: string[] = kimiFallbackPaths(),
+): string | null {
+  const override = env.HERMIT_KIMI_BIN?.trim();
+  if (override) return override;
+
+  const candidates = [
+    ...(env.PATH ?? '').split(path.delimiter).filter(Boolean).map((d) => path.join(d, 'kimi')),
+    ...fallbacks,
+  ];
+  for (const candidate of candidates) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // next
+    }
+  }
+  return null;
+}
+
+/**
+ * The credential's wire protocol, in kimi's vocabulary.
+ *
+ * kimi's own `type: "kimi"` is deliberately NOT produced. It speaks OpenAI
+ * chat-completions and appends `/chat/completions` to the base URL, so the
+ * fleet's stored `https://api.kimi.com/coding` 404s under it (measured) while
+ * the same URL answers under `anthropic`. Mapping from the credential's `api`
+ * instead keeps ONE credential serving claude-sdk and this backend identically
+ * — which is the whole point of Settings → Models.
+ */
+export function kimiProviderType(api: string | null | undefined): string {
+  switch ((api ?? '').trim() || 'anthropic-messages') {
+    case 'openai-completions': return 'openai';
+    case 'openai-responses': return 'openai_responses';
+    default: return 'anthropic';
+  }
+}
+
+/**
+ * Variables that must NOT survive into the child.
+ *
+ * With no `KIMI_MODEL_BASE_URL` set, the CLI resolves the endpoint through the
+ * provider definition's env names — so a stray `ANTHROPIC_BASE_URL` in the
+ * gateway's own environment would silently redirect a Kimi session somewhere
+ * else. The keys are deleted for the same reason claude-credentials deletes
+ * ANTHROPIC_API_KEY: two spellings of one slot is an ambiguity nobody can see.
+ */
+export const CONFLICTING_KIMI_VARS = [
+  'KIMI_API_KEY', 'KIMI_BASE_URL',
+  'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL',
+  'OPENAI_API_KEY', 'OPENAI_BASE_URL',
+] as const;
+
+/**
+ * The env that points one kimi child at one credential and one model.
+ *
+ * Pure, so the mapping is testable without a secret store or a database.
+ * Returns `{}` when there is nothing usable to point at — the caller reports
+ * that rather than spawning a child that fails at its own auth gate.
+ *
+ * A base URL is REQUIRED, unlike for dsh, where a blank one legitimately means
+ * "the harness supplies its own catalog". Blank here does not mean nothing: the
+ * CLI would resolve the endpoint from the provider definition's default, which
+ * for the anthropic protocol is api.anthropic.com — i.e. a blank field would
+ * quietly post a Moonshot key to Anthropic.
+ */
+export function kimiSpawnEnv(
+  credential: ModelCredential | null | undefined,
+  apiKey: string | null,
+  model: string | null | undefined,
+): Record<string, string> {
+  const id = model?.trim() || credentialDefaultModel(credential) || '';
+  const baseUrl = credential?.baseUrl?.trim() || '';
+  if (!apiKey || !id || !baseUrl) return {};
+
+  const env: Record<string, string> = {
+    KIMI_MODEL_BASE_URL: baseUrl,
+    KIMI_MODEL_NAME: id,
+    KIMI_MODEL_API_KEY: apiKey,
+    KIMI_MODEL_PROVIDER_TYPE: kimiProviderType(credential?.api),
+    // Reason as hard as the model allows, matching what the claude-sdk backend
+    // asks of the same endpoint. K3 cannot turn thinking off, so the only
+    // question is how much of it we ask for.
+    KIMI_MODEL_THINKING_EFFORT: 'max',
+    // Telemetry is on by default and this session is not the human's.
+    KIMI_DISABLE_TELEMETRY: '1',
+  };
+
+  // Without this the CLI assumes 262144 for every env-configured model, and a
+  // k3 session would compact at a quarter of its real window. The credential's
+  // own modelLimits win; the shared family table is the fallback.
+  const limits = modelLimitsFor(id, credential?.modelLimits);
+  if (limits.contextWindow) env.KIMI_MODEL_MAX_CONTEXT_SIZE = String(limits.contextWindow);
+  // maxOutputSize is read on the anthropic protocol only; setting it elsewhere
+  // is ignored, which is worse than not setting it because it reads as applied.
+  if (limits.maxTokens && env.KIMI_MODEL_PROVIDER_TYPE === 'anthropic') {
+    env.KIMI_MODEL_MAX_OUTPUT_SIZE = String(limits.maxTokens);
+  }
+
+  return env;
+}
+
+/**
+ * Did this turn FAIL, given how the child exited?
+ *
+ * The exit code is the only honest signal. An earlier version of this asked
+ * "did we see any output" instead, and that was silently wrong in the one case
+ * that matters: the CLI writes `{"role":"meta","type":"system.version"}` before
+ * it does anything else, so a run that then dies on `provider … has no
+ * credential configured` HAS produced output — and the failure would have
+ * reached the user as an empty reply. Measured, not theorised.
+ *
+ * `/goal` is the one non-zero exit that is not a failure: goal mode reports its
+ * terminal state through the code (3 = blocked, 6 = paused, 0 = complete), and
+ * a user can type `/goal …` into an ordinary chat.
+ */
+export function turnFailed(code: number | null, interrupted: boolean, goalTurn: boolean): boolean {
+  if (interrupted) return false;
+  if (code === 0 || code === null) return false;
+  return !(goalTurn && (code === 3 || code === 6));
+}
+
+/** Does this prompt put the CLI into goal mode? Mirrors its own GOAL_PREFIX. */
+export function isGoalPrompt(text: string): boolean {
+  return /^\s*\/goal(\s|$)/.test(text);
+}
+
+/**
+ * The argv for one turn. `--model` is deliberately absent — see the header.
+ *
+ * `addDirs` widens the workspace. Only the oversized-prompt path uses it, and
+ * it has to: the agent's tools are scoped to its workspace, so a prompt parked
+ * in a temp file would be refused by the Read that was told to fetch it.
+ */
+export function kimiArgs(prompt: string, resumeId: string | null, addDirs: string[] = []): string[] {
+  return [
+    ...(resumeId ? ['-r', resumeId] : []),
+    ...addDirs.flatMap((d) => ['--add-dir', d]),
+    '--output-format', 'stream-json',
+    '-p', prompt,
+  ];
+}
+
+// ── usage, read back out of kimi's own session log ──────────────────────────
+
+/**
+ * Where a session's event log lives.
+ *
+ * Found through `session_index.jsonl` rather than by rebuilding the directory
+ * name: that name is `wd_<slug>_<first 12 of sha256 of the work dir>`, and
+ * reproducing a hash the CLI computes is the kind of coupling that breaks
+ * silently on the day they change the slug rule. The index is one line per
+ * session and the CLI maintains it.
+ */
+export function wireFileFor(home: string, sessionId: string): string | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(home, 'session_index.jsonl'), 'utf8');
+  } catch {
+    return null;
+  }
+  // Last match wins: a forked or re-created id appends rather than rewrites.
+  let dir: string | null = null;
+  for (const line of raw.split('\n')) {
+    if (!line.includes(sessionId)) continue;
+    try {
+      const row = JSON.parse(line) as { sessionId?: string; sessionDir?: string };
+      if (row.sessionId === sessionId && row.sessionDir) dir = row.sessionDir;
+    } catch {
+      // a truncated tail line; the next full one wins
+    }
+  }
+  return dir ? path.join(dir, 'agents', 'main', 'wire.jsonl') : null;
+}
+
+/**
+ * Token counters from a slice of one session's wire log.
+ *
+ * The stream-json protocol carries NO usage at all — it is messages only. The
+ * numbers exist one level down, in the session log the CLI writes for its own
+ * replay: `usage.record` per model call (disjoint counters, like dsh's) and
+ * `token_counting.measured` for live window occupancy.
+ *
+ * Reading from `fromOffset` rather than from the top is what keeps this cheap
+ * enough to run after every turn: a long session's log is megabytes, and only
+ * the bytes this turn appended are new.
+ */
+export function scanWire(
+  file: string,
+  fromOffset: number,
+  base: KimiTotals | null,
+): { totals: KimiTotals; offset: number } | null {
+  let fd: number;
+  let size: number;
+  try {
+    size = fs.statSync(file).size;
+    // Truncated or replaced under us (a session reset): start over rather than
+    // read from a stale offset into the middle of a line.
+    const start = fromOffset > size ? 0 : fromOffset;
+    if (start === size) return base ? { totals: base, offset: size } : null;
+    fd = fs.openSync(file, 'r');
+    try {
+      const buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      return { totals: accumulate(buf.toString('utf8'), start === 0 ? null : base), offset: size };
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+function accumulate(text: string, base: KimiTotals | null): KimiTotals {
+  const totals: KimiTotals = {
+    input: base?.input ?? 0,
+    output: base?.output ?? 0,
+    contextTokens: base?.contextTokens ?? null,
+    lastOutput: base?.lastOutput ?? null,
+  };
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('{')) continue;
+    let row: { type?: string; usage?: Record<string, number>; tokens?: number };
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue; // a half-written tail line; the next scan picks it up whole
+    }
+    if (row.type === 'usage.record' && row.usage) {
+      const u = row.usage;
+      // Disjoint counters, exactly like dsh's: billed input is the sum.
+      totals.input += (u.inputOther ?? 0) + (u.inputCacheRead ?? 0) + (u.inputCacheCreation ?? 0);
+      totals.output += u.output ?? 0;
+      totals.lastOutput = u.output ?? totals.lastOutput;
+    } else if (row.type === 'token_counting.measured' && typeof row.tokens === 'number') {
+      totals.contextTokens = row.tokens;
+    }
+  }
+  return totals;
+}
+
+/** Secrets, cached briefly per name — this sits on the message-delivery path. */
+const secretCache = new Map<string, { at: number; value: string | null }>();
+async function cachedSecret(name: string): Promise<string | null> {
+  const hit = secretCache.get(name);
+  if (hit && Date.now() - hit.at < 60_000) return hit.value;
+  const value = await readSecret(name);
+  secretCache.set(name, { at: Date.now(), value });
+  return value;
+}
+
+/** Test seam. */
+export function resetKimiSecretCache(): void {
+  secretCache.clear();
+}
+
+// ── the runtime ─────────────────────────────────────────────────────────────
+
+export class KimiCodeRuntime implements AgentRuntime {
+  readonly kind = 'kimi-code' as const;
+
+  async ensure(session: RuntimeSession, emit: (item: SyncItem) => void): Promise<RuntimeHandle> {
+    const existing = live.get(session.id);
+    if (existing) {
+      // The spawn env is derived from the handle per turn, so a change here is
+      // live on the next submit — there is nothing to rebuild.
+      existing.emit = emit;
+      existing.agentDirectory = session.agentDirectory;
+      existing.modelPin = session.model?.trim() || null;
+      existing.credentialId = session.credentialId ?? null;
+      return existing;
+    }
+
+    // `externalSessionId` (the DB's `claudeSessionId`) is ONE slot shared by
+    // every backend. The switch path clears it on a real backend change, but a
+    // row that dodged that — a crash between writes, a hand-edited DB — would
+    // hand kimi a claude uuid or a codex thread id. kimi ids are
+    // self-describing (`session_<uuid>`), so anything else starts fresh
+    // instead of failing identically on every retry.
+    const recorded = session.externalSessionId?.trim() || null;
+    const kimiId = recorded && KIMI_SESSION_ID.test(recorded) ? recorded : null;
+    if (recorded && !kimiId) {
+      console.warn(
+        `[kimi] session=${session.id.slice(0, 8)}: recorded id ${recorded.slice(0, 12)}… is not a kimi session — starting fresh`,
+      );
+    }
+
+    const handle: KimiHandle = {
+      sessionId: session.id,
+      externalSessionId: kimiId ?? '',
+      stampedSessionId: kimiId,
+      emit,
+      agentDirectory: session.agentDirectory,
+      modelPin: session.model?.trim() || null,
+      credentialId: session.credentialId ?? null,
+      working: false,
+      child: null,
+      interrupted: false,
+      totals: null,
+      // A resumed session's log already holds every earlier turn. Reading it
+      // from 0 on the first turn back is what makes the session total survive
+      // a gateway restart, so the offset starts at 0 rather than at its size.
+      wireOffset: 0,
+    };
+    live.set(session.id, handle);
+    return handle;
+  }
+
+  async submit(handle: RuntimeHandle, text: string, images: RuntimeImage[]): Promise<boolean> {
+    void images; // chat-runner folds images into `text` for child backends
+    const h = handleOf(handle);
+    if (!h) return false;
+    if (h.working) return false; // a racing tick must not double-submit
+
+    const bin = resolveKimiCommand();
+    if (!bin) {
+      h.emit(systemItem(
+        h.sessionId,
+        `kimi:missing:${Date.now().toString(36)}`,
+        '[the Kimi Code CLI is not installed on this machine]\n'
+        + 'Install it with `curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash`'
+        + ' or `npm i -g @moonshot-ai/kimi-code`, or point HERMIT_KIMI_BIN at it.',
+      ));
+      return false;
+    }
+
+    const credential = await getCredential(h.credentialId);
+    const secretKey = credential?.secretKey?.trim();
+    const apiKey = secretKey ? await cachedSecret(secretKey) : null;
+    const env = kimiSpawnEnv(credential, apiKey, h.modelPin);
+    if (Object.keys(env).length === 0) {
+      // Named precisely, because the three causes need three different fixes
+      // and "kimi could not start" would send the reader to the wrong one.
+      const why = !credential
+        ? 'this machine has no credential in Settings → Models'
+        : !secretKey
+          ? `the credential "${credential.label}" names no secret`
+          : !apiKey
+            ? `the secret ${secretKey} is not in this machine's store`
+            : !credential.baseUrl?.trim()
+              ? `the credential "${credential.label}" names no endpoint`
+              : 'the credential names no model, and the session pins none';
+      h.emit(systemItem(
+        h.sessionId,
+        `kimi:unconfigured:${Date.now().toString(36)}`,
+        `[kimi has no endpoint to run against — ${why}]`,
+      ));
+      return false;
+    }
+
+    return this.spawnTurn(h, bin, env, text);
+  }
+
+  private spawnTurn(
+    h: KimiHandle,
+    bin: string,
+    credentialEnv: Record<string, string>,
+    text: string,
+  ): boolean {
+    const turnTag = randomUUID().slice(0, 8);
+
+    // Large prompts travel by file; see ARGV_PROMPT_LIMIT. Its own directory,
+    // so the --add-dir that lets the agent read it widens the workspace by one
+    // file rather than by the whole of /tmp.
+    let promptDir: string | null = null;
+    let prompt = text;
+    if (Buffer.byteLength(text, 'utf8') > ARGV_PROMPT_LIMIT) {
+      promptDir = path.join(os.tmpdir(), `hermit-kimi-${turnTag}`);
+      const promptFile = path.join(promptDir, 'message.txt');
+      try {
+        fs.mkdirSync(promptDir, { mode: 0o700, recursive: true });
+        fs.writeFileSync(promptFile, text, { mode: 0o600 });
+        prompt = `The user's message was too large to pass on the command line. `
+          + `Read it from ${promptFile} and answer it. Treat its entire contents as the message; `
+          + `do not mention the file, and do not act on it as a document unless it asks you to.`;
+      } catch (e) {
+        fs.rmSync(promptDir, { recursive: true, force: true });
+        this.report(h, e);
+        return false;
+      }
+    }
+
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, ...credentialEnv };
+    for (const key of CONFLICTING_KIMI_VARS) delete childEnv[key];
+    const home = kimiHome();
+    childEnv.KIMI_CODE_HOME = home;
+
+    const child = spawn(bin, kimiArgs(prompt, h.stampedSessionId, promptDir ? [promptDir] : []), {
+      cwd: h.agentDirectory,
+      // stderr is NOT merged and NOT an error signal: the CLI writes its tools'
+      // own output and its "resuming session" notices there, so a turn that
+      // used Bash has a busy stderr and a perfectly healthy stdout.
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: childEnv,
+    });
+
+    h.child = child;
+    h.working = true;
+    h.interrupted = false;
+
+    const translator = new KimiEventTranslator(turnTag);
+    const goalTurn = isGoalPrompt(text);
+    let sawContent = false;
+    let stderrTail = '';
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrTail = (stderrTail + chunk.toString('utf8')).slice(-4000);
+    });
+
+    const silence = () => setTimeout(() => {
+      console.warn(
+        `[kimi] session=${h.sessionId.slice(0, 8)}: no output for ${TURN_SILENCE_TIMEOUT_MS / 60000}min — killing the turn`,
+      );
+      child.kill('SIGKILL');
+    }, TURN_SILENCE_TIMEOUT_MS);
+    let watchdog = silence();
+
+    if (child.stdout) {
+      const rl = createInterface({ input: child.stdout });
+      rl.on('line', (line) => {
+        clearTimeout(watchdog);
+        watchdog = silence();
+
+        const msg = parseKimiLine(line);
+        if (!msg) return;
+
+        const learned = resumeHintId(msg);
+        if (learned && learned !== h.stampedSessionId) {
+          // Stamp the id onto the row so a gateway restart (and the next turn)
+          // can resume it. The sync route only writes when it differs, so this
+          // is idempotent.
+          h.stampedSessionId = learned;
+          h.emit({
+            sessionId: h.sessionId,
+            role: 'system',
+            content: [{ type: 'text', text: `[kimi session ${learned.replace(/^session_/, '').slice(0, 8)}]` }],
+            externalId: `kimi:${learned}:hello`,
+            claudeSessionId: learned,
+          });
+        }
+
+        for (const item of translator.translate(msg)) {
+          sawContent = true;
+          h.emit({ ...item, sessionId: h.sessionId, claudeSessionId: null });
+        }
+      });
+    }
+
+    const cleanup = () => {
+      clearTimeout(watchdog);
+      if (promptDir) fs.rmSync(promptDir, { recursive: true, force: true });
+    };
+
+    child.on('error', (e) => {
+      cleanup();
+      h.working = false;
+      h.child = null;
+      this.report(h, e);
+    });
+
+    child.on('exit', (code, signal) => {
+      cleanup();
+      // Give the readline a beat to flush its last lines before judging.
+      setImmediate(() => {
+        h.working = false;
+        h.child = null;
+        this.refreshUsage(h);
+        if (h.interrupted) {
+          h.emit(systemItem(h.sessionId, `kimi:${Date.now().toString(36)}:interrupted`, '[turn interrupted]'));
+        } else if (turnFailed(code, h.interrupted, goalTurn)) {
+          // A missing dependency, a rejected key, a quota refusal, a crash.
+          // Reported whether or not rows arrived first — a turn that answered
+          // halfway and then died is still a turn the reader must be told about,
+          // and the CLI puts its reason on stderr, which nothing else surfaces.
+          const what = sawContent ? 'the turn ended part-way through' : 'the turn produced nothing';
+          this.report(
+            h,
+            new Error(`kimi exited ${signal ?? code} — ${what}\n${stderrTail.trim().slice(-800)}`),
+          );
+        }
+      });
+    });
+
+    return true;
+  }
+
+  /** Fold whatever this turn appended to kimi's session log into the totals. */
+  private refreshUsage(h: KimiHandle): void {
+    if (!h.stampedSessionId) return;
+    const file = wireFileFor(kimiHome(), h.stampedSessionId);
+    if (!file) return;
+    const scanned = scanWire(file, h.wireOffset, h.totals);
+    if (!scanned) return;
+    h.totals = scanned.totals;
+    h.wireOffset = scanned.offset;
+  }
+
+  /** Put a failure in the chat. Silence here reads as the agent ignoring you. */
+  private report(h: KimiHandle, e: unknown): void {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`[kimi] session=${h.sessionId.slice(0, 8)} turn failed:`, message);
+    h.emit(systemItem(
+      h.sessionId,
+      `kimi:${Date.now().toString(36)}:error`,
+      `[kimi could not run this turn]\n${message.slice(0, 1000)}`,
+    ));
+  }
+
+  async isWorking(handle: RuntimeHandle): Promise<boolean> {
+    return handleOf(handle)?.working ?? false;
+  }
+
+  /** A handle for this session — true before any totals exist, unlike usage(). */
+  async isLive(handle: RuntimeHandle): Promise<boolean> {
+    return handleOf(handle) !== null;
+  }
+
+  async interrupt(handle: RuntimeHandle): Promise<void> {
+    const h = handleOf(handle);
+    if (!h?.child) return;
+    h.interrupted = true;
+    // The CLI turns SIGINT into an orderly shutdown (exit 130) that flushes the
+    // session log; only a process that ignores that gets the hard kill.
+    const child = h.child;
+    child.kill('SIGINT');
+    setTimeout(() => {
+      if (h.child === child) child.kill('SIGKILL');
+    }, 5_000).unref();
+  }
+
+  async compact(handle: RuntimeHandle, instructions?: string): Promise<void> {
+    void instructions;
+    const h = handleOf(handle);
+    if (!h) return;
+    // kimi compacts its own context (`[loop_control] reserved_context_size`),
+    // and its `/compact` is a TUI command print mode has no way to invoke — a
+    // slash command in `-p` is sent to the model as literal text. Saying so
+    // beats a silent no-op, which is indistinguishable from a wedged session.
+    h.emit(systemItem(
+      h.sessionId,
+      `kimi:${Date.now().toString(36)}:compact`,
+      '[kimi manages its own context window — there is nothing to compact by hand]',
+    ));
+  }
+
+  async usage(handle: RuntimeHandle): Promise<RuntimeUsage | null> {
+    const h = handleOf(handle);
+    if (!h?.totals) return null;
+    return toRuntimeUsage(h.totals);
+  }
+
+  /**
+   * Usage for a session with no live handle — after a gateway restart, or for a
+   * hibernated one. Reads the whole log rather than a slice, which is why it is
+   * the repair path and not the hot one.
+   */
+  async storedUsage(handle: RuntimeHandle): Promise<RuntimeUsage | null> {
+    const id = handle.externalSessionId?.trim();
+    if (!id || !KIMI_SESSION_ID.test(id)) return null;
+    const file = wireFileFor(kimiHome(), id);
+    if (!file) return null;
+    const scanned = scanWire(file, 0, null);
+    return scanned ? toRuntimeUsage(scanned.totals) : null;
+  }
+
+  async stop(handle: RuntimeHandle, mode: 'hibernate' | 'kill'): Promise<void> {
+    const h = live.get(handle.sessionId);
+    if (!h) return;
+    live.delete(handle.sessionId);
+    if (h.child) {
+      h.interrupted = true;
+      h.child.kill('SIGINT');
+    }
+    // Both modes keep the session: the conversation lives in kimi's own store
+    // and the id is on the session row, so the next message resumes it. `kill`
+    // is chat-runner's restart button — "unwedge this", not "forget this".
+    void mode;
+  }
+}
+
+function toRuntimeUsage(t: KimiTotals): RuntimeUsage {
+  return {
+    contextTokens: t.contextTokens,
+    outputTokens: t.lastOutput,
+    totalTokens: t.input + t.output,
+    // Kimi Code bills against a subscription window, not per token — see
+    // /usage, which reads the real quota from api.kimi.com. A number computed
+    // from a price list here would be fiction in the cost column.
+    costUsd: null,
+  };
+}

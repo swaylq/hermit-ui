@@ -9,12 +9,12 @@
 // sheet and the new-chat picker — and they were drifting apart (the header said
 // "Claude", the picker "Claude Code"). One table, no ternaries.
 
-// Six harnesses. omp (oh-my-pi) is NOT one of them: it is a second ENGINE
+// Seven harnesses. omp (oh-my-pi) is NOT one of them: it is a second ENGINE
 // inside the pi harness, selected by the mode — see lib/pi-modes.ts.
 //
-// claude-sdk, claude-tmux and codex-exec are the three that authenticate as
-// themselves, on the machine, against a subscription. The other three take a
-// credential from Settings → Models, which is what makes them user-composable.
+// claude-tmux and codex-exec authenticate as themselves, on the machine,
+// against a subscription. The other five take a credential from Settings →
+// Models, which is what makes them user-composable.
 //
 // The two claude harnesses are the SAME Claude Code, reached two ways:
 // 'claude-sdk' through its official Agent SDK, 'claude-tmux' by typing into its
@@ -22,7 +22,7 @@
 // separately — a split that was paused before it took effect (evolution/
 // lessons.md → L1) — and is kept for the one thing it still does better:
 // outliving the gateway process. See docs/claude-sdk-runtime-design.md.
-export const RUNTIME_KINDS = ['claude-sdk', 'claude-tmux', 'pi-rpc', 'prime-rpc', 'codex-exec', 'dsh-exec'] as const;
+export const RUNTIME_KINDS = ['claude-sdk', 'claude-tmux', 'pi-rpc', 'prime-rpc', 'codex-exec', 'dsh-exec', 'kimi-code'] as const;
 export type RuntimeKind = (typeof RUNTIME_KINDS)[number];
 
 export function isRuntimeKind(v: string | null | undefined): v is RuntimeKind {
@@ -39,13 +39,19 @@ export function isRuntimeKind(v: string | null | undefined): v is RuntimeKind {
  * skills and hooks intact. Verified against Kimi Code (api.kimi.com/coding,
  * model `k3[1m]`) before this was added.
  *
+ * kimi-code is here for the same reason, reached differently: its CLI refuses
+ * to read a key from the shell, but `KIMI_MODEL_NAME` + `KIMI_MODEL_API_KEY`
+ * synthesise a provider in memory and write nothing to disk, so one credential
+ * drives it exactly as it drives claude-sdk. Verified against api.kimi.com/
+ * coding, model `k3`, before this was added.
+ *
  * claude-tmux and codex-exec stay out. The pane takes its model and its auth
  * from ~/.claude/settings.json and ignores anything the gateway sets, and codex
  * authenticates through `codex login` with no endpoint to name — so a picker
  * offering either paired with a credential would offer something that does not
  * exist.
  */
-export const CUSTOM_HARNESSES = ['claude-sdk', 'pi-rpc', 'prime-rpc', 'dsh-exec'] as const;
+export const CUSTOM_HARNESSES = ['claude-sdk', 'pi-rpc', 'prime-rpc', 'dsh-exec', 'kimi-code'] as const;
 export type CustomHarness = (typeof CUSTOM_HARNESSES)[number];
 
 // `unknown` rather than `string | null | undefined`: the caller that matters
@@ -62,6 +68,7 @@ export function runtimeLabel(kind: string | null | undefined): string {
   if (kind === 'prime-rpc') return 'Prime Agent';
   if (kind === 'codex-exec') return 'Codex';
   if (kind === 'dsh-exec') return 'DeepSeek';
+  if (kind === 'kimi-code') return 'Kimi Code';
   return 'Claude Code';
 }
 
@@ -71,6 +78,7 @@ export function runtimeShortLabel(kind: string | null | undefined): string {
   if (kind === 'prime-rpc') return 'prime';
   if (kind === 'codex-exec') return 'Codex';
   if (kind === 'dsh-exec') return 'dsh';
+  if (kind === 'kimi-code') return 'Kimi';
   return 'Claude';
 }
 
@@ -136,6 +144,7 @@ export function runtimeDetail(
   // session has no credential and so no provider, and reads as it always did.
   if (kind === 'claude-sdk') return ['Claude Code (Agent SDK)', provider, model].filter(Boolean).join(' · ');
   if (kind === 'claude-tmux') return 'Claude Code (interactive, tmux pane)';
+  if (kind === 'kimi-code') return ['Kimi Code CLI', provider, model].filter(Boolean).join(' · ');
   return [runtimeLabel(kind), provider, model].filter(Boolean).join(' · ');
 }
 
@@ -147,6 +156,7 @@ export const RUNTIME_BLURB: Record<RuntimeKind, string> = {
   'prime-rpc': 'Prime Agent. One tool — a persistent IPython kernel — plus subagents and a self-refining harness.',
   'codex-exec': 'OpenAI Codex, one run per turn, on this machine’s own codex login.',
   'dsh-exec': 'DeepSeek Harness (dsh), one run per turn, resumed by session id.',
+  'kimi-code': 'Moonshot’s own Kimi Code CLI, one run per turn, resumed by session id. Its own tools, skills, sub-agents and hooks; the key is passed in the environment and nothing is written to its config.',
 };
 
 /** What a harness needs on the machine before a backend built on it will start. */
@@ -157,6 +167,7 @@ export const RUNTIME_NEEDS: Record<RuntimeKind, string> = {
   'prime-rpc': 'Prime Agent installed (`curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh`) plus its Python kernel.',
   'codex-exec': '`codex` installed and `codex login` completed as the gateway’s user.',
   'dsh-exec': 'DeepSeek Harness (dsh) installed on this machine.',
+  'kimi-code': '`kimi` on this machine (`curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash`, or `npm i -g @moonshot-ai/kimi-code`), plus a credential whose endpoint it can reach. No `kimi login` needed.',
 };
 
 /**
@@ -186,6 +197,8 @@ const PANELESS_RUNTIMES: ReadonlySet<string> = new Set([
   'codex-exec',
   // one `dsh` subprocess per turn, exactly codex's shape — no pane.
   'dsh-exec',
+  // and one `kimi -p` subprocess per turn, the same shape again.
+  'kimi-code',
 ]);
 
 export function hasTmuxPane(runtime: string | null | undefined): boolean {
