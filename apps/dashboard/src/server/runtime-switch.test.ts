@@ -171,24 +171,35 @@ test('a prime session restarts for a new model and keeps its session id', () => 
   );
 });
 
-// kimi is one subprocess per turn, so a model change costs nothing to apply —
-// but it is the only such harness that also takes a CREDENTIAL, and a resumed
-// kimi session replays its stored reasoning to whatever endpoint is configured
-// now. Reaching here with a moved credential means the backend was re-pointed
-// in Settings under a live session.
-test('a kimi session never restarts, but drops its id when the endpoint moves', () => {
-  const kimi = (model: string, credential: string) => ({
-    backendId: 'kimi-code', runtime: 'kimi-code', runtimeCredentialId: credential,
+// kimi is one subprocess per turn: the next child is simply born with the new
+// model and resumes the same session id, so a restart would hibernate a session
+// to achieve what the next turn does anyway.
+test('a kimi model change costs nothing and keeps the conversation', () => {
+  const kimi = (model: string) => ({
+    backendId: 'kimi-code', runtime: 'kimi-code', runtimeCredentialId: 'kimi-code',
     runtimeProvider: 'kimi-coding', runtimeModel: model, runtimeMode: null,
   });
   assert.deepEqual(
-    planRuntimeSwitch({ state: 'idle' }, kimi('k3', 'kimi-code'), kimi('k3-256k', 'kimi-code')),
+    planRuntimeSwitch({ state: 'idle' }, kimi('k3'), kimi('k3-256k')),
     { ok: true, restart: false, resetExternalId: false },
   );
-  assert.deepEqual(
-    planRuntimeSwitch({ state: 'idle' }, kimi('k3', 'kimi-code'), kimi('k3', 'other')),
-    { ok: true, restart: false, resetExternalId: true },
+});
+
+// Moving OFF kimi is a real backend change, and kimi's session id means nothing
+// to anything else — so the id has to go even though nothing restarts.
+test('leaving kimi for another backend drops its session id', () => {
+  const plan = planRuntimeSwitch(
+    { state: 'idle' },
+    {
+      backendId: 'kimi-code', runtime: 'kimi-code', runtimeCredentialId: 'kimi-code',
+      runtimeProvider: 'kimi-coding', runtimeModel: 'k3', runtimeMode: null,
+    },
+    {
+      backendId: 'claude-sdk-kimi-code', runtime: 'claude-sdk', runtimeCredentialId: 'kimi-code',
+      runtimeProvider: 'kimi-coding', runtimeModel: 'k3[1m]', runtimeMode: null,
+    },
   );
+  assert.deepEqual(plan, { ok: true, restart: true, resetExternalId: true });
 });
 
 // ── moving between the two Claude Code drivers ──────────────────────────────

@@ -152,7 +152,13 @@ export function canRunCronTurn(harness: string | null | undefined, mode: string 
  * it just does not colour the status. Today it reaches them as nothing at all.
  */
 export function isFailureNote(text: string): boolean {
-  return /^\s*\[(?:gateway\]\s*⚠️|turn interrupted|pi error|pi could not start|pi session ended|pi is on the wrong provider|omp session ended|omp could not start|Prime Agent could not start|prime session ended|dsh could not run this turn|dsh —)/i.test(
+  // NOTE for whoever adds the next backend: your failure notes have to be
+  // listed here or a failed cron on your harness is recorded as a success.
+  // kimi's two are `[kimi could not run this turn]` and `[kimi could not
+  // start — …]`. Its `[kimi — model call failed 429 …]` is deliberately NOT
+  // here: that is a retry the CLI usually wins, and colouring the run red for
+  // it would flag a turn that finished fine.
+  return /^\s*\[(?:gateway\]\s*⚠️|turn interrupted|pi error|pi could not start|pi session ended|pi is on the wrong provider|omp session ended|omp could not start|Prime Agent could not start|prime session ended|dsh could not run this turn|dsh —|kimi could not run this turn|kimi could not start)/i.test(
     text,
   );
 }

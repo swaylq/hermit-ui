@@ -87,11 +87,36 @@ type KimiHandle = RuntimeHandle & {
   /** True once interrupt() fired for the current turn. */
   interrupted: boolean;
   totals: KimiTotals | null;
-  /** Bytes of wire.jsonl already accounted for — see readTurnUsage(). */
+  /** Bytes of wire.jsonl already accounted for — see refreshUsage(). */
   wireOffset: number;
+  /**
+   * Which session's log `wireOffset` and `totals` describe.
+   *
+   * Not the same as `stampedSessionId`, and that is the point: resuming an id
+   * kimi no longer has starts a NEW session, and its log is a different file
+   * whose bytes this offset means nothing about. Without this the first turn of
+   * the new session would be scanned from the old one's offset — its opening
+   * records skipped for good, the old session's totals carried on top, and the
+   * number wrong from then on with nothing to show for it.
+   */
+  wireSessionId: string | null;
 };
 
 const live = new Map<string, KimiHandle>();
+
+/**
+ * What storedUsage() has already read, per kimi session id.
+ *
+ * Keyed on kimi's id rather than the chat session's, because that is what
+ * identifies the log. Entries are dropped when a session is stopped; one that
+ * outlives its chat costs four numbers and a path.
+ */
+const storedScans = new Map<string, { file: string; offset: number; totals: KimiTotals }>();
+
+/** Test seam. */
+export function resetKimiStoredScans(): void {
+  storedScans.clear();
+}
 
 function handleOf(h: RuntimeHandle): KimiHandle | null {
   return live.get(h.sessionId) ?? null;
@@ -211,6 +236,17 @@ export const CONFLICTING_KIMI_VARS = [
 ] as const;
 
 /**
+ * Variables stripped for a reason that has nothing to do with Kimi.
+ *
+ * `ASST_KEY` is the gateway's own dashboard credential, and the gateway's
+ * environment is the child's by default — so without this, `echo $ASST_KEY`
+ * inside the agent's Bash tool prints the machine's key. This backend has no
+ * hermit tool surface, so it needs no part of it. codex deletes the same
+ * variable for the same reason (codex-exec.ts → codexChildEnv).
+ */
+export const GATEWAY_ONLY_VARS = ['ASST_KEY'] as const;
+
+/**
  * The env that points one kimi child at one credential and one model.
  *
  * Pure, so the mapping is testable without a secret store or a database.
@@ -262,19 +298,34 @@ export function kimiSpawnEnv(
 /**
  * Did this turn FAIL, given how the child exited?
  *
- * The exit code is the only honest signal. An earlier version of this asked
- * "did we see any output" instead, and that was silently wrong in the one case
- * that matters: the CLI writes `{"role":"meta","type":"system.version"}` before
- * it does anything else, so a run that then dies on `provider … has no
- * credential configured` HAS produced output — and the failure would have
+ * How the child exited is the only honest signal, and it comes in two halves.
+ * Node reports a normal exit as `(code, null)` and a signal death as
+ * `(null, 'SIGKILL')` — so a function that looks only at `code` calls every
+ * signal death a success. That is not hypothetical here: the silence watchdog
+ * kills a wedged turn with SIGKILL, and reading only `code` would end that turn
+ * with no note at all, the session flipping from working to idle with nothing
+ * to explain it.
+ *
+ * An earlier version asked "did we see any output" instead, which was wrong for
+ * a third reason: the CLI writes `{"role":"meta","type":"system.version"}`
+ * before it does anything else, so a run that then dies on `provider … has no
+ * credential configured` HAS produced output, and the failure would have
  * reached the user as an empty reply. Measured, not theorised.
  *
  * `/goal` is the one non-zero exit that is not a failure: goal mode reports its
  * terminal state through the code (3 = blocked, 6 = paused, 0 = complete), and
  * a user can type `/goal …` into an ordinary chat.
  */
-export function turnFailed(code: number | null, interrupted: boolean, goalTurn: boolean): boolean {
+export function turnFailed(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  interrupted: boolean,
+  goalTurn: boolean,
+): boolean {
+  // interrupt() already puts its own note in the chat; a second one would give
+  // one stop button two contradictory answers.
   if (interrupted) return false;
+  if (signal) return true;
   if (code === 0 || code === null) return false;
   return !(goalTurn && (code === 3 || code === 6));
 }
@@ -358,13 +409,28 @@ export function scanWire(
     const start = fromOffset > size ? 0 : fromOffset;
     if (start === size) return base ? { totals: base, offset: size } : null;
     fd = fs.openSync(file, 'r');
+    let text: string;
     try {
       const buf = Buffer.alloc(size - start);
       fs.readSync(fd, buf, 0, buf.length, start);
-      return { totals: accumulate(buf.toString('utf8'), start === 0 ? null : base), offset: size };
+      text = buf.toString('utf8');
     } finally {
       fs.closeSync(fd);
     }
+
+    // Stop at the last COMPLETE line, and leave the offset there. A partial tail
+    // is then genuinely re-read next time rather than skipped and stepped over —
+    // which is what "the next scan picks it up whole" has to mean for it to be
+    // true. Rare (the scan runs after the child has exited) but the alternative
+    // is a record lost silently, which is the failure mode with no symptom.
+    const lastBreak = text.lastIndexOf('\n');
+    if (lastBreak < 0) return base ? { totals: base, offset: start } : null;
+    const complete = text.slice(0, lastBreak + 1);
+
+    return {
+      totals: accumulate(complete, start === 0 ? null : base),
+      offset: start + Buffer.byteLength(complete, 'utf8'),
+    };
   } catch {
     return null;
   }
@@ -460,6 +526,7 @@ export class KimiCodeRuntime implements AgentRuntime {
       // from 0 on the first turn back is what makes the session total survive
       // a gateway restart, so the offset starts at 0 rather than at its size.
       wireOffset: 0,
+      wireSessionId: null,
     };
     live.set(session.id, handle);
     return handle;
@@ -476,7 +543,9 @@ export class KimiCodeRuntime implements AgentRuntime {
       h.emit(systemItem(
         h.sessionId,
         `kimi:missing:${Date.now().toString(36)}`,
-        '[the Kimi Code CLI is not installed on this machine]\n'
+        // The `[kimi could not start` prefix is load-bearing, not phrasing:
+        // cron-turn's isFailureNote() matches on it to colour a cron run red.
+        '[kimi could not start — the CLI is not installed on this machine]\n'
         + 'Install it with `curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash`'
         + ' or `npm i -g @moonshot-ai/kimi-code`, or point HERMIT_KIMI_BIN at it.',
       ));
@@ -502,7 +571,7 @@ export class KimiCodeRuntime implements AgentRuntime {
       h.emit(systemItem(
         h.sessionId,
         `kimi:unconfigured:${Date.now().toString(36)}`,
-        `[kimi has no endpoint to run against — ${why}]`,
+        `[kimi could not start — no endpoint to run against: ${why}]`,
       ));
       return false;
     }
@@ -541,6 +610,7 @@ export class KimiCodeRuntime implements AgentRuntime {
 
     const childEnv: NodeJS.ProcessEnv = { ...process.env, ...credentialEnv };
     for (const key of CONFLICTING_KIMI_VARS) delete childEnv[key];
+    for (const key of GATEWAY_ONLY_VARS) delete childEnv[key];
     const home = kimiHome();
     childEnv.KIMI_CODE_HOME = home;
 
@@ -565,19 +635,29 @@ export class KimiCodeRuntime implements AgentRuntime {
       stderrTail = (stderrTail + chunk.toString('utf8')).slice(-4000);
     });
 
+    // `exited` gates the watchdog. readline keeps delivering buffered lines
+    // AFTER the exit event — which is why the exit handler waits a tick before
+    // judging — and each of those would otherwise re-arm a fresh 15-minute
+    // timer that nothing ever clears. Every completed turn would leave one
+    // behind, to fire later and log the wedge warning for a turn that ended
+    // cleanly: noise shaped exactly like the failure an operator is hunting.
+    // `.unref()` so a stray one can never hold the process open either.
+    let exited = false;
     const silence = () => setTimeout(() => {
       console.warn(
         `[kimi] session=${h.sessionId.slice(0, 8)}: no output for ${TURN_SILENCE_TIMEOUT_MS / 60000}min — killing the turn`,
       );
       child.kill('SIGKILL');
-    }, TURN_SILENCE_TIMEOUT_MS);
+    }, TURN_SILENCE_TIMEOUT_MS).unref();
     let watchdog = silence();
 
     if (child.stdout) {
       const rl = createInterface({ input: child.stdout });
       rl.on('line', (line) => {
-        clearTimeout(watchdog);
-        watchdog = silence();
+        if (!exited) {
+          clearTimeout(watchdog);
+          watchdog = silence();
+        }
 
         const msg = parseKimiLine(line);
         if (!msg) return;
@@ -605,6 +685,7 @@ export class KimiCodeRuntime implements AgentRuntime {
     }
 
     const cleanup = () => {
+      exited = true;
       clearTimeout(watchdog);
       if (promptDir) fs.rmSync(promptDir, { recursive: true, force: true });
     };
@@ -625,7 +706,7 @@ export class KimiCodeRuntime implements AgentRuntime {
         this.refreshUsage(h);
         if (h.interrupted) {
           h.emit(systemItem(h.sessionId, `kimi:${Date.now().toString(36)}:interrupted`, '[turn interrupted]'));
-        } else if (turnFailed(code, h.interrupted, goalTurn)) {
+        } else if (turnFailed(code, signal, h.interrupted, goalTurn)) {
           // A missing dependency, a rejected key, a quota refusal, a crash.
           // Reported whether or not rows arrived first — a turn that answered
           // halfway and then died is still a turn the reader must be told about,
@@ -645,6 +726,12 @@ export class KimiCodeRuntime implements AgentRuntime {
   /** Fold whatever this turn appended to kimi's session log into the totals. */
   private refreshUsage(h: KimiHandle): void {
     if (!h.stampedSessionId) return;
+    if (h.wireSessionId !== h.stampedSessionId) {
+      // A different log than the one the offset counts. See wireSessionId.
+      h.wireOffset = 0;
+      h.totals = null;
+      h.wireSessionId = h.stampedSessionId;
+    }
     const file = wireFileFor(kimiHome(), h.stampedSessionId);
     if (!file) return;
     const scanned = scanWire(file, h.wireOffset, h.totals);
@@ -703,31 +790,64 @@ export class KimiCodeRuntime implements AgentRuntime {
 
   async usage(handle: RuntimeHandle): Promise<RuntimeUsage | null> {
     const h = handleOf(handle);
-    if (!h?.totals) return null;
-    return toRuntimeUsage(h.totals);
+    if (!h) return null;
+    // Refreshed here, not only at the end of a turn. Session snapshots call
+    // this every 8s including mid-turn, and kimi writes its usage records as it
+    // goes — so reading them here is what keeps the context bar moving instead
+    // of showing the previous completed turn (or nothing at all, for a
+    // session's first) until the child exits. Costs only the bytes appended
+    // since the last call. Same reasoning as codex's refreshRolloutUsage.
+    this.refreshUsage(h);
+    return h.totals ? toRuntimeUsage(h.totals) : null;
   }
 
   /**
    * Usage for a session with no live handle — after a gateway restart, or for a
-   * hibernated one. Reads the whole log rather than a slice, which is why it is
-   * the repair path and not the hot one.
+   * hibernated one.
+   *
+   * The first call for a session reads its whole log, because a cumulative
+   * total cannot be had any other way. Every call after that reads only what
+   * was appended since, which for a session with no live child is normally
+   * nothing at all — scanWire returns on the stat without opening the file.
+   *
+   * That cache is not an optimisation, it is the difference between working and
+   * not. This is called from the session-snapshot tick for EVERY open session
+   * that has no handle, every 8 seconds, forever — so after a gateway restart
+   * with ten open kimi sessions, the uncached version would re-read ten
+   * multi-megabyte logs on the event loop six hundred times an hour. codex
+   * solves the same problem by bounding its read to a tail; this keeps the
+   * whole-file answer and pays for it once.
    */
   async storedUsage(handle: RuntimeHandle): Promise<RuntimeUsage | null> {
     const id = handle.externalSessionId?.trim();
     if (!id || !KIMI_SESSION_ID.test(id)) return null;
-    const file = wireFileFor(kimiHome(), id);
+
+    const cached = storedScans.get(id);
+    const file = cached?.file ?? wireFileFor(kimiHome(), id);
     if (!file) return null;
-    const scanned = scanWire(file, 0, null);
-    return scanned ? toRuntimeUsage(scanned.totals) : null;
+
+    const scanned = scanWire(file, cached?.offset ?? 0, cached?.totals ?? null);
+    if (!scanned) return null;
+    storedScans.set(id, { file, offset: scanned.offset, totals: scanned.totals });
+    return toRuntimeUsage(scanned.totals);
   }
 
   async stop(handle: RuntimeHandle, mode: 'hibernate' | 'kill'): Promise<void> {
     const h = live.get(handle.sessionId);
     if (!h) return;
     live.delete(handle.sessionId);
+    if (h.stampedSessionId) storedScans.delete(h.stampedSessionId);
     if (h.child) {
       h.interrupted = true;
-      h.child.kill('SIGINT');
+      const child = h.child;
+      child.kill('SIGINT');
+      // Escalate, exactly as interrupt() does. `kill` is chat-runner's restart
+      // button — "unwedge this" — and the one thing a wedged child does is
+      // ignore SIGINT. Without this the handle is gone from `live` (so isLive
+      // and isWorking both answer false, and the purge path reads the session
+      // as free) while the child keeps running and keeps emitting into a chat
+      // that was just restarted.
+      setTimeout(() => child.kill('SIGKILL'), 5_000).unref();
     }
     // Both modes keep the session: the conversation lives in kimi's own store
     // and the id is on the session row, so the next message resumes it. `kill`

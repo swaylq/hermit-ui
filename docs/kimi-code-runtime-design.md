@@ -197,8 +197,21 @@ Two implementation notes:
   refresh costs only the bytes that turn appended. A truncated file (a session
   reset) resets the offset rather than reading on from the middle of a line.
 
-`storedUsage` reads the whole log, for a session with no live handle — the
-repair path after a gateway restart, not the hot one.
+`storedUsage` serves a session with no live handle. Its first call for a session
+reads the whole log — a cumulative total cannot be had any other way — and
+caches the offset and totals, so every later call reads only what was appended,
+which for a session with no child is nothing at all.
+
+That cache is not an optimisation. `session-snapshot` calls this on every open
+handle-less session, every 8 seconds, forever; after a gateway restart with ten
+open kimi sessions the uncached version would re-read ten multi-megabyte logs on
+the event loop six hundred times an hour. codex solves the same problem by
+bounding its read to a 256 KiB tail; this keeps the whole-file answer and pays
+for it once.
+
+`usage()` refreshes on the same incremental basis rather than only at the end of
+a turn, so the context bar moves during a long tool-heavy turn instead of showing
+the previous one's numbers — the same reason codex refreshes inside `usage()`.
 
 ## What is deliberately not wired
 
@@ -243,13 +256,25 @@ and surfaced as a bare ENOENT.
 
 ## Switching a live session
 
-`planRuntimeSwitch` gives `kimi-code` its own branch: never a restart (there is
-no long-lived child), but `resetExternalId` when the credential moved under the
-same backend. kimi keeps `[thinking] keep = "all"`, so a resumed session replays
-its stored reasoning to whatever endpoint is configured now — the same
-provider-signed-thinking trap that makes a claude-sdk transcript unusable across
-credentials, and it would surface as a failure on every later message of a
-session that looked fine when it was switched.
+`kimi-code` sits in `planRuntimeSwitch`'s codex/dsh branch: never a restart,
+because there is no long-lived child to tear down. Moving to a different backend
+is caught earlier and drops the session id, as for every other harness.
+
+**Known gap, deliberately not papered over.** kimi keeps
+`[thinking] keep = "all"`, so a resumed session replays its stored reasoning to
+whatever endpoint is configured now. Re-pointing a backend at a different
+credential in Settings while a session is live would therefore hand Kimi's
+reasoning to somebody else's endpoint — the provider-signed-thinking trap that
+already makes a claude-sdk transcript unusable across credentials.
+
+A first version of this guarded against it in `planRuntimeSwitch` and the guard
+was dead code: that function is only reached from the session-switch mutation,
+`before` and `after` are both resolved against the same machine snapshot, and
+`runtimeCredentialId` comes straight off the backend — so within one backend id
+the credential can never differ. Editing a backend in Settings does not call it
+at all. The branch is gone; the gap is written down here instead. Fixing it
+properly means the credential edit path invalidating live sessions, which is a
+change for pi, prime and claude-sdk too.
 
 ## Verification
 
@@ -268,13 +293,32 @@ of the log both live and stored. It SKIPS (not fails) when kimi, the credential
 or the secret is absent, so a laptop without a Kimi subscription does not have a
 red suite.
 
-### The bug this nearly shipped with
+### Three bugs this nearly shipped with
 
-The exit handler first asked "did the child produce any output?" before
-reporting a failure. That reads as reasonable and is silently wrong: the CLI
-writes its `system.version` line before doing anything else, so **every** run has
-produced output by the time it fails, and a turn that died at the auth gate
-would have reached the user as an empty reply — the exact silent-degradation
-shape this codebase exists to avoid. `turnFailed()` keys on the exit code
-instead, with `/goal`'s 3-and-6 as the one documented exception, and the itest
-drives a stand-in binary that reproduces the real failure shape byte for byte.
+All three were the same shape — a turn failing and nobody being told — and all
+three are now pinned by a test.
+
+1. **"Did we see any output?"** was the exit handler's first test for failure.
+   It reads as reasonable and is silently wrong: the CLI writes its
+   `system.version` line before doing anything else, so **every** run has
+   produced output by the time it fails, and a turn that died at the auth gate
+   reached the user as an empty reply.
+2. **Then it keyed on the exit code alone** — and Node reports a signal death as
+   `(null, 'SIGKILL')`, so every signal death read as a clean exit. The silence
+   watchdog ends a wedged turn exactly that way, so the one case the watchdog
+   exists for produced no note at all. (The tell was in the code: the error
+   string interpolated `signal ?? code`, and the `signal` branch was
+   unreachable.) `turnFailed()` now takes both halves, with `/goal`'s 3-and-6 as
+   the one documented exception.
+3. **`isFailureNote()` in cron-turn.ts is a prose allowlist**, and a new
+   backend's notes have to be added to it or a failed cron on that harness is
+   recorded as a success — the regression its own doc comment describes from the
+   2026-08-15 codex outage. kimi's two failure notes therefore share the prefixes
+   `[kimi could not run this turn]` and `[kimi could not start — …]`, which is
+   why those strings are load-bearing rather than phrasing. Its retry note
+   (`[kimi — model call failed 429 …]`) is deliberately NOT listed: that is a
+   retry the CLI usually wins, and flagging it would colour a turn that finished
+   fine.
+
+The itest drives a stand-in binary that reproduces the real failure shape byte
+for byte, so (1) and (2) cannot come back silently.

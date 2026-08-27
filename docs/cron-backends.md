@@ -155,9 +155,13 @@ the brain tools to do their job.
 would be wrong to call their behaviour pre-existing, because **before this change
 no cron ever ran on pi, omp or prime at all** — they fell through the `else` onto
 the pane. This change is what would first have handed them the key, so it is also
-what withholds it. `dsh-exec` and `kimi-code` need no flag (neither has a hermit
-tool surface, so neither ever receives the key — see
-[kimi-code-runtime-design.md](kimi-code-runtime-design.md) on what that costs).
+what withholds it. `dsh-exec` and `kimi-code` need no flag: neither has a hermit
+tool surface, so neither is ever handed `HERMIT_KEY`. `kimi-code` additionally
+DELETES `ASST_KEY` from the child's environment, because a child inherits the
+gateway's environment by default and the agent's own Bash tool could otherwise
+print the machine's dashboard credential. `dsh-exec` does not — it spreads
+`process.env` unscrubbed, which is a pre-existing gap, not one this documents
+away.
 
 **Still open:** `codex-exec` injects `HERMIT_KEY` unconditionally. That one IS
 pre-existing — codex crons have run since 2026-08-15 — and is not made worse

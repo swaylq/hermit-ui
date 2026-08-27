@@ -431,6 +431,9 @@ describe('isFailureNote', () => {
       '[Prime Agent could not start]',
       '[dsh could not run this turn]\nstderr tail',
       '[dsh — the turn ended: rate_limited]',
+      '[kimi could not run this turn]\nkimi exited 1 — the turn produced nothing',
+      '[kimi could not start — the CLI is not installed on this machine]',
+      '[kimi could not start — no endpoint to run against: the secret KIMI_API_KEY is not in this machine\'s store]',
       '[gateway] ⚠️ 这一轮没有正常结束：authentication_failed',
       '[turn interrupted]',
     ]) assert.equal(isFailureNote(t), true, t.split('\n')[0]);
@@ -445,6 +448,11 @@ describe('isFailureNote', () => {
       '```\n$ ls\nREADME.md\n```',
       'plain output with no marker at all',
       '[gateway] ⏹️ 已停止',
+      // A retry the CLI usually wins. Flagging it would colour a turn that
+      // finished fine — the exact thing this split exists to prevent.
+      '[kimi — model call failed 429 (attempt 1/3), retrying in 1.5s]\ntoo many requests',
+      '[kimi session 2d0aad4f]',
+      '[kimi manages its own context window — there is nothing to compact by hand]',
     ]) assert.equal(isFailureNote(t), false, t.split('\n')[0]);
   });
 });

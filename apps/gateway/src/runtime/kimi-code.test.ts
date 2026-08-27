@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   kimiArgs, kimiFallbackPaths, kimiHome, kimiProviderType, kimiSpawnEnv, resolveKimiCommand,
-  scanWire, wireFileFor, turnFailed, isGoalPrompt, CONFLICTING_KIMI_VARS,
+  scanWire, wireFileFor, turnFailed, isGoalPrompt,
+  CONFLICTING_KIMI_VARS, GATEWAY_ONLY_VARS,
 } from './kimi-code';
 import type { ModelCredential } from '../pi-config';
 
@@ -136,26 +137,42 @@ test('the vars that could redirect or double-authenticate a child are named', ()
 // else, so "we saw output" is true even for a run that dies at its own auth
 // gate — and the failure would reach the user as an empty reply.
 test('a non-zero exit is a failure even when the turn produced output first', () => {
-  assert.equal(turnFailed(1, false, false), true);
-  assert.equal(turnFailed(0, false, false), false);
+  assert.equal(turnFailed(1, null, false, false), true);
+  assert.equal(turnFailed(0, null, false, false), false);
+});
+
+// The shape Node reports for a signal death is `(null, 'SIGKILL')`, so a check
+// that reads only `code` calls every signal death a success. That is not
+// hypothetical: the silence watchdog ends a wedged turn exactly this way, and
+// the session would flip from working to idle with no note at all.
+test('a signal death is a failure, not a clean exit', () => {
+  assert.equal(turnFailed(null, 'SIGKILL', false, false), true);
+  assert.equal(turnFailed(null, 'SIGSEGV', false, false), true);
+  // …unless the stop button caused it, which reports itself.
+  assert.equal(turnFailed(null, 'SIGINT', true, false), false);
+  // A clean exit still has no signal.
+  assert.equal(turnFailed(0, null, false, false), false);
 });
 
 // An interrupted turn already reports itself; saying it failed as well would put
 // two contradictory notes under one stop button.
 test('an interrupted turn is not a failure', () => {
-  assert.equal(turnFailed(130, true, false), false);
-  assert.equal(turnFailed(1, true, false), false);
+  assert.equal(turnFailed(130, null, true, false), false);
+  assert.equal(turnFailed(1, null, true, false), false);
 });
 
 // Goal mode reports its terminal state through the exit code, and a user can
 // type /goal into an ordinary chat.
 test('goal mode terminal states are not failures, but only for a goal prompt', () => {
-  assert.equal(turnFailed(3, false, true), false);
-  assert.equal(turnFailed(6, false, true), false);
-  assert.equal(turnFailed(1, false, true), true);
+  assert.equal(turnFailed(3, null, false, true), false);
+  assert.equal(turnFailed(6, null, false, true), false);
+  assert.equal(turnFailed(1, null, false, true), true);
   // The same codes from an ordinary prompt ARE failures.
-  assert.equal(turnFailed(3, false, false), true);
-  assert.equal(turnFailed(6, false, false), true);
+  assert.equal(turnFailed(3, null, false, false), true);
+  assert.equal(turnFailed(6, null, false, false), true);
+  // A goal prompt killed by a signal is still a failure — the exemption is for
+  // the codes goal mode chooses, not for however the process died.
+  assert.equal(turnFailed(null, 'SIGKILL', false, true), true);
 });
 
 test('goal prompts are recognised the way the CLI recognises them', () => {
@@ -164,6 +181,13 @@ test('goal prompts are recognised the way the CLI recognises them', () => {
   assert.equal(isGoalPrompt('/goals are good'), false);
   assert.equal(isGoalPrompt('tell me about /goal'), false);
   assert.equal(isGoalPrompt(''), false);
+});
+
+// The gateway's environment is the child's by default, and this backend has no
+// hermit tool surface — so without the scrub, `echo $ASST_KEY` inside the
+// agent's own Bash tool prints the machine's dashboard credential.
+test('the gateway own dashboard key is kept out of the agent shell', () => {
+  assert.ok((GATEWAY_ONLY_VARS as readonly string[]).includes('ASST_KEY'));
 });
 
 // ── where it looks for the binary and the store ─────────────────────────────
@@ -281,7 +305,46 @@ test('a half-written tail line is skipped, not fatal', () => {
   assert.equal(scanned.totals.input, 4090 + 16896);
 });
 
+// …and skipping it must not also step OVER it. Advancing the offset to the
+// file's size would lose that record forever — a number quietly too low, with
+// no symptom to notice.
+test('a half-written tail line is re-read once it is complete', () => {
+  const { home, wire, sessionId } = fixture();
+  const partial = '{"type":"usage.record","agentId":"main","usage":{"inputOth';
+  fs.writeFileSync(wire, TURN_1 + partial);
+
+  const first = scanWire(wireFileFor(home, sessionId)!, 0, null)!;
+  assert.equal(first.totals.input, 4090 + 16896);
+  assert.equal(first.offset, Buffer.byteLength(TURN_1), 'the offset stopped past the partial line');
+
+  // The writer finishes the line.
+  fs.writeFileSync(wire, TURN_1 + TURN_2);
+  const second = scanWire(wire, first.offset, first.totals)!;
+  assert.equal(second.totals.input, 4090 + 16896 + 2303 + 18176);
+});
+
+// A log holding nothing but a partial first line has no complete record to
+// count and nowhere safe to move the offset to.
+test('a log with no complete line yet leaves the offset alone', () => {
+  const { home, wire, sessionId } = fixture();
+  fs.writeFileSync(wire, '{"type":"usage.rec');
+  assert.equal(scanWire(wireFileFor(home, sessionId)!, 0, null), null);
+});
+
 test('a log that does not exist yet is not an error', () => {
   const { home, sessionId } = fixture();
   assert.equal(scanWire(wireFileFor(home, sessionId)!, 0, null), null);
+});
+
+// The cheap-repeat path storedUsage() depends on: a session with no live child
+// is not being written to, so the second scan must cost a stat and stop — not
+// re-read a multi-megabyte log on every 8-second snapshot tick.
+test('re-scanning an unchanged log reads nothing and keeps the totals', () => {
+  const { home, wire, sessionId } = fixture();
+  fs.writeFileSync(wire, TURN_1);
+  const first = scanWire(wireFileFor(home, sessionId)!, 0, null)!;
+
+  const again = scanWire(wire, first.offset, first.totals)!;
+  assert.deepEqual(again.totals, first.totals);
+  assert.equal(again.offset, first.offset);
 });

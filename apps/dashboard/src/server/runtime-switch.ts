@@ -86,34 +86,30 @@ export function planRuntimeSwitch(
     };
   }
 
-  // codex and dsh read the model off these columns like pi does, but neither
+  // codex, dsh and kimi read the model off these columns like pi does, but none
   // has a long-lived process to tear down — each turn is its own subprocess,
   // and the gateway resolves the model at spawn time (codex rebuilds its thread
-  // object; dsh passes it per run, resuming the same session id either way).
-  // Restarting would hibernate a session to achieve something the next turn
-  // does anyway.
-  if (after.runtime === 'codex-exec' || after.runtime === 'dsh-exec') {
-    return { ok: true, restart: false, resetExternalId: false };
-  }
-
-  // kimi is the same one-subprocess-per-turn shape, so it never restarts
-  // either — but it is the only one of the three that takes a credential, and
-  // that half needs the claude-sdk treatment rather than codex's.
+  // object; dsh and kimi pass it per run, resuming the same session id either
+  // way). Restarting would hibernate a session to achieve something the next
+  // turn does anyway.
   //
-  // Reaching here with a moved credential means the BACKEND was re-pointed in
-  // Settings while this session sat on it (same backend id, different
-  // endpoint). kimi keeps `[thinking] keep = "all"`, so a resumed session
-  // replays its stored reasoning to whatever endpoint is configured now — the
-  // same provider-signed-thinking trap that makes a claude-sdk transcript
-  // unusable across credentials, and it would surface as a failure on every
-  // later message of a session that looked fine when it was switched. Dropping
-  // the id starts a fresh kimi session instead, which is visible and recoverable.
-  if (after.runtime === 'kimi-code') {
-    return {
-      ok: true,
-      restart: false,
-      resetExternalId: (before.runtimeCredentialId ?? null) !== (after.runtimeCredentialId ?? null),
-    };
+  // kimi takes a credential and the other two do not, which looks like it
+  // should get the claude-sdk treatment below — a restart when the credential
+  // moves. It cannot, and the reason is worth writing down so nobody adds that
+  // branch back: reaching here means `before.backendId === after.backendId`,
+  // and `resolveRuntime` reads `runtimeCredentialId` straight off that
+  // backend's config, with both sides resolved against the SAME machine
+  // snapshot. Same backend id therefore always means same credential id, so the
+  // comparison could only ever be false.
+  //
+  // What that leaves genuinely unhandled: re-pointing a backend at a different
+  // credential in Settings while a session is live. Nothing calls this function
+  // on that path at all, so a resumed kimi session would replay its stored
+  // reasoning (`[thinking] keep = "all"`) to the new endpoint. Recorded in
+  // docs/kimi-code-runtime-design.md rather than papered over here with a
+  // branch that cannot fire.
+  if (after.runtime === 'codex-exec' || after.runtime === 'dsh-exec' || after.runtime === 'kimi-code') {
+    return { ok: true, restart: false, resetExternalId: false };
   }
 
   // A claude-sdk session applies a model pin live (`setModel`, one control
