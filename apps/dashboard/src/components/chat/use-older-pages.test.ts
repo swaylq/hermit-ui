@@ -5,53 +5,65 @@ import { pageBefore, chunksBottomFirst, shedRows, absorbShed, OLDER_PAGE, COMMIT
 // The seam between a cached page and the rest of history. Getting it wrong does
 // not throw — it shows a turn twice, or drops one, the next time someone reads
 // back through a conversation they have already read.
+//
+// What makes a cached page trustworthy is the `nextId` each row was stamped with
+// when it was written: the store itself is NOT contiguous (it accumulates live
+// windows written minutes apart), so a page is served only when the links prove
+// it is one unbroken run reaching the anchor.
 
+/** A run exactly as the server hands one over: each row linked to the next. */
+const run = (ids: string[], after?: string) =>
+  ids.map((id, i) => ({ id, nextId: i + 1 < ids.length ? ids[i + 1] : after }));
+
+/** One row with a timestamp, for the chunking tests, which only order by it. */
 const row = (id: string, createdAt: string) => ({ id, createdAt });
 
-// (createdAt, id) is the total order the server pages by. Ties on the timestamp
-// are real: a turn's rows land in the same millisecond often enough that
-// ordering by time alone loops forever on the same page.
-const HISTORY = [
-  row('a', '2026-08-21T10:00:00.000Z'),
-  row('b', '2026-08-21T10:00:01.000Z'),
-  row('c', '2026-08-21T10:00:02.000Z'),
-  row('d', '2026-08-21T10:00:02.000Z'), // same ms as c
-  row('e', '2026-08-21T10:00:03.000Z'),
-];
+const HISTORY = run(['a', 'b', 'c', 'd', 'e'], 'f');
 
 test('a whole page comes back, newest-last', () => {
-  const page = pageBefore(HISTORY, { createdAt: '2026-08-21T10:00:03.000Z', id: 'e' }, 2);
-  assert.deepEqual(page?.map((r) => r.id), ['c', 'd']);
+  assert.deepEqual(pageBefore(HISTORY, { id: 'e' }, 2)?.map((r) => r.id), ['c', 'd']);
 });
 
 test('the edge row itself is never included — that is the duplicate', () => {
-  const page = pageBefore(HISTORY, { createdAt: '2026-08-21T10:00:02.000Z', id: 'd' }, 3);
-  assert.deepEqual(page?.map((r) => r.id), ['a', 'b', 'c']);
-});
-
-test('a tie on the timestamp is broken by id, not ignored', () => {
-  // Edge is `d`; `c` shares its millisecond and must still count as older.
-  const page = pageBefore(HISTORY, { createdAt: '2026-08-21T10:00:02.000Z', id: 'd' }, 1);
-  assert.deepEqual(page?.map((r) => r.id), ['c']);
-  // ...and from `c`, `d` is NOT older, so the page stops before it.
-  const fromC = pageBefore(HISTORY, { createdAt: '2026-08-21T10:00:02.000Z', id: 'c' }, 2);
-  assert.deepEqual(fromC?.map((r) => r.id), ['a', 'b']);
+  assert.deepEqual(pageBefore(HISTORY, { id: 'd' }, 3)?.map((r) => r.id), ['a', 'b', 'c']);
 });
 
 // A partial hit would have to be stitched to a server page, and that seam is
 // exactly what this refuses to get wrong.
 test('less than a whole page is refused rather than half-served', () => {
-  assert.equal(pageBefore(HISTORY, { createdAt: '2026-08-21T10:00:01.000Z', id: 'b' }, 2), null);
-  assert.equal(pageBefore([], { createdAt: '2026-08-21T10:00:00.000Z', id: 'a' }, 1), null);
+  assert.equal(pageBefore(HISTORY, { id: 'b' }, 2), null);
+  assert.equal(pageBefore([], { id: 'a' }, 1), null);
 });
 
-test('Date and string timestamps are the same order', () => {
-  const mixed = [
-    { id: 'a', createdAt: new Date('2026-08-21T10:00:00.000Z') },
-    { id: 'b', createdAt: '2026-08-21T10:00:01.000Z' },
-  ];
-  const page = pageBefore(mixed, { createdAt: '2026-08-21T10:00:02.000Z', id: 'z' }, 2);
-  assert.deepEqual(page?.map((r) => r.id), ['a', 'b']);
+// The store holds the live window AND, separately, the pages below it; only the
+// pages carry a link up to the window's oldest row. Reading has to work from an
+// anchor the store does not hold.
+test('the anchor need not be in the store, only a row claiming to precede it', () => {
+  assert.deepEqual(pageBefore(HISTORY, { id: 'f' }, 2)?.map((r) => r.id), ['d', 'e']);
+});
+
+// THE regression. Two runs written minutes apart, with the session having moved
+// on in between: sorted together they look like one history, and the old
+// implementation served straight across the gap. The page it handed back had a
+// hole in the middle, and since paging only ever walks further back, nothing
+// afterwards could repair it — it survived every reload.
+test('a gap between two runs is refused, not jumped', () => {
+  const store = [...run(['a', 'b', 'c']), ...run(['m', 'n', 'o'], 'p')];
+  assert.equal(pageBefore(store, { id: 'p' }, 4), null);
+  // The part that IS proven still serves.
+  assert.deepEqual(pageBefore(store, { id: 'p' }, 3)?.map((r) => r.id), ['m', 'n', 'o']);
+});
+
+test('a row whose link points at something the store lost is refused', () => {
+  const store = run(['a', 'b', 'c'], 'd').filter((r) => r.id !== 'b');
+  assert.equal(pageBefore(store, { id: 'd' }, 2), null);
+});
+
+// An old cached row predates the links entirely. It must read as "unknown", not
+// as "nothing comes after me".
+test('unlinked rows are refused rather than guessed at', () => {
+  const store = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  assert.equal(pageBefore(store, { id: 'd' }, 1), null);
 });
 
 // The size the warm-ahead fetch and the cache read must agree on: warming one
@@ -59,10 +71,9 @@ test('Date and string timestamps are the same order', () => {
 // would spend the request and keep the wait.
 test('a page is one size, and the warm fetch uses it', () => {
   assert.equal(OLDER_PAGE, 60);
-  const many = Array.from({ length: OLDER_PAGE + 1 }, (_, i) =>
-    row(`m${String(i).padStart(4, '0')}`, new Date(1_700_000_000_000 + i * 1000).toISOString()));
+  const many = run(Array.from({ length: OLDER_PAGE + 1 }, (_, i) => `m${String(i).padStart(4, '0')}`));
   const edge = many[many.length - 1];
-  const page = pageBefore(many, { createdAt: edge.createdAt, id: edge.id }, OLDER_PAGE);
+  const page = pageBefore(many, { id: edge.id }, OLDER_PAGE);
   assert.equal(page?.length, OLDER_PAGE);
   assert.equal(page?.[page.length - 1].id, many[many.length - 2].id);
 });

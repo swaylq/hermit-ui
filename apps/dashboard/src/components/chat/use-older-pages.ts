@@ -65,23 +65,50 @@ const WARM_MAX_PAGES = 20;
 const WARM_GAP_MS = 120;
 
 /**
- * The last `size` rows strictly before `edge`, or null when the store does not
- * hold a whole page — see the call site for why a partial hit is refused.
- * `(createdAt, id)` is the same total order the server pages by.
+ * The `size` rows immediately before `edge`, or null when the store cannot PROVE
+ * it holds them as an unbroken run.
+ *
+ * The proof is the `nextId` each row was stamped with when it was written (see
+ * CachedFullRow.nextId): start at the edge, take the row that claims to come
+ * directly before it, and repeat. A missing link stops the walk and the whole
+ * page is refused, so the caller fetches it from the server instead.
+ *
+ * This used to be "sort what the store holds, take the last `size` older than
+ * the edge", which is only right if the store is contiguous — and it is not. It
+ * accumulates live windows written minutes apart, and a session busy enough to
+ * slide the window further than its own width between two writes leaves a gap.
+ * Reading straight across one of those served a page with a hole in the middle,
+ * and because paging only ever walks FURTHER back, nothing after that could
+ * repair it: the hole outlived every reload. On the session this was written
+ * for it swallowed 162 messages, fifteen minutes, and the auto-compaction
+ * notice the user was looking for.
+ *
+ * The edge itself need not be in the store — only a row claiming to precede it.
+ * That is the seam between the live window (`full`) and the pages below it
+ * (`digest`), which no single store holds both sides of.
  *
  * Exported for its tests: a seam that duplicates or skips a message is invisible
  * until someone reads back through history and finds a turn twice.
  */
-export function pageBefore<T extends { id: string; createdAt: string | Date }>(
+export function pageBefore<T extends { id: string; nextId?: string | null }>(
   rows: T[],
-  edge: { createdAt: string; id: string },
+  edge: { id: string },
   size: number
 ): T[] | null {
-  const older = rows.filter((r) => {
-    const at = typeof r.createdAt === 'string' ? r.createdAt : r.createdAt.toISOString();
-    return at !== edge.createdAt ? at < edge.createdAt : r.id < edge.id;
-  });
-  return older.length >= size ? older.slice(older.length - size) : null;
+  const before = new Map<string, T>();
+  for (const r of rows) if (r.nextId) before.set(r.nextId, r);
+  const page: T[] = [];
+  let key = edge.id;
+  for (let i = 0; i < size; i++) {
+    const p = before.get(key);
+    // No link, or the linked row is not held: a partial hit would have to be
+    // stitched to a server page, and getting that seam wrong means duplicated or
+    // skipped messages. Refuse the whole page instead.
+    if (!p) return null;
+    page.push(p);
+    key = p.id;
+  }
+  return page.reverse();
 }
 
 /** `(createdAt, id)`, the total order the server pages by, as a boolean. */
@@ -274,7 +301,7 @@ export function useOlderPages(
         digest: true,
       });
       if (res.rows.length === 0) return;
-      await putDigestRows(scope, sessionId, toCachedRows(res.rows, sessionId));
+      await putDigestRows(scope, sessionId, toCachedRows(res.rows, sessionId), before.id);
     },
     [sessionId, utils]
   );
@@ -341,7 +368,7 @@ export function useOlderPages(
             // trimmed, and writing them into the store the LIVE window is served
             // from would let a first paint come back missing what it used to show.
             if (scope) {
-              void putDigestRows(scope, sessionId, toCachedRows(res.rows, sessionId)).catch(() => {});
+              void putDigestRows(scope, sessionId, toCachedRows(res.rows, sessionId), anchorId).catch(() => {});
             }
           }
         }
@@ -452,7 +479,7 @@ export function useOlderPages(
             });
             if (run.cancelled || run.sessionId !== sessionId) return;
             if (res.rows.length === 0) break;
-            await putDigestRows(scope, sessionId, toCachedRows(res.rows, sessionId));
+            await putDigestRows(scope, sessionId, toCachedRows(res.rows, sessionId), cursor.id);
             const first = res.rows[0];
             cursor = {
               id: first.id,

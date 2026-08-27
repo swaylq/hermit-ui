@@ -445,6 +445,38 @@ export async function getFullRows(scope: string, sessionId: string): Promise<Cac
   return rows.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1));
 }
 
+/**
+ * Stamp each row with the id of the row after it, ready to be written.
+ *
+ * `rows` must be one run exactly as the server handed it over — a live window or
+ * a page of history — because that is what makes the neighbour of each row known
+ * rather than assumed. `after` is the row the run butts up against above it,
+ * which a history page knows (it was fetched strictly before that anchor) and a
+ * live window does not (nothing has come after it yet).
+ *
+ * The last row keeps whatever link it already had when `after` is unknown: the
+ * newest row of one window is a middle row of the next, and downgrading it to
+ * "unknown" would break the chain a later read walks through it.
+ */
+function linked(rows: CachedFullRow[], after: string | undefined, held: Map<string, CachedFullRow>): CachedFullRow[] {
+  return rows.map((r, i) => {
+    const nextId = i + 1 < rows.length ? rows[i + 1].id : after ?? held.get(r.id)?.nextId;
+    return nextId ? { ...r, nextId } : r;
+  });
+}
+
+/** The rows of `ids` that the store already holds, for `linked`'s last-row case. */
+async function heldByIds(store: IDBObjectStore, ids: string[]): Promise<Map<string, CachedFullRow>> {
+  const out = new Map<string, CachedFullRow>();
+  await Promise.all(
+    ids.map(async (id) => {
+      const row = await promisify(store.get(id) as IDBRequest<CachedFullRow | undefined>);
+      if (row) out.set(id, row);
+    }),
+  );
+  return out;
+}
+
 // Write-through from listMessages. Rows are upserted, never replace-all: the
 // window the user is looking at is the NEWEST N, so a replace-all would throw
 // away the older rows a previous "load earlier" already cached.
@@ -452,9 +484,14 @@ export async function putFullRows(scope: string, sessionId: string, rows: Cached
   if (rows.length === 0) return;
   const db = await openCache(scope);
   if (!db) return;
+  // Two transactions: the read of the last row's existing link has to settle
+  // before the write, and an IndexedDB transaction cannot be awaited mid-flight
+  // without auto-committing.
+  const readTx = db.transaction(STORE_FULL, 'readonly');
+  const held = await heldByIds(readTx.objectStore(STORE_FULL), [rows[rows.length - 1].id]);
   const tx = db.transaction([STORE_FULL, STORE_FULL_META], 'readwrite');
   const store = tx.objectStore(STORE_FULL);
-  for (const r of rows) store.put(r);
+  for (const r of linked(rows, undefined, held)) store.put(r);
   tx.objectStore(STORE_FULL_META).put({ sessionId, lastUsedAt: Date.now() } satisfies FullMeta);
   await txDone(tx);
 }
@@ -473,13 +510,27 @@ export async function getDigestRows(scope: string, sessionId: string): Promise<C
   return rows.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1));
 }
 
-export async function putDigestRows(scope: string, sessionId: string, rows: CachedFullRow[]): Promise<void> {
+/**
+ * @param anchorId the row this page was fetched strictly BEFORE — what makes the
+ *                 page's newest row a known neighbour rather than a guess. Omit
+ *                 only if there genuinely is no anchor; the page is then written
+ *                 unlinked at its top and reads stop there.
+ */
+export async function putDigestRows(
+  scope: string,
+  sessionId: string,
+  rows: CachedFullRow[],
+  anchorId?: string,
+): Promise<void> {
   if (rows.length === 0) return;
   const db = await openCache(scope);
   if (!db) return;
+  const held = anchorId
+    ? new Map<string, CachedFullRow>()
+    : await heldByIds(db.transaction(STORE_DIGEST, 'readonly').objectStore(STORE_DIGEST), [rows[rows.length - 1].id]);
   const tx = db.transaction([STORE_DIGEST, STORE_FULL_META], 'readwrite');
   const store = tx.objectStore(STORE_DIGEST);
-  for (const r of rows) store.put(r);
+  for (const r of linked(rows, anchorId, held)) store.put(r);
   tx.objectStore(STORE_FULL_META).put({ sessionId, lastUsedAt: Date.now() } satisfies FullMeta);
   await txDone(tx);
 }

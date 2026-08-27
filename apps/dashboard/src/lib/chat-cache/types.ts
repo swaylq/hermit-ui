@@ -45,6 +45,26 @@ export type CachedFullRow = {
   // paints from here first — without it, reopening a session the Brain drove would
   // show its messages as the human's until the network fetch landed.
   authoredBy?: string | null;
+  /**
+   * The row that comes immediately AFTER this one in the conversation.
+   *
+   * Every write into these stores is a run the server handed over in one piece —
+   * a live window, or one page of history — so each row's neighbour inside that
+   * run is known at write time and can be recorded. A read then PROVES the page
+   * it serves is unbroken by walking these links back from the anchor, instead
+   * of assuming that whatever the store happens to hold is contiguous.
+   *
+   * It is not. The store accumulates windows written minutes apart, and a
+   * session busy enough to slide the window further than its own width between
+   * two writes leaves a gap between them. Serving a page across that gap hands
+   * the timeline a hole that survives every reload, because the pager only ever
+   * walks further back — 162 messages and fifteen minutes of one, in the case
+   * this was written for.
+   *
+   * Absent means "unknown", which is what an old cached row and the newest row
+   * of a live window both are; a read refuses rather than guesses.
+   */
+  nextId?: string | null;
 };
 
 // One translated markdown block, keyed by a hash of its SOURCE text plus the
