@@ -57,7 +57,7 @@ import { PreviewFab } from '@/components/chat/preview-fab';
 import { LivePreviewPanel, parseLivePreview } from '@/components/chat/preview-panel';
 import { SessionDetailSheet } from '@/components/chat/session-detail-sheet';
 import { ModelChip } from '@/components/chat/model-chip';
-import { runtimeShortLabel, runtimeDetail, hasTmuxPane } from '@/lib/runtime-labels';
+import { runtimeShortLabel, runtimeDetail, hasTmuxPane, providerMark } from '@/lib/runtime-labels';
 
 // isTouchPrimary (phone/tablet vs desktop) lives in @/lib/save-file — the
 // soft-keyboard return key inserts a newline there (a dedicated send button
@@ -611,9 +611,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // it for an input; Enter or blur saves, Escape cancels. Backend already has
   // `chat.setTitle` — we just plug into it.
   const [editingTitle, setEditingTitle] = useState(false);
-  // Mobile header overflow: the phone header only has room for the two actions
-  // you actually reach for mid-conversation (tmux, delete), so the rest live in a
-  // tray that slides out leftward OVER the title. Desktop keeps everything inline.
+  // Mobile header overflow: the phone header only has room for the actions you
+  // actually reach for mid-conversation (new chat, tmux, delete), so the rest
+  // live in a tray that slides out leftward OVER the title. Desktop keeps
+  // everything inline.
   const [moreOpen, setMoreOpen] = useState(false);
   // Session detail (incl. the backend switcher). Local state, not a URL param:
   // this app's programmatic same-path navigations get swallowed (see the
@@ -1431,6 +1432,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // between "Claude Code" and "the header hasn't loaded".
   const backendLabel = runtimeShortLabel(session?.runtime);
   const backendTitle = `${runtimeDetail(session?.runtime, session?.runtimeProvider, session?.runtimeModel)} — click for session details`;
+  // Whose model answers. Only for a session running on a credential — a
+  // built-in backend has none, and there the harness name already says it all.
+  const vendorMark = session?.runtimeCredentialId ? providerMark(session.runtimeProvider) : null;
 
   // What the state chip says when it can no longer say it in full. The chip is
   // the meta row's shrinking item now (see the header), so on a phone
@@ -1646,19 +1650,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       >
         <Search className="h-4 w-4" />
       </button>
-      <button
-        type="button"
-        onClick={() => {
-          if (!session?.agentName || newAgentChat.isPending) return;
-          newAgentChat.mutate({ agentName: session.agentName });
-        }}
-        disabled={!session?.agentName || newAgentChat.isPending}
-        aria-label="new chat with this agent"
-        title={session?.agentName ? `New chat with ${session.agentName}` : 'New chat with this agent'}
-        className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground disabled:cursor-wait disabled:opacity-50"
-      >
-        <SquarePen className="h-4 w-4" />
-      </button>
       <ConfirmIconButton
         icon={FoldVertical}
         title="compact — summarize the conversation so the agent's context window shrinks (runs /compact, keeps continuity). THIS is what reduces a large context; restart only reloads the whole history via --resume."
@@ -1673,6 +1664,29 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         onConfirm={() => { restartSession.mutate({ id: sessionId }); }}
       />
     </>
+  );
+
+  // Start another chat with the same agent. NOT one of the secondary actions
+  // above: on a phone those fold into the "more" tray, and this is the one
+  // among them you reach for without already being in the middle of something
+  // — a thought that has nothing to do with the conversation on screen. Two
+  // taps to open a tray was enough friction that the sidebar's New chat, which
+  // costs opening the drawer and picking the agent again, was winning. Rendered
+  // once, in the persistent cluster, so it is the same button at every width.
+  const newChatButton = (
+    <button
+      type="button"
+      onClick={() => {
+        if (!session?.agentName || newAgentChat.isPending) return;
+        newAgentChat.mutate({ agentName: session.agentName });
+      }}
+      disabled={!session?.agentName || newAgentChat.isPending}
+      aria-label="new chat with this agent"
+      title={session?.agentName ? `New chat with ${session.agentName}` : 'New chat with this agent'}
+      className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground disabled:cursor-wait disabled:opacity-50"
+    >
+      <SquarePen className="h-4 w-4" />
+    </button>
   );
 
   return (
@@ -1817,7 +1831,22 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                       ctx because both describe the run, not the conversation.
                       Short labels — the meta line is already tight at 390px.
                       Also the way IN to the session detail: the backend is the
-                      thing you'd click this line to change. */}
+                      thing you'd click this line to change.
+
+                      Two facts share this chip when the session runs on a
+                      credential: which harness, and whose model answers. The
+                      second is the one that was missing — a claude-sdk session
+                      pointed at Kimi read plain "Claude", exactly like one on
+                      this machine's Anthropic subscription, so nothing on
+                      screen said which account the turn was billed to.
+
+                      Both only fit above 40rem. Below it the VENDOR wins and
+                      the harness falls back to the tooltip: it is the half you
+                      cannot deduce (you chose the backend; you cannot see the
+                      endpoint), and spending the row's last 30px on it is what
+                      kept the agent name from truncating to "a…" — measured at
+                      390px, the width where this row has nothing to spare. Same
+                      trade the ctx bar makes two items along. */}
                   <button
                     type="button"
                     onClick={() => setDetailOpen(true)}
@@ -1825,7 +1854,14 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                     aria-label="session details"
                     className="shrink-0 font-mono rounded px-1 -mx-1 cursor-pointer transition-colors hover:bg-accent/60 hover:text-foreground"
                   >
-                    {backendLabel}
+                    {vendorMark ? (
+                      <>
+                        <span className="hidden @min-[40rem]:inline">
+                          {backendLabel}<span className="text-muted-foreground/40">·</span>
+                        </span>
+                        <span className="text-foreground">{vendorMark}</span>
+                      </>
+                    ) : backendLabel}
                   </button>
                   {/* Model, next to the backend that runs it — the two answer
                       one question together. Claude Code only: the pane driver
@@ -1903,6 +1939,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               <ArchiveRestore className="h-4 w-4" />
             </button>
           )}
+          {newChatButton}
           {/* Secondary actions. Inline while the header (container query — the
               chat COLUMN, which the preview split narrows) is ≥40rem; below
               that they live in the tray, same JSX in a different container. */}

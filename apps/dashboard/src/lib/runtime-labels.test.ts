@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   RUNTIME_KINDS, CUSTOM_HARNESSES, RUNTIME_BLURB, RUNTIME_NEEDS,
   runtimeLabel, runtimeShortLabel, sharesConversation, runtimeDetail, isCustomHarness, hasTmuxPane,
+  providerMark,
 } from './runtime-labels';
 
 test('every harness has a label, a blurb and an install note', () => {
@@ -41,6 +42,52 @@ test('detail names the endpoint for the harnesses that have one', () => {
   // cannot set and the harness does not read.
   assert.equal(runtimeDetail('codex-exec', 'hyqubit', 'gpt-5.1'), 'Codex · gpt-5.1');
   assert.equal(runtimeDetail('claude-tmux', 'hyqubit', 'x'), 'Claude Code (interactive, tmux pane)');
+  // The SDK driver names its endpoint too, now that it can be pointed at one —
+  // this string is the tooltip behind the header's shortened vendor mark.
+  assert.equal(
+    runtimeDetail('claude-sdk', 'kimi-coding', 'k3[1m]'),
+    'Claude Code (Agent SDK) · kimi-coding · k3[1m]',
+  );
+  // …and the built-in has no credential, so no provider, and reads as before.
+  assert.equal(runtimeDetail('claude-sdk', null, 'opus'), 'Claude Code (Agent SDK) · opus');
+});
+
+// ── whose model answers ────────────────────────────────────────────
+
+// The header chip that carries this reads "Claude" for a Kimi session and for a
+// subscription one alike, because the harness is the same Claude Code. The mark
+// is the only thing on the row that tells them apart.
+test('both ways of reaching Kimi are marked Kimi', () => {
+  // Kimi Code (the membership endpoint) and the Moonshot open platform are two
+  // key namespaces and two model-id namespaces — one vendor on the header.
+  assert.equal(providerMark('kimi-coding'), 'Kimi');
+  assert.equal(providerMark('moonshotai-cn'), 'Kimi');
+  assert.equal(providerMark('zai'), 'GLM');
+});
+
+// `provider` is free text the user typed into Settings → Models, so the table
+// can only ever be a spelling aid. An entry it has not met is shown as typed:
+// ugly beats blank, and blank is what the header had before.
+test('an unknown provider is shown as typed, not dropped', () => {
+  assert.equal(providerMark('hyqubit'), 'hyqubit');
+  assert.equal(providerMark('  KIMI-CODING '), 'Kimi');
+  assert.equal(providerMark('my-litellm'), 'my-litellm');
+});
+
+// The column takes 64 characters and the chip lives in a row that runs out of
+// width at 390px. Cut here, not in CSS: `truncate` needs a block box and the
+// row around this is inline.
+test('a long provider is cut to something a phone header can hold', () => {
+  assert.equal(providerMark('a-very-long-provider-name'), 'a-very-long…');
+  assert.equal(providerMark('exactly12chr'), 'exactly12chr');
+});
+
+// A built-in backend has no credential and therefore no provider. Null is the
+// signal the header uses to render nothing at all.
+test('no provider means no mark', () => {
+  assert.equal(providerMark(null), null);
+  assert.equal(providerMark(undefined), null);
+  assert.equal(providerMark('   '), null);
 });
 
 // ── which harnesses have a pane to attach to ────────────────────────────────

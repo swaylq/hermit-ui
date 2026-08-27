@@ -74,6 +74,52 @@ export function runtimeShortLabel(kind: string | null | undefined): string {
   return 'Claude';
 }
 
+/**
+ * Pretty names for the endpoints a credential can point at.
+ *
+ * Keyed on the credential's `provider`, which is free text the user types in
+ * Settings → Models — so this is a spelling table, not a registry. Anything
+ * missing falls through to the raw string in providerMark below.
+ */
+const PROVIDER_MARKS: Record<string, string> = {
+  // Kimi reaches you two ways with two key namespaces (see the two presets in
+  // lib/model-credentials.ts). Both are Kimi as far as the header is concerned.
+  'kimi-coding': 'Kimi',
+  'moonshotai-cn': 'Kimi',
+  moonshotai: 'Kimi',
+  moonshot: 'Kimi',
+  kimi: 'Kimi',
+  zai: 'GLM',
+  openrouter: 'OpenRouter',
+  deepseek: 'DeepSeek',
+};
+
+/**
+ * Whose model answers, for a session running on a credential.
+ *
+ * The harness label answers a different question — `runtimeShortLabel` reads
+ * "Claude" for every claude-sdk session, whether the turn went to Anthropic on
+ * this machine's subscription or to Kimi on an API key, because the harness is
+ * Claude Code either way. That left the chat header with no way to tell the two
+ * apart, which is the thing this fixes.
+ *
+ * Returns null when there is nothing to say (a built-in backend has no
+ * credential and therefore no provider). An unrecognised provider is returned
+ * as typed rather than dropped: `moonshotai-cn` is uglier than `Kimi` and far
+ * better than a blank.
+ */
+export function providerMark(provider: string | null | undefined): string | null {
+  const p = (provider ?? '').trim();
+  if (!p) return null;
+  const named = PROVIDER_MARKS[p.toLowerCase()];
+  if (named) return named;
+  // Free text, and the column allows 64 characters. This lands in a header row
+  // that is already fighting for width at 390px, so it is cut here rather than
+  // by CSS — `truncate` needs a block box, and the surrounding row is inline.
+  // The untruncated value stays in the chip's tooltip via runtimeDetail.
+  return p.length > 12 ? `${p.slice(0, 11)}…` : p;
+}
+
 /** One line of hover detail: the harness plus whatever qualifies it. */
 export function runtimeDetail(
   kind: string | null | undefined,
@@ -84,7 +130,11 @@ export function runtimeDetail(
   // no endpoint to name, so naming one would be a field the user cannot set and
   // the harness does not read.
   if (kind === 'codex-exec') return ['Codex', model].filter(Boolean).join(' · ');
-  if (kind === 'claude-sdk') return ['Claude Code (Agent SDK)', model].filter(Boolean).join(' · ');
+  // The SDK driver DOES name its endpoint, since it became composable: paired
+  // with a credential it answers from that vendor, and this tooltip is where
+  // the header chip's shortened mark spells itself out. A built-in claude-sdk
+  // session has no credential and so no provider, and reads as it always did.
+  if (kind === 'claude-sdk') return ['Claude Code (Agent SDK)', provider, model].filter(Boolean).join(' · ');
   if (kind === 'claude-tmux') return 'Claude Code (interactive, tmux pane)';
   return [runtimeLabel(kind), provider, model].filter(Boolean).join(' · ');
 }
