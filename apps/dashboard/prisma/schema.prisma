@@ -222,6 +222,10 @@ model AgentShareLink {
   keyPrefix  String
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
+  // PUBLIC mode: the token is deterministic (`pub_` + machine name + agent name),
+  // not a bcrypt-hashed secret, so anyone who can form the URL gets in with no
+  // password. Owner opts in via a confirm in the share dialog; false = private.
+  isPublic   Boolean   @default(false)
 
   machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
 

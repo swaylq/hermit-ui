@@ -84,6 +84,7 @@ export function invalidateMachineCache(machineId: string): void {
 // but cached for only 30s so a revoked / regenerated link stops working quickly.
 
 export const SHARE_KEY_NS = 'shr_'; // reserved token namespace (machine keys never use it)
+export const PUB_KEY_NS = 'pub_'; // public-share namespace: deterministic, NOT a secret
 export const SHARE_PREFIX_LEN = 12; // 'shr_' + 8 random chars — the indexed lookup column
 
 export type ResolvedScope =
@@ -152,6 +153,11 @@ async function resolveShareCached(keyPlain: string): Promise<ShareCacheEntry | n
 // everything else is a machine key (full access).
 export async function resolveKey(keyPlain: string): Promise<ResolvedScope | null> {
   if (!keyPlain) return null;
+  // Public shares route first: their token is derived from PUBLIC names, so a
+  // straight lookup (no bcrypt) is enough — see resolvePublicShare below.
+  if (keyPlain.startsWith(PUB_KEY_NS)) {
+    return resolvePublicShare(keyPlain);
+  }
   if (keyPlain.startsWith(SHARE_KEY_NS)) {
     const r = await resolveShareCached(keyPlain);
     return r ? { scope: 'agent', machine: r.machine, scopedAgent: r.agentName } : null;
@@ -166,4 +172,53 @@ export function invalidateShareCache(keyPrefix: string): void {
   for (const [k, v] of shareCache) {
     if (v.keyPrefix === keyPrefix) shareCache.delete(k);
   }
+}
+
+// ─── Public share links: a deterministic, NON-secret token ───────────────────
+// `pub_` + base64url(machineName) + '.' + base64url(agentName). base64url never
+// contains '.', so the dot is an unambiguous delimiter. The token encodes PUBLIC
+// names (machine name is globally unique, agent name is per-machine), not a
+// secret — resolving it is a straight lookup, no bcrypt. Anyone who can form the
+// URL gets in, which is exactly what the owner confirmed when they flipped the
+// link public in the share dialog.
+
+export function publicShareToken(machineName: string, agentName: string): string {
+  const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64url');
+  return PUB_KEY_NS + b64(machineName) + '.' + b64(agentName);
+}
+
+function parsePublicToken(token: string): { machineName: string; agentName: string } | null {
+  const dot = token.indexOf('.', PUB_KEY_NS.length);
+  if (dot <= PUB_KEY_NS.length) return null;
+  try {
+    const machineName = Buffer.from(token.slice(PUB_KEY_NS.length, dot), 'base64url').toString('utf8');
+    const agentName = Buffer.from(token.slice(dot + 1), 'base64url').toString('utf8');
+    if (!machineName || !agentName) return null;
+    return { machineName, agentName };
+  } catch {
+    return null;
+  }
+}
+
+// Debounced lastUsedAt bump for public links (mirrors the machine/share bumps).
+const publicLastUsed = new Map<string, number>();
+
+async function resolvePublicShare(keyPlain: string): Promise<ResolvedScope | null> {
+  const parsed = parsePublicToken(keyPlain);
+  if (!parsed) return null;
+  const machine = await prisma.machine.findUnique({ where: { name: parsed.machineName } });
+  if (!machine) return null;
+  const link = await prisma.agentShareLink.findUnique({
+    where: { machineId_agentName: { machineId: machine.id, agentName: parsed.agentName } },
+    select: { isPublic: true },
+  });
+  if (!link?.isPublic) return null;
+
+  if (Date.now() - (publicLastUsed.get(keyPlain) ?? 0) > LASTSEEN_DEBOUNCE_MS) {
+    publicLastUsed.set(keyPlain, Date.now());
+    void prisma.agentShareLink
+      .updateMany({ where: { machineId: machine.id, agentName: parsed.agentName }, data: { lastUsedAt: new Date() } })
+      .catch(() => {});
+  }
+  return { scope: 'agent', machine, scopedAgent: parsed.agentName };
 }

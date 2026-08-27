@@ -11,7 +11,7 @@ import { randomBytes } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { router, machineProcedure, publicProcedure, authedProcedure } from '../trpc';
 import { prisma } from '../db';
-import { SHARE_KEY_NS, shareKeyPrefix, invalidateShareCache, resolveKey } from '../auth';
+import { SHARE_KEY_NS, shareKeyPrefix, publicShareToken, invalidateShareCache, resolveKey } from '../auth';
 
 const AgentName = z.object({ agentName: z.string().min(1).max(64) });
 
@@ -22,7 +22,14 @@ function mintToken(): string {
 }
 
 // Create or rotate the link for one agent, returning the plaintext token ONCE.
-async function mintAndStore(machineId: string, agentName: string): Promise<{ token: string }> {
+// `publicFlag` (optional) chooses public vs private; undefined preserves the
+// existing link's mode (so a regenerate on an existing link never silently flips
+// it). Public links use a deterministic `pub_` token — no secret, no bcrypt.
+async function mintAndStore(
+  machineId: string,
+  agentName: string,
+  publicFlag?: boolean,
+): Promise<{ token: string; isPublic: boolean }> {
   // Don't mint a link for a non-existent agent (catches a typo'd agentName).
   const agent = await prisma.agent.findUnique({
     where: { machineId_name: { machineId, name: agentName } },
@@ -30,40 +37,66 @@ async function mintAndStore(machineId: string, agentName: string): Promise<{ tok
   });
   if (!agent) throw new TRPCError({ code: 'NOT_FOUND', message: 'agent not found' });
 
-  const token = mintToken();
-  const keyHash = await bcrypt.hash(token, 10);
-  const keyPrefix = shareKeyPrefix(token);
-
   // One link per (machine, agent): regenerate replaces the hash in place. Capture
-  // the OLD prefix first so we can evict its cached resolution (instant revoke).
+  // the OLD prefix first so we can evict its cached resolution (instant revoke),
+  // and read the current mode so an unspecified flag preserves it.
   const prev = await prisma.agentShareLink.findUnique({
     where: { machineId_agentName: { machineId, agentName } },
-    select: { keyPrefix: true },
+    select: { keyPrefix: true, isPublic: true },
   });
+  const isPublic = publicFlag ?? prev?.isPublic ?? false;
+
+  let token: string;
+  let keyHash: string;
+  if (isPublic) {
+    const machine = await prisma.machine.findUnique({ where: { id: machineId }, select: { name: true } });
+    if (!machine) throw new TRPCError({ code: 'NOT_FOUND', message: 'machine not found' });
+    token = publicShareToken(machine.name, agentName);
+    keyHash = token; // placeholder only — public resolution never bcrypts (no secret)
+  } else {
+    token = mintToken();
+    keyHash = await bcrypt.hash(token, 10);
+  }
+  const keyPrefix = shareKeyPrefix(token);
+
   await prisma.agentShareLink.upsert({
     where: { machineId_agentName: { machineId, agentName } },
-    create: { machineId, agentName, keyHash, keyPrefix },
-    update: { keyHash, keyPrefix, lastUsedAt: null },
+    create: { machineId, agentName, keyHash, keyPrefix, isPublic },
+    update: { keyHash, keyPrefix, isPublic, lastUsedAt: null },
   });
   if (prev) invalidateShareCache(prev.keyPrefix);
-  return { token };
+  return { token, isPublic };
 }
 
 export const shareRouter = router({
-  // Owner-only: is there an active link for this agent? (never returns the token)
+  // Owner-only: is there an active link for this agent? (never returns the PRIVATE
+  // token; a public link's deterministic token IS returned so the owner can re-copy
+  // its URL — it's not a secret.)
   get: machineProcedure.input(AgentName).query(async ({ ctx, input }) => {
     const link = await prisma.agentShareLink.findUnique({
       where: { machineId_agentName: { machineId: ctx.machine.id, agentName: input.agentName } },
-      select: { createdAt: true, lastUsedAt: true },
+      select: { createdAt: true, lastUsedAt: true, isPublic: true },
     });
-    return { exists: !!link, createdAt: link?.createdAt ?? null, lastUsedAt: link?.lastUsedAt ?? null };
+    return {
+      exists: !!link,
+      createdAt: link?.createdAt ?? null,
+      lastUsedAt: link?.lastUsedAt ?? null,
+      isPublic: link?.isPublic ?? false,
+      publicToken: link?.isPublic ? publicShareToken(ctx.machine.name, input.agentName) : null,
+    };
   }),
 
-  // Owner-only: create the link, returning the token once.
-  create: machineProcedure.input(AgentName).mutation(({ ctx, input }) => mintAndStore(ctx.machine.id, input.agentName)),
+  // Owner-only: create the link, returning the token once. `public: true` makes it
+  // a no-password public link (the dialog confirms this with the owner first).
+  create: machineProcedure
+    .input(AgentName.extend({ public: z.boolean().optional() }))
+    .mutation(({ ctx, input }) => mintAndStore(ctx.machine.id, input.agentName, input.public)),
 
-  // Owner-only: rotate the token — the previous link stops working at once.
-  regenerate: machineProcedure.input(AgentName).mutation(({ ctx, input }) => mintAndStore(ctx.machine.id, input.agentName)),
+  // Owner-only: rotate the token — the previous link stops working at once. A
+  // public link is deterministic, so "regenerate" there only re-stamps the row.
+  regenerate: machineProcedure
+    .input(AgentName.extend({ public: z.boolean().optional() }))
+    .mutation(({ ctx, input }) => mintAndStore(ctx.machine.id, input.agentName, input.public)),
 
   // Owner-only: revoke (delete) the link.
   revoke: machineProcedure.input(AgentName).mutation(async ({ ctx, input }) => {
