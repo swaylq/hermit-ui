@@ -11,6 +11,7 @@ import remarkGfm from 'remark-gfm';
 // the markdown renders as literal asterisks. This plugin patches the rule.
 import remarkCjkFriendly from 'remark-cjk-friendly';
 import rehypeHighlight from 'rehype-highlight';
+import { copyText } from '@/lib/copy-text';
 import bash from 'highlight.js/lib/languages/bash';
 import css from 'highlight.js/lib/languages/css';
 import diff from 'highlight.js/lib/languages/diff';
@@ -112,8 +113,24 @@ function extractLanguage(children: ReactNode): string | undefined {
 // `list-style: none`, and there's no @tailwindcss/typography plugin here, so
 // without these the markers (ordered numbers / bullets) silently vanish.
 
-// Code block with a language pill (top-right) and a hover Copy button. We
-// reach into the rendered <pre> via a ref to pull `textContent` instead of
+// Code block with a copy affordance that differs by pointer type.
+//
+// A mouse gets the floating pill in the top-right corner, revealed on hover, so
+// the transcript stays clean to read. A phone has no hover: the pill was there
+// in the DOM the whole time at opacity 0 and NOTHING on the screen ever showed
+// it, so copying a command from a code block was impossible on mobile — and the
+// language label, which lives in the same hidden layer, was invisible too. Touch
+// pointers therefore get a permanently visible bar above the code instead: the
+// whole bar is the button (a ~36px full-width tap target, versus the 40x16px
+// pill), language on the left, copy state on the right.
+//
+// Both layouts are rendered and one is hidden by `@media (hover: none)` in CSS.
+// Deciding in JS would mean either a hydration mismatch or a layout shift on
+// every code block as the timeline scrolls, and the hidden node costs nothing.
+// The default branch is the desktop one, so a device that reports neither way
+// keeps today's behaviour.
+//
+// We reach into the rendered <pre> via a ref to pull `textContent` instead of
 // trying to walk the React children tree — that way we get the actual source
 // text without highlight.js's <span> wrappers.
 function CodeBlock({
@@ -126,21 +143,32 @@ function CodeBlock({
   children: ReactNode;
 }) {
   const preRef = useRef<HTMLPreElement>(null);
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<'idle' | 'ok' | 'fail'>('idle');
   const copy = useCallback(async () => {
     const text = preRef.current?.textContent ?? '';
     if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {
-      // clipboard may be denied — fail silent.
-    }
+    const ok = await copyText(text);
+    // Say so when it fails. On a phone there is no console to check and no
+    // selection fallback, so a button that silently does nothing is unusable.
+    setState(ok ? 'ok' : 'fail');
+    setTimeout(() => setState('idle'), 1400);
   }, []);
+  const label = state === 'ok' ? '✓ copied' : state === 'fail' ? '✗ failed' : 'copy';
+  const labelTone = state === 'ok' ? 'text-emerald-400' : state === 'fail' ? 'text-rose-400' : 'text-zinc-300';
   return (
     <div className="relative my-2 group/code">
-      <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-1.5 opacity-0 group-hover/code:opacity-100 focus-within:opacity-100 transition-opacity">
+      {/* Touch: the bar IS the button. */}
+      <button
+        type="button"
+        onClick={copy}
+        aria-label={state === 'ok' ? 'copied' : 'copy code'}
+        className="hidden [@media(hover:none)]:flex w-full cursor-pointer items-center justify-between gap-2 rounded-t-md border border-b-0 border-zinc-800 bg-zinc-900 px-3 py-2.5 text-[11px] font-mono text-zinc-400 transition-colors active:bg-zinc-800"
+      >
+        <span className="select-none uppercase tracking-[0.1em] text-zinc-500">{lang ?? ''}</span>
+        <span className={`select-none ${labelTone}`}>{label}</span>
+      </button>
+      {/* Mouse: the floating pill, revealed on hover. */}
+      <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-1.5 opacity-0 group-hover/code:opacity-100 focus-within:opacity-100 transition-opacity [@media(hover:none)]:hidden">
         {lang && (
           <span className="select-none rounded px-1 py-0.5 text-[9px] font-mono uppercase tracking-[0.1em] text-zinc-500">
             {lang}
@@ -149,10 +177,10 @@ function CodeBlock({
         <button
           type="button"
           onClick={copy}
-          aria-label={copied ? 'copied' : 'copy code'}
-          className="cursor-pointer rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-mono text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800 transition-colors"
+          aria-label={state === 'ok' ? 'copied' : 'copy code'}
+          className={`cursor-pointer rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-mono transition-colors hover:bg-zinc-800 ${state === 'idle' ? 'text-zinc-300 hover:text-zinc-50' : labelTone}`}
         >
-          {copied ? '✓ copied' : 'copy'}
+          {label}
         </button>
       </div>
       <pre
@@ -165,7 +193,7 @@ function CodeBlock({
         // invisible on top. Neutralize any direct code child back to a bare block
         // so the zinc-950 surface + light text show through. No-op for a
         // language-tagged block (its <code class="hljs …"> has none of these).
-        className="!my-0 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 text-zinc-100 px-3 py-2.5 text-[12px] leading-relaxed [&>code]:block [&>code]:border-0 [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit"
+        className="!my-0 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 text-zinc-100 px-3 py-2.5 text-[12px] leading-relaxed [&>code]:block [&>code]:border-0 [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit [@media(hover:none)]:rounded-t-none"
       >
         {children}
       </pre>

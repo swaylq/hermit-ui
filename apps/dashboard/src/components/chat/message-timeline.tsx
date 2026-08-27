@@ -15,6 +15,7 @@ import { useTimelineWindow, WINDOW_ROW_ATTR } from '@/components/chat/use-timeli
 import type { ScrollStability } from '@/components/chat/use-scroll-stability';
 import { spacerBoxHeight, visibleSlice } from '@/components/chat/timeline-window';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/copy-text';
 import { relTime } from '@/lib/format';
 import { TimeAgo } from '@/components/time-ago';
 import { isSameDay, type Block } from '@/components/chat/lib';
@@ -611,16 +612,16 @@ function MessageActions({
   translateAction?: { label: string; title: string };
   onTranslate?: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<'idle' | 'ok' | 'fail'>('idle');
+  const copied = state === 'ok';
   const copy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {
-      // clipboard write can fail in non-secure contexts or when permission is
-      // denied — silently swallow rather than throw at the user.
-    }
+    // copyText falls back to execCommand when navigator.clipboard is missing
+    // (plain-http LAN access) or rejects; a failure gets shown on the button
+    // rather than swallowed, which on a phone is the difference between "it
+    // didn't copy" and "nothing happens when I tap this".
+    const ok = await copyText(text);
+    setState(ok ? 'ok' : 'fail');
+    setTimeout(() => setState('idle'), 1400);
   }, [text]);
   const btn = cn(
     'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono transition-opacity cursor-pointer',
@@ -667,7 +668,7 @@ function MessageActions({
           : 'text-muted-foreground hover:text-foreground hover:bg-accent',
       )}
     >
-      {copied ? '✓ copied' : 'copy'}
+      {state === 'ok' ? '✓ copied' : state === 'fail' ? '✗ failed' : 'copy'}
     </button>
     </>
   );
