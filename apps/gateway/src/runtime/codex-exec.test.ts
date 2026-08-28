@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   CodexExecRuntime, readRolloutTokens, findRolloutFile, resolveCodexModel,
   clampEffort, codexChildEnv, codexShellIsolationConfig, hermitMcpConfigFor, httpsTransportConfig,
+  client,
 } from './codex-exec';
 
 // ── the rollout file, which is how a restarted gateway gets its baseline ──────
@@ -453,4 +454,19 @@ test('HERMIT_CODEX_WEBSOCKETS=1 restores the default transport', () => {
     if (previous === undefined) delete process.env.HERMIT_CODEX_WEBSOCKETS;
     else process.env.HERMIT_CODEX_WEBSOCKETS = previous;
   }
+});
+
+// ── the JSONL repair, which is one line and would fail silently ──────────────
+
+// Without it, one U+2028 anywhere in a turn's output kills the turn (see
+// codex-jsonl-repair.ts). The wrap is a single call inside `client()`, and every
+// test in codex-jsonl-repair.test.ts installs the wrap itself — so deleting that
+// call reinstates the original bug with the whole suite still green. This is the
+// test that goes red instead.
+test('every codex client is built with the JSONL repair already installed', () => {
+  const exec = (client({
+    id: 'sess-1', agentName: 'a', agentDirectory: '/tmp', externalSessionId: null, model: null, mode: null,
+  }) as unknown as { exec: object }).exec;
+
+  assert.ok(Object.hasOwn(exec, 'run'), 'run is the SDK prototype method unless someone wrapped it');
 });

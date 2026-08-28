@@ -366,7 +366,8 @@ export function httpsTransportConfig(): NonNullable<CodexOptions['config']> {
   };
 }
 
-function client(session: RuntimeSession): Codex {
+/** Exported for the test that proves the JSONL repair is actually installed. */
+export function client(session: RuntimeSession): Codex {
   const override = process.env.HERMIT_CODEX_BIN?.trim();
   const codex = new Codex({
     ...(override ? { codexPathOverride: override } : {}),
@@ -380,8 +381,10 @@ function client(session: RuntimeSession): Codex {
   // The SDK reads codex's JSONL with `readline`, which also breaks on U+2028
   // and U+2029 — legal raw inside a JSON string, and emitted raw by codex. One
   // of them anywhere in a turn's payload used to kill the whole turn with
-  // `Failed to parse item:`. See codex-jsonl-repair.ts.
-  installJsonlRepair(codex);
+  // `Failed to parse item:`. See codex-jsonl-repair.ts. The repair drops what it
+  // cannot rejoin, so its warnings carry the session — a bare line in a gateway
+  // log multiplexing every agent names nobody.
+  installJsonlRepair(codex, (m) => console.warn(`[codex] session=${session.id.slice(0, 8)}: ${m}`));
   return codex;
 }
 

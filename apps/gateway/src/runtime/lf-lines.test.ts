@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
 import { readLfLines } from './lf-lines';
 
 // Built, never typed as literals — see the note in lf-lines.ts.
@@ -64,4 +65,28 @@ test('a runaway line is dropped, is reported, and does not take the next one wit
   );
   assert.deepEqual(seen, ['after']);
   assert.equal(oversize.length, 1);
+});
+
+// The emitter above proves the splitting; these two prove the plumbing. Both
+// call sites that moved off `readline` read a real child — kimi its stdout, dsh
+// its fd 3 — and the questions that decide whether they still work are whether
+// attaching 'data' puts the stream in flowing mode at all, and whether the last
+// line arrives when the child exits without a trailing newline.
+function fromChild(argv: string, fd: 1 | 3): Promise<string[]> {
+  const stdio = fd === 1
+    ? ['ignore', 'pipe', 'ignore'] as const
+    : ['ignore', 'ignore', 'ignore', 'pipe'] as const;
+  const child = spawn('/bin/sh', ['-c', argv], { stdio: [...stdio] });
+  const stream = (fd === 1 ? child.stdout : child.stdio[3]) as NodeJS.ReadableStream;
+  const seen: string[] = [];
+  readLfLines(stream, (line) => seen.push(line));
+  return new Promise((resolve) => child.on('close', () => setImmediate(() => resolve(seen))));
+}
+
+test("a real child's stdout delivers every line, including a last one with no newline", async () => {
+  assert.deepEqual(await fromChild('printf "one\\ntwo"', 1), ['one', 'two']);
+});
+
+test("a real child's fd 3 delivers every line — dsh's event channel", async () => {
+  assert.deepEqual(await fromChild('printf "a\\nb\\n" >&3', 3), ['a', 'b']);
 });

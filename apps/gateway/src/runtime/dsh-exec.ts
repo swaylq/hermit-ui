@@ -506,6 +506,13 @@ export class DshExecRuntime implements AgentRuntime {
         // done
         sawDone = true;
         h.totals = msg.totals ?? h.totals;
+      }, {
+        // The reader caps a single frame where readline did not. Say so when it
+        // fires: the dropped frame can be the `done` one, and the turn would
+        // then be reported as a failure that never happened.
+        onOversize: (chars) => console.warn(
+          `[dsh] session=${h.sessionId.slice(0, 8)}: dropping a ${chars}-char frame, past the ceiling`,
+        ),
       });
     }
 

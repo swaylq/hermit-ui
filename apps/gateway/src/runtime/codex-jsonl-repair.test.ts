@@ -13,7 +13,7 @@ import { rejoinSplitRecords, installJsonlRepair } from './codex-jsonl-repair';
 const LS = String.fromCharCode(0x2028); // U+2028 LINE SEPARATOR
 const PS = String.fromCharCode(0x2029); // U+2029 PARAGRAPH SEPARATOR
 
-const silent = () => {};
+const silent = { warn: () => {} };
 
 async function* lines(...items: string[]): AsyncGenerator<string> {
   for (const item of items) yield item;
@@ -40,7 +40,7 @@ test('the upstream reader really does split a legal JSON record — the reason t
 
   const split = await readlineSplit(record);
   assert.equal(split.length, 2, 'readline broke one record in two — delete this wrapper when it stops');
-  assert.throws(() => JSON.parse(split[0]), 'and neither half parses');
+  for (const half of split) assert.throws(() => JSON.parse(half), 'and neither half parses');
 });
 
 test('a record split on U+2028 is put back together', async () => {
@@ -67,11 +67,17 @@ test('a record split several times, on both separators, is put back together', a
   );
 });
 
-test('whole records pass straight through, in order and unaltered', async () => {
+test('whole records pass straight through, in order', async () => {
   const a = JSON.stringify({ type: 'thread.started', thread_id: 't1' });
   const b = JSON.stringify({ type: 'item.completed', item: { text: 'plain' } });
-  const out = await collect(rejoinSplitRecords(lines(a, '', b), silent));
-  assert.deepEqual(out, [a, '', b], 'a blank line is framing noise, not a truncated record');
+  assert.deepEqual(await collect(rejoinSplitRecords(lines(a, b), silent)), [a, b]);
+});
+
+test('a blank line is dropped, never forwarded', async () => {
+  const a = JSON.stringify({ type: 'thread.started', thread_id: 't1' });
+  // `JSON.parse('')` throws, and the SDK parses every line it is handed — so
+  // passing a blank line on is itself a `Failed to parse item:` turn death.
+  assert.deepEqual(await collect(rejoinSplitRecords(lines(a, '', '   ', a), silent)), [a, a]);
 });
 
 test('a split record between two whole ones does not swallow its neighbours', async () => {
@@ -86,13 +92,37 @@ test('a split record between two whole ones does not swallow its neighbours', as
   assert.deepEqual(out, [first, split, last]);
 });
 
-test('an unparseable line is dropped with a warning and the next record still lands', async () => {
+test('a stray non-JSON line is dropped where it stands, and the split record behind it survives', async () => {
+  const split = JSON.stringify({ type: 'item.completed', item: { text: `x${LS}y` } });
+  const warnings: string[] = [];
+  const out = await collect(rejoinSplitRecords(
+    lines('some non-json noise', ...await readlineSplit(split)),
+    { warn: (m) => warnings.push(m) },
+  ));
+
+  assert.deepEqual(out, [split], 'holding the noise would have eaten the record behind it');
+  assert.equal(warnings.length, 1, 'and the drop is logged, not silent');
+});
+
+test('a hold that can never complete gives up at the next real event instead of eating it', async () => {
   const good = JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } });
   const warnings: string[] = [];
-  const out = await collect(rejoinSplitRecords(lines('{not json', good), (m) => warnings.push(m)));
+  const out = await collect(rejoinSplitRecords(lines('{ truncated garbage', good), { warn: (m) => warnings.push(m) }));
 
   assert.deepEqual(out, [good], 'one bad line must not eat the rest of the turn');
-  assert.equal(warnings.length, 1, 'and the drop is logged, not silent');
+  assert.equal(warnings.length, 1);
+});
+
+test('a held record past the ceiling is dropped, and the stream resyncs on the next event', async () => {
+  const good = JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } });
+  const warnings: string[] = [];
+  const out = await collect(rejoinSplitRecords(
+    lines('{"a":"open', 'still open', 'still open', good),
+    { warn: (m) => warnings.push(m), maxHeldChars: 20 },
+  ));
+
+  assert.deepEqual(out, [good]);
+  assert.match(warnings[0], /dropping an unusable record/);
 });
 
 test('a fragment that happens to parse on its own is still treated as a fragment', async () => {
@@ -105,24 +135,42 @@ test('a fragment that happens to parse on its own is still treated as a fragment
   assert.equal(fragments.length, 3);
   assert.deepEqual(JSON.parse(fragments[1]), {}, 'the middle fragment is valid JSON on its own');
 
-  const out = await collect(rejoinSplitRecords(lines(...fragments), silent));
-  assert.deepEqual(out, [record], 'and it is still rejoined, not mistaken for a record');
+  assert.deepEqual(await collect(rejoinSplitRecords(lines(...fragments), silent)), [record]);
 });
 
-test('a stream that ends mid-record drops the fragment instead of failing the turn', async () => {
-  const warnings: string[] = [];
+test('a stream that ends mid-record fails loudly instead of truncating the turn silently', async () => {
   const [head] = await readlineSplit(
     JSON.stringify({ type: 'item.completed', item: { text: `head${LS}tail` } }),
   );
-  const out = await collect(rejoinSplitRecords(lines(head), (m) => warnings.push(m)));
+  await assert.rejects(
+    () => collect(rejoinSplitRecords(lines(head), silent)),
+    /ended mid-record/,
+    'a silent return here is indistinguishable, in the chat, from a finished turn',
+  );
+});
 
-  assert.deepEqual(out, []);
-  assert.match(warnings[0], /ended mid-record/);
+test('rejoining a separator-dense record stays linear', async () => {
+  // The input this module exists for — a minified bundle — is also the one that
+  // punishes re-parsing the whole accumulated record per fragment: that costs
+  // ~1.9s of blocked event loop here, on the gateway's only thread. Budget is
+  // 30x the linear cost, so it fails on a regression, not on a busy machine.
+  const chunk = 'x'.repeat(1000);
+  const record = JSON.stringify({ type: 'item.completed', item: { text: Array(2000).fill(chunk).join(LS) } });
+  const fragments = await readlineSplit(record);
+  assert.equal(fragments.length, 2000);
+
+  const started = Date.now();
+  const out = await collect(rejoinSplitRecords(lines(...fragments), silent));
+  const elapsed = Date.now() - started;
+
+  assert.deepEqual(out, [record]);
+  assert.ok(elapsed < 500, `rejoining 2000 fragments of a 2MB record took ${elapsed}ms`);
 });
 
 test('the wrap lands on a real Codex instance — an SDK that reshapes it fails here, not in production', () => {
   const codex = new Codex({});
   assert.equal(installJsonlRepair(codex), true, '@openai/codex-sdk no longer exposes exec.run as expected');
+  assert.equal(installJsonlRepair(codex), false, 'and a second call must not wrap the wrapper');
 });
 
 test('an SDK whose shape we do not recognise is left alone', () => {
@@ -131,19 +179,37 @@ test('an SDK whose shape we do not recognise is left alone', () => {
   assert.equal(installJsonlRepair({ exec: { run: 'not a function' } }), false);
 });
 
-test('the wrapped run repairs what the raw one would have broken', async () => {
+test('the wrapped run repairs what the raw one would have broken, and reports drops to the caller', async () => {
   const record = JSON.stringify({ type: 'item.completed', item: { text: `left${LS}right` } });
+  const warnings: string[] = [];
   const fake = {
     exec: {
       run: async function* (): AsyncGenerator<string> {
+        yield 'stray diagnostic line';
         yield* await readlineSplit(record);
       },
     },
   };
 
-  assert.equal(installJsonlRepair(fake), true);
-  const out = await collect(fake.exec.run());
-  assert.deepEqual(out, [record]);
+  assert.equal(installJsonlRepair(fake, (m) => warnings.push(m)), true);
+  assert.deepEqual(await collect(fake.exec.run()), [record]);
+  assert.equal(warnings.length, 1, 'the drop must reach the caller’s logger, not a session-less console');
+});
+
+test('abandoning the stream still closes the source — an interrupt must reach the child', async () => {
+  let cleanedUp = false;
+  async function* source(): AsyncGenerator<string> {
+    try {
+      yield JSON.stringify({ type: 'item.started' });
+      yield JSON.stringify({ type: 'item.completed' });
+    } finally {
+      // Where the SDK does `rl.close(); child.kill()`.
+      cleanedUp = true;
+    }
+  }
+
+  for await (const _line of rejoinSplitRecords(source(), silent)) break;
+  assert.equal(cleanedUp, true, 'a wrapper that swallowed the close would leak a codex process per interrupt');
 });
 
 /**
@@ -182,6 +248,7 @@ async function runFakeTurn(codex: Codex): Promise<unknown[]> {
 
 test('end to end: the real SDK chokes on a raw U+2028, and the repair fixes it', async (t) => {
   const bin = fakeCodex();
+  t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));
 
   await assert.rejects(
     () => runFakeTurn(new Codex({ codexPathOverride: bin })),
@@ -195,21 +262,4 @@ test('end to end: the real SDK chokes on a raw U+2028, and the repair fixes it',
 
   assert.deepEqual(events.map((e) => e.type), ['thread.started', 'item.completed', 'turn.completed']);
   assert.equal(events[1].item.text, `before${LS}after`, 'and the payload survives intact');
-  t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));
-});
-
-test('abandoning the stream still closes the source — an interrupt must reach the child', async () => {
-  let cleanedUp = false;
-  async function* source(): AsyncGenerator<string> {
-    try {
-      yield JSON.stringify({ type: 'item.started' });
-      yield JSON.stringify({ type: 'item.completed' });
-    } finally {
-      // Where the SDK does `rl.close(); child.kill()`.
-      cleanedUp = true;
-    }
-  }
-
-  for await (const _line of rejoinSplitRecords(source(), silent)) break;
-  assert.equal(cleanedUp, true, 'a wrapper that swallowed the close would leak a codex process per interrupt');
 });

@@ -785,6 +785,13 @@ export class KimiCodeRuntime implements AgentRuntime {
           sawContent = true;
           h.emit({ ...item, sessionId: h.sessionId, claudeSessionId: null });
         }
+      }, {
+        // The reader caps a single line where readline did not. Say so when it
+        // fires: a dropped record can be the one carrying the resume hint or the
+        // whole assistant message, and the turn would otherwise just look empty.
+        onOversize: (chars) => console.warn(
+          `[kimi] session=${h.sessionId.slice(0, 8)}: dropping a ${chars}-char line, past the frame ceiling`,
+        ),
       });
     }
 
