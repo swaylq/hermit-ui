@@ -404,6 +404,40 @@ export function sessionDirFor(home: string, sessionId: string): string | null {
  * silence was read as a wedge. The logs are where kimi's liveness actually
  * shows; a process making no syscalls writes none of them.
  */
+/**
+ * What the chat is told when a turn dies, and — the part that cost a whole
+ * forensic afternoon on 2026-08-28 — WHO killed it.
+ *
+ * A watchdog kill used to be reported as `kimi exited SIGKILL`, which reads as
+ * "kimi crashed" when the truth is "the gateway shot a working turn". Worse, it
+ * carried 800 characters of stderr tail: the CLI puts TOOL output on stderr, so
+ * the reader got a slab of unrelated `ls` output pasted under the error, and
+ * the next turn got it back as context. When we did the killing we already know
+ * the reason, so the tail explains nothing and is dropped; on a real crash it
+ * IS the CLI's own reason, and stays — labelled, because it is still as likely
+ * to be the tail of a `grep` as a stack trace.
+ */
+export function turnFailureMessage(a: {
+  code: number | null;
+  signal: string | null;
+  sawContent: boolean;
+  silenceKill: { stdoutQuietMs: number; wireQuietMs: number | null } | null;
+  stderrTail: string;
+}): string {
+  const min = (ms: number) => `${Math.round(ms / 60_000)}min`;
+  if (a.silenceKill) {
+    const log = a.silenceKill.wireQuietMs === null
+      ? 'and it has no session log on disk to check against'
+      : `and its session log had been quiet for ${min(a.silenceKill.wireQuietMs)} too`;
+    return `the gateway stopped this turn: kimi printed nothing for ${min(a.silenceKill.stdoutQuietMs)}, ${log}. `
+      + 'Send another message and kimi picks the conversation up where it left off.';
+  }
+  const what = a.sawContent ? 'the turn ended part-way through' : 'the turn produced nothing';
+  const tail = a.stderrTail.trim().slice(-400);
+  return `kimi exited ${a.signal ?? a.code} — ${what}`
+    + (tail ? `\n\nkimi's last stderr (this is where its tool output goes, so it may not be the reason):\n${tail}` : '');
+}
+
 export function wireQuietMs(home: string, sessionId: string | null, now = Date.now()): number | null {
   if (!sessionId) return null;
   const dir = sessionDirFor(home, sessionId);
@@ -697,6 +731,10 @@ export class KimiCodeRuntime implements AgentRuntime {
     // `h.stampedSessionId` is read at fire time, not capture time: the first
     // turn of a fresh session learns its id from stdout mid-turn.
     let exited = false;
+    // Set by the watchdog just before it fires, read by the exit handler: the
+    // difference between "kimi died" and "we killed a turn that was working".
+    let silenceKill: { stdoutQuietMs: number; wireQuietMs: number | null } | null = null;
+    let lastStdoutAt = Date.now();
     const silence = (delayMs: number): NodeJS.Timeout => setTimeout(() => {
       const quietMs = wireQuietMs(kimiHome(), h.stampedSessionId);
       if (quietMs !== null && quietMs < TURN_SILENCE_TIMEOUT_MS) {
@@ -708,8 +746,10 @@ export class KimiCodeRuntime implements AgentRuntime {
         watchdog = silence(remainder);
         return;
       }
+      silenceKill = { stdoutQuietMs: Date.now() - lastStdoutAt, wireQuietMs: quietMs };
       console.warn(
-        `[kimi] session=${h.sessionId.slice(0, 8)}: no output for ${TURN_SILENCE_TIMEOUT_MS / 60000}min — killing the turn`,
+        `[kimi] session=${h.sessionId.slice(0, 8)}: no output for ${TURN_SILENCE_TIMEOUT_MS / 60000}min `
+        + `(session log ${quietMs === null ? 'not found' : `quiet ${Math.round(quietMs / 1000)}s`}) — killing the turn`,
       );
       child.kill('SIGKILL');
     }, delayMs).unref();
@@ -719,6 +759,7 @@ export class KimiCodeRuntime implements AgentRuntime {
       const rl = createInterface({ input: child.stdout });
       rl.on('line', (line) => {
         if (!exited) {
+          lastStdoutAt = Date.now();
           clearTimeout(watchdog);
           watchdog = silence(TURN_SILENCE_TIMEOUT_MS);
         }
@@ -775,11 +816,7 @@ export class KimiCodeRuntime implements AgentRuntime {
           // Reported whether or not rows arrived first — a turn that answered
           // halfway and then died is still a turn the reader must be told about,
           // and the CLI puts its reason on stderr, which nothing else surfaces.
-          const what = sawContent ? 'the turn ended part-way through' : 'the turn produced nothing';
-          this.report(
-            h,
-            new Error(`kimi exited ${signal ?? code} — ${what}\n${stderrTail.trim().slice(-800)}`),
-          );
+          this.report(h, new Error(turnFailureMessage({ code, signal, sawContent, silenceKill, stderrTail })));
         }
       });
     });

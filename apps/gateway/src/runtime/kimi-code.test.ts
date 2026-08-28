@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   kimiArgs, kimiFallbackPaths, kimiHome, kimiProviderType, kimiSpawnEnv, resolveKimiCommand,
-  scanWire, wireFileFor, wireQuietMs, turnFailed, isGoalPrompt,
+  scanWire, wireFileFor, wireQuietMs, turnFailed, turnFailureMessage, isGoalPrompt,
   CONFLICTING_KIMI_VARS, GATEWAY_ONLY_VARS,
 } from './kimi-code';
 import type { ModelCredential } from '../pi-config';
@@ -391,4 +391,40 @@ test('re-scanning an unchanged log reads nothing and keeps the totals', () => {
   const again = scanWire(wire, first.offset, first.totals)!;
   assert.deepEqual(again.totals, first.totals);
   assert.equal(again.offset, first.offset);
+});
+
+// ── what the chat is told when a turn dies ───────────────────────────────────
+// The 2026-08-28 session cmtcdtw7 lost five turns to the silence watchdog, and
+// every one of them was reported as `kimi exited SIGKILL` with a slab of
+// unrelated `ls` output under it. Naming the killer is the whole point.
+
+const KILL = { code: null, signal: 'SIGKILL', sawContent: true, stderrTail: 'total 48\ndrwx------ agents\n' };
+
+test('a watchdog kill says the gateway did it, and drops the stderr tail', () => {
+  const m = turnFailureMessage({ ...KILL, silenceKill: { stdoutQuietMs: 15 * 60_000, wireQuietMs: 16 * 60_000 } });
+  assert.match(m, /gateway stopped this turn/);
+  assert.match(m, /nothing for 15min/);
+  assert.match(m, /quiet for 16min/);
+  assert.ok(!m.includes('drwx'), 'tool output must not be pasted under the reason');
+  assert.ok(!m.includes('SIGKILL'), 'the signal is our own doing, not a diagnosis');
+  assert.match(m, /Send another message/);
+});
+
+test('a watchdog kill with no session log says so rather than inventing a number', () => {
+  const m = turnFailureMessage({ ...KILL, silenceKill: { stdoutQuietMs: 15 * 60_000, wireQuietMs: null } });
+  assert.match(m, /no session log on disk/);
+  assert.ok(!/quiet for/.test(m));
+});
+
+test('a real crash keeps the CLI reason, labelled and capped', () => {
+  const m = turnFailureMessage({ code: 1, signal: null, sawContent: false, silenceKill: null, stderrTail: 'x'.repeat(900) + 'ERR boom' });
+  assert.match(m, /kimi exited 1 — the turn produced nothing/);
+  assert.match(m, /last stderr/);
+  assert.match(m, /ERR boom$/);
+  assert.ok(m.length < 600, `capped, got ${m.length}`);
+});
+
+test('a crash with nothing on stderr adds no empty label', () => {
+  const m = turnFailureMessage({ code: 127, signal: null, sawContent: false, silenceKill: null, stderrTail: '   \n' });
+  assert.equal(m, 'kimi exited 127 — the turn produced nothing');
 });
