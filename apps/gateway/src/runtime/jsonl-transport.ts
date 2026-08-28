@@ -114,14 +114,7 @@ export class JsonlTransport {
     throw new Error(`${this.opts.label} did not announce ready within ${timeout / 1000}s`);
   }
 
-  /**
-   * LF-only line assembly.
-   *
-   * Segments are kept in an array and joined exactly once, when the terminating
-   * newline arrives. Appending to one growing accumulator and re-scanning it
-   * with indexOf on every chunk is O(n^2) when a single record is split across
-   * many reads, which is the normal case for a large tool result.
-   */
+  /** LF-only line assembly, plus what to do with a frame nobody could want. */
   private attachReader(child: ChildProcessWithoutNullStreams): void {
     readLfLines(child.stdout, (line) => this.onLine(line), {
       maxLineChars: MAX_LINE_CHARS,
@@ -133,10 +126,9 @@ export class JsonlTransport {
     });
   }
 
-  private onLine(raw: string): void {
-    // Tolerate CRLF input by stripping a trailing CR; the framing itself stays
-    // LF-only, which is what the protocol specifies.
-    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+  private onLine(line: string): void {
+    // CRLF input is tolerated by the reader, which strips the trailing CR before
+    // this sees it; the framing itself stays LF-only, as the protocol specifies.
     if (!line.trim()) return;
     let frame: any;
     try {

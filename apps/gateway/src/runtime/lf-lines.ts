@@ -1,8 +1,9 @@
 // Split a child's JSONL stream on LF and nothing else.
 //
-// Node's `readline` is the obvious tool and the wrong one: it also breaks a
-// line on U+2028 and U+2029 (and silently eats U+0085). Those characters are
-// perfectly legal RAW inside a JSON string, and they turn up in real payloads —
+// Node's `readline` is the obvious tool and the wrong one: it breaks a line on
+// U+2028 and U+2029 as well as on LF and CR (those four and no others — scanned
+// every BMP code point on node 26). Both are perfectly legal RAW inside a JSON
+// string, and they turn up in real payloads —
 // scraped web text, a JS bundle echoed into a tool result. readline chops such
 // a record into halves that neither parse, so a backend built on it drops the
 // event without a word. Both pi and prime say so outright: "Do not use generic
@@ -50,6 +51,9 @@ export function readLfLines(
   };
 
   stream.on('data', (buf: Buffer | string) => {
+    // A stream someone called `setEncoding` on hands over strings; a raw child
+    // pipe hands over Buffers, which must go through the decoder so a multi-byte
+    // character split across two reads is not mangled.
     const chunk = typeof buf === 'string' ? buf : decoder.write(buf);
     let from = 0;
     for (;;) {
@@ -79,6 +83,7 @@ export function readLfLines(
   });
 
   stream.on('end', () => {
+    // A discarded runaway has no tail worth delivering.
     if (discarding) return;
     const tail = parts.join('') + decoder.end();
     parts = [];

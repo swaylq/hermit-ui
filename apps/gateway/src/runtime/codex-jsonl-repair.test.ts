@@ -96,7 +96,7 @@ test('a stray non-JSON line is dropped where it stands, and the split record beh
   const split = JSON.stringify({ type: 'item.completed', item: { text: `x${LS}y` } });
   const warnings: string[] = [];
   const out = await collect(rejoinSplitRecords(
-    lines('some non-json noise', ...await readlineSplit(split)),
+    lines('{ stray log noise', ...await readlineSplit(split)),
     { warn: (m) => warnings.push(m) },
   ));
 
@@ -107,10 +107,10 @@ test('a stray non-JSON line is dropped where it stands, and the split record beh
 test('a hold that can never complete gives up at the next real event instead of eating it', async () => {
   const good = JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } });
   const warnings: string[] = [];
-  const out = await collect(rejoinSplitRecords(lines('{ truncated garbage', good), { warn: (m) => warnings.push(m) }));
+  const out = await collect(rejoinSplitRecords(lines('{"truncated', good), { warn: (m) => warnings.push(m) }));
 
   assert.deepEqual(out, [good], 'one bad line must not eat the rest of the turn');
-  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /an event may be lost/, 'and the log says an event may have gone with it');
 });
 
 test('a held record past the ceiling is dropped, and the stream resyncs on the next event', async () => {
@@ -122,7 +122,81 @@ test('a held record past the ceiling is dropped, and the stream resyncs on the n
   ));
 
   assert.deepEqual(out, [good]);
-  assert.match(warnings[0], /dropping an unusable record/);
+  assert.match(warnings[0], /never completed a record/);
+});
+
+// ── the scanner: braces, quotes and backslashes INSIDE the payload ───────────
+// Plain-letter fixtures cannot tell a working scanner from a broken one. These
+// carry the characters the scanner exists to interpret, so dropping the string
+// tracking or the escape tracking in `advance()` loses the record and fails here.
+
+test('a payload full of JSON-looking text is rejoined, not miscounted', async () => {
+  const text = `json {"a":[1,2]} then }}} then \\" then${LS}the rest [ { " \\\\`;
+  const record = JSON.stringify({ type: 'item.completed', item: { id: 'i', text } });
+  const after = JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } });
+
+  const out = await collect(rejoinSplitRecords(lines(...await readlineSplit(record), after), silent));
+  assert.deepEqual(out, [record, after]);
+  assert.equal((JSON.parse(out[0]) as { item: { text: string } }).item.text, text);
+});
+
+test('a separator directly after an escaped quote does not desynchronise the scanner', async () => {
+  const text = `he said \\"stop\\"${LS}and \\\\${LS}{ unbalanced`;
+  const record = JSON.stringify({ type: 'item.completed', item: { text } });
+  const fragments = await readlineSplit(record);
+  assert.equal(fragments.length, 3);
+
+  assert.deepEqual(await collect(rejoinSplitRecords(lines(...fragments), silent)), [record]);
+});
+
+test('a record whose payload is itself whole codex JSONL survives', async () => {
+  const inner = JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 7 } });
+  const record = JSON.stringify({
+    type: 'item.completed',
+    item: { type: 'command_execution', aggregated_output: `${inner}\n${inner}${LS}tail` },
+  });
+
+  assert.deepEqual(await collect(rejoinSplitRecords(lines(...await readlineSplit(record)), silent)), [record]);
+});
+
+test('a line that closes but does not parse is dropped, and the next record still lands', async () => {
+  const good = JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } });
+  const warnings: string[] = [];
+  // A trailing comma: the braces balance, so only the parse can reject it. Handing
+  // it to the SDK is `Failed to parse item:` — the very death this module removes.
+  const out = await collect(rejoinSplitRecords(lines('{"type":"x",}', good), { warn: (m) => warnings.push(m) }));
+
+  assert.deepEqual(out, [good]);
+  assert.match(warnings[0], /closed but does not parse/);
+});
+
+test('a rejoined record that closes but does not parse is dropped, not handed on', async () => {
+  const warnings: string[] = [];
+  const out = await collect(rejoinSplitRecords(
+    lines('{"type":"x","t":"a', 'b",}'),
+    { warn: (m) => warnings.push(m) },
+  ));
+
+  assert.deepEqual(out, []);
+  assert.match(warnings[0], /record that closed but does not parse/);
+});
+
+test('a line with more closing braces than opening ones is dropped where it stands', async () => {
+  const good = JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } });
+  const warnings: string[] = [];
+  const out = await collect(rejoinSplitRecords(lines('{"a":1}}', good), { warn: (m) => warnings.push(m) }));
+
+  assert.deepEqual(out, [good]);
+  assert.match(warnings[0], /cannot be a record/);
+});
+
+test('blank lines are dropped in silence — they are framing, not a fault', async () => {
+  const good = JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } });
+  const warnings: string[] = [];
+  const out = await collect(rejoinSplitRecords(lines('', '  ', good), { warn: (m) => warnings.push(m) }));
+
+  assert.deepEqual(out, [good]);
+  assert.deepEqual(warnings, [], 'a warning per blank line would bury the ones that matter');
 });
 
 test('a fragment that happens to parse on its own is still treated as a fragment', async () => {

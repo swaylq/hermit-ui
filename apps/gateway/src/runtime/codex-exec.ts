@@ -384,7 +384,13 @@ export function client(session: RuntimeSession): Codex {
   // `Failed to parse item:`. See codex-jsonl-repair.ts. The repair drops what it
   // cannot rejoin, so its warnings carry the session — a bare line in a gateway
   // log multiplexing every agent names nobody.
-  installJsonlRepair(codex, (m) => console.warn(`[codex] session=${session.id.slice(0, 8)}: ${m}`));
+  const tag = `[codex] session=${session.id.slice(0, 8)}`;
+  if (!installJsonlRepair(codex, (m) => console.warn(`${tag}: ${m}`))) {
+    // Only reachable if a future SDK reshapes the field this reaches into. Say
+    // so: the alternative is turns quietly dying on a separator again, with the
+    // dependency bump that caused it weeks in the past.
+    console.warn(`${tag}: the codex SDK no longer exposes exec.run — a U+2028 in any payload will kill the turn`);
+  }
   return codex;
 }
 

@@ -7,6 +7,7 @@ import { readLfLines } from './lf-lines';
 // Built, never typed as literals — see the note in lf-lines.ts.
 const LS = String.fromCharCode(0x2028);
 const PS = String.fromCharCode(0x2029);
+/** Not a separator anywhere; here to prove the reader does not touch it. */
 const NEL = String.fromCharCode(0x85);
 
 /**
@@ -23,7 +24,7 @@ function collect(chunks: Array<string | Buffer>, opts = {}): string[] {
   return seen;
 }
 
-test('the separators readline breaks on stay inside the line', () => {
+test('the two separators readline breaks on stay inside the line', () => {
   const payload = `a${LS}b${PS}c${NEL}d`;
   assert.deepEqual(collect([`${payload}\n`]), [payload], 'not one character lost, not one line split');
 });

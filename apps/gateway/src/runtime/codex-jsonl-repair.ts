@@ -86,8 +86,33 @@ function advance(state: Scan, text: string): Scan {
   return state;
 }
 
-/** Structurally complete: every bracket closed and no string left open. */
+/**
+ * Structurally complete: every bracket closed and no string left open.
+ *
+ * For a VALID record the bracket count alone would do — a brace inside a string
+ * is skipped, so depth can only return to zero outside one. The extra conditions
+ * cost nothing and keep the scan honest on input that is not valid JSON, which
+ * is exactly when the give-up paths below have to fire.
+ */
 const isClosed = (state: Scan): boolean => state.opened && state.depth === 0 && !state.inString && !state.broken;
+
+/** Enough of a line to recognise it in a log without pasting a whole payload. */
+const head = (text: string): string => (text.length > 120 ? `${text.slice(0, 120)}…` : text);
+
+/** What a dropped hold looks like in the log — it may have been a real event. */
+const abandoned = (text: string): string =>
+  `dropping ${text.length} chars that never completed a record — an event may be lost: ${head(text)}`;
+
+/**
+ * Could this line be the start of a codex record?
+ *
+ * Every one of them is a compact JSON object with at least one key, so it opens
+ * `{"` — and requiring both characters, not just the brace, is what stops a
+ * stray line like `{ some log noise` from becoming a hold that swallows the
+ * records behind it.
+ */
+const opensRecord = (line: string): boolean =>
+  line.charCodeAt(0) === OPEN_BRACE && line.charCodeAt(1) === 0x22;
 
 /** The parsed record, or null if the text is not one JSON object. */
 function parseRecord(text: string): Record<string, unknown> | null {
@@ -110,13 +135,18 @@ function parseRecord(text: string): Record<string, unknown> | null {
  * Three things are dropped with a warning rather than handed on, because handing
  * unparseable text to the SDK is what kills the turn — the failure this module
  * exists to remove:
- *   - a line that cannot even begin a record (does not open with `{`), including
- *     the blank lines that `JSON.parse('')` would die on;
+ *   - a line that cannot even open a record (anything not starting `{"`),
+ *     including the blank lines that `JSON.parse('')` would die on;
  *   - a held record that closes but does not parse, or that goes structurally
  *     impossible;
  *   - a held record past `maxHeldChars`.
- * A hold cannot swallow the records after it: a line that is itself a complete
- * codex event ends the hold and is delivered.
+ *
+ * A hold ends when a line that is itself a complete codex event arrives, so
+ * ordinary stdout noise cannot swallow the records behind it. The residual case
+ * is noise that opens `{"` and never closes: the records that follow it are
+ * folded into the hold until a WHOLE event arrives, and every drop says so in
+ * the log. Nothing observed from codex does this — its stdout in
+ * `--experimental-json` mode is nothing but records.
  *
  * The one case that still fails the turn is a stream that ENDS mid-record. That
  * throws, because the alternative is worse: the SDK returns normally, codex-exec
@@ -127,7 +157,7 @@ export async function* rejoinSplitRecords(
   source: AsyncIterable<string>,
   opts: RejoinOptions = {},
 ): AsyncGenerator<string> {
-  const warn = opts.warn ?? ((m: string) => console.warn(m));
+  const warn = opts.warn ?? ((m: string) => console.warn(`[codex] ${m}`));
   const maxHeldChars = opts.maxHeldChars ?? DEFAULT_MAX_HELD_CHARS;
   let held: string | null = null;
   let state = freshScan();
@@ -140,7 +170,7 @@ export async function* rejoinSplitRecords(
       if (isClosed(state)) {
         held = null;
         if (parseRecord(joined)) yield joined;
-        else warn(`[codex] dropping a ${joined.length}-char record that closed but does not parse`);
+        else warn(`dropping a ${joined.length}-char record that closed but does not parse`);
         continue;
       }
 
@@ -149,21 +179,19 @@ export async function* rejoinSplitRecords(
       // record after it. `type` is what makes it unmistakable: a fragment from
       // the MIDDLE of a record begins inside a JSON string, where every quote is
       // escaped, so it cannot parse as an object at all.
-      const standalone = line.charCodeAt(0) === OPEN_BRACE && isClosed(advance(freshScan(), line))
+      const standalone = opensRecord(line) && isClosed(advance(freshScan(), line))
         ? parseRecord(line)
         : null;
       if (standalone && typeof standalone.type === 'string') {
-        warn(`[codex] dropping ${held.length} chars of unparseable event data`);
+        warn(abandoned(held));
         held = null;
-        state = freshScan();
         yield line;
         continue;
       }
 
       if (state.broken || joined.length > maxHeldChars) {
-        warn(`[codex] dropping an unusable record after ${joined.length} chars`);
+        warn(abandoned(joined));
         held = null;
-        state = freshScan();
         continue;
       }
       held = joined;
@@ -174,23 +202,25 @@ export async function* rejoinSplitRecords(
     // a stray diagnostic. Forwarding it is what `Failed to parse item:` is made
     // of — a blank line alone is enough — and holding it would swallow the
     // records behind it.
-    if (line.charCodeAt(0) !== OPEN_BRACE) {
-      if (line.trim()) warn(`[codex] ignoring a ${line.length}-char line that is not a JSON record`);
+    if (!opensRecord(line)) {
+      if (line.trim()) warn(`ignoring a ${line.length}-char line that does not open a record: ${head(line)}`);
       continue;
     }
 
     state = advance(freshScan(), line);
     if (!isClosed(state)) {
-      if (state.broken) warn(`[codex] ignoring a ${line.length}-char line that cannot be a record`);
+      if (state.broken) warn(`ignoring a ${line.length}-char line that cannot be a record: ${head(line)}`);
       else held = line;
       continue;
     }
     if (parseRecord(line)) yield line;
-    else warn(`[codex] dropping a ${line.length}-char line that closed but does not parse`);
+    else warn(`dropping a ${line.length}-char line that closed but does not parse: ${head(line)}`);
   }
 
   if (held !== null) {
-    throw new Error(`codex event stream ended mid-record (${held.length} chars unparsed)`);
+    throw new Error(
+      `codex event stream ended mid-record (${held.length} chars unparsed): ${head(held)}`,
+    );
   }
 }
 
