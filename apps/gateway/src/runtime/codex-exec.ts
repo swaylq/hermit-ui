@@ -26,6 +26,7 @@ import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
 import { translateCodexEvent } from './codex-events';
+import { installJsonlRepair } from './codex-jsonl-repair';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 
 /** Cumulative token counters, as codex reports them. */
@@ -367,7 +368,7 @@ export function httpsTransportConfig(): NonNullable<CodexOptions['config']> {
 
 function client(session: RuntimeSession): Codex {
   const override = process.env.HERMIT_CODEX_BIN?.trim();
-  return new Codex({
+  const codex = new Codex({
     ...(override ? { codexPathOverride: override } : {}),
     config: {
       ...hermitMcpConfigFor(session),
@@ -376,6 +377,12 @@ function client(session: RuntimeSession): Codex {
     },
     env: codexChildEnv(session),
   });
+  // The SDK reads codex's JSONL with `readline`, which also breaks on U+2028
+  // and U+2029 — legal raw inside a JSON string, and emitted raw by codex. One
+  // of them anywhere in a turn's payload used to kill the whole turn with
+  // `Failed to parse item:`. See codex-jsonl-repair.ts.
+  installJsonlRepair(codex);
+  return codex;
 }
 
 /**

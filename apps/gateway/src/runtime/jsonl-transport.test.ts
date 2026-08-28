@@ -30,8 +30,16 @@ function collect(chunks: string[]): Record<string, unknown>[] {
 // legal inside a JSON string — so one of them in any payload (scraped web text,
 // a JS bundle echoed into a tool result) split one record into two unparseable
 // halves and BOTH were dropped. Both pi and prime document exactly this.
+//
+// Built at runtime, never typed as literals: the characters in this file's own
+// bytes are a landmine for every OTHER naive line reader that opens it. A
+// codex-backed session reading this file died on exactly that, twice, on
+// 2026-08-28 — see runtime/codex-jsonl-repair.ts.
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
+
 test('U+2028 and U+2029 inside a string do not split the record', () => {
-  const text = `line one line two line three`;
+  const text = `line one${LINE_SEPARATOR}line two${PARAGRAPH_SEPARATOR}line three`;
   const seen = collect([`${JSON.stringify({ type: 'e', text })}\n`]);
   assert.equal(seen.length, 1);
   assert.equal(seen[0].text, text);

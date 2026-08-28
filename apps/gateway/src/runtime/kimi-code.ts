@@ -48,11 +48,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createInterface } from 'node:readline';
 import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
 import { KimiEventTranslator, parseKimiLine, resumeHintId } from './kimi-code-events';
+import { readLfLines } from './lf-lines';
 import { readSecret } from './pi-credentials';
 import { getCredential, credentialDefaultModel, type ModelCredential } from '../pi-config';
 import { modelLimitsFor } from '../pi-model-limits';
@@ -713,8 +713,8 @@ export class KimiCodeRuntime implements AgentRuntime {
       stderrTail = (stderrTail + chunk.toString('utf8')).slice(-4000);
     });
 
-    // `exited` gates the watchdog. readline keeps delivering buffered lines
-    // AFTER the exit event — which is why the exit handler waits a tick before
+    // `exited` gates the watchdog. The line reader keeps delivering buffered
+    // lines AFTER the exit event — which is why the exit handler waits a tick before
     // judging — and each of those would otherwise re-arm a fresh 15-minute
     // timer that nothing ever clears. Every completed turn would leave one
     // behind, to fire later and log the wedge warning for a turn that ended
@@ -756,8 +756,7 @@ export class KimiCodeRuntime implements AgentRuntime {
     let watchdog = silence(TURN_SILENCE_TIMEOUT_MS);
 
     if (child.stdout) {
-      const rl = createInterface({ input: child.stdout });
-      rl.on('line', (line) => {
+      readLfLines(child.stdout, (line) => {
         if (!exited) {
           lastStdoutAt = Date.now();
           clearTimeout(watchdog);
@@ -804,7 +803,7 @@ export class KimiCodeRuntime implements AgentRuntime {
 
     child.on('exit', (code, signal) => {
       cleanup();
-      // Give the readline a beat to flush its last lines before judging.
+      // Give the line reader a beat to flush its last lines before judging.
       setImmediate(() => {
         h.working = false;
         h.child = null;

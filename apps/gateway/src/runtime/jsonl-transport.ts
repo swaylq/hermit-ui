@@ -3,20 +3,18 @@
 // The wire is strict JSONL over stdio: one JSON object per line, LF only,
 // requests correlated by `id`, everything else an event.
 //
-// **Split on `\n` and nothing else.** This used to use `readline`, and that is
-// a protocol violation: readline also breaks on U+2028 and U+2029, which are
-// perfectly legal inside a JSON string. One of those in any payload — scraped
-// web text, a JS bundle echoed into a tool result — splits a record into two
-// unparseable halves, and both get dropped silently. Both pi and prime document
-// exactly this ("Do not use generic line readers that treat Unicode separators
-// as newlines"); pi's own RpcClient is compliant, which is why the pi path never
+// **Split on `\n` and nothing else** — `readLfLines`, never `readline`, for the
+// reason spelled out in lf-lines.ts: readline breaks on U+2028/U+2029 too, and
+// those are legal inside a JSON string. Both pi and prime document exactly this
+// ("Do not use generic line readers that treat Unicode separators as
+// newlines"); pi's own RpcClient is compliant, which is why the pi path never
 // hit it and the hand-rolled omp path could.
 //
 // Used by the omp and prime backends. The pi backend drives pi's own typed
 // RpcClient instead, which is compliant and gives us its API for free.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { StringDecoder } from 'node:string_decoder';
+import { readLfLines } from './lf-lines';
 
 export type RpcEvent = Record<string, unknown> & { type?: string };
 
@@ -52,7 +50,7 @@ const DEFAULT_READY_TIMEOUT_MS = 60_000;
 /** Kept only to explain a death; never parsed. */
 const STDERR_TAIL_MAX = 4_000;
 /** A single frame past this is a runaway, not a message. */
-const MAX_LINE_BYTES = 32 * 1024 * 1024;
+const MAX_LINE_CHARS = 32 * 1024 * 1024;
 
 export class JsonlTransport {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -125,41 +123,13 @@ export class JsonlTransport {
    * many reads, which is the normal case for a large tool result.
    */
   private attachReader(child: ChildProcessWithoutNullStreams): void {
-    const decoder = new StringDecoder('utf8');
-    let pendingParts: string[] = [];
-    let pendingLength = 0;
-    let discarding = false;
-
-    child.stdout.on('data', (buf: Buffer) => {
-      const chunk = decoder.write(buf);
-      let from = 0;
-      for (;;) {
-        const nl = chunk.indexOf('\n', from);
-        if (nl === -1) break;
-        if (discarding) {
-          discarding = false;
-        } else {
-          pendingParts.push(chunk.slice(from, nl));
-          this.onLine(pendingParts.join(''));
-        }
-        pendingParts = [];
-        pendingLength = 0;
-        from = nl + 1;
-      }
-      const rest = chunk.slice(from);
-      if (rest) {
-        pendingLength += rest.length;
-        if (pendingLength > MAX_LINE_BYTES) {
-          // Drop the runaway record rather than the session: a child that emits
-          // one is broken about that message, not about the conversation.
-          console.warn(`[${this.opts.label}] dropping an oversized frame (>${MAX_LINE_BYTES} bytes)`);
-          pendingParts = [];
-          pendingLength = 0;
-          discarding = true;
-        } else if (!discarding) {
-          pendingParts.push(rest);
-        }
-      }
+    readLfLines(child.stdout, (line) => this.onLine(line), {
+      maxLineChars: MAX_LINE_CHARS,
+      // Drop the runaway record rather than the session: a child that emits one
+      // is broken about that message, not about the conversation.
+      onOversize: () => console.warn(
+        `[${this.opts.label}] dropping an oversized frame (>${MAX_LINE_CHARS} chars)`,
+      ),
     });
   }
 

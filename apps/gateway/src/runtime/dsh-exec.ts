@@ -23,12 +23,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
 import { DshEventTranslator, parseRunnerLine, type DshTotals, type DshUsage } from './dsh-events';
+import { readLfLines } from './lf-lines';
 import { readSecret } from './pi-credentials';
 import { getCredential, type ModelCredential } from '../pi-config';
 import { modelLimitsFor } from '../pi-model-limits';
@@ -456,8 +456,7 @@ export class DshExecRuntime implements AgentRuntime {
 
     const events = child.stdio[3];
     if (events && 'on' in events) {
-      const rl = createInterface({ input: events as NodeJS.ReadableStream });
-      rl.on('line', (line) => {
+      readLfLines(events as NodeJS.ReadableStream, (line) => {
         clearTimeout(watchdog);
         watchdog = silence();
         const msg = parseRunnerLine(line);
@@ -521,7 +520,7 @@ export class DshExecRuntime implements AgentRuntime {
 
     child.on('exit', (code, signal) => {
       clearTimeout(watchdog);
-      // Give the readline a beat to flush its last lines before judging.
+      // Give the line reader a beat to flush its last lines before judging.
       setImmediate(() => {
         h.working = false;
         h.child = null;
