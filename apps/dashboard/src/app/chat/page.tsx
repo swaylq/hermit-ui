@@ -51,12 +51,9 @@ import { translateOutgoing } from '@/lib/translate-outbound';
 import { RunDetailContext, stepsFromRows, type RunResolver } from '@/components/chat/run-capsule';
 import { isMachineryBlock } from '@/components/chat/fold-runs';
 import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
-import { VoiceMic } from '@/components/chat/voice-mic';
-import { DictationDock, type DictationHandle, type DictationSource } from '@/components/chat/dictation-dock';
+import type { DictationHandle, DictationSource } from '@/components/chat/dictation-dock';
 import { FabDock } from '@/components/chat/fab-dock';
-import { PreviewFab } from '@/components/chat/preview-fab';
-import { LivePreviewPanel, parseLivePreview } from '@/components/chat/preview-panel';
-import { SessionDetailSheet } from '@/components/chat/session-detail-sheet';
+import { parseLivePreview } from '@/lib/live-preview';
 import { ModelChip } from '@/components/chat/model-chip';
 import { runtimeShortLabel, runtimeDetail, hasTmuxPane, providerMark } from '@/lib/runtime-labels';
 
@@ -110,6 +107,20 @@ const useIsoLayoutEffect = typeof document !== 'undefined' ? useLayoutEffect : u
 // here) for a form most page loads never show. Warmed on idle in ChatPageInner
 // below, so clicking New chat still finds it in cache.
 const NewChatPane = lazy(() => import('@/components/chat/new-chat-pane').then((m) => ({ default: m.NewChatPane })));
+
+// Same treatment for the other low-frequency branches of this page: the detail
+// sheet, the live-preview UI and voice dictation are all conditional panels a
+// plain page load never renders, yet their code sat in the blocking first-load
+// chunk. Each renders inside its own <Suspense fallback={null}> below — showing
+// up a frame late is fine for a panel — and all five chunks are warmed on idle
+// in ChatPageInner, the same way NewChatPane is. parseLivePreview (used during
+// render) moved to lib/live-preview so this module keeps no static path into
+// preview-panel.
+const SessionDetailSheet = lazy(() => import('@/components/chat/session-detail-sheet').then((m) => ({ default: m.SessionDetailSheet })));
+const LivePreviewPanel = lazy(() => import('@/components/chat/preview-panel').then((m) => ({ default: m.LivePreviewPanel })));
+const PreviewFab = lazy(() => import('@/components/chat/preview-fab').then((m) => ({ default: m.PreviewFab })));
+const VoiceMic = lazy(() => import('@/components/chat/voice-mic').then((m) => ({ default: m.VoiceMic })));
+const DictationDock = lazy(() => import('@/components/chat/dictation-dock').then((m) => ({ default: m.DictationDock })));
 
 // Shown only while that chunk is in flight. Mirrors the pane's own frame (header
 // + centered max-w-md card) so the swap doesn't move anything; the mobile sidebar
@@ -176,14 +187,22 @@ function ChatPageInner() {
   // landing redirect + empty state). Drops a duplicate 5s poll/re-render.
   const sessions = trpc.chat.listSessions.useQuery({});
 
-  // Warm the New-chat chunk on idle — same trick markdown.tsx uses. It is off the
+  // Warm the split chunks on idle — same trick markdown.tsx uses. It is off the
   // critical path (fires after first paint, at idle priority) but lands well before
-  // the New chat button gets clicked, so the split above costs no perceived latency.
+  // the New chat button (or the detail sheet, preview, mic) gets clicked, so the
+  // splits above cost no perceived latency.
   // Lives HERE rather than at module scope on purpose: /brain imports SessionPane
   // from this file and never shows the pane, so it should not pay for the fetch.
   useEffect(() => {
     const w = window as unknown as { requestIdleCallback?: (cb: () => void) => void };
-    const warm = () => { void import('@/components/chat/new-chat-pane'); };
+    const warm = () => {
+      void import('@/components/chat/new-chat-pane');
+      void import('@/components/chat/session-detail-sheet');
+      void import('@/components/chat/preview-panel');
+      void import('@/components/chat/preview-fab');
+      void import('@/components/chat/voice-mic');
+      void import('@/components/chat/dictation-dock');
+    };
     (w.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1500)))(warm);
   }, []);
 
@@ -2067,7 +2086,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       {/* Mounted only once opened, so an untouched chat never pays for the
           detail query; kept mounted afterwards so the sheet animates out. */}
       {(detailOpen || detailEverOpened.current) && (
-        <SessionDetailSheet sessionId={sessionId} open={detailOpen} onOpenChange={setDetailOpen} />
+        <Suspense fallback={null}>
+          <SessionDetailSheet sessionId={sessionId} open={detailOpen} onOpenChange={setDetailOpen} />
+        </Suspense>
       )}
 
       {/* Anchored mode banner: you're parked on a search hit, not at the live
@@ -2187,25 +2208,27 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             reach for mid-scroll. */}
         {(showMicFab || hasLivePreview) && (
           <FabDock count={(showMicFab ? 1 : 0) + (hasLivePreview ? 1 : 0)}>
-            {showMicFab && (
-              // Never hidden while a run is live: the button IS the way out of
-              // one (release it, or tap it), and a button that unmounts
-              // mid-press never delivers its pointerup.
-              <VoiceMic
-                hidden={false}
-                dictating={dictating}
-                cancelArmed={slideCancelArmed}
-                onDictate={startDictation}
-                onDictateStop={stopDictation}
-                onDictateCancel={cancelDictation}
-                onSlideCancelArm={setSlideCancelArmed}
-              />
-            )}
-            {/* Below the mic so the mic keeps its stored spot; only exists while
-                the session has a registered preview — "hidden by default". */}
-            {hasLivePreview && (
-              <PreviewFab open={previewOpen} onToggle={() => setPreviewOpenUrl(previewOpen ? null : (livePreview?.url ?? null))} />
-            )}
+            <Suspense fallback={null}>
+              {showMicFab && (
+                // Never hidden while a run is live: the button IS the way out of
+                // one (release it, or tap it), and a button that unmounts
+                // mid-press never delivers its pointerup.
+                <VoiceMic
+                  hidden={false}
+                  dictating={dictating}
+                  cancelArmed={slideCancelArmed}
+                  onDictate={startDictation}
+                  onDictateStop={stopDictation}
+                  onDictateCancel={cancelDictation}
+                  onSlideCancelArm={setSlideCancelArmed}
+                />
+              )}
+              {/* Below the mic so the mic keeps its stored spot; only exists while
+                  the session has a registered preview — "hidden by default". */}
+              {hasLivePreview && (
+                <PreviewFab open={previewOpen} onToggle={() => setPreviewOpenUrl(previewOpen ? null : (livePreview?.url ?? null))} />
+              )}
+            </Suspense>
           </FabDock>
         )}
         {/* Plain wrapper — it used to be measured to keep the mic above this stack.
@@ -2260,14 +2283,16 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             onClear={() => { setOptimisticQueue([]); clearQueue.mutate({ sessionId }); }}
             clearing={clearQueue.isPending}
           />
-          <DictationDock
-            ref={dictationRef}
-            sessionId={sessionId}
-            composerRef={composerRef}
-            cancelArmed={slideCancelArmed}
-            onActiveChange={onDictationActive}
-            onNotice={setComposerNotice}
-          />
+          <Suspense fallback={null}>
+            <DictationDock
+              ref={dictationRef}
+              sessionId={sessionId}
+              composerRef={composerRef}
+              cancelArmed={slideCancelArmed}
+              onActiveChange={onDictationActive}
+              onNotice={setComposerNotice}
+            />
+          </Suspense>
           <ComposeBar
             sessionId={sessionId}
             disabled={!!session?.closedAt}
@@ -2363,12 +2388,14 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       {previewOpen && livePreview && (
         // key: a re-registration rotates the URL, and the panel's history
         // bookkeeping is only true of the frame it was counted in.
-        <LivePreviewPanel
-          key={livePreview.url}
-          preview={livePreview}
-          onClose={() => setPreviewOpenUrl(null)}
-          onPickSelector={pickSelector}
-        />
+        <Suspense fallback={null}>
+          <LivePreviewPanel
+            key={livePreview.url}
+            preview={livePreview}
+            onClose={() => setPreviewOpenUrl(null)}
+            onPickSelector={pickSelector}
+          />
+        </Suspense>
       )}
       </div>
     </>

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { ThemeProvider } from 'next-themes';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { httpBatchLink, loggerLink } from '@trpc/client';
+import { httpBatchLink, httpLink, loggerLink, splitLink } from '@trpc/client';
 import superjson from 'superjson';
 import { trpc } from '@/lib/trpc';
 import { getActiveKey } from '@/lib/keyring';
@@ -34,20 +34,33 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     return client;
   });
 
-  const [trpcClient] = useState(() =>
-    trpc.createClient({
+  const [trpcClient] = useState(() => {
+    // Both ends of the split share the transport config — only the batching
+    // differs.
+    const http = {
+      url: '/api/trpc',
+      transformer: superjson,
+      headers() {
+        return { 'x-asst-key': getActiveKey() };
+      },
+    };
+    return trpc.createClient({
       links: [
         loggerLink({ enabled: () => false }),
-        httpBatchLink({
-          url: '/api/trpc',
-          transformer: superjson,
-          headers() {
-            return { 'x-asst-key': getActiveKey() };
-          },
+        // Batching shares one HTTP response across the queries that happen to
+        // land in the same tick, so every query in the batch waits for the
+        // SLOWEST one. chat.getSession (single-row PK lookup, tens of ms) was
+        // routinely held hostage by a same-batch listSessions / listMessages
+        // (~240 KB). Those two (plus chat.queue, the small poll next to it) go
+        // out unbatched and return on their own; everything else keeps batching.
+        splitLink({
+          condition: (op) => op.path === 'chat.getSession' || op.path === 'chat.queue',
+          true: httpLink(http),
+          false: httpBatchLink(http),
         }),
       ],
-    }),
-  );
+    });
+  });
 
   // Expose the native-shell API (APNs token intake + deep links). No-op in a
   // browser — it just parks an object the shell would have called.

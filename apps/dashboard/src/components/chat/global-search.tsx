@@ -17,7 +17,6 @@ import { Overlay } from '@/components/overlay';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
-import { onOpenGlobalSearch } from '@/lib/chat-cache/search-bus';
 import { useChatSearch, useCachedSessionMeta, useChatCacheSyncStatus, coverageLabel } from '@/lib/chat-cache/use-chat-cache';
 import type { SearchHit } from '@/lib/chat-cache/types';
 
@@ -240,10 +239,10 @@ function SearchPanel({ close }: { close: () => void }) {
   );
 }
 
-/** Mounted once (providers). Listens for the open event and renders the overlay. */
-export function GlobalSearchHost() {
-  const [open, setOpen] = useState(false);
-  useEffect(() => onOpenGlobalSearch(() => setOpen(true)), []);
+/** Mounted once (providers). Open state lives in chat-cache-root: the host's
+    chunk loads on the first open event, so no listener inside here can have
+    seen that event. */
+export function GlobalSearchHost({ open, onClose }: { open: boolean; onClose: () => void }) {
   if (!open) return null;
-  return <Overlay onClose={() => setOpen(false)}>{(close) => <SearchPanel close={close} />}</Overlay>;
+  return <Overlay onClose={onClose}>{(close) => <SearchPanel close={close} />}</Overlay>;
 }

@@ -133,7 +133,16 @@ class ChatCacheSync {
     }
     void requestPersistence();
     void this.housekeep();
-    void this.tick();
+    // The FIRST tick waits for idle: it runs the server-side syncProbe (a
+    // groupBy over every message on the machine) plus the IndexedDB pass, and
+    // firing it the moment the page loads makes both compete with first paint
+    // and hydration. The steady-state poll below is unchanged. A 3s fallback
+    // covers browsers without requestIdleCallback (Safari) — bounded, so the
+    // cache can never be starved by a busy main thread.
+    const w = typeof window !== 'undefined'
+      ? (window as unknown as { requestIdleCallback?: (cb: () => void) => void })
+      : {};
+    (w.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 3000)))(() => void this.tick());
   }
 
   stop(): void {

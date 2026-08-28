@@ -44,26 +44,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Check, ChevronLeft, ChevronRight, Copy, ExternalLink, RotateCw, SquareDashedMousePointer, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-export interface LivePreviewInfo {
-  url: string;
-  mode: 'static' | 'proxy';
-  target: string;
-  updatedAt?: string;
-}
-
-/** ChatSession.livePreview is an untyped Json column — validate at the edge. */
-export function parseLivePreview(v: unknown): LivePreviewInfo | null {
-  if (!v || typeof v !== 'object') return null;
-  const o = v as Record<string, unknown>;
-  if (typeof o.url !== 'string' || !/^https?:\/\//.test(o.url)) return null;
-  return {
-    url: o.url,
-    mode: o.mode === 'proxy' ? 'proxy' : 'static',
-    target: typeof o.target === 'string' ? o.target : '',
-    updatedAt: typeof o.updatedAt === 'string' ? o.updatedAt : undefined,
-  };
-}
+import type { LivePreviewInfo } from '@/lib/live-preview';
 
 // ── divider width persistence ────────────────────────────────────────────────
 

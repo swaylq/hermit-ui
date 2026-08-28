@@ -7,10 +7,36 @@
 //
 // Renders nothing until the overlay is opened.
 
-import { GlobalSearchHost } from '@/components/chat/global-search';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { onOpenGlobalSearch } from '@/lib/chat-cache/search-bus';
 import { useChatCacheSync } from '@/lib/chat-cache/use-chat-cache';
+
+// The overlay renders null until ⌘K / the sidebar magnifier opens it, yet its
+// chunk (Overlay + base-ui's Select popup engine) rode every route's blocking
+// first load. Load it on first open instead: the open state lives here because
+// the event that triggers the load is already dispatched before the chunk (and
+// with it any listener inside) exists. Kept mounted after the first open so
+// closing doesn't throw the loaded chunk away.
+const GlobalSearchHost = lazy(() =>
+  import('@/components/chat/global-search').then((m) => ({ default: m.GlobalSearchHost })),
+);
 
 export function ChatCacheRoot() {
   useChatCacheSync();
-  return <GlobalSearchHost />;
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchEverOpened = useRef(false);
+  useEffect(
+    () =>
+      onOpenGlobalSearch(() => {
+        searchEverOpened.current = true;
+        setSearchOpen(true);
+      }),
+    [],
+  );
+  if (!searchEverOpened.current) return null;
+  return (
+    <Suspense fallback={null}>
+      <GlobalSearchHost open={searchOpen} onClose={() => setSearchOpen(false)} />
+    </Suspense>
+  );
 }
