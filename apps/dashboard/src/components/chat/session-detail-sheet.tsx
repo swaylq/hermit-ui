@@ -252,13 +252,16 @@ export function SessionDetailSheet({
             {/* Wraps rather than truncates: the tail of a session url is the id,
                 which is the half worth reading, and on a phone an ellipsis eats
                 exactly that. */}
-            <SheetDescription className="min-w-0 flex-1 pt-0.5 font-mono text-[11px] break-all">
+            <SheetDescription className="min-w-0 flex-1 pt-1 font-mono text-[11px] break-all">
               {sessionUrl}
             </SheetDescription>
+            {/* Same size and variant as the sheet's own close X, and -mr-1 pulls
+                it onto the same right edge (the header pads 4 more than the X's
+                absolute inset) — one column, two buttons. */}
             <Button
               variant="ghost"
-              size="icon-xs"
-              className="shrink-0 text-muted-foreground hover:text-foreground"
+              size="icon-sm"
+              className="-mr-1 shrink-0 text-muted-foreground hover:text-foreground"
               aria-label="Copy session link"
               title={copied === 'fail' ? 'Copy failed' : copied === 'ok' ? 'Copied' : 'Copy link'}
               onClick={copyUrl}
