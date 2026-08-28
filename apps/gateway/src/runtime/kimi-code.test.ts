@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   kimiArgs, kimiFallbackPaths, kimiHome, kimiProviderType, kimiSpawnEnv, resolveKimiCommand,
-  scanWire, wireFileFor, turnFailed, isGoalPrompt,
+  scanWire, wireFileFor, wireQuietMs, turnFailed, isGoalPrompt,
   CONFLICTING_KIMI_VARS, GATEWAY_ONLY_VARS,
 } from './kimi-code';
 import type { ModelCredential } from '../pi-config';
@@ -236,6 +236,50 @@ test('the log is found through the index, not by rebuilding the directory name',
   assert.equal(wireFileFor(home, sessionId), wire);
   assert.equal(wireFileFor(home, 'session_missing'), null);
   assert.equal(wireFileFor('/nonexistent-abcdef', sessionId), null);
+});
+
+// ── the watchdog's second opinion ──────────────────────────────────────────
+
+// An AgentSwarm turn is mute on stdout while its subagents write to their own
+// agents/agent-N/wire.jsonl. Liveness is the NEWEST write anywhere in the
+// tree — on 2026-08-28 a swarm was killed as "wedged" while a subagent's log
+// was ten seconds old.
+test('a subagent writing its own log counts as the session being alive', () => {
+  const { home, wire, sessionId } = fixture();
+  const now = Date.now();
+  fs.writeFileSync(wire, '{}\n');
+  fs.utimesSync(wire, new Date(now - 20 * 60 * 1000), new Date(now - 20 * 60 * 1000));
+
+  // Main log 20min stale and nothing else: quiet for 20min.
+  assert.equal(wireQuietMs(home, sessionId, now), 20 * 60 * 1000);
+
+  // A swarm subagent wrote 10s ago: the session is 10s quiet, not 20min.
+  const sub = path.join(path.dirname(path.dirname(wire)), 'agent-4');
+  fs.mkdirSync(sub, { recursive: true });
+  const subWire = path.join(sub, 'wire.jsonl');
+  fs.writeFileSync(subWire, '{}\n');
+  fs.utimesSync(subWire, new Date(now - 10_000), new Date(now - 10_000));
+  assert.equal(wireQuietMs(home, sessionId, now), 10_000);
+
+  // A subagent dir with no wire.jsonl yet doesn't spoil the answer.
+  fs.mkdirSync(path.join(path.dirname(path.dirname(wire)), 'agent-5'), { recursive: true });
+  assert.equal(wireQuietMs(home, sessionId, now), 10_000);
+
+  // Clock skew (mtime ahead of now) clamps to 0, never negative.
+  fs.utimesSync(subWire, new Date(now + 60_000), new Date(now + 60_000));
+  assert.equal(wireQuietMs(home, sessionId, now), 0);
+});
+
+// null means "no evidence either way" — the watchdog falls back to its stdout
+// verdict and kills, which is the old behavior for a spawn that truly wedged
+// before ever printing (no id learned) or before kimi indexed the session.
+test('no id, no index entry, or no logs at all yields null, not a reprieve', () => {
+  const { home, sessionId } = fixture();
+  assert.equal(wireQuietMs(home, null), null);
+  assert.equal(wireQuietMs(home, 'session_missing'), null);
+  assert.equal(wireQuietMs('/nonexistent-abcdef', sessionId), null);
+  // Indexed, agents/main exists, but no wire.jsonl was ever written.
+  assert.equal(wireQuietMs(home, sessionId), null);
 });
 
 // Real lines from a captured wire.jsonl. The counters are DISJOINT — billed

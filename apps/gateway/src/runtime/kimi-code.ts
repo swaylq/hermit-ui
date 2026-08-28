@@ -130,11 +130,14 @@ function systemItem(sessionId: string, externalId: string, text: string): SyncIt
 const KIMI_SESSION_ID = /^session_[0-9a-f]{8}-[0-9a-f-]{20,}$/i;
 
 /**
- * A turn that produces no output for this long is wedged.
+ * A turn that shows no sign of life for this long is wedged.
  *
  * The model call inside kimi has its own retry machinery (it reports each
  * attempt as `turn.step.retrying`), so silence this long means the process is
- * stuck rather than thinking. Same value and same reasoning as dsh's.
+ * stuck rather than thinking. Same value and same reasoning as dsh's — but
+ * "silence" is stdout AND the session's log tree: an AgentSwarm turn is
+ * legitimately mute on stdout for its whole run (see wireQuietMs), so the
+ * watchdog only kills when both have been quiet this long.
  */
 const TURN_SILENCE_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -363,6 +366,12 @@ export function kimiArgs(prompt: string, resumeId: string | null, addDirs: strin
  * session and the CLI maintains it.
  */
 export function wireFileFor(home: string, sessionId: string): string | null {
+  const dir = sessionDirFor(home, sessionId);
+  return dir ? path.join(dir, 'agents', 'main', 'wire.jsonl') : null;
+}
+
+/** The session's directory, looked up the same way. */
+export function sessionDirFor(home: string, sessionId: string): string | null {
   let raw: string;
   try {
     raw = fs.readFileSync(path.join(home, 'session_index.jsonl'), 'utf8');
@@ -380,7 +389,42 @@ export function wireFileFor(home: string, sessionId: string): string | null {
       // a truncated tail line; the next full one wins
     }
   }
-  return dir ? path.join(dir, 'agents', 'main', 'wire.jsonl') : null;
+  return dir;
+}
+
+/**
+ * How long the session's log tree has been quiet, in ms — or null when there
+ * is no tree to ask (no id learned yet, index missing, dir unreadable).
+ *
+ * This is the watchdog's second opinion. Stdout goes silent for the whole
+ * length of an AgentSwarm call: subagents log to their own
+ * `agents/agent-N/wire.jsonl`, and the main agent's step only flushes to
+ * stdout when the tool returns. On 2026-08-28 a swarm that was still writing
+ * files got SIGKILLed ten seconds after its last log write, because stdout
+ * silence was read as a wedge. The logs are where kimi's liveness actually
+ * shows; a process making no syscalls writes none of them.
+ */
+export function wireQuietMs(home: string, sessionId: string | null, now = Date.now()): number | null {
+  if (!sessionId) return null;
+  const dir = sessionDirFor(home, sessionId);
+  if (!dir) return null;
+  let names: string[];
+  try {
+    names = fs.readdirSync(path.join(dir, 'agents'));
+  } catch {
+    return null;
+  }
+  let latest = -Infinity;
+  for (const name of names) {
+    try {
+      const { mtimeMs } = fs.statSync(path.join(dir, 'agents', name, 'wire.jsonl'));
+      if (mtimeMs > latest) latest = mtimeMs;
+    } catch {
+      // a subagent dir without a wire.jsonl yet; the others speak for the session
+    }
+  }
+  if (latest === -Infinity) return null;
+  return Math.max(0, now - latest);
 }
 
 /**
@@ -642,21 +686,41 @@ export class KimiCodeRuntime implements AgentRuntime {
     // behind, to fire later and log the wedge warning for a turn that ended
     // cleanly: noise shaped exactly like the failure an operator is hunting.
     // `.unref()` so a stray one can never hold the process open either.
+    //
+    // Stdout silence alone is not a verdict, though. An AgentSwarm turn prints
+    // nothing for the whole tool call — the main agent's step flushes when the
+    // tool returns, and the subagents never touch stdout — so before killing,
+    // the timer asks the session's log tree (wireQuietMs) whether anything is
+    // still being written. Alive on disk → re-arm for the remainder of a
+    // 15-minute quiet budget measured from the last log write; the reprieve is
+    // logged so a runaway shows up in the gateway log, not just its kill.
+    // `h.stampedSessionId` is read at fire time, not capture time: the first
+    // turn of a fresh session learns its id from stdout mid-turn.
     let exited = false;
-    const silence = () => setTimeout(() => {
+    const silence = (delayMs: number): NodeJS.Timeout => setTimeout(() => {
+      const quietMs = wireQuietMs(kimiHome(), h.stampedSessionId);
+      if (quietMs !== null && quietMs < TURN_SILENCE_TIMEOUT_MS) {
+        const remainder = Math.max(1000, TURN_SILENCE_TIMEOUT_MS - quietMs);
+        console.warn(
+          `[kimi] session=${h.sessionId.slice(0, 8)}: stdout quiet, but the session log was written `
+          + `${Math.round(quietMs / 1000)}s ago (a swarm works in silence) — letting the turn run`,
+        );
+        watchdog = silence(remainder);
+        return;
+      }
       console.warn(
         `[kimi] session=${h.sessionId.slice(0, 8)}: no output for ${TURN_SILENCE_TIMEOUT_MS / 60000}min — killing the turn`,
       );
       child.kill('SIGKILL');
-    }, TURN_SILENCE_TIMEOUT_MS).unref();
-    let watchdog = silence();
+    }, delayMs).unref();
+    let watchdog = silence(TURN_SILENCE_TIMEOUT_MS);
 
     if (child.stdout) {
       const rl = createInterface({ input: child.stdout });
       rl.on('line', (line) => {
         if (!exited) {
           clearTimeout(watchdog);
-          watchdog = silence();
+          watchdog = silence(TURN_SILENCE_TIMEOUT_MS);
         }
 
         const msg = parseKimiLine(line);
