@@ -17,6 +17,7 @@
 
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
+import { Check, Copy } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -25,6 +26,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
+import { copyText } from '@/lib/copy-text';
 import { CtxBar } from '@/components/ctx-bar';
 import { contextWindowFor } from '@/lib/context-window';
 import { BackendPicker } from './backend-picker';
@@ -76,6 +78,24 @@ export function SessionDetailSheet({
     { enabled: open, refetchInterval: open ? 10_000 : false },
   );
   const d = q.data;
+
+  // The header shows the LINK to this session, not the bare id: the id on its
+  // own was only ever a step towards a url someone had to assemble by hand.
+  // Reading `window` during render is safe here — AuthGate mounts the app only
+  // after hydration — and the '' fallback keeps a server render from throwing.
+  const sessionUrl =
+    typeof window === 'undefined'
+      ? ''
+      : `${window.location.origin}/chat?session=${encodeURIComponent(sessionId)}`;
+  // copyText falls back to execCommand when navigator.clipboard is missing
+  // (plain http on the LAN) or rejects, and returns a boolean so a failure shows
+  // on the button instead of being swallowed into a tap that does nothing.
+  const [copied, setCopied] = useState<'idle' | 'ok' | 'fail'>('idle');
+  async function copyUrl() {
+    const ok = await copyText(sessionUrl);
+    setCopied(ok ? 'ok' : 'fail');
+    setTimeout(() => setCopied('idle'), 1400);
+  }
 
   // The same query (and staleTime) the picker inside this sheet runs, so
   // react-query serves both from one request. Read here as well because the
@@ -228,7 +248,26 @@ export function SessionDetailSheet({
       <SheetContent className="data-[side=right]:w-full sm:max-w-lg data-[side=right]:sm:max-w-lg overflow-hidden flex flex-col gap-0 p-0">
         <SheetHeader className="border-b">
           <SheetTitle className="truncate">{d?.title || d?.agentName || 'Session'}</SheetTitle>
-          <SheetDescription className="font-mono text-[11px]">{sessionId}</SheetDescription>
+          <div className="flex items-start gap-1">
+            {/* Wraps rather than truncates: the tail of a session url is the id,
+                which is the half worth reading, and on a phone an ellipsis eats
+                exactly that. */}
+            <SheetDescription className="min-w-0 flex-1 pt-0.5 font-mono text-[11px] break-all">
+              {sessionUrl}
+            </SheetDescription>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label="Copy session link"
+              title={copied === 'fail' ? 'Copy failed' : copied === 'ok' ? 'Copied' : 'Copy link'}
+              onClick={copyUrl}
+            >
+              {copied === 'ok'
+                ? <Check className="text-emerald-500" />
+                : <Copy className={cn(copied === 'fail' && 'text-rose-400')} />}
+            </Button>
+          </div>
         </SheetHeader>
 
         {q.isPending && (
