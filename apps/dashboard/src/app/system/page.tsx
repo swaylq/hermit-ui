@@ -2,6 +2,7 @@
 
 import { SettingsTabs } from '@/components/settings-tabs';
 import { HostHealthView } from '@/components/host-health-view';
+import { GatewayCard } from '@/components/gateway-card';
 import { SessionCleanupView } from '@/components/session-cleanup-view';
 
 export default function SystemPage() {
@@ -15,6 +16,9 @@ export default function SystemPage() {
             reported by its gateway. Health is judged on free RAM + load.
           </p>
           <HostHealthView />
+          <div className="mt-4">
+            <GatewayCard />
+          </div>
           <div className="mt-4">
             <SessionCleanupView />
           </div>

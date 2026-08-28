@@ -9,6 +9,36 @@ import { watchdogConfigOf } from '@/lib/watchdog-config';
 import { modelCredentialsOf, defaultModelOf } from '@/lib/model-credentials';
 import { claudeModelsOf } from '@/lib/claude-models';
 
+// ── Machine operations ────────────────────────────────────────────────────────
+// The ops the dashboard can queue for a gateway to run on its host. Kept in step
+// with the gateway's dispatch by hand (apps/gateway/src/machine-requests.ts): a
+// kind no gateway on that machine knows is acked as `unknown kind`, which is the
+// right failure but a puzzling one to read, so a machine whose gateway has not
+// been updated yet answers the two gateway ops with exactly that.
+const OPS_KINDS = ['upgrade-claude', 'restart-all-sessions', 'update-gateway', 'restart-gateway'];
+
+// How long a `running` row keeps the button disabled. Re-queueing while an op is
+// in flight collapses onto that row instead of stacking a second identical one —
+// but the two gateway ops end by killing the process that would have resolved
+// them, so an ack that loses its race would otherwise leave a row that blocks the
+// button forever. `pending` is NOT aged out: that one means the gateway has not
+// polled yet, and waiting is the correct behaviour there.
+const OP_IN_FLIGHT_MS = 10 * 60_000;
+
+function pendingRequest(machineId: string, kind: string) {
+  return prisma.machineRequest.findFirst({
+    where: {
+      machineId,
+      kind,
+      OR: [
+        { status: 'pending' },
+        { status: 'running', requestedAt: { gt: new Date(Date.now() - OP_IN_FLIGHT_MS) } },
+      ],
+    },
+    select: { id: true },
+  });
+}
+
 export const PI_CONFIG_SCHEMA = z.object({
   // NOTE: `authMode` used to live here and could name 'cc-subscription', which
   // pointed pi at this machine's Claude Code OAuth credentials. That option is
@@ -401,10 +431,7 @@ export const machinesRouter = router({
   // host, so it queues a MachineRequest; the gateway polls, executes, writes the
   // result back. Re-queuing while one is pending/running collapses to the same row.
   requestUpgradeClaude: machineProcedure.mutation(async ({ ctx }) => {
-    const existing = await prisma.machineRequest.findFirst({
-      where: { machineId: ctx.machine.id, kind: 'upgrade-claude', status: { in: ['pending', 'running'] } },
-      select: { id: true },
-    });
+    const existing = await pendingRequest(ctx.machine.id, 'upgrade-claude');
     if (existing) return { ok: true, id: existing.id, alreadyQueued: true };
     const r = await prisma.machineRequest.create({
       data: { machineId: ctx.machine.id, kind: 'upgrade-claude' },
@@ -414,13 +441,33 @@ export const machinesRouter = router({
   }),
 
   requestRestartAllSessions: machineProcedure.mutation(async ({ ctx }) => {
-    const existing = await prisma.machineRequest.findFirst({
-      where: { machineId: ctx.machine.id, kind: 'restart-all-sessions', status: { in: ['pending', 'running'] } },
-      select: { id: true },
-    });
+    const existing = await pendingRequest(ctx.machine.id, 'restart-all-sessions');
     if (existing) return { ok: true, id: existing.id, alreadyQueued: true };
     const r = await prisma.machineRequest.create({
       data: { machineId: ctx.machine.id, kind: 'restart-all-sessions' },
+      select: { id: true },
+    });
+    return { ok: true, id: r.id, alreadyQueued: false };
+  }),
+
+  // Pull this machine's gateway checkout up to origin and restart it onto the
+  // new code (Settings → System). A no-op pull never restarts — see the
+  // gateway's runUpdateGateway.
+  requestUpdateGateway: machineProcedure.mutation(async ({ ctx }) => {
+    const existing = await pendingRequest(ctx.machine.id, 'update-gateway');
+    if (existing) return { ok: true, id: existing.id, alreadyQueued: true };
+    const r = await prisma.machineRequest.create({
+      data: { machineId: ctx.machine.id, kind: 'update-gateway' },
+      select: { id: true },
+    });
+    return { ok: true, id: r.id, alreadyQueued: false };
+  }),
+
+  requestRestartGateway: machineProcedure.mutation(async ({ ctx }) => {
+    const existing = await pendingRequest(ctx.machine.id, 'restart-gateway');
+    if (existing) return { ok: true, id: existing.id, alreadyQueued: true };
+    const r = await prisma.machineRequest.create({
+      data: { machineId: ctx.machine.id, kind: 'restart-gateway' },
       select: { id: true },
     });
     return { ok: true, id: r.id, alreadyQueued: false };
@@ -430,14 +477,17 @@ export const machinesRouter = router({
   // request is in flight so "running…" → "done" updates without a refresh.
   opsStatus: machineProcedure.query(async ({ ctx }) => {
     const rows = await prisma.machineRequest.findMany({
-      where: { machineId: ctx.machine.id, kind: { in: ['upgrade-claude', 'restart-all-sessions'] } },
+      where: { machineId: ctx.machine.id, kind: { in: OPS_KINDS } },
       orderBy: { requestedAt: 'desc' },
-      take: 10,
+      // One row per kind is all the panels show, and only the newest of each.
+      take: 5 * OPS_KINDS.length,
       select: { id: true, kind: true, status: true, output: true, error: true, requestedAt: true, resolvedAt: true },
     });
     return {
       upgrade: rows.find((r) => r.kind === 'upgrade-claude') ?? null,
       restartAll: rows.find((r) => r.kind === 'restart-all-sessions') ?? null,
+      updateGateway: rows.find((r) => r.kind === 'update-gateway') ?? null,
+      restartGateway: rows.find((r) => r.kind === 'restart-gateway') ?? null,
     };
   }),
 
