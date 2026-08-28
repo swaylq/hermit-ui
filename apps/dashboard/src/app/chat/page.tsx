@@ -20,6 +20,7 @@ import { sessionStatusView } from '@/lib/session-status';
 import { dashboardReach } from '@/lib/dashboard-reach';
 import { useMarkSessionRead } from '@/lib/session-read';
 import { lastSessionId, rememberSession } from '@/lib/last-session';
+import { writeCachedSessions } from '@/lib/session-list-cache';
 import {
   markSessionWorking,
   publishSessionStatus,
@@ -88,6 +89,35 @@ const SETTLE_CHASE_FRAMES = 24;
 // scroll position synchronously after a history prepend so there's no visible
 // lurch), plain useEffect on the server to dodge React's SSR warning.
 const useIsoLayoutEffect = typeof document !== 'undefined' ? useLayoutEffect : useEffect;
+
+// Optimistic-row handoff. An optimistic row (a `pending` bubble or an
+// `optimisticQueue` stub) comes off screen once its REAL row lands in server
+// data. Match by the id chat.send returned (`realId`): text matching breaks
+// under outgoing auto-translate, where the optimistic row holds the typed
+// Chinese and the real row is English, so the two never met and the stub
+// lingered / double-counted. Text survives only as a fallback for the window
+// before the send responds, and each real row claims at most ONE optimistic
+// row — two identical texts sent back to back must not dedupe each other.
+function dropLanded<T extends { id: string; realId?: string; content: { type: 'text'; text: string }[] }>(
+  optimistic: T[],
+  real: ReadonlyArray<{ id: string; content: unknown }>,
+): T[] {
+  if (optimistic.length === 0) return optimistic;
+  const ids = new Set(real.map((m) => m.id));
+  const texts = new Map<string, number>();
+  for (const m of real) {
+    const t = msgText(m.content);
+    texts.set(t, (texts.get(t) ?? 0) + 1);
+  }
+  return optimistic.filter((p) => {
+    if (p.realId) return !ids.has(p.realId);
+    const t = msgText(p.content);
+    const left = texts.get(t) ?? 0;
+    if (left === 0) return true;
+    texts.set(t, left - 1);
+    return false;
+  });
+}
 
 // ── SSE message-list merge ──────────────────────────────────────────────────
 // The stream pushes the entire newest-N window every ~250ms. Writing it into
@@ -550,7 +580,23 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // Recycle bin, not a hard delete — see the sidebar's note and
   // docs/session-cleanup-design.md. Recoverable, and the pane is hibernated
   // rather than stranded.
+  //
+  // Optimistic like the sidebar's delete (recent-lists.tsx): the row leaves
+  // the cached list and the localStorage snapshot NOW, so the reload above
+  // lands on a warm list that no longer contains the dead row — without this
+  // the snapshot's 20s throttle made the first paint flash it back.
   const deleteSession = trpc.chat.trashSessions.useMutation({
+    onMutate: async ({ ids }) => {
+      await utils.chat.listSessions.cancel({});
+      const prev = utils.chat.listSessions.getData({});
+      const next = prev?.filter((s) => !ids.includes(s.id));
+      utils.chat.listSessions.setData({}, next);
+      if (next) writeCachedSessions(next, true);
+      return { prev };
+    },
+    onError: (_e, _v, context) => {
+      if (context?.prev) utils.chat.listSessions.setData({}, context.prev);
+    },
     onSuccess: () => { window.location.href = '/chat'; },
   });
   const restartSession = trpc.chat.requestSessionRestart.useMutation({
@@ -626,7 +672,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // and an optimistic row has neither — a full-window refetch drops it, and a
   // delta push has nothing to match it against. Merged into `view` at
   // render-time and auto-dropped once the real row (same text) lands in the cache.
-  const [pending, setPending] = useState<Array<{ id: string; role: 'user'; content: { type: 'text'; text: string }[]; createdAt: string }>>([]);
+  const [pending, setPending] = useState<Array<{ id: string; realId?: string; role: 'user'; content: { type: 'text'; text: string }[]; createdAt: string }>>([]);
   // Inline-edit the session title from the header. Clicking the title swaps
   // it for an input; Enter or blur saves, Escape cancels. Backend already has
   // `chat.setTitle` — we just plug into it.
@@ -933,11 +979,24 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     if (anchored.active) return anchored.rows ?? [];
     const base = baseRows ?? [];
     if (pending.length === 0) return base;
-    // Drop any optimistic row whose real counterpart (same user text) has landed.
-    const sent = new Set((messages.data ?? []).filter((m) => m.role === 'user').map((m) => msgText(m.content)));
-    const live = pending.filter((p) => !sent.has(msgText(p.content)));
+    // Drop any optimistic row whose real counterpart has landed — matched by
+    // the sent row's id, text only as a pre-response fallback (see dropLanded).
+    const live = dropLanded(pending, (messages.data ?? []).filter((m) => m.role === 'user'));
     return live.length ? [...base, ...live] : base;
   }, [messages.data, baseRows, pending, anchored.active, anchored.rows]);
+
+  // True while the timeline has nothing to show yet (cold-cache session
+  // switch). The skeleton is delayed ~100ms: the IndexedDB cache usually
+  // answers in 10–50ms, so an instant skeleton was one white flash the user
+  // never needed — data landing first now skips it entirely, and only a
+  // genuinely slow load ever shows it.
+  const loadingTimeline = anchored.active ? anchored.loading : messages.isPending && !baseRows;
+  const [showSkeleton, setShowSkeleton] = useState(false);
+  useEffect(() => {
+    if (!loadingTimeline) { setShowSkeleton(false); return; }
+    const t = setTimeout(() => setShowSkeleton(true), 100);
+    return () => clearTimeout(t);
+  }, [loadingTimeline]);
 
   // Top up a timeline too short to scroll.
   //
@@ -972,9 +1031,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // over a long session. Same-ref return guards against a render loop.
   useEffect(() => {
     if (pending.length === 0) return;
-    const sent = new Set((messages.data ?? []).filter((m) => m.role === 'user').map((m) => msgText(m.content)));
+    const userRows = (messages.data ?? []).filter((m) => m.role === 'user');
     setPending((p) => {
-      const next = p.filter((x) => !sent.has(msgText(x.content)));
+      const next = dropLanded(p, userRows);
       return next.length === p.length ? p : next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1211,7 +1270,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // few frames to outlast late layout. Retries respect pinnedRef, so a user who
   // scrolls up within the first 500ms isn't yanked back down.
   const didInitialScrollRef = useRef(false);
-  useEffect(() => {
+  // A LAYOUT effect: the first pin writes scrollTop before the browser paints,
+  // so even a fast machine never shows one frame of the conversation top. The
+  // timed retries below stay post-paint by nature — they outlast late layout.
+  useIsoLayoutEffect(() => {
     if (didInitialScrollRef.current) return;
     if (view.length === 0 || anchored.active) return;
     didInitialScrollRef.current = true;
@@ -1355,14 +1417,19 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // Optimistic queue overlay: a message sent while a turn is running IS a queue
   // item, but the real row only surfaces after the ~2s queue poll. Stubs pushed
   // here on send (see onSend) show instantly; pruned when the real queued row
-  // lands (effect below, keyed on queue.data) or on send error. Deduped by text
-  // against the real queue so the hand-off doesn't double-count.
-  const [optimisticQueue, setOptimisticQueue] = useState<Array<{ id: string; content: { type: 'text'; text: string }[] }>>([]);
-  const realQueue = (queue.data ?? []).filter((m) => !starterIds.has(m.id));
-  const realQueueTexts = new Set(realQueue.map((m) => msgText(m.content)));
+  // lands (effect below, keyed on queue.data) or on send error. Deduped by the
+  // sent row's id, text only as fallback (see dropLanded), so the hand-off
+  // doesn't double-count — including under outgoing auto-translate.
+  const [optimisticQueue, setOptimisticQueue] = useState<Array<{ id: string; realId?: string; content: { type: 'text'; text: string }[] }>>([]);
+  // Queue rows the user cancelled, hidden before the dequeue round-trip
+  // answers. Restored on error or on `removed: false` (the gateway already
+  // delivered it — the row belongs back); pruned once the row leaves
+  // queue.data for real, so a stale in-flight poll can't flash it back.
+  const [removedQueueIds, setRemovedQueueIds] = useState<Set<string>>(() => new Set());
+  const realQueue = (queue.data ?? []).filter((m) => !starterIds.has(m.id) && !removedQueueIds.has(m.id));
   const displayQueue = [
     ...realQueue,
-    ...optimisticQueue.filter((p) => !realQueueTexts.has(msgText(p.content))),
+    ...dropLanded(optimisticQueue, queue.data ?? []),
   ];
   const queueLen = displayQueue.length;
   // Messages you've typed this session, oldest→newest — the ↑/↓ recall history in
@@ -1376,10 +1443,21 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // it can't reappear after the message is delivered (and leaves queue.data).
   useEffect(() => {
     if (optimisticQueue.length === 0) return;
-    const queued = new Set((queue.data ?? []).map((m) => msgText(m.content)));
     setOptimisticQueue((q) => {
-      const next = q.filter((x) => !queued.has(msgText(x.content)));
+      const next = dropLanded(q, queue.data ?? []);
       return next.length === q.length ? q : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue.data]);
+  // Drop optimistically-cancelled ids once their row is really gone from
+  // queue.data. A row still present keeps its id, so a stale poll answering
+  // after the dequeue cannot make the cancelled row flash back.
+  useEffect(() => {
+    if (removedQueueIds.size === 0) return;
+    const live = new Set((queue.data ?? []).map((m) => m.id));
+    setRemovedQueueIds((s) => {
+      const next = new Set([...s].filter((id) => live.has(id)));
+      return next.size === s.size ? s : next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue.data]);
@@ -2111,8 +2189,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             a whole; wide content (tables, code) scrolls within its own message.
             `clip` (not hidden) avoids forcing overflow-y to auto. */}
         <div data-scroll-stability-layer className="px-4 py-4 max-w-3xl mx-auto overflow-x-clip [overflow-anchor:none]">
-          {(anchored.active ? anchored.loading : messages.isPending && !baseRows) ? (
-            <Skeleton className="h-32" />
+          {loadingTimeline ? (
+            // Blank for the first ~100ms (see showSkeleton above) — an IDB/cache
+            // hit lands inside that window and paints content with no skeleton
+            // flash at all; only a genuinely slow load ever shows one.
+            showSkeleton ? <Skeleton className="h-32" /> : null
           ) : view.length === 0 ? (
             <div className="animate-in fade-in-0 duration-150">
               <EmptyChat agentName={session?.agentName} onPickPrompt={pickPrompt} />
@@ -2277,8 +2358,24 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             onCancel={(id) => {
               // A still-optimistic stub isn't a real DB row yet — drop it locally;
               // a real queued row goes through the dequeue mutation.
-              if (id.startsWith('pending-')) setOptimisticQueue((q) => q.filter((x) => x.id !== id));
-              else dequeue.mutate({ messageId: id });
+              if (id.startsWith('pending-')) {
+                setOptimisticQueue((q) => q.filter((x) => x.id !== id));
+                return;
+              }
+              // Optimistic: hide the row NOW instead of after the round-trip +
+              // invalidate. Put it back if the call fails or the server answers
+              // removed:false — that means the gateway already delivered it, so
+              // the row belongs in the timeline, not in the bin.
+              const restore = () =>
+                setRemovedQueueIds((s) => { const n = new Set(s); n.delete(id); return n; });
+              setRemovedQueueIds((s) => new Set(s).add(id));
+              dequeue.mutate(
+                { messageId: id },
+                {
+                  onSuccess: (r) => { if (!r.removed) restore(); },
+                  onError: restore,
+                },
+              );
             }}
             onClear={() => { setOptimisticQueue([]); clearQueue.mutate({ sessionId }); }}
             clearing={clearQueue.isPending}
@@ -2356,6 +2453,12 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   {
                     onSuccess: (msg) => {
                       if (wasIdle) setStarterIds((s) => { const n = new Set(s); n.add(msg.id); return n; });
+                      // Hand the optimistic rows over to their real counterpart
+                      // BY ID: they stay on screen until that exact row lands in
+                      // server data (see dropLanded), so a translated send — real
+                      // row English, optimistic row Chinese — still reconciles.
+                      setPending((p) => p.map((x) => (x.id === optimisticId ? { ...x, realId: msg.id } : x)));
+                      setOptimisticQueue((q) => q.map((x) => (x.id === optimisticId ? { ...x, realId: msg.id } : x)));
                     },
                     onError: (err) => {
                       setPending((p) => p.filter((x) => x.id !== optimisticId));

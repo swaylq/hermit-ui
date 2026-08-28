@@ -15,7 +15,7 @@
 // row (from stable callback props), which doesn't defeat its memo (P1-3, finding C2).
 
 import { useState, useCallback, useMemo, useEffect, memo, lazy, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree, Archive, ArchiveRestore } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -323,6 +323,7 @@ const SessionRow = memo(function SessionRow({
   live,
   pinned,
   onPrefetch,
+  onSelect,
   onOpenMenu,
   longPress,
 }: {
@@ -332,6 +333,7 @@ const SessionRow = memo(function SessionRow({
   live: LiveStatus | null;
   pinned: boolean;
   onPrefetch: (id: string) => void;
+  onSelect: (id: string) => void;
   onOpenMenu: (id: string, x: number, y: number) => void;
   longPress: ReturnType<typeof useLongPress>;
 }) {
@@ -362,6 +364,9 @@ const SessionRow = memo(function SessionRow({
     <li>
       <Link
         href={`/chat?session=${encodeURIComponent(s.id)}`}
+        // Active styling on the click, not on the URL commit (long-press
+        // swallows this click after its menu fires, so no false active).
+        onClick={() => onSelect(s.id)}
         onMouseEnter={() => onPrefetch(s.id)}
         onFocus={() => onPrefetch(s.id)}
         onContextMenu={(e) => {
@@ -455,8 +460,18 @@ function ViewToggle({ view }: { view: SessionView }) {
 // state, pins, a context menu, hide/hibernate/restart actions, and long-press on
 // touch. Rendered by AppSidebar; the heaviest of the three worker Recent* lists.
 export function RecentSessions() {
+  const router = useRouter();
   const search = useSearchParams();
   const activeId = search.get('session');
+  // Instant click feedback: the URL (and with it useSearchParams) commits a
+  // beat behind the click on a busy main thread, so the row you just opened
+  // kept rendering inactive. Mark it locally on the click; once the URL
+  // catches up — or a landing redirect corrects it — the param takes over
+  // (the render-time clear below).
+  const [optimisticActiveId, setOptimisticActiveId] = useState<string | null>(null);
+  if (optimisticActiveId && activeId && optimisticActiveId !== activeId) setOptimisticActiveId(null);
+  const selectSession = useCallback((id: string) => setOptimisticActiveId(id), []);
+  const shownActiveId = optimisticActiveId ?? activeId;
   // `placeholderData`, not `initialData`: the list paints on the first frame from
   // the last known copy of THIS machine's sessions, while the real fetch — already
   // in flight — replaces it ~200ms later (much longer on a phone). initialData
@@ -554,14 +569,34 @@ export function RecentSessions() {
   // see docs/session-cleanup-design.md) and stays recoverable for the machine's
   // retention window. The menu item still reads "Delete" because that is what the
   // user means; the confirm text is where the bin is explained.
+  //
+  // Optimistic, same pattern as setHidden above: the row disappears on the
+  // click, not after trashSessions + a full refetch. onError rolls the list
+  // back; the delete is soft (recoverable from the bin), so a failed trash
+  // needs no navigation undo.
   const deleteSession = trpc.chat.trashSessions.useMutation({
-    onSuccess: (_d, vars) => {
-      // Deleting the session you're viewing: hard-nav to /chat (the Next 16
-      // custom-server router strands you on the dead URL — see the chat page's
-      // delete note). A background session: just refresh so its row vanishes.
-      if (vars.ids.includes(activeId ?? '')) { window.location.href = '/chat'; return; }
-      void utils.chat.listSessions.invalidate();
+    onMutate: async ({ ids }) => {
+      await utils.chat.listSessions.cancel({});
+      const prev = utils.chat.listSessions.getData({});
+      const next = prev?.filter((s) => !ids.includes(s.id));
+      utils.chat.listSessions.setData({}, next);
+      // Rewrite the localStorage snapshot NOW — its 20s throttle would
+      // otherwise keep the dead row for the next full reload's first paint.
+      if (next) writeCachedSessions(next, true);
+      // Deleting the session you're viewing: land on the next one right away.
+      // Same pick as the chat page's landing effect (most recent, not the
+      // Brain's, not hidden), client-side replace — the old window.location
+      // hard nav white-screened and threw away every warm cache.
+      if (activeId && ids.includes(activeId)) {
+        const nextUp = next?.find((s) => s.agentName !== orchestratorName && !s.hiddenAt && s.origin !== 'dispatch');
+        router.replace(nextUp ? `/chat?session=${encodeURIComponent(nextUp.id)}` : '/chat');
+      }
+      return { prev };
     },
+    onError: (_e, _v, context) => {
+      if (context?.prev) utils.chat.listSessions.setData({}, context.prev);
+    },
+    onSettled: () => { void utils.chat.listSessions.invalidate(); },
   });
 
   // Local agent filter — persisted in sessionStorage so it survives reloads
@@ -608,6 +643,12 @@ export function RecentSessions() {
   const prefetchSession = useCallback(
     (id: string) => {
       void utils.chat.listMessages.prefetch({ sessionId: id, limit: 60 }, { staleTime: 60_000 });
+      // Warm the markdown chunk on the same intent — an app just loaded, then
+      // a fast session switch, otherwise paints every bubble's Suspense
+      // fallback while ~370KB flies (a column of height jitter). Same chunk
+      // markdown.tsx's lazy resolves to, so this is a head start, not a
+      // second download.
+      void import('@/components/markdown-impl');
     },
     [utils],
   );
@@ -1032,11 +1073,12 @@ export function RecentSessions() {
                         <SessionRow
                           key={s.id}
                           session={s}
-                          active={activeId === s.id}
+                          active={shownActiveId === s.id}
                           liveAt={liveWorkingSince(s.id)}
                           live={liveStatus(s.id)}
                           pinned={pins.has(s.id)}
                           onPrefetch={prefetchSession}
+                          onSelect={selectSession}
                           onOpenMenu={openMenuAt}
                           longPress={longPress}
                         />
@@ -1084,11 +1126,12 @@ export function RecentSessions() {
                             <SessionRow
                               key={s.id}
                               session={s}
-                              active={activeId === s.id}
+                              active={shownActiveId === s.id}
                               liveAt={liveWorkingSince(s.id)}
                               live={liveStatus(s.id)}
                               pinned={pins.has(s.id)}
                               onPrefetch={prefetchSession}
+                              onSelect={selectSession}
                               onOpenMenu={openMenuAt}
                               longPress={longPress}
                             />
@@ -1104,11 +1147,12 @@ export function RecentSessions() {
                 <SessionRow
                   key={s.id}
                   session={s}
-                  active={activeId === s.id}
+                  active={shownActiveId === s.id}
                   liveAt={liveWorkingSince(s.id)}
                   live={liveStatus(s.id)}
                   pinned={pins.has(s.id)}
                   onPrefetch={prefetchSession}
+                  onSelect={selectSession}
                   onOpenMenu={openMenuAt}
                   longPress={longPress}
                 />

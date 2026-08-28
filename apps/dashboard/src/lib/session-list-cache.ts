@@ -54,10 +54,13 @@ export function readCachedSessions<T>(): T[] | undefined {
   }
 }
 
-export function writeCachedSessions(rows: unknown[]): void {
+// `force` skips the throttle: an optimistic delete removes rows from the query
+// cache instantly, and without a forced write the snapshot would still hold the
+// dead row — flashing it on the next full reload's first paint.
+export function writeCachedSessions(rows: unknown[], force = false): void {
   if (typeof window === 'undefined' || !Array.isArray(rows)) return;
   const now = Date.now();
-  if (now - lastWriteAt < MIN_WRITE_MS) return;
+  if (!force && now - lastWriteAt < MIN_WRITE_MS) return;
   const k = keyFor();
   if (!k) return;
   try {

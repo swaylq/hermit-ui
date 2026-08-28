@@ -503,7 +503,13 @@ export const ComposeBar = forwardRef<ComposerHandle, {
 
   const submit = () => {
     const text = draft.trim();
-    if (sending || disabled || queueFull) return;
+    // `sending` is deliberately NOT a guard. An in-flight send (~0.2–0.5s,
+    // longer with auto-translate) used to swallow an Enter whole — no bubble,
+    // no feedback. Now every Enter goes through: onSend puts the bubble up
+    // immediately and SessionPane's send chain serializes the actual dispatch,
+    // which is what the guard was really for. The draft clearing on send
+    // already stops a double-Enter from sending the same text twice.
+    if (disabled || queueFull) return;
     // Hold the send until every attachment finishes uploading — otherwise the
     // message goes out with the still-uploading files silently dropped.
     if (uploadingCount > 0) return;
@@ -545,7 +551,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   // The Brain's in-progress sentence shows only while the box is otherwise empty —
   // the moment you start typing, the composer is yours and the ghost gets out.
   const showBrainGhost = !!brainDraft && draft.length === 0 && !disabled;
-  const canSend = !sending && !disabled && !awaitingInput && !queueFull && uploadingCount === 0 && (draft.trim().length > 0 || readyAttachments.length > 0);
+  const canSend = !disabled && !awaitingInput && !queueFull && uploadingCount === 0 && (draft.trim().length > 0 || readyAttachments.length > 0);
 
   return (
     <form

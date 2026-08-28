@@ -467,11 +467,26 @@ function SessionsSection({
   // Recycle bin (docs/session-cleanup-design.md): recoverable, and it hibernates
   // the pane instead of leaving a ~500MB claude with no row able to kill it.
   const deleteSession = trpc.chat.trashSessions.useMutation({
-    onSuccess: () => {
-      // Invalidate every listSessions variant so the row also vanishes from the
-      // main sidebar, not just this agent-filtered list.
-      utils.chat.listSessions.invalidate();
+    // Optimistic remove, same pattern as the sidebar's delete: the row goes on
+    // the click in BOTH cached variants — this sheet's `{ agentName }` and the
+    // main sidebar's `{}` — rolled back on error.
+    onMutate: async ({ ids }) => {
+      await utils.chat.listSessions.cancel();
+      const prevAll = utils.chat.listSessions.getData({});
+      const prevAgent = utils.chat.listSessions.getData({ agentName });
+      const without = (old: SessionRow[] | undefined) => old?.filter((s) => !ids.includes(s.id));
+      utils.chat.listSessions.setData({}, without);
+      utils.chat.listSessions.setData({ agentName }, without);
+      return { prevAll, prevAgent };
     },
+    onError: (_e, _v, context) => {
+      if (context?.prevAll) utils.chat.listSessions.setData({}, context.prevAll);
+      if (context?.prevAgent) utils.chat.listSessions.setData({ agentName }, context.prevAgent);
+    },
+    // Only this agent's variant needs the reconcile refetch: the main sidebar
+    // already dropped the row optimistically and its own 5s poll covers the
+    // rest, so don't pay a 90KB `{}` refetch for every delete from this sheet.
+    onSettled: () => { void utils.chat.listSessions.invalidate({ agentName }); },
   });
 
   const all = sessions ?? [];
