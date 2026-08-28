@@ -268,24 +268,31 @@ model PlanUsage {
 // can't touch the gateway host's filesystem, so it queues a request here; the
 // Mac-side gateway polls, scaffolds-from-template / rm -rf's the agent dir,
 // then acks. Mirrors the ChatSession.restartRequestedAt round-trip.
-// Codex plan consumption, read from codex's own rollout files by the gateway.
+// Codex plan consumption, read from app-server `account/rateLimits/read`.
 //
-// Deliberately NOT merged into PlanUsage: that row is Claude's two-window
-// (5-hour + weekly) shape scraped from `claude /usage`, and codex reports one
-// window with a different meaning and its own reset clock. Sharing a row would
-// mean nullable columns whose meaning depends on which vendor last wrote them.
+// Deliberately NOT merged into PlanUsage: Codex can source its 5-hour and weekly
+// values from different metered buckets, while Claude's pair is one scraped
+// text panel. The source IDs below keep that distinction explicit.
 model CodexUsage {
-  machineId     String   @id
-  machine       Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  // The primary rate-limit window as codex reports it. `windowMinutes` is what
-  // makes usedPercent readable — 10080 means the number is a WEEKLY figure.
-  usedPercent   Float?
-  windowMinutes Int?
-  resetsAt      DateTime?
-  planType      String?
-  // Per-day token totals for the sparkline: `[{ day: "2026-08-11", input, output, sessions }]`.
-  daily         Json?
-  capturedAt    DateTime @default(now())
+  machineId         String    @id
+  machine           Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  // Legacy single-window columns retained while older gateways roll forward.
+  usedPercent       Float?
+  windowMinutes     Int?
+  resetsAt          DateTime?
+  // The two slots rendered by the dashboard, with their actual metered bucket.
+  fiveHourPct       Float?
+  fiveHourResetsAt  DateTime?
+  fiveHourLimitId   String?
+  fiveHourLimitName String?
+  weekPct           Float?
+  weekResetsAt      DateTime?
+  weekLimitId       String?
+  weekLimitName     String?
+  planType          String?
+  // Legacy per-day token totals. Retained for sync compatibility; no longer rendered.
+  daily             Json?
+  capturedAt        DateTime  @default(now())
 }
 
 // Kimi Code subscription quota, read from Moonshot's own endpoint by the

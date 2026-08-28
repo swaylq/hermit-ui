@@ -1,11 +1,8 @@
-// POST /api/sync/codex-usage — the gateway pushes what codex has spent on this
-// machine, read from codex's own rollout files (its `token_count` events carry
-// both a running token total and the server's `rate_limits` block).
+// POST /api/sync/codex-usage — the gateway pushes Codex's live app-server quota
+// snapshot plus legacy per-day token activity from rollout files.
 //
-// One row per machine, upserted. Kept separate from PlanUsage because that row
-// is Claude's two-window shape scraped from `claude /usage`; codex reports one
-// window with its own meaning and reset clock, and sharing a row would mean
-// nullable columns whose meaning depends on which vendor wrote last.
+// New columns are optional during rollout: an older gateway must not erase a
+// newer gateway's last good 5h/weekly reading by omitting fields it does not know.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -27,7 +24,7 @@ export async function POST(req: NextRequest) {
   }
 
   const c = body.codexUsage;
-  const data = {
+  const baseData = {
     usedPercent: c.usedPercent ?? null,
     windowMinutes: c.windowMinutes ?? null,
     resetsAt: c.resetsAt ? new Date(c.resetsAt) : null,
@@ -35,10 +32,31 @@ export async function POST(req: NextRequest) {
     daily: (c.daily ?? []) as unknown as Prisma.InputJsonValue,
     capturedAt: c.capturedAt ? new Date(c.capturedAt) : new Date(),
   };
+  const newData = {
+    fiveHourPct: c.fiveHourPct ?? null,
+    fiveHourResetsAt: c.fiveHourResetsAt ? new Date(c.fiveHourResetsAt) : null,
+    fiveHourLimitId: c.fiveHourLimitId ?? null,
+    fiveHourLimitName: c.fiveHourLimitName ?? null,
+    weekPct: c.weekPct ?? null,
+    weekResetsAt: c.weekResetsAt ? new Date(c.weekResetsAt) : null,
+    weekLimitId: c.weekLimitId ?? null,
+    weekLimitName: c.weekLimitName ?? null,
+  };
+  const update = {
+    ...baseData,
+    ...(c.fiveHourPct !== undefined ? { fiveHourPct: newData.fiveHourPct } : {}),
+    ...(c.fiveHourResetsAt !== undefined ? { fiveHourResetsAt: newData.fiveHourResetsAt } : {}),
+    ...(c.fiveHourLimitId !== undefined ? { fiveHourLimitId: newData.fiveHourLimitId } : {}),
+    ...(c.fiveHourLimitName !== undefined ? { fiveHourLimitName: newData.fiveHourLimitName } : {}),
+    ...(c.weekPct !== undefined ? { weekPct: newData.weekPct } : {}),
+    ...(c.weekResetsAt !== undefined ? { weekResetsAt: newData.weekResetsAt } : {}),
+    ...(c.weekLimitId !== undefined ? { weekLimitId: newData.weekLimitId } : {}),
+    ...(c.weekLimitName !== undefined ? { weekLimitName: newData.weekLimitName } : {}),
+  };
   await prisma.codexUsage.upsert({
     where: { machineId: machine.id },
-    create: { machineId: machine.id, ...data },
-    update: data,
+    create: { machineId: machine.id, ...baseData, ...newData },
+    update,
   });
   return NextResponse.json({ ok: true });
 }

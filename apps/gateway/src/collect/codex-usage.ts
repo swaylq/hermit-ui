@@ -1,23 +1,15 @@
-// collect/codex-usage.ts — what codex has spent, read from codex's own files.
+// collect/codex-usage.ts — Codex subscription limits plus recent token activity.
 //
-// There is no `codex usage` command, and unlike Claude there is no TUI panel to
-// scrape either. But every turn codex writes a `token_count` event into its
-// rollout JSONL carrying BOTH a running token total and the server's own
-// `rate_limits` block — the same numbers the CLI shows. So this reads them
-// rather than estimating anything.
+// Limits come from Codex's stable app-server `account/rateLimits/read` method.
+// It returns every metered bucket in one current snapshot. Reading the newest
+// rollout file was not equivalent: ordinary Codex reports a weekly bucket while
+// GPT-5.3-Codex-Spark reports its own 5h + weekly bucket, so whichever model ran
+// last made three identical machines show different cards.
 //
-// Two different questions, two different sources, deliberately:
-//   · "how much of the plan is gone" -> rate_limits, from the NEWEST rollout
-//     only. It is a server-reported figure about the account, so the most
-//     recent turn has the freshest copy and older files say nothing extra.
-//   · "how much did each day cost" -> per-day token totals, summed across the
-//     rollouts of the last N days.
-//
-// Cost control matters here: a long-lived machine accumulates thousands of
-// rollouts and some run to megabytes. Only the last DAILY_DAYS date directories
-// are walked, and only the TAIL of each file is read — the running total is
-// cumulative, so the last token_count in a file is the whole answer for it.
+// Token activity still comes from rollout JSONL. It is retained for the sync
+// contract even though the Usage page no longer renders the old date chart.
 
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,20 +23,67 @@ export type CodexDailyUsage = {
 };
 
 export type CodexUsageSample = {
+  // Legacy single-window fields. Keep sending the ordinary weekly bucket so an
+  // older dashboard remains useful while the fleet rolls forward.
   usedPercent: number | null;
-  /** 10080 means the percentage above is a WEEKLY figure. */
   windowMinutes: number | null;
   resetsAt: string | null;
+  fiveHourPct: number | null;
+  fiveHourResetsAt: string | null;
+  fiveHourLimitId: string | null;
+  fiveHourLimitName: string | null;
+  weekPct: number | null;
+  weekResetsAt: string | null;
+  weekLimitId: string | null;
+  weekLimitName: string | null;
   planType: string | null;
   daily: CodexDailyUsage[];
   capturedAt: string;
 };
 
-/** How many date directories back to sum. Two weeks fits the sparkline. */
+type RawWindow = {
+  usedPercent: number | null;
+  windowDurationMins: number | null;
+  resetsAt: number | null;
+};
+
+type RawBucket = {
+  limitId: string;
+  limitName: string | null;
+  planType: string | null;
+  primary: RawWindow | null;
+  secondary: RawWindow | null;
+};
+
+export type SelectedCodexWindow = {
+  usedPercent: number | null;
+  windowMinutes: number;
+  resetsAt: string | null;
+  limitId: string;
+  limitName: string | null;
+};
+
+export type SelectedCodexLimits = {
+  fiveHour: SelectedCodexWindow | null;
+  weekly: SelectedCodexWindow | null;
+  planType: string | null;
+};
+
+export type CodexAppServerOptions = {
+  command?: string;
+  args?: string[];
+  timeoutMs?: number;
+  stopGraceMs?: number;
+};
+
+/** How many active date directories back to sum. */
 const DAILY_DAYS = 14;
 
 /** Enough tail to hold the last few JSONL records of any rollout. */
 const TAIL_BYTES = 256 * 1024;
+
+const APP_SERVER_TIMEOUT_MS = 12_000;
+const APP_SERVER_STOP_GRACE_MS = 150;
 
 function codexHome(): string {
   return process.env.CODEX_HOME?.trim() || path.join(os.homedir(), '.codex');
@@ -53,8 +92,8 @@ function codexHome(): string {
 function readdirSafe(dir: string): string[] {
   try {
     return fs.readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
       .sort()
       .reverse();
   } catch {
@@ -62,14 +101,14 @@ function readdirSafe(dir: string): string[] {
   }
 }
 
-/** The newest date directories, newest first, as `[path, 'YYYY-MM-DD']`. */
+/** The newest active date directories, newest first, as `[path, YYYY-MM-DD]`. */
 export function recentDayDirs(home = codexHome(), limit = DAILY_DAYS): Array<[string, string]> {
   const root = path.join(home, 'sessions');
   const out: Array<[string, string]> = [];
-  for (const y of readdirSafe(root)) {
-    for (const m of readdirSafe(path.join(root, y))) {
-      for (const d of readdirSafe(path.join(root, y, m))) {
-        out.push([path.join(root, y, m, d), `${y}-${m}-${d}`]);
+  for (const year of readdirSafe(root)) {
+    for (const month of readdirSafe(path.join(root, year))) {
+      for (const day of readdirSafe(path.join(root, year, month))) {
+        out.push([path.join(root, year, month, day), `${year}-${month}-${day}`]);
         if (out.length >= limit) return out;
       }
     }
@@ -77,7 +116,7 @@ export function recentDayDirs(home = codexHome(), limit = DAILY_DAYS): Array<[st
   return out;
 }
 
-/** The tail of a file, or '' if it cannot be read. */
+/** The tail of a file, or an empty string if it cannot be read. */
 function tail(file: string): string {
   try {
     const { size } = fs.statSync(file);
@@ -95,93 +134,45 @@ function tail(file: string): string {
   }
 }
 
-type TokenCount = {
-  total: { input: number; output: number } | null;
-  limits: {
-    usedPercent: number | null;
-    windowMinutes: number | null;
-    resetsAt: string | null;
-    planType: string | null;
-  } | null;
-};
-
-/**
- * The last token_count record in a rollout's tail.
- *
- * Both halves are optional: an old rollout may predate `rate_limits`, and a
- * session killed before its first turn has no totals at all. Returning them
- * separately lets the caller take whichever it actually found.
- */
-export function lastTokenCount(text: string): TokenCount {
+/** The last cumulative token total in one rollout tail. */
+export function lastTokenCount(text: string): { input: number; output: number } | null {
   const lines = text.split('\n');
-  let total: TokenCount['total'] = null;
-  let limits: TokenCount['limits'] = null;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
     if (!line || !line.includes('token_count')) continue;
-    let payload: Record<string, unknown> | undefined;
     try {
       const parsed = JSON.parse(line) as { payload?: Record<string, unknown> };
-      payload = parsed?.payload ?? (parsed as Record<string, unknown>);
+      const payload = parsed?.payload ?? (parsed as Record<string, unknown>);
+      const info = payload?.info as { total_token_usage?: Record<string, number> } | undefined;
+      const total = info?.total_token_usage;
+      if (total) {
+        return {
+          input: Number(total.input_tokens ?? 0),
+          output: Number(total.output_tokens ?? 0),
+        };
+      }
     } catch {
-      continue; // the tail cut mid-record, or a shape we do not know
+      // The tail can begin halfway through a record. Keep walking backwards.
     }
-    const info = payload?.info as { total_token_usage?: Record<string, number> } | undefined;
-    const t = info?.total_token_usage;
-    if (t && !total) {
-      total = { input: Number(t.input_tokens ?? 0), output: Number(t.output_tokens ?? 0) };
-    }
-    const rl = payload?.rate_limits as {
-      primary?: { used_percent?: number; window_minutes?: number; resets_at?: number };
-      plan_type?: string;
-    } | undefined;
-    if (rl?.primary && !limits) {
-      const p = rl.primary;
-      limits = {
-        usedPercent: typeof p.used_percent === 'number' ? p.used_percent : null,
-        windowMinutes: typeof p.window_minutes === 'number' ? p.window_minutes : null,
-        // codex writes epoch SECONDS; Date wants ms. Getting this wrong puts
-        // the reset in 1970 and the countdown renders as long past.
-        resetsAt: typeof p.resets_at === 'number' ? new Date(p.resets_at * 1000).toISOString() : null,
-        planType: typeof rl.plan_type === 'string' ? rl.plan_type : null,
-      };
-    }
-    if (total && limits) break;
   }
-  return { total, limits };
+  return null;
 }
 
-/**
- * Collect this machine's codex usage, or null when codex has never run here.
- *
- * Null rather than a zeroed sample on purpose: "no codex on this machine" and
- * "codex used nothing this week" are different facts, and the dashboard hides
- * the section for the first while showing 0% for the second.
- */
-export function collectCodexUsage(home = codexHome()): CodexUsageSample | null {
-  const days = recentDayDirs(home);
-  if (days.length === 0) return null;
-
+function collectDaily(home: string): CodexDailyUsage[] {
   const daily: CodexDailyUsage[] = [];
-  let limits: TokenCount['limits'] = null;
-
-  for (const [dir, day] of days) {
+  for (const [dir, day] of recentDayDirs(home)) {
     let files: string[];
     try {
-      files = fs.readdirSync(dir).filter((f) => f.startsWith('rollout-') && f.endsWith('.jsonl'));
+      files = fs.readdirSync(dir).filter((file) => file.startsWith('rollout-') && file.endsWith('.jsonl'));
     } catch {
       continue;
     }
-    // Newest first within the day, so the rate limits come from the most recent
-    // turn overall — days are already walked newest-first.
-    files.sort().reverse();
 
     let inputTokens = 0;
     let outputTokens = 0;
     let sessions = 0;
-    for (const f of files) {
-      const { total, limits: l } = lastTokenCount(tail(path.join(dir, f)));
-      if (l && !limits) limits = l;
+    for (const file of files) {
+      const total = lastTokenCount(tail(path.join(dir, file)));
       if (!total) continue;
       inputTokens += total.input;
       outputTokens += total.output;
@@ -189,16 +180,277 @@ export function collectCodexUsage(home = codexHome()): CodexUsageSample | null {
     }
     if (sessions > 0) daily.push({ day, inputTokens, outputTokens, sessions });
   }
+  return daily.reverse();
+}
 
-  if (daily.length === 0 && !limits) return null;
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function nullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function parseWindow(value: unknown): RawWindow | null {
+  const raw = record(value);
+  if (!raw) return null;
+  const usedPercent = nullableNumber(raw.usedPercent);
+  const windowDurationMins = nullableNumber(raw.windowDurationMins);
+  // A duration alone is metadata, not a quota reading. Reject it so a partial
+  // app-server response cannot overwrite the database's last good percentage.
+  // Zero is intentionally valid.
+  if (usedPercent == null || windowDurationMins == null) return null;
+  return {
+    usedPercent,
+    windowDurationMins,
+    resetsAt: nullableNumber(raw.resetsAt),
+  };
+}
+
+function parseBucket(value: unknown, fallbackId?: string): RawBucket | null {
+  const raw = record(value);
+  if (!raw) return null;
+  const limitId = nullableString(raw.limitId) ?? fallbackId ?? null;
+  if (!limitId) return null;
+  return {
+    limitId,
+    limitName: nullableString(raw.limitName),
+    planType: nullableString(raw.planType),
+    primary: parseWindow(raw.primary),
+    secondary: parseWindow(raw.secondary),
+  };
+}
+
+function windowsOf(bucket: RawBucket | null): RawWindow[] {
+  return bucket ? [bucket.primary, bucket.secondary].filter((window): window is RawWindow => window != null) : [];
+}
+
+function selectedWindow(bucket: RawBucket, window: RawWindow): SelectedCodexWindow {
+  const reset = window.resetsAt == null ? null : new Date(window.resetsAt * 1000);
+  return {
+    usedPercent: window.usedPercent,
+    windowMinutes: window.windowDurationMins ?? 0,
+    // Date#toISOString throws on an out-of-range epoch. A malformed reset must
+    // not turn an otherwise valid percentage into a 12-second probe timeout.
+    resetsAt: reset && !Number.isNaN(reset.getTime()) ? reset.toISOString() : null,
+    limitId: bucket.limitId,
+    limitName: bucket.limitName,
+  };
+}
+
+/**
+ * Pick the two values the product asks to display while keeping their source
+ * buckets explicit. Today ordinary `codex` supplies weekly and Spark supplies
+ * a separate 5-hour limit. If ordinary Codex later supplies both, it wins both.
+ */
+export function selectCodexLimits(result: unknown): SelectedCodexLimits | null {
+  const raw = record(result);
+  if (!raw) return null;
+
+  const defaultBucket = parseBucket(raw.rateLimits);
+  const bucketMap = record(raw.rateLimitsByLimitId);
+  const buckets = bucketMap
+    ? Object.entries(bucketMap)
+        .map(([limitId, value]) => parseBucket(value, limitId))
+        .filter((bucket): bucket is RawBucket => bucket != null)
+    : [];
+  if (defaultBucket && !buckets.some((bucket) => bucket.limitId === defaultBucket.limitId)) {
+    buckets.push(defaultBucket);
+  }
+  if (buckets.length === 0) return null;
+
+  const general = buckets.find((bucket) => bucket.limitId === 'codex') ?? defaultBucket ?? buckets[0];
+  const spark = buckets.find((bucket) => bucket.limitId === 'codex_bengalfox') ?? null;
+  const findWindow = (bucket: RawBucket | null, minutes: number) =>
+    windowsOf(bucket).find((window) => window.windowDurationMins === minutes) ?? null;
+  const findAnywhere = (minutes: number) => {
+    for (const bucket of buckets) {
+      const window = findWindow(bucket, minutes);
+      if (window) return { bucket, window };
+    }
+    return null;
+  };
+
+  const generalFiveHour = findWindow(general, 300);
+  const sparkFiveHour = findWindow(spark, 300);
+  const anyFiveHour = findAnywhere(300);
+  const fiveHour = generalFiveHour
+    ? selectedWindow(general, generalFiveHour)
+    : spark && sparkFiveHour
+      ? selectedWindow(spark, sparkFiveHour)
+      : anyFiveHour
+        ? selectedWindow(anyFiveHour.bucket, anyFiveHour.window)
+        : null;
+
+  const generalWeekly = findWindow(general, 10_080);
+  const sameBucketAsFiveHour = fiveHour
+    ? buckets.find((bucket) => bucket.limitId === fiveHour.limitId) ?? null
+    : null;
+  const pairedWeekly = findWindow(sameBucketAsFiveHour, 10_080);
+  const anyWeekly = findAnywhere(10_080);
+  const weekly = generalWeekly
+    ? selectedWindow(general, generalWeekly)
+    : sameBucketAsFiveHour && pairedWeekly
+      ? selectedWindow(sameBucketAsFiveHour, pairedWeekly)
+      : anyWeekly
+        ? selectedWindow(anyWeekly.bucket, anyWeekly.window)
+        : null;
+
+  if (!fiveHour && !weekly) return null;
 
   return {
-    usedPercent: limits?.usedPercent ?? null,
-    windowMinutes: limits?.windowMinutes ?? null,
-    resetsAt: limits?.resetsAt ?? null,
-    planType: limits?.planType ?? null,
-    // Oldest first, which is the order a chart wants to draw.
-    daily: daily.reverse(),
+    fiveHour,
+    weekly,
+    planType: general.planType ?? sameBucketAsFiveHour?.planType ?? buckets.find((bucket) => bucket.planType)?.planType ?? null,
+  };
+}
+
+/**
+ * Read all current ChatGPT limit buckets through a short-lived Codex app-server.
+ * No thread or model turn is created. Every exit path stops exactly the child
+ * this call spawned; a timeout never searches for or touches another process.
+ */
+export async function readCodexLimits(options: CodexAppServerOptions = {}): Promise<SelectedCodexLimits | null> {
+  const command = (options.command ?? process.env.HERMIT_CODEX_BIN?.trim()) || 'codex';
+  const args = options.args ?? ['app-server'];
+  const timeoutMs = options.timeoutMs ?? APP_SERVER_TIMEOUT_MS;
+  const stopGraceMs = options.stopGraceMs ?? APP_SERVER_STOP_GRACE_MS;
+
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'ignore'] });
+    let stdout = '';
+    let completing = false;
+    let resolved = false;
+    let termTimer: NodeJS.Timeout | null = null;
+    let killTimer: NodeJS.Timeout | null = null;
+
+    const finishResolve = (value: SelectedCodexLimits | null) => {
+      if (resolved) return;
+      resolved = true;
+      if (termTimer) clearTimeout(termTimer);
+      if (killTimer) clearTimeout(killTimer);
+      resolve(value);
+    };
+
+    let watchdog: NodeJS.Timeout;
+    const stop = (value: SelectedCodexLimits | null, graceful: boolean) => {
+      if (completing) return;
+      completing = true;
+      clearTimeout(watchdog);
+
+      child.once('exit', () => finishResolve(value));
+      if (child.exitCode != null || child.signalCode != null) {
+        finishResolve(value);
+        return;
+      }
+
+      if (graceful) {
+        child.stdin.end();
+        termTimer = setTimeout(() => {
+          if (child.exitCode == null && child.signalCode == null) child.kill('SIGTERM');
+        }, stopGraceMs);
+      } else {
+        child.stdin.destroy();
+        child.kill('SIGTERM');
+      }
+      killTimer = setTimeout(() => {
+        if (child.exitCode == null && child.signalCode == null) child.kill('SIGKILL');
+      }, stopGraceMs + 500);
+    };
+
+    watchdog = setTimeout(() => stop(null, false), timeoutMs);
+
+    const send = (message: unknown) => {
+      if (!completing && child.stdin.writable) child.stdin.write(`${JSON.stringify(message)}\n`);
+    };
+
+    const onMessage = (message: unknown) => {
+      const msg = record(message);
+      if (!msg) return;
+      if (msg.id === 0) {
+        if (msg.error || !msg.result) {
+          stop(null, false);
+          return;
+        }
+        send({ method: 'initialized', params: {} });
+        send({ method: 'account/rateLimits/read', id: 6 });
+      } else if (msg.id === 6) {
+        stop(msg.error ? null : selectCodexLimits(msg.result), true);
+      }
+    };
+
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk;
+      let newline = stdout.indexOf('\n');
+      while (newline >= 0) {
+        const line = stdout.slice(0, newline).trim();
+        stdout = stdout.slice(newline + 1);
+        if (line) {
+          try {
+            onMessage(JSON.parse(line));
+          } catch {
+            // App-server stdout is JSONL. Ignore one malformed line and wait for
+            // the response id; the watchdog bounds a permanently broken stream.
+          }
+        }
+        newline = stdout.indexOf('\n');
+      }
+    });
+    child.on('error', () => stop(null, false));
+    child.on('exit', () => {
+      if (!completing) stop(null, false);
+    });
+    child.stdin.on('error', () => {
+      if (!completing) stop(null, false);
+    });
+
+    send({
+      method: 'initialize',
+      id: 0,
+      params: {
+        clientInfo: {
+          name: 'hermit_usage_probe',
+          title: 'Hermit Usage Probe',
+          version: '0.1.0',
+        },
+      },
+    });
+  });
+}
+
+/**
+ * Collect this machine's current Codex limits. A failed live read returns null,
+ * so the sync loop leaves the last good database row intact.
+ */
+export async function collectCodexUsage(
+  home = codexHome(),
+  appServerOptions: CodexAppServerOptions = {},
+): Promise<CodexUsageSample | null> {
+  const limits = await readCodexLimits(appServerOptions);
+  if (!limits) return null;
+
+  const weekly = limits.weekly;
+  return {
+    usedPercent: weekly?.usedPercent ?? null,
+    windowMinutes: weekly?.windowMinutes ?? null,
+    resetsAt: weekly?.resetsAt ?? null,
+    fiveHourPct: limits.fiveHour?.usedPercent ?? null,
+    fiveHourResetsAt: limits.fiveHour?.resetsAt ?? null,
+    fiveHourLimitId: limits.fiveHour?.limitId ?? null,
+    fiveHourLimitName: limits.fiveHour?.limitName ?? null,
+    weekPct: weekly?.usedPercent ?? null,
+    weekResetsAt: weekly?.resetsAt ?? null,
+    weekLimitId: weekly?.limitId ?? null,
+    weekLimitName: weekly?.limitName ?? null,
+    planType: limits.planType,
+    daily: collectDaily(home),
     capturedAt: new Date().toISOString(),
   };
 }

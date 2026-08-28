@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import type { inferRouterOutputs } from '@trpc/server';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
@@ -9,7 +10,9 @@ import { relTime } from '@/lib/format';
 import { UsageSection } from '@/components/usage-section';
 import { UsageSparkline } from '@/components/usage-sparkline';
 import { SettingsTabs } from '@/components/settings-tabs';
+import { codexWindowSlots, type CodexUsageSlot } from '@/lib/codex-usage';
 import { parseResetText, untilText, formatShanghai, crossesDay, DISPLAY_TZ_LABEL } from '@/lib/reset-time';
+import type { AppRouter } from '@/server/routers/_app';
 
 function fmtUSD(n: number | null | undefined): string {
   if (n == null) return '-';
@@ -460,111 +463,71 @@ function KimiPlan({
 
 // ── Codex ────────────────────────────────────────────────────────────────────
 //
-// Codex reports ONE rate-limit window, not Claude's two, and it reports it as a
-// server-side percentage with an epoch reset — so this is a different shape
-// from PlanBar rather than a reuse of it. `windowMinutes` is rendered rather
-// than assumed: 10080 means the percentage is weekly, and a number with no
-// stated period is not a fact anyone can act on.
+// Codex reports server-side percentages with epoch resets. App-server supplies
+// every metered bucket at once; the gateway records the source ID for each slot
+// and this panel mirrors Claude's two-card layout above.
 //
 // No dollar figure anywhere. These turns bill against a ChatGPT plan, and a
 // computed cost would be a number nobody is charged — the same reason the
 // runtime reports costUsd: null.
 
-function windowLabel(minutes: number | null | undefined): string {
-  if (!minutes) return 'plan usage';
-  if (minutes % 10080 === 0) {
-    const w = minutes / 10080;
-    return w === 1 ? 'weekly' : `${w}-week window`;
-  }
-  if (minutes % 1440 === 0) {
-    const d = minutes / 1440;
-    return d === 1 ? 'daily' : `${d}-day window`;
-  }
-  if (minutes % 60 === 0) return `${minutes / 60}h window`;
-  return `${minutes}m window`;
-}
+type CodexUsageData = NonNullable<inferRouterOutputs<AppRouter>['usage']['codexUsage']>;
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
-  return String(n);
-}
+function CodexBar({ label, window: reading, now }: { label: string; window: CodexUsageSlot | null; now: Date }) {
+  const pct = reading?.usedPercent ?? null;
+  const at = reading?.resetsAt ? new Date(reading.resetsAt) : null;
+  const validAt = at && !Number.isNaN(at.getTime()) ? at : null;
+  const left = validAt ? untilText(validAt, now) : '';
+  const source = reading?.limitName ?? (reading?.limitId && reading.limitId !== 'codex' ? reading.limitId : null);
 
-type CodexDaily = { day: string; inputTokens: number; outputTokens: number; sessions: number };
+  return (
+    <Card className="p-4 space-y-2">
+      <div className="flex items-baseline justify-between">
+        <span className="text-sm font-medium text-foreground">{label}</span>
+        <span className={cn('text-lg font-semibold tabular-nums', pctTextColor(pct ?? 0))}>
+          {pct == null ? '—' : `${pct.toFixed(pct < 10 ? 1 : 0)}%`}
+        </span>
+      </div>
+      <AnimatedBar pct={pct ?? 0} color={pctBarColor(pct ?? 0)} />
+      <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground min-h-[14px]">
+        <span className="truncate">
+          {validAt ? (
+            <>
+              resets <span className="tabular-nums text-foreground/70">{formatShanghai(validAt, { withDate: true })}</span>{' '}
+              {DISPLAY_TZ_LABEL}
+              {left && <> · in <span className="tabular-nums text-foreground/70">{left}</span></>}
+            </>
+          ) : (
+            'no reset reported'
+          )}
+        </span>
+        {source && <span className="shrink-0 truncate max-w-[45%]" title={source}>{source}</span>}
+      </div>
+    </Card>
+  );
+}
 
 function CodexPlan({
   data,
   now,
 }: {
-  data: { usedPercent: number | null; windowMinutes: number | null; resetsAt: Date | string | null; planType: string | null; daily: unknown; capturedAt: Date | string };
+  data: CodexUsageData;
   now: Date;
 }) {
-  const pct = data.usedPercent ?? null;
-  const at = data.resetsAt ? new Date(data.resetsAt) : null;
-  const left = at ? untilText(at, now) : '';
-  const daily = (Array.isArray(data.daily) ? data.daily : []) as CodexDaily[];
-  const peak = Math.max(1, ...daily.map((d) => d.inputTokens + d.outputTokens));
-  const totalIn = daily.reduce((a, d) => a + d.inputTokens, 0);
-  const totalOut = daily.reduce((a, d) => a + d.outputTokens, 0);
+  const { fiveHour, weekly } = codexWindowSlots(data);
 
   return (
     <section className="pt-4">
-      <h2 className="text-xs uppercase tracking-wider text-muted-foreground mb-2">
-        Codex{data.planType && <span className="ml-1.5 normal-case text-muted-foreground/70">· {data.planType}</span>}
-      </h2>
-      <Card className="p-4 space-y-3">
-        <div className="flex items-baseline justify-between">
-          <span className="text-sm font-medium text-foreground">{windowLabel(data.windowMinutes)}</span>
-          <span className={cn('text-lg font-semibold tabular-nums', pctTextColor(pct ?? 0))}>
-            {pct == null ? '—' : `${pct.toFixed(pct < 10 ? 1 : 0)}%`}
-          </span>
-        </div>
-        <AnimatedBar pct={pct ?? 0} color={pctBarColor(pct ?? 0)} />
-        <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground min-h-[14px]">
-          <span className="truncate">
-            {at ? (
-              <>
-                resets <span className="tabular-nums text-foreground/70">{formatShanghai(at, { withDate: true })}</span>{' '}
-                {DISPLAY_TZ_LABEL}
-                {left && <> · in <span className="tabular-nums text-foreground/70">{left}</span></>}
-              </>
-            ) : (
-              'no reset reported'
-            )}
-          </span>
-          <span className="shrink-0">read {relTime(data.capturedAt)}</span>
-        </div>
-
-        {daily.length > 0 && (
-          <>
-            <div className="flex items-end gap-1 h-16 pt-1">
-              {daily.map((d) => {
-                const total = d.inputTokens + d.outputTokens;
-                return (
-                  <div
-                    key={d.day}
-                    className="flex-1 min-w-0 bg-foreground/15 hover:bg-foreground/30 rounded-sm transition-colors"
-                    style={{ height: `${Math.max(3, (total / peak) * 100)}%` }}
-                    title={`${d.day} · ${total.toLocaleString()} tokens · ${d.sessions} session${d.sessions === 1 ? '' : 's'}`}
-                  />
-                );
-              })}
-            </div>
-            {/* Days codex actually ran, not calendar days — it writes a
-                directory only when there was a session, so a gap is a quiet
-                day rather than missing data. */}
-            <div className="flex items-baseline justify-between text-[10px] font-mono text-muted-foreground/80">
-              <span>{daily[0]?.day}</span>
-              <span>
-                {fmtTokens(totalIn)} in · {fmtTokens(totalOut)} out over {daily.length} active day
-                {daily.length === 1 ? '' : 's'}
-              </span>
-              <span>{daily[daily.length - 1]?.day}</span>
-            </div>
-          </>
-        )}
-      </Card>
+      <div className="flex items-baseline justify-between mb-2 gap-2">
+        <h2 className="text-xs uppercase tracking-wider text-muted-foreground">
+          Codex{data.planType && <span className="ml-1.5 normal-case text-muted-foreground/70">· {data.planType}</span>}
+        </h2>
+        <span className="text-[10px] text-muted-foreground/70">read {relTime(data.capturedAt)}</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <CodexBar label="Session (5h)" window={fiveHour} now={now} />
+        <CodexBar label="Weekly" window={weekly} now={now} />
+      </div>
     </section>
   );
 }
