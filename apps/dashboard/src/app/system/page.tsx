@@ -15,9 +15,13 @@ export default function SystemPage() {
             Live resource health for the <span className="font-medium text-foreground/80">currently selected machine</span>,
             reported by its gateway. Health is judged on free RAM + load.
           </p>
-          <HostHealthView />
+          {/* Above host health on purpose: the session list inside HostHealthView
+              is as long as the machine has sessions (17 rows on this one), and
+              anything under it is off-screen on every viewport. The gateway is
+              also the thing every other number on this page is reported BY. */}
+          <GatewayCard />
           <div className="mt-4">
-            <GatewayCard />
+            <HostHealthView />
           </div>
           <div className="mt-4">
             <SessionCleanupView />
