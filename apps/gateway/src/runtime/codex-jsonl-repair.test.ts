@@ -197,3 +197,19 @@ test('end to end: the real SDK chokes on a raw U+2028, and the repair fixes it',
   assert.equal(events[1].item.text, `before${LS}after`, 'and the payload survives intact');
   t.after(() => fs.rmSync(path.dirname(bin), { recursive: true, force: true }));
 });
+
+test('abandoning the stream still closes the source — an interrupt must reach the child', async () => {
+  let cleanedUp = false;
+  async function* source(): AsyncGenerator<string> {
+    try {
+      yield JSON.stringify({ type: 'item.started' });
+      yield JSON.stringify({ type: 'item.completed' });
+    } finally {
+      // Where the SDK does `rl.close(); child.kill()`.
+      cleanedUp = true;
+    }
+  }
+
+  for await (const _line of rejoinSplitRecords(source(), silent)) break;
+  assert.equal(cleanedUp, true, 'a wrapper that swallowed the close would leak a codex process per interrupt');
+});
