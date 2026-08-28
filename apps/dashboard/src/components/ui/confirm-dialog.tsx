@@ -36,6 +36,8 @@ export type ConfirmOptions = {
   cancelLabel?: string;
   /** Red confirm button for destructive actions (delete, etc). */
   danger?: boolean;
+  /** Alert shape: hide Cancel, leaving a single acknowledgement button. */
+  hideCancel?: boolean;
 };
 
 /** A confirm plus one text field. Resolves to the trimmed value, or null if cancelled. */
@@ -75,6 +77,7 @@ function Actions({
   cancelLabel,
   danger,
   disabled,
+  hideCancel,
   onCancel,
   onConfirm,
 }: {
@@ -82,18 +85,22 @@ function Actions({
   cancelLabel?: string;
   danger?: boolean;
   disabled?: boolean;
+  /** Alert shape: no Cancel, just the one acknowledgement button. */
+  hideCancel?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   return (
     <div className="mt-4 flex justify-end gap-2">
-      <button
-        type="button"
-        onClick={onCancel}
-        className="inline-flex h-8 items-center rounded-md px-3 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
-      >
-        {cancelLabel ?? 'Cancel'}
-      </button>
+      {!hideCancel && (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="inline-flex h-8 items-center rounded-md px-3 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
+        >
+          {cancelLabel ?? 'Cancel'}
+        </button>
+      )}
       <button
         type="button"
         onClick={onConfirm}
@@ -283,6 +290,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
                       confirmLabel={pending.confirmLabel}
                       cancelLabel={pending.cancelLabel}
                       danger={pending.danger}
+                      hideCancel={pending.hideCancel}
                       onCancel={() => settle(false)}
                       onConfirm={() => settle(true)}
                     />

@@ -34,6 +34,7 @@ import { useSessionView, setSessionView, useAgentDrawers, setAgentDrawer, type S
 import { useLongPress } from '@/lib/use-long-press';
 import { readChatFilter, writeChatFilter } from '@/lib/chat-filter';
 import { readCachedSessions, writeCachedSessions } from '@/lib/session-list-cache';
+import { markOptimisticTrash, clearOptimisticTrash } from '@/lib/optimistic-trash';
 import { ContextMenu } from '@/components/ui/context-menu';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-dialog';
 import { SidebarFindInput } from '@/components/sidebar/sidebar-find-input';
@@ -586,17 +587,41 @@ export function RecentSessions() {
       // Deleting the session you're viewing: land on the next one right away.
       // Same pick as the chat page's landing effect (most recent, not the
       // Brain's, not hidden), client-side replace — the old window.location
-      // hard nav white-screened and threw away every warm cache.
+      // hard nav white-screened and threw away every warm cache. The tombstone
+      // keeps the chat page's stale-id check from firing that same hard nav
+      // while the replace is still in flight (see lib/optimistic-trash).
       if (activeId && ids.includes(activeId)) {
+        markOptimisticTrash(activeId);
         const nextUp = next?.find((s) => s.agentName !== orchestratorName && !s.hiddenAt && s.origin !== 'dispatch');
         router.replace(nextUp ? `/chat?session=${encodeURIComponent(nextUp.id)}` : '/chat');
       }
       return { prev };
     },
-    onError: (_e, _v, context) => {
-      if (context?.prev) utils.chat.listSessions.setData({}, context.prev);
+    onError: (_e, { ids }, context) => {
+      for (const id of ids) clearOptimisticTrash(id);
+      if (context?.prev) {
+        utils.chat.listSessions.setData({}, context.prev);
+        // onMutate force-wrote the filtered list; put the row back in the
+        // snapshot too, or the next full reload's first paint drops it.
+        writeCachedSessions(context.prev, true);
+      }
+      void confirm({
+        title: "Couldn't delete",
+        message: 'The session is back in the list — nothing was deleted.',
+        confirmLabel: 'OK',
+        hideCancel: true,
+      });
     },
-    onSettled: () => { void utils.chat.listSessions.invalidate(); },
+    onSettled: async () => {
+      await utils.chat.listSessions.invalidate();
+      // Force-write the AUTHORITATIVE list once the refetch lands. Without
+      // this, a rollback's forced write (or onMutate's) refreshes the 20s
+      // throttle window just before the corrective refetch arrives — the
+      // throttled effect write is then skipped, and a reload inside the
+      // window paints a snapshot that still holds a deleted row.
+      const data = utils.chat.listSessions.getData({});
+      if (data) writeCachedSessions(data, true);
+    },
   });
 
   // Local agent filter — persisted in sessionStorage so it survives reloads

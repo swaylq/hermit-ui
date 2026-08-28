@@ -21,6 +21,7 @@ import { dashboardReach } from '@/lib/dashboard-reach';
 import { useMarkSessionRead } from '@/lib/session-read';
 import { lastSessionId, rememberSession } from '@/lib/last-session';
 import { writeCachedSessions } from '@/lib/session-list-cache';
+import { isOptimisticTrash } from '@/lib/optimistic-trash';
 import {
   markSessionWorking,
   publishSessionStatus,
@@ -258,6 +259,25 @@ function ChatPageInner() {
     // looks unknown, and redirecting then would fight the URL on every load.
     const known = sessions.data;
     const stale = !!sessionParam && !!known && !known.some((s) => s.id === sessionParam);
+    // An optimistic sidebar trash removes the OPEN session from the list in
+    // the same beat that it SPA-navigates to the next one (recent-lists.tsx
+    // marks the id via lib/optimistic-trash). Without this grace the stale
+    // branch below wins the race with a window.location hard nav and
+    // white-screens the page the replace would have painted fine. Defer; if
+    // the URL still points at the tombstoned id after 800ms the replace
+    // really was swallowed (the documented Next 16 same-path case) and the
+    // hard nav fires as the safety net it always was.
+    if (stale && isOptimisticTrash(sessionParam)) {
+      const tombstoned = sessionParam;
+      const timer = setTimeout(() => {
+        if (
+          isOptimisticTrash(tombstoned) &&
+          new URLSearchParams(window.location.search).get('session') === tombstoned
+        )
+          window.location.href = '/chat';
+      }, 800);
+      return () => clearTimeout(timer);
+    }
     if (sessionParam && !stale) return;
     const rows = known ?? [];
     // Prefer the remembered session, but only while it's still one we'd be willing
@@ -623,7 +643,12 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       return { prev };
     },
     onError: (_e, _v, context) => {
-      if (context?.prev) utils.chat.listSessions.setData({}, context.prev);
+      if (context?.prev) {
+        utils.chat.listSessions.setData({}, context.prev);
+        // onMutate force-wrote the filtered list; put the row back in the
+        // snapshot too, or the next full reload's first paint drops it.
+        writeCachedSessions(context.prev, true);
+      }
     },
     onSuccess: () => { window.location.href = '/chat'; },
   });
@@ -2247,6 +2272,20 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             // hit lands inside that window and paints content with no skeleton
             // flash at all; only a genuinely slow load ever shows one.
             showSkeleton ? <Skeleton className="h-32" /> : null
+          ) : view.length === 0 && messages.isError ? (
+            // Load FAILED — before this branch the same situation rendered
+            // EmptyChat, which tells the user a conversation full of history
+            // simply doesn't exist. Say it failed and offer a retry.
+            <div className="animate-in fade-in-0 duration-150 flex flex-col items-center gap-3 py-20 text-center">
+              <p className="text-sm text-muted-foreground">Couldn&apos;t load this conversation.</p>
+              <button
+                type="button"
+                onClick={() => { void messages.refetch(); }}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1 text-xs text-muted-foreground transition-colors cursor-pointer hover:border-foreground/30 hover:text-foreground hover:bg-accent/40"
+              >
+                Retry
+              </button>
+            </div>
           ) : view.length === 0 ? (
             <div className="animate-in fade-in-0 duration-150">
               <EmptyChat agentName={session?.agentName} onPickPrompt={pickPrompt} />
