@@ -73,7 +73,18 @@ function OpResult({ row }: { row: OpRow }) {
           It started and never reported back — most likely the gateway restarted before it could. Safe to run again.
         </p>
       )}
-      {row.error && <p className="text-rose-400 break-words">{row.error}</p>}
+      {/* The one failure every machine answers with until its gateway has
+          restarted once on the code that adds these ops — worth saying in
+          words, because `unknown kind: update-gateway` reads like a bug. */}
+      {row.error?.startsWith('unknown kind:') ? (
+        <p className="text-amber-500 break-words">
+          This machine&apos;s gateway is older than this button. It runs these two ops only after it has restarted once on
+          the code that adds them — and it cannot install that code with the Update button, so the first restart is a
+          manual one on the host.
+        </p>
+      ) : row.error ? (
+        <p className="text-rose-400 break-words">{row.error}</p>
+      ) : null}
       {row.output && (
         <pre className="max-h-48 overflow-auto rounded bg-background/60 p-2 text-[11px] font-mono whitespace-pre-wrap break-words text-foreground/80">
           {row.output}

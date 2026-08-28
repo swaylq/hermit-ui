@@ -12,8 +12,9 @@ export default function SystemPage() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl p-4 sm:p-6">
           <p className="mb-4 text-xs text-muted-foreground">
-            Live resource health for the <span className="font-medium text-foreground/80">currently selected machine</span>,
-            reported by its gateway. Health is judged on free RAM + load.
+            The gateway and the resources it runs on, for the{' '}
+            <span className="font-medium text-foreground/80">currently selected machine</span>. Everything below is
+            reported by that gateway; health is judged on free RAM + load.
           </p>
           {/* Above host health on purpose: the session list inside HostHealthView
               is as long as the machine has sessions (17 rows on this one), and
