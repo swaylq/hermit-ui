@@ -231,7 +231,7 @@ function AgentDetailContent({
   tab: DetailTab;
 }) {
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div key={tab} className="flex flex-col h-full min-h-0 animate-in fade-in-0 duration-150">
       {tab === 'files' ? (
         // Keyed by agent so the tree/selection resets to the new agent's root
         // when you switch agents while staying on the Files tab.
@@ -535,7 +535,7 @@ function SessionsSection({
                 >
                   <div className="flex items-center gap-2">
                     <span
-                      className={cn('h-1.5 w-1.5 rounded-full shrink-0', status.dot, status.pulse && 'animate-pulse')}
+                      className={cn('h-1.5 w-1.5 rounded-full shrink-0 transition-colors', status.dot, status.pulse && 'animate-pulse')}
                       aria-hidden="true"
                     />
                     <div className="flex-1 min-w-0">
@@ -631,7 +631,7 @@ function CronsSection({ agentName }: { agentName: string }) {
                 >
                   <div className="flex items-center gap-2">
                     <span
-                      className={cn('h-1.5 w-1.5 rounded-full shrink-0', dot, running && 'animate-pulse')}
+                      className={cn('h-1.5 w-1.5 rounded-full shrink-0 transition-colors', dot, running && 'animate-pulse')}
                       aria-hidden="true"
                     />
                     <div className="flex-1 min-w-0">
@@ -715,7 +715,7 @@ function SkillsAndTasks({ agent, agentName }: { agent: AgentByNameOutput['agent'
         <button
           type="button"
           onClick={() => setInstallOpen(true)}
-          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer"
+          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
         >
           <Download className="h-3.5 w-3.5" /> Install skill
         </button>
@@ -798,7 +798,7 @@ function TemplatePublishSection({ agentName }: { agentName: string }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
       >
         <Package className="h-3.5 w-3.5" /> Publish as template
       </button>
@@ -875,7 +875,7 @@ function FolderGroup({ label, scope, paths, agentName, note, editable }: {
           <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />
         </span>
       </summary>
-      <div className="border-t border-border px-2 py-2">
+      <div className="border-t border-border px-2 py-2 animate-in fade-in-0 duration-150">
         {note && <p className="mb-1.5 px-1 text-[10px] text-muted-foreground/60">{note}</p>}
         {content.isFetching && !content.data ? (
           <p className="px-1 py-2 text-[11px] text-muted-foreground/60">加载中…</p>
@@ -1149,14 +1149,14 @@ function DetailModal({
                   type="button"
                   onClick={() => item.target && save.mutate({ name: agentName, target: item.target, content: draft })}
                   disabled={save.isPending || draft === body}
-                  className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs font-medium bg-foreground text-background hover:bg-foreground/90 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs font-medium bg-foreground text-background hover:bg-foreground/90 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Check className="h-3.5 w-3.5" /> {save.isPending ? 'queuing…' : 'Save'}
                 </button>
                 <button
                   type="button"
                   onClick={() => { setEditing(false); setDraft(''); }}
-                  className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs text-muted-foreground hover:bg-accent cursor-pointer"
+                  className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs text-muted-foreground hover:bg-accent transition-colors cursor-pointer"
                 >
                   <X className="h-3.5 w-3.5" /> cancel
                 </button>

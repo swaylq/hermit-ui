@@ -281,7 +281,7 @@ function CredentialCard({
           type="button"
           aria-label={`remove ${c.label}`}
           onClick={onRemove}
-          className="rounded p-1 text-muted-foreground hover:text-rose-500"
+          className="rounded p-1 text-muted-foreground hover:text-rose-500 transition-colors"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -317,7 +317,7 @@ function CredentialCard({
               className="h-9 font-mono"
             />
             <button type="button" onClick={() => setReveal((v) => !v)}
-              aria-label="toggle visibility" className="rounded p-1 text-muted-foreground hover:text-foreground">
+              aria-label="toggle visibility" className="rounded p-1 text-muted-foreground hover:text-foreground transition-colors">
               {reveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
             </button>
           </div>
@@ -437,7 +437,7 @@ function CredentialDialog({
                 aria-label="secret name"
               />
               <button type="button" onClick={() => setReveal((v) => !v)}
-                aria-label="toggle visibility" className="rounded p-1 text-muted-foreground hover:text-foreground">
+                aria-label="toggle visibility" className="rounded p-1 text-muted-foreground hover:text-foreground transition-colors">
                 {reveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
               </button>
             </div>
@@ -507,7 +507,7 @@ function VisionCard({ config, secretNames }: { config: ImageConfig | null; secre
         </label>
       </div>
       {img.enabled && (
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 animate-in fade-in-0">
           <Field label="Vision provider">
             <Select value={provider} onValueChange={(v) => setImg({ ...img, provider: (v ?? 'openrouter') as ImageProvider })} modal={false}>
               <SelectTrigger className="h-9" aria-label="vision provider">

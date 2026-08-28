@@ -86,9 +86,9 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
             ))}
           </div>
         ) : rows.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">No conversations yet — use New Brain chat above.</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150">No conversations yet — use New Brain chat above.</p>
         ) : (
-          <ul className="space-y-px">
+          <ul className="space-y-px animate-in fade-in-0 duration-150">
             {rows.map((s) => {
               const active = activeId === s.id;
               const status = sessionStatusView(s, dashboardReach());
@@ -111,7 +111,7 @@ function RecentBrainSessions({ brainName }: { brainName?: string }) {
                           re-attached since the last restart. */}
                       <span
                         className={cn(
-                          'mt-1.5 h-1.5 w-1.5 rounded-full shrink-0',
+                          'mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 transition-colors',
                           status.dot,
                           status.pulse && 'animate-pulse',
                         )}
@@ -167,9 +167,9 @@ export function RecentDispatchSessions() {
             ))}
           </div>
         ) : rows.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">No dispatches yet. When Brain delegates a one-shot task, it appears here.</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150">No dispatches yet. When Brain delegates a one-shot task, it appears here.</p>
         ) : (
-          <ul className="space-y-px">
+          <ul className="space-y-px animate-in fade-in-0 duration-150">
             {rows.map((s) => {
               const active = activeId === s.id;
               const label = s.title || `Brain → ${s.agentName}`;
@@ -196,7 +196,7 @@ export function RecentDispatchSessions() {
                   >
                     <div className="flex items-start gap-2 min-w-0">
                       <span
-                        className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', status.dot, status.pulse && 'animate-pulse')}
+                        className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 transition-colors', status.dot, status.pulse && 'animate-pulse')}
                         aria-hidden
                       />
                       <div className="min-w-0 flex-1">

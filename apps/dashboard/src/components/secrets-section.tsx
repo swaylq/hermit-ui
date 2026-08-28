@@ -147,7 +147,7 @@ export function SecretsSection() {
               <Button
                 size="icon-sm"
                 variant="ghost"
-                className="text-muted-foreground hover:text-destructive"
+                className="text-muted-foreground hover:text-destructive transition-colors"
                 title="delete"
                 disabled={remove.isPending}
                 onClick={async () => {

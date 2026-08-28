@@ -322,7 +322,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                 >
                   <span
                     className={cn(
-                      'h-1.5 w-1.5 rounded-full shrink-0',
+                      'h-1.5 w-1.5 rounded-full shrink-0 transition-colors',
                       status[e.id] ? 'bg-emerald-500' : 'border border-muted-foreground/40',
                     )}
                     aria-hidden
@@ -341,7 +341,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                     type="button"
                     onClick={() => { setConfirmingId(null); setEditingId(e.id); setDraft(e.alias ?? ''); }}
                     aria-label={`rename ${displayName(e)}`}
-                    className="shrink-0 rounded p-1.5 text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent cursor-pointer opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+                    className="shrink-0 rounded p-1.5 text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity [@media(hover:none)]:opacity-100"
                   >
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
@@ -354,7 +354,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                       type="button"
                       onClick={() => { setEditingId(null); setConfirmingId(e.id); }}
                       aria-label={`remove ${displayName(e)}`}
-                      className="shrink-0 rounded p-1.5 text-muted-foreground hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+                      className="shrink-0 rounded p-1.5 text-muted-foreground hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity [@media(hover:none)]:opacity-100"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>

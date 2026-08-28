@@ -67,7 +67,7 @@ export function NotificationsFilters({ collapsed }: { collapsed: boolean }) {
               {count > 0 && (
                 <span
                   className={cn(
-                    'shrink-0 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-mono tabular-nums leading-none',
+                    'shrink-0 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-mono tabular-nums leading-none animate-in fade-in-0 zoom-in-50 duration-150',
                     collapsed && 'lg:hidden',
                   )}
                 >

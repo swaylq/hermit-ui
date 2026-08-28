@@ -77,7 +77,7 @@ export function InstallPrompt() {
   }
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-50 flex justify-center px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pointer-events-none">
+    <div className="fixed inset-x-0 bottom-0 z-50 flex justify-center px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pointer-events-none animate-in fade-in-0 slide-in-from-bottom-2 duration-150">
       <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-border bg-background/95 backdrop-blur px-3 py-2 shadow-lg w-full max-w-md">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/icon-192.png" alt="" className="h-9 w-9 rounded-lg shrink-0" />
@@ -94,12 +94,12 @@ export function InstallPrompt() {
         {!iosHint && (
           <button
             onClick={install}
-            className="shrink-0 inline-flex items-center gap-1 rounded-md bg-foreground text-background text-xs font-medium px-2.5 py-1.5 hover:opacity-90"
+            className="shrink-0 inline-flex items-center gap-1 rounded-md bg-foreground text-background text-xs font-medium px-2.5 py-1.5 transition-opacity hover:opacity-90"
           >
             <Download className="h-3.5 w-3.5" /> 安装
           </button>
         )}
-        <button onClick={dismiss} aria-label="关闭" className="shrink-0 text-muted-foreground hover:text-foreground p-1">
+        <button onClick={dismiss} aria-label="关闭" className="shrink-0 text-muted-foreground transition-colors hover:text-foreground p-1">
           <X className="h-4 w-4" />
         </button>
       </div>

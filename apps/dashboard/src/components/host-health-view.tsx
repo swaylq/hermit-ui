@@ -62,7 +62,7 @@ export function HostHealthView() {
     <div className="space-y-4">
       <Card className="p-4">
         <div className="mb-3 flex items-center gap-2">
-          <span className={cn('h-2.5 w-2.5 rounded-full', stale ? 'bg-muted-foreground/40' : DOT[health], health === 'red' && !stale && 'animate-pulse')} />
+          <span className={cn('h-2.5 w-2.5 rounded-full transition-colors', stale ? 'bg-muted-foreground/40' : DOT[health], health === 'red' && !stale && 'animate-pulse')} />
           <span className="text-sm font-semibold">Host health</span>
           <span className={cn('text-xs', stale ? 'text-muted-foreground' : TEXT[health])}>{stale ? 'Stale' : LABEL[health]}</span>
         </div>
@@ -124,7 +124,7 @@ export function HostHealthView() {
                     type="button"
                     title="Archive — out of the sidebar and asleep; wakes on send"
                     onClick={() => archive.mutate({ id: s.id })}
-                    className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-foreground cursor-pointer"
+                    className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
                   >
                     <Archive className="h-3.5 w-3.5" />
                   </button>

@@ -28,7 +28,7 @@ function OpResult({ row }: { row: OpRow }) {
   const m = meta[row.status] ?? meta.pending;
   const spin = row.status === 'pending' || row.status === 'running';
   return (
-    <div className="rounded-md border border-border bg-muted/30 p-2.5 space-y-1.5 text-xs">
+    <div className="rounded-md border border-border bg-muted/30 p-2.5 space-y-1.5 text-xs animate-in fade-in-0">
       <div className="flex items-center gap-2">
         <span className={cn('inline-flex items-center gap-1 font-medium', m.cls)}>
           {spin ? (

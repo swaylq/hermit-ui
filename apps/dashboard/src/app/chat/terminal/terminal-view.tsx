@@ -303,7 +303,7 @@ export function TerminalView({ sessionId }: { sessionId: string }) {
       <div ref={wrapRef} className="absolute inset-0 px-2 py-1" />
       {status.kind !== 'connected' && (
         <div className="absolute top-2 right-2 flex items-center gap-2">
-          <div className="text-[10px] font-mono px-2 py-1 rounded bg-zinc-900/80 border border-zinc-700 text-zinc-300 pointer-events-none">
+          <div className="text-[10px] font-mono px-2 py-1 rounded bg-zinc-900/80 border border-zinc-700 text-zinc-300 pointer-events-none animate-in fade-in-0">
             {status.kind === 'connecting' && 'connecting…'}
             {status.kind === 'reconnecting' && `reconnecting in ${Math.round(status.nextDelayMs / 1000)}s…`}
             {status.kind === 'closed' && `disconnected — ${status.reason}`}

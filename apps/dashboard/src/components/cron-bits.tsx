@@ -60,7 +60,7 @@ export function CronStatusBadge({ status, enabled, done }: { status?: string | n
       ? CRON_BADGE_CLS[cronStatusTone(status)]
       : CRON_BADGE_CLS.neutral;
   return (
-    <span className={cn('inline-flex items-center rounded border px-1.5 py-px text-[10px] font-mono uppercase tracking-wide', cls, status === CRON_STATUS.running && enabled && 'animate-pulse')}>
+    <span className={cn('inline-flex items-center rounded border px-1.5 py-px text-[10px] font-mono uppercase tracking-wide transition-colors', cls, status === CRON_STATUS.running && enabled && 'animate-pulse')}>
       {text}
     </span>
   );
@@ -115,7 +115,7 @@ export const CronRunRow = memo(function CronRunRow({
           {run.durationMs != null && <span className="tabular-nums text-muted-foreground/60">{fmtMs(run.durationMs)}</span>}
           <ChevronDown className="ml-auto h-3.5 w-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />
         </summary>
-        <div className="border-t border-border px-3 py-2">
+        <div className="border-t border-border px-3 py-2 animate-in fade-in-0 duration-150">
           {!open ? null : out.isPending ? (
             <p className="text-xs text-muted-foreground">loading…</p>
           ) : out.data?.output ? (

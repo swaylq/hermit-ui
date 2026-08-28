@@ -35,7 +35,7 @@ export function ToolChip({ call, dark, inline = false }: { call: { id: string; n
         {argPreview && <span className="text-muted-foreground truncate max-w-[32ch]">{argPreview}</span>}
       </summary>
       {open && (
-        <pre className="mt-0 mx-0 border-t border-border px-2 py-1.5 text-[11px] whitespace-pre-wrap break-all bg-muted/40 text-foreground/80 rounded-b">
+        <pre className="mt-0 mx-0 border-t border-border px-2 py-1.5 text-[11px] whitespace-pre-wrap break-all bg-muted/40 text-foreground/80 rounded-b animate-in fade-in-0 duration-150">
           {JSON.stringify(call.input, null, 2)}
         </pre>
       )}
@@ -51,7 +51,10 @@ export function ToolBatchChip({ name, calls, dark, inline = false }: { name: str
         <span className="font-medium text-foreground">{name}</span>
         <span className="text-muted-foreground tabular-nums">× {calls.length}</span>
       </summary>
-      <ul className="border-t border-border divide-y divide-border">
+      {/* The <ul> stays mounted while closed (native <details> hides it), so a
+          plain animate-in would only run on chip mount — group-open: re-applies
+          the enter animation every time the chip opens. */}
+      <ul className="border-t border-border divide-y divide-border group-open:animate-in group-open:fade-in-0 group-open:duration-150">
         {calls.map((c, i) => (
           <BatchCallItem key={c.id || `${name}-${i}`} call={c} index={i} />
         ))}
@@ -75,7 +78,7 @@ function BatchCallItem({ call, index }: { call: { id: string; name: string; inpu
           <span className="text-foreground/80 truncate">{arg || '(no arg)'}</span>
         </summary>
         {open && (
-          <pre className="mt-1 px-2 py-1.5 rounded text-[10px] whitespace-pre-wrap break-all bg-muted/60 text-foreground/80">
+          <pre className="mt-1 px-2 py-1.5 rounded text-[10px] whitespace-pre-wrap break-all bg-muted/60 text-foreground/80 animate-in fade-in-0 duration-150">
             {JSON.stringify(call.input, null, 2)}
           </pre>
         )}
@@ -106,7 +109,7 @@ export function InlineToolResult({ block }: { block: { type: string; tool_use_id
         <span className="text-muted-foreground truncate max-w-[60ch]">{firstLine(text)}</span>
       </summary>
       {open && (
-        <pre className="border-t border-border px-2 py-1.5 text-[11px] whitespace-pre-wrap break-all bg-muted/40 text-foreground/80 rounded-b">
+        <pre className="border-t border-border px-2 py-1.5 text-[11px] whitespace-pre-wrap break-all bg-muted/40 text-foreground/80 rounded-b animate-in fade-in-0 duration-150">
           {text}
         </pre>
       )}

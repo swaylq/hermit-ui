@@ -77,7 +77,7 @@ export function TakeoverBar({
               It reads as one sentence, so it should wrap as one. */}
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/70">
             {activity.busy && (
-              <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500 align-middle" />
+              <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500 align-middle transition-colors" />
             )}
             {activity.text}
             <span className="mx-1 text-muted-foreground/40">·</span>

@@ -239,11 +239,11 @@ export function SessionDetailSheet({
         )}
 
         {q.data === null && (
-          <div className="p-6 text-sm text-muted-foreground">This session no longer exists.</div>
+          <div className="p-6 text-sm text-muted-foreground animate-in fade-in-0">This session no longer exists.</div>
         )}
 
         {d && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5">
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5 animate-in fade-in-0">
             <Section title="backend">
               <BackendPicker
                 value={shownBackend}

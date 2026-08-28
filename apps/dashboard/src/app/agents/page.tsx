@@ -206,11 +206,11 @@ function ConfirmDeleteButton({
   }, [armed]);
   if (armed) {
     return (
-      <span className="inline-flex items-center gap-0.5">
+      <span className="inline-flex items-center gap-0.5 animate-in fade-in-0">
         <button
           type="button"
           onClick={() => { setArmed(false); onConfirm(); }}
-          className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs font-medium text-amber-600 hover:bg-amber-500/10 cursor-pointer"
+          className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs font-medium text-amber-600 hover:bg-amber-500/10 transition-colors cursor-pointer"
         >
           <Check className="h-3.5 w-3.5" /> recycle bin
         </button>
@@ -218,7 +218,7 @@ function ConfirmDeleteButton({
           type="button"
           onClick={() => setArmed(false)}
           aria-label="cancel"
-          className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:bg-accent cursor-pointer"
+          className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:bg-accent transition-colors cursor-pointer"
         >
           <X className="h-3.5 w-3.5" />
         </button>

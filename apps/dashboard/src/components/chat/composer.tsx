@@ -16,6 +16,7 @@ import { foldTail, newClaim, replaceTail, type DictationClaim } from '@/lib/dict
 import dynamic from 'next/dynamic';
 import { Plus, ArrowUp, FileText, X } from 'lucide-react';
 import { msgText, type Attachment } from '@/components/chat/lib';
+import { Collapse } from '@/components/chat/collapse';
 import { originalFor } from '@/lib/translate-outbound';
 
 // Lazy-load the zoomable image lightbox (its own ~20KB portal-overlay chunk) so
@@ -44,9 +45,8 @@ export function QueueBar({
   onClear: () => void;
   clearing: boolean;
 }) {
-  if (items.length === 0) return null;
   return (
-    <div className="mx-auto w-full max-w-3xl px-3">
+    <Collapse open={items.length > 0} className="mx-auto w-full max-w-3xl px-3">
       <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
         <div className="mb-1 flex items-center justify-between text-muted-foreground">
           <span>{items.length} 条排队中 · 等当前任务完成后依次执行</span>
@@ -80,7 +80,7 @@ export function QueueBar({
           ))}
         </ul>
       </div>
-    </div>
+    </Collapse>
   );
 }
 
@@ -559,7 +559,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
           clear the home indicator (absorbed via max(), not stacked) so the input
           sits snug above it with no empty band. No-op in a normal browser tab. */}
       <div className="mx-auto w-full max-w-3xl px-3 pb-3 pt-1 pwa-pb-safe">
-        {notice && (
+        <Collapse open={!!notice}>
           <button
             type="button"
             onClick={() => setNotice(null)}
@@ -569,7 +569,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             <span className="flex-1">{notice}</span>
             <X className="h-3.5 w-3.5 shrink-0 opacity-60" />
           </button>
-        )}
+        </Collapse>
         {attachments.length > 0 && (
           <div className="mb-2 space-y-1.5">
             <div className="flex flex-wrap gap-2">
@@ -819,7 +819,7 @@ function AttachmentChip({ attachment: a, onRemove }: { attachment: Attachment; o
   const previewUrl = 'previewUrl' in a ? a.previewUrl : null;
   const [lightbox, setLightbox] = useState(false);
   return (
-    <div className="relative group inline-flex items-center gap-2 rounded-md border border-border bg-background px-1.5 py-1 text-[11px] font-mono">
+    <div className="relative group inline-flex items-center gap-2 rounded-md border border-border bg-background px-1.5 py-1 text-[11px] font-mono animate-in fade-in-0 zoom-in-95 duration-100">
       {previewUrl ? (
         <button type="button" onClick={() => setLightbox(true)} aria-label="preview image" className="shrink-0 cursor-zoom-in">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -849,7 +849,7 @@ function AttachmentChip({ attachment: a, onRemove }: { attachment: Attachment; o
         type="button"
         onClick={onRemove}
         aria-label="remove attachment"
-        className="opacity-60 hover:opacity-100 hover:text-rose-500 px-1 text-xs cursor-pointer"
+        className="opacity-60 hover:opacity-100 hover:text-rose-500 transition-[opacity,color] px-1 text-xs cursor-pointer"
       >
         ×
       </button>

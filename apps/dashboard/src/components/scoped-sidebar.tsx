@@ -96,9 +96,10 @@ export function ScopedSidebar({ agentName }: { agentName: string }) {
           {sessions.isPending ? (
             <div className="px-2 py-1.5 text-xs text-muted-foreground">loading…</div>
           ) : rows.length === 0 ? (
-            <div className="px-2 py-1.5 text-xs text-muted-foreground">No chats yet.</div>
+            <div className="px-2 py-1.5 text-xs text-muted-foreground animate-in fade-in-0 duration-150">No chats yet.</div>
           ) : (
-            rows.map((s) => (
+            <div className="animate-in fade-in-0 duration-150">
+              {rows.map((s) => (
               <Link
                 key={s.id}
                 href={`/chat?session=${encodeURIComponent(s.id)}`}
@@ -117,7 +118,8 @@ export function ScopedSidebar({ agentName }: { agentName: string }) {
                     a broken row rather than as "nothing said here yet". */}
                 <span className="text-[10px] text-muted-foreground/70">{relTime(sessionRecencyAt(s))}</span>
               </Link>
-            ))
+              ))}
+            </div>
           )}
         </div>
 

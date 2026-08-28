@@ -98,7 +98,7 @@ export function NotificationsButton({ collapsed }: { collapsed: boolean }) {
       {count > 0 && (
         <span
           aria-hidden="true"
-          className="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-rose-500 text-white text-[8px] font-mono tabular-nums leading-none"
+          className="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-rose-500 text-white text-[8px] font-mono tabular-nums leading-none animate-in fade-in-0 zoom-in-50 duration-150"
         >
           {count > 99 ? '99+' : count}
         </span>

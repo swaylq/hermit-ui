@@ -34,6 +34,7 @@ import { ScheduleBar } from '@/components/chat/schedule-bar';
 import { TakeoverBar } from '@/components/chat/takeover-bar';
 import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
+import { Collapse } from '@/components/chat/collapse';
 import { useAnchoredWindow } from '@/components/chat/use-anchored-window';
 import { useOlderPages, shedRows, shouldKeepShed, type TimelineRow } from '@/components/chat/use-older-pages';
 import { usePrependAnchor } from '@/components/chat/use-prepend-anchor';
@@ -1873,7 +1874,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                     title={statusTitle}
                   >
                     <span
-                      className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot, status.pulse && 'animate-pulse')}
+                      className={cn('h-1.5 w-1.5 shrink-0 rounded-full transition-colors', status.dot, status.pulse && 'animate-pulse')}
                       aria-hidden="true"
                     />
                     <span className="max-w-[11rem] truncate">{status.label}</span>
@@ -1986,7 +1987,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               disabled={reopenSession.isPending}
               aria-label="restore from archive"
               title="Restore from archive — bring this chat back into the sidebar. It stays asleep until your next message, which wakes it with full history (--resume)."
-              className="inline-flex items-center justify-center h-7 w-7 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-400 transition-colors cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-wait"
+              className="inline-flex items-center justify-center h-7 w-7 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-400 transition-colors cursor-pointer animate-in fade-in-0 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-wait"
             >
               <ArchiveRestore className="h-4 w-4" />
             </button>
@@ -2051,7 +2052,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         </div>
       </div>
 
-      {findOpen && (
+      {/* Height-animated (Collapse) so opening ⌘F slides the timeline down
+          instead of amputating 44px from it in one frame. */}
+      <Collapse open={findOpen}>
         <ChatFind
           sessionId={sessionId}
           getViewport={getViewport}
@@ -2059,7 +2062,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           onJump={anchored.jumpTo}
           onClose={() => setFindOpen(false)}
         />
-      )}
+      </Collapse>
 
       {/* Mounted only once opened, so an untouched chat never pays for the
           detail query; kept mounted afterwards so the sheet animates out. */}
@@ -2069,7 +2072,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
       {/* Anchored mode banner: you're parked on a search hit, not at the live
           tail. Without this the frozen timeline reads as a stuck session. */}
-      {anchored.active && (
+      <Collapse open={anchored.active}>
         <div className="shrink-0 flex items-center gap-2 border-b border-border bg-amber-500/10 px-3 h-9 text-xs">
           <span className="text-amber-700 dark:text-amber-400">Viewing earlier history</span>
           <button
@@ -2080,7 +2083,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             Jump to latest ↓
           </button>
         </div>
-      )}
+      </Collapse>
 
       <ScrollArea ref={scrollRef} className="flex-1 min-h-0 bg-background">
         {/* overflow-x-clip guarantees the conversation never scrolls sideways as
@@ -2090,9 +2093,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           {(anchored.active ? anchored.loading : messages.isPending && !baseRows) ? (
             <Skeleton className="h-32" />
           ) : view.length === 0 ? (
-            <EmptyChat agentName={session?.agentName} onPickPrompt={pickPrompt} />
+            <div className="animate-in fade-in-0 duration-150">
+              <EmptyChat agentName={session?.agentName} onPickPrompt={pickPrompt} />
+            </div>
           ) : (
-            <>
+            <div className="animate-in fade-in-0 duration-150">
               {anchored.active ? (
                 anchored.hasBefore && (
                   <div className="flex justify-center pb-3">
@@ -2134,39 +2139,48 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   runDetail={runActivity.detail}
                 />
               </RunDetailContext.Provider>
-            </>
+            </div>
           )}
           {/* Only show the standalone dots-below indicator while the assistant
               has not yet emitted any content. Once the bubble appears, dots
               live inline at the bubble's tail (StreamingDots) — and when the
               turn is off in a tool chain, the run capsule's own sweep bar is
               the indicator, so a second breathing dot below it is just noise. */}
-          {showThinkingDots && !streamingTailId && !tailIsRun && <TypingIndicator dot={status.dot} />}
+          {showThinkingDots && !streamingTailId && !tailIsRun && (
+            <div className="animate-in fade-in-0 duration-150">
+              <TypingIndicator dot={status.dot} />
+            </div>
+          )}
         </div>
       </ScrollArea>
       {/* Scroll-to-latest, in a zero-height strip above the ComposeBar. Stop used
           to share this strip; it is back inside the composer row now (right of
           the text, left of send — see StopPill there). Pointer-events gated so
           the strip never catches clicks meant for the conversation behind it. */}
-      {!pinnedToBottom && (messages.data?.length ?? 0) > 0 && (
-        <div className="relative mx-auto h-0 w-full max-w-3xl px-3 z-10 pointer-events-none">
-          <button
-              type="button"
-              onClick={() => scrollToBottom('smooth')}
-              aria-label="scroll to latest"
-              className={cn(
-                // Centred, and no longer stacked above Stop: Stop lives at the
-                // right end of the strip, so the two can't collide.
-                'pointer-events-auto absolute left-1/2 -translate-x-1/2 bottom-3',
-                'inline-flex items-center gap-1 rounded-full border border-border bg-background/95',
-                'px-3 py-1 text-xs font-medium text-foreground shadow-sm backdrop-blur',
-                'hover:bg-accent hover:text-foreground transition-colors cursor-pointer',
-              )}
-            >
-              <span aria-hidden="true">↓</span> latest
-            </button>
-        </div>
-      )}
+      <div className="relative mx-auto h-0 w-full max-w-3xl px-3 z-10 pointer-events-none">
+        <button
+            type="button"
+            onClick={() => scrollToBottom('smooth')}
+            aria-label="scroll to latest"
+            aria-hidden={pinnedToBottom || (messages.data?.length ?? 0) === 0}
+            tabIndex={pinnedToBottom || (messages.data?.length ?? 0) === 0 ? -1 : undefined}
+            className={cn(
+              // Centred, and no longer stacked above: Stop lives inside the
+              // composer row now, so the two can't collide.
+              'absolute left-1/2 -translate-x-1/2 bottom-3',
+              'inline-flex items-center gap-1 rounded-full border border-border bg-background/95',
+              'px-3 py-1 text-xs font-medium text-foreground shadow-sm backdrop-blur',
+              'hover:bg-accent hover:text-foreground cursor-pointer',
+              // Always mounted; the tray-pattern fade keeps it from popping.
+              'transition-[opacity,transform,background-color,color] duration-200',
+              !pinnedToBottom && (messages.data?.length ?? 0) > 0
+                ? 'pointer-events-auto opacity-100 translate-y-0'
+                : 'pointer-events-none opacity-0 translate-y-2',
+            )}
+          >
+            <span aria-hidden="true">↓</span> latest
+          </button>
+      </div>
 
         {/* The mic floats alone. Takeover moved into the suggestion row above the
             composer — it's a decision you make instead of typing, not something you
@@ -2221,18 +2235,20 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           {/* Directly above the composer: the Brain's stated goal sits where the
               human's eyes already are when they're about to type — which is also
               the gesture that takes the conversation back. */}
-          {takenOver && takeover && (
-            <TakeoverBar
-              goal={takeover.takeoverGoal}
-              turns={takeover.takeoverTurns}
-              agentName={session?.agentName ?? 'the agent'}
-              agentWorking={session?.state === 'working'}
-              brainWorking={takeover?.takeoverBrainState === 'working'}
-              drafting={!!takeover?.takeoverDraft}
-              releasing={releaseTakeover.isPending}
-              onRelease={() => releaseTakeover.mutate({ sessionId, reason: 'human' })}
-            />
-          )}
+          <Collapse open={takenOver && !!takeover}>
+            {takeover && (
+              <TakeoverBar
+                goal={takeover.takeoverGoal}
+                turns={takeover.takeoverTurns}
+                agentName={session?.agentName ?? 'the agent'}
+                agentWorking={session?.state === 'working'}
+                brainWorking={takeover?.takeoverBrainState === 'working'}
+                drafting={!!takeover?.takeoverDraft}
+                releasing={releaseTakeover.isPending}
+                onRelease={() => releaseTakeover.mutate({ sessionId, reason: 'human' })}
+              />
+            )}
+          </Collapse>
           <QueueBar
             items={displayQueue}
             onCancel={(id) => {

@@ -93,7 +93,7 @@ function StatusRow({ row, onRemove }: { row: Row; onRemove: () => void }) {
         {row.unzip && <span className="text-amber-500 shrink-0">解压</span>}
         <span className="text-muted-foreground/60 ml-auto shrink-0">{relTime(row.resolvedAt ?? row.requestedAt)}</span>
         {!ACTIVE.has(row.status) && (
-          <button onClick={onRemove} aria-label="remove" className="text-muted-foreground hover:text-rose-400 cursor-pointer shrink-0">
+          <button onClick={onRemove} aria-label="remove" className="text-muted-foreground hover:text-rose-400 transition-colors cursor-pointer shrink-0">
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         )}

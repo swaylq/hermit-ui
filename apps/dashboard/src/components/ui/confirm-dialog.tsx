@@ -165,6 +165,9 @@ function PromptBody({
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<Pending | null>(null);
+  // Enter/leave animation, same controlled-show pattern as overlay.tsx: mount
+  // hidden, flip to shown next frame; the leave transition plays before unmount.
+  const [show, setShow] = useState(false);
   // Mirror into a ref so settle()/supersede read the latest without being a
   // side-effect inside a state updater (which React double-invokes in dev).
   const pendingRef = useRef<Pending | null>(null);
@@ -192,6 +195,8 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
 
   // `value` is the prompt's field; a confirm ignores it. An empty submit can't
   // reach here (the field guards it), but treat it as a cancel if it ever does.
+  // The promise resolves immediately; the dialog stays mounted for the 150ms
+  // leave transition before `pending` clears and the portal unmounts.
   const settle = useCallback((ok: boolean, value?: string) => {
     const p = pendingRef.current;
     if (p) {
@@ -202,7 +207,11 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         p.resolve(ok);
       }
     }
-    setPending(null);
+    setShow(false);
+    // Unmount only if nothing newer superseded this dialog during the leave.
+    window.setTimeout(() => {
+      if (pendingRef.current === p) setPending(null);
+    }, 150);
   }, []);
 
   // While open: Esc cancels, Enter confirms, body scroll locks. Capture phase +
@@ -210,6 +219,8 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   // act on the same Esc/Enter (which would close the sheet behind the confirm).
   useEffect(() => {
     if (!pending) return;
+    // Enter: mount hidden, flip to shown next frame so the CSS transition runs.
+    const r = requestAnimationFrame(() => setShow(true));
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault(); e.stopImmediatePropagation(); settle(false);
@@ -223,6 +234,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
+      cancelAnimationFrame(r);
       window.removeEventListener('keydown', onKey, true);
       document.body.style.overflow = prevOverflow;
     };
@@ -235,7 +247,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         {pending && typeof document !== 'undefined'
           ? createPortal(
               <div
-                className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4"
+                className={cn(
+                  'fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 transition-opacity duration-150 ease-out',
+                  show ? 'opacity-100' : 'opacity-0',
+                )}
                 // Click the dimmed area (not the popup) to cancel. The dim is on
                 // THIS element (not a child overlay) so an outside click's target
                 // IS currentTarget — a separate backdrop child would swallow it.
@@ -244,7 +259,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
                 <div
                   role={pending.kind === 'prompt' ? 'dialog' : 'alertdialog'}
                   aria-modal="true"
-                  className="w-full max-w-sm rounded-xl border border-border bg-popover p-5 text-popover-foreground shadow-2xl"
+                  className={cn(
+                    'w-full max-w-sm rounded-xl border border-border bg-popover p-5 text-popover-foreground shadow-2xl transition-[opacity,transform] duration-150 ease-out',
+                    show ? 'opacity-100 scale-100' : 'opacity-0 scale-95',
+                  )}
                 >
                   {pending.title && (
                     <h2 className="text-sm font-semibold text-foreground">{pending.title}</h2>

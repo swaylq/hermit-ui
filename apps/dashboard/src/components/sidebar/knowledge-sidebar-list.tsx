@@ -33,9 +33,9 @@ export function KnowledgeSidebarList() {
             ))}
           </div>
         ) : rows.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">No knowledge bases yet. Create one to give agents shared, on-demand reference docs.</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150">No knowledge bases yet. Create one to give agents shared, on-demand reference docs.</p>
         ) : (
-          <ul className="space-y-px">
+          <ul className="space-y-px animate-in fade-in-0 duration-150">
             {rows.map((kb) => {
               const active = activeSlug === kb.slug;
               return (

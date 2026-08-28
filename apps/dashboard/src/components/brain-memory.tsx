@@ -27,7 +27,7 @@ function MemoryFileRow({ agentName, path, label }: { agentName: string; path: st
         <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground/60 transition-transform', open && 'rotate-180')} />
       </button>
       {open && (
-        <div className="border-t border-border px-3 py-2.5">
+        <div className="border-t border-border px-3 py-2.5 animate-in fade-in-0 duration-150">
           {q.isPending ? (
             <span className="text-xs text-muted-foreground">loading…</span>
           ) : q.error ? (

@@ -38,7 +38,7 @@ export function LoginScreen({ onSubmit }: { onSubmit: (k: string) => Promise<str
             placeholder="X-Asst-Key"
             className="font-mono"
           />
-          {err && <p className="text-xs text-rose-400">{err}</p>}
+          {err && <p className="text-xs text-rose-400 animate-in fade-in-0">{err}</p>}
           <Button type="submit" disabled={!key || busy} className="w-full">
             {busy ? 'checking…' : 'sign in'}
           </Button>

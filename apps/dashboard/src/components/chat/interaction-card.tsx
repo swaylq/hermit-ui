@@ -50,7 +50,7 @@ export function InteractionCard({ block }: { block: any }) {
       summary = ans.length ? `✓ ${ans.join(', ')}` : 'dismissed';
     }
     return (
-      <div className="rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+      <div className="rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150">
         <span className="font-medium text-foreground/70">{kind === 'permission' ? 'Permission' : 'Asked'}</span>
         {' · '}
         {summary}

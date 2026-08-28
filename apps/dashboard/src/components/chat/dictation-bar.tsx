@@ -119,7 +119,7 @@ export const DictationBar = memo(function DictationBar({
 
         <span
           className={cn(
-            'relative z-10 h-2 w-2 shrink-0 rounded-full',
+            'relative z-10 h-2 w-2 shrink-0 rounded-full transition-colors',
             cancelArmed || status === 'error' ? 'bg-rose-400'
               : silent || status === 'connecting' || status === 'finishing' || status === 'refining' ? 'bg-white/40'
               : status === 'offline' ? 'bg-amber-400'
@@ -130,7 +130,7 @@ export const DictationBar = memo(function DictationBar({
         <div className="relative z-10 min-w-0 flex-1">
           <div
             className={cn(
-              'truncate text-[13px] leading-5',
+              'truncate text-[13px] leading-5 transition-colors',
               cancelArmed || status === 'error' ? 'text-rose-200' : status === 'offline' ? 'text-amber-200/80' : 'text-white/45',
             )}
           >

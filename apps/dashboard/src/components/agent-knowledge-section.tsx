@@ -57,7 +57,7 @@ export function AgentKnowledgeSection({ agentName }: { agentName: string }) {
                   detach.mutate({ agentName, baseId: kb.id });
                 }
               }}
-              className="shrink-0 p-1 text-muted-foreground hover:text-rose-500 cursor-pointer"
+              className="shrink-0 p-1 text-muted-foreground hover:text-rose-500 transition-colors cursor-pointer"
             >
               <X className="h-4 w-4" />
             </button>
@@ -95,7 +95,7 @@ function AttachKnowledgeDialog({
         <>
           <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5 shrink-0">
             <span className="text-sm font-medium">Attach knowledge base → {agentName}</span>
-            <button type="button" onClick={close} aria-label="close" className="h-7 w-7 inline-flex items-center justify-center rounded text-muted-foreground hover:bg-accent cursor-pointer">
+            <button type="button" onClick={close} aria-label="close" className="h-7 w-7 inline-flex items-center justify-center rounded text-muted-foreground hover:bg-accent transition-colors cursor-pointer">
               <X className="h-4 w-4" />
             </button>
           </div>

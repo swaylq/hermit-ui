@@ -249,7 +249,7 @@ function ScheduleCard({ cron, sessionId }: { cron: ScheduleEntry; sessionId: str
       </summary>
       {/* Bounded panel: one scroll region so a long run log can't grow the
           shrink-0 strip and squeeze the conversation above it. */}
-      <div className="border-t border-border px-3 py-2 text-[12px] space-y-1 max-h-[40vh] overflow-y-auto overscroll-contain">
+      <div className="border-t border-border px-3 py-2 text-[12px] space-y-1 max-h-[40vh] overflow-y-auto overscroll-contain group-open:animate-in group-open:fade-in-0 group-open:duration-150">
         <DetailRow k="Task" v={detail.data?.cron.prompt ?? cron.prompt} />
         <DetailRow k="Every" v={`${fmtDur(cron.intervalSec)}${cron.jitterSec > 0 ? ` ±${fmtDur(cron.jitterSec)}` : ''}`} />
         {done ? (

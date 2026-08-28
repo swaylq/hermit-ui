@@ -117,19 +117,19 @@ export function FilePane({
         )}
         {renaming ? (
           <>
-            <button onClick={commitRename} className="p-1 text-muted-foreground hover:text-foreground" title="Save"><Check className="h-4 w-4" /></button>
-            <button onClick={() => setRenaming(false)} className="p-1 text-muted-foreground hover:text-foreground" title="Cancel"><X className="h-4 w-4" /></button>
+            <button onClick={commitRename} className="p-1 text-muted-foreground hover:text-foreground transition-colors" title="Save"><Check className="h-4 w-4" /></button>
+            <button onClick={() => setRenaming(false)} className="p-1 text-muted-foreground hover:text-foreground transition-colors" title="Cancel"><X className="h-4 w-4" /></button>
           </>
         ) : (
           <>
             {authoring && !isDir && !isImg && !editing && (
-              <button onClick={() => setEditing(true)} className="p-1 text-muted-foreground hover:text-foreground" title="Edit"><Pencil className="h-4 w-4" /></button>
+              <button onClick={() => setEditing(true)} className="p-1 text-muted-foreground hover:text-foreground transition-colors" title="Edit"><Pencil className="h-4 w-4" /></button>
             )}
-            <button onClick={doDownload} disabled={downloading} className="p-1 text-muted-foreground hover:text-foreground" title={isDir ? 'Download as zip' : 'Download'}>
+            <button onClick={doDownload} disabled={downloading} className="p-1 text-muted-foreground hover:text-foreground transition-colors" title={isDir ? 'Download as zip' : 'Download'}>
               {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
             </button>
-            <button onClick={() => { setDraft(selected.name); setRenaming(true); }} className="p-1 text-muted-foreground hover:text-foreground" title="Rename"><Pencil className="h-4 w-4" /></button>
-            <button onClick={doDelete} disabled={remove.isPending} className="p-1 text-muted-foreground hover:text-rose-500" title="Delete">
+            <button onClick={() => { setDraft(selected.name); setRenaming(true); }} className="p-1 text-muted-foreground hover:text-foreground transition-colors" title="Rename"><Pencil className="h-4 w-4" /></button>
+            <button onClick={doDelete} disabled={remove.isPending} className="p-1 text-muted-foreground hover:text-rose-500 transition-colors" title="Delete">
               {remove.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
             </button>
           </>

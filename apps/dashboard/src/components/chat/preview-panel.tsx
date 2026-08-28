@@ -448,7 +448,7 @@ export function LivePreviewPanel({
             target: after a back button exists, "which page" is the part that
             changes, and it must not be the first thing truncated away. */}
         {here && (
-          <span className="max-w-[45%] shrink truncate font-mono text-[11px] text-foreground/70" title={here}>
+          <span className="max-w-[45%] shrink truncate font-mono text-[11px] text-foreground/70 animate-in fade-in-0" title={here}>
             {here}
           </span>
         )}
@@ -526,7 +526,7 @@ export function LivePreviewPanel({
             what will happen and how to stop. */}
         {(picking || picked) && (
           <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-3">
-            <span className="max-w-full truncate rounded-full bg-foreground/90 px-3 py-1 text-[11px] font-medium text-background shadow-lg">
+            <span className="max-w-full truncate rounded-full bg-foreground/90 px-3 py-1 text-[11px] font-medium text-background shadow-lg animate-in fade-in-0">
               {picking ? (
                 '点选一个元素，选择器会填进输入框 · Esc 取消'
               ) : (

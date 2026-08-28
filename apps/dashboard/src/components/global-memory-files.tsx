@@ -83,7 +83,7 @@ export function GlobalMemoryFiles() {
               onClick={openNote}
               style={{ paddingLeft: 8 }}
               className={cn(
-                'flex w-full items-center gap-1 pr-1.5 h-7 cursor-pointer text-sm select-none',
+                'flex w-full items-center gap-1 pr-1.5 h-7 cursor-pointer text-sm select-none transition-colors',
                 noteOpen ? 'bg-accent text-foreground' : 'hover:bg-accent/40 text-foreground/85',
               )}
             >

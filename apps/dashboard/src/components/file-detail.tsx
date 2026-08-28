@@ -155,14 +155,14 @@ function DetailModal({ item, onClose }: { item: FileItem | null; onClose: () => 
                   type="button"
                   onClick={doSave}
                   disabled={saving || draft === body}
-                  className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs font-medium bg-foreground text-background hover:bg-foreground/90 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs font-medium bg-foreground text-background hover:bg-foreground/90 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Check className="h-3.5 w-3.5" /> {saving ? 'saving…' : 'Save'}
                 </button>
                 <button
                   type="button"
                   onClick={() => { setEditing(false); setDraft(''); }}
-                  className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs text-muted-foreground hover:bg-accent cursor-pointer"
+                  className="inline-flex items-center gap-1 h-7 px-2 rounded text-xs text-muted-foreground hover:bg-accent transition-colors cursor-pointer"
                 >
                   <X className="h-3.5 w-3.5" /> cancel
                 </button>

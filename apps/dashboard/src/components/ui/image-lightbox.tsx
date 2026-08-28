@@ -578,7 +578,7 @@ export function ImageLightbox({
       {menu && (
         <div
           data-lightbox-control
-          className="pointer-events-auto fixed z-[110] min-w-[168px] overflow-hidden rounded-xl border border-white/10 bg-zinc-800/95 text-white shadow-2xl backdrop-blur"
+          className="pointer-events-auto fixed z-[110] min-w-[168px] overflow-hidden rounded-xl border border-white/10 bg-zinc-800/95 text-white shadow-2xl backdrop-blur animate-in fade-in-0 zoom-in-95 duration-150"
           style={{
             left: Math.max(8, Math.min(menu.x, (typeof window === 'undefined' ? 9999 : window.innerWidth) - 176)),
             top: Math.max(8, Math.min(menu.y, (typeof window === 'undefined' ? 9999 : window.innerHeight) - 104)),
@@ -587,7 +587,7 @@ export function ImageLightbox({
           <button
             type="button"
             onClick={() => { setMenu(null); saveImage(); }}
-            className="flex w-full items-center gap-2.5 px-4 py-3 text-left text-sm hover:bg-white/10"
+            className="flex w-full items-center gap-2.5 px-4 py-3 text-left text-sm transition-colors hover:bg-white/10"
           >
             <Download className="h-4 w-4 shrink-0" /> Save image
           </button>
@@ -596,7 +596,7 @@ export function ImageLightbox({
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => setMenu(null)}
-            className="flex w-full items-center gap-2.5 border-t border-white/10 px-4 py-3 text-left text-sm hover:bg-white/10"
+            className="flex w-full items-center gap-2.5 border-t border-white/10 px-4 py-3 text-left text-sm transition-colors hover:bg-white/10"
           >
             <ExternalLink className="h-4 w-4 shrink-0" /> Open original
           </a>

@@ -99,7 +99,7 @@ function NameEditor({ id, name, onSaved }: { id: string; name: string; onSaved: 
         className="group inline-flex items-center gap-1.5 min-w-0 rounded px-1 py-0.5 hover:bg-accent cursor-pointer"
       >
         <span className="text-sm font-semibold truncate">{name}</span>
-        <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 shrink-0" />
+        <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
       </button>
     );
   }
@@ -240,7 +240,7 @@ function DocsSection({
                   opacity-0 control still captures taps, so on a hover-less device the
                   invisible reorder/delete buttons stole taps meant to open the doc —
                   the row reordered instead of opening the modal. */}
-              <span className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+              <span className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 transition-opacity [@media(hover:none)]:opacity-100">
                 <button type="button" title="Move up" onClick={(e) => { e.stopPropagation(); move(i, -1); }} className="p-0.5 hover:text-foreground disabled:opacity-30 cursor-pointer" disabled={i === 0}>
                   <ChevronUp className="h-3.5 w-3.5" />
                 </button>

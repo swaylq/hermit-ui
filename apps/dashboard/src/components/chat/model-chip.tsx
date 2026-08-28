@@ -51,6 +51,11 @@ export function ModelChip({
   // and after: none of the ancestors carry a transform/filter/contain, so a
   // fixed element escapes the clip instead of being contained by one of them.)
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  // Enter/leave transition driver, same controlled-show pattern as
+  // overlay.tsx: mount hidden, flip to shown next frame; on close keep the
+  // menu mounted for the 150ms leave transition, then unmount.
+  const [menuMounted, setMenuMounted] = useState(false);
+  const [show, setShow] = useState(false);
   const utils = trpc.useUtils();
 
   // Changed by installing a new Claude Code, not by anything on this page.
@@ -69,6 +74,17 @@ export function ModelChip({
     // model the session is not running.
     onError: (e) => setErr(e.message),
   });
+
+  useEffect(() => {
+    if (open && pos) {
+      setMenuMounted(true);
+      const r = requestAnimationFrame(() => setShow(true));
+      return () => cancelAnimationFrame(r);
+    }
+    setShow(false);
+    const t = window.setTimeout(() => setMenuMounted(false), 150);
+    return () => window.clearTimeout(t);
+  }, [open, pos]);
 
   useEffect(() => {
     if (!open) return;
@@ -143,10 +159,14 @@ export function ModelChip({
           both inherit. Without the reset the four options laid themselves out
           on ONE line, 1000px wide, three of them past the right edge of the
           window. */}
-      {open && pos && (
+      {menuMounted && pos && (
         <div
           style={{ position: 'fixed', left: pos.left, top: pos.top, width: MENU_W }}
-          className="z-50 rounded-lg border border-border bg-popover p-1 shadow-lg whitespace-normal font-sans"
+          className={cn(
+            'z-50 rounded-lg border border-border bg-popover p-1 shadow-lg whitespace-normal font-sans',
+            'origin-top transition-[opacity,transform] duration-150 ease-out',
+            show ? 'opacity-100 scale-100' : 'opacity-0 scale-95',
+          )}
         >
           {models.map((m) => {
             const active = m.value === selected;

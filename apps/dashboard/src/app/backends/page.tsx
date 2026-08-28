@@ -232,7 +232,7 @@ function BackendRow({
             aria-label={`edit ${title}`}
             disabled={busy}
             onClick={onEdit}
-            className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+            className="rounded p-1 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
@@ -243,7 +243,7 @@ function BackendRow({
             aria-label={`remove ${title}`}
             disabled={busy}
             onClick={onRemove}
-            className="rounded p-1 text-muted-foreground hover:text-rose-500 disabled:opacity-50"
+            className="rounded p-1 text-muted-foreground hover:text-rose-500 transition-colors disabled:opacity-50"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>

@@ -111,7 +111,7 @@ function Authed({ onSignOut, children }: { onSignOut: () => void; children: Reac
   if (scope.scoped && scope.agentName) {
     return (
       <SidebarProvider>
-        <div className="flex app-h w-full overflow-hidden bg-background text-foreground pwa-safe-t pwa-safe-x">
+        <div className="flex app-h w-full overflow-hidden bg-background text-foreground pwa-safe-t pwa-safe-x animate-in fade-in-0 duration-150">
           <ScopedSidebar agentName={scope.agentName} />
           <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
             <ScopedBounds agentName={scope.agentName}>{children}</ScopedBounds>
@@ -127,7 +127,7 @@ function Authed({ onSignOut, children }: { onSignOut: () => void; children: Reac
           because this is the outermost thing that renders on every authed page,
           so the fade covers the whole app regardless of route. */}
       <SwitchArrival />
-      <div className="flex app-h w-full overflow-hidden bg-background text-foreground pwa-safe-t pwa-safe-x">
+      <div className="flex app-h w-full overflow-hidden bg-background text-foreground pwa-safe-t pwa-safe-x animate-in fade-in-0 duration-150">
         <AppSidebar />
         <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">{children}</main>
       </div>

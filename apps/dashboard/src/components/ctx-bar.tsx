@@ -50,7 +50,7 @@ export function CtxBar({
     return (
       <span className="inline-flex items-center gap-1" title={title}>
         {showLabel && <span className="text-muted-foreground/70">ctx</span>}
-        <span className={`tabular-nums ${pctClass}`}>{pctText}</span>
+        <span className={`tabular-nums transition-colors ${pctClass}`}>{pctText}</span>
       </span>
     );
   }
@@ -69,7 +69,7 @@ export function CtxBar({
           aria-hidden="true"
         >
           <span
-            className={`absolute inset-y-0 left-0 rounded-full transition-[width] duration-700 ease-out ${barColor(pct)}`}
+            className={`absolute inset-y-0 left-0 rounded-full transition-[width,background-color] duration-700 ease-out ${barColor(pct)}`}
             style={{ width: `${fill}%` }}
           />
         </span>
@@ -86,11 +86,11 @@ export function CtxBar({
         aria-hidden="true"
       >
         <span
-          className={`absolute inset-y-0 left-0 rounded-full transition-[width] duration-700 ease-out ${barColor(pct)}`}
+          className={`absolute inset-y-0 left-0 rounded-full transition-[width,background-color] duration-700 ease-out ${barColor(pct)}`}
           style={{ width: `${fill}%` }}
         />
       </span>
-      <span className={`tabular-nums ${pctClass}`}>{pctText}</span>
+      <span className={`tabular-nums transition-colors ${pctClass}`}>{pctText}</span>
     </span>
   );
 }

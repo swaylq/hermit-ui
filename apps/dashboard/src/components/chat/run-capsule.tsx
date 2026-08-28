@@ -140,7 +140,7 @@ export const RunCapsule = memo(function RunCapsule({ ids, steps, from, to, runni
           <span className="tabular-nums text-muted-foreground/60">· {fmtChars(sum.thinkChars)}</span>
         </summary>
         {open && (
-          <div className="space-y-1 border-t border-border/60 bg-muted/20 p-1.5">
+          <div className="space-y-1 border-t border-border/60 bg-muted/20 p-1.5 animate-in fade-in-0 duration-150">
             {fetching && <div className="px-1 py-0.5 font-mono text-[10px] not-italic text-muted-foreground">正在取回完整记录…</div>}
             {shown.map((st, i) => (
               <StepView key={i} step={st} />
@@ -202,7 +202,7 @@ export const RunCapsule = memo(function RunCapsule({ ids, steps, from, to, runni
       </summary>
 
       {open && (
-        <div className="space-y-1 border-t border-border bg-muted/20 p-1.5">
+        <div className="space-y-1 border-t border-border bg-muted/20 p-1.5 animate-in fade-in-0 duration-150">
           {fetching && <div className="px-1 py-0.5 font-mono text-[10px] text-muted-foreground">正在取回完整记录…</div>}
           {shown.map((s, i) => (
             <StepView key={i} step={s} />

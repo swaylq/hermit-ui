@@ -44,6 +44,7 @@ import { startStreaming, releaseWarmMic, type VoiceStream } from '@/lib/voice-ca
 import { joinSegments, worthRefining } from '@/lib/dictation-text';
 import { typeFrame, TYPE_TICK_MS } from '@/lib/typewriter';
 import { DictationBar, type DictationStatus } from '@/components/chat/dictation-bar';
+import { Collapse } from '@/components/chat/collapse';
 import type { ComposerHandle } from '@/components/chat/composer';
 
 /** How a run was started — decides how it ends, and what the bar shows. */
@@ -388,19 +389,20 @@ export const DictationDock = forwardRef<DictationHandle, {
     get active() { return activeRef.current; },
   }), [start, stop, cancel]);
 
-  if (!active) return null;
   return (
-    <DictationBar
-      source={source}
-      cancelArmed={cancelArmed}
-      pending={pending}
-      level={level}
-      silent={silent}
-      status={status}
-      elapsedMs={startedAt ? Date.now() - startedAt : 0}
-      hint={hint}
-      onDone={stop}
-      onCancel={cancel}
-    />
+    <Collapse open={active}>
+      <DictationBar
+        source={source}
+        cancelArmed={cancelArmed}
+        pending={pending}
+        level={level}
+        silent={silent}
+        status={status}
+        elapsedMs={startedAt ? Date.now() - startedAt : 0}
+        hint={hint}
+        onDone={stop}
+        onCancel={cancel}
+      />
+    </Collapse>
   );
 });

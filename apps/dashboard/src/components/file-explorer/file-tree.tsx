@@ -72,7 +72,7 @@ function TreeNode({
         onClick={() => { onSelect({ path, name: entry.name, type: entry.type, size: entry.size }); if (isDir) toggleExpand(path); }}
         style={{ paddingLeft: indent }}
         className={cn(
-          'group flex items-center gap-1 pr-1.5 h-7 cursor-pointer text-sm select-none',
+          'group flex items-center gap-1 pr-1.5 h-7 cursor-pointer text-sm select-none transition-colors',
           isSel ? 'bg-accent text-foreground' : 'hover:bg-accent/40 text-foreground/85',
         )}
       >

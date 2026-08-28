@@ -88,7 +88,7 @@ const CronRow = memo(function CronRow({ cron: c, active }: { cron: CronListItem;
       >
         <div className="flex items-start gap-2 min-w-0">
           <span
-            className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', dot, c.lastStatus === 'running' && 'animate-pulse')}
+            className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 transition-colors', dot, c.lastStatus === 'running' && 'animate-pulse')}
             aria-hidden="true"
           />
           <div className="min-w-0 flex-1">
@@ -98,7 +98,7 @@ const CronRow = memo(function CronRow({ cron: c, active }: { cron: CronListItem;
               </span>
               {c.unreadCount > 0 && (
                 <span
-                  className="shrink-0 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-mono tabular-nums leading-none"
+                  className="shrink-0 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-mono tabular-nums leading-none animate-in fade-in-0 zoom-in-50 duration-150"
                   title={`${c.unreadCount} unread run${c.unreadCount === 1 ? '' : 's'}`}
                 >
                   {c.unreadCount}
@@ -154,11 +154,11 @@ export function RecentCrons() {
             ))}
           </div>
         ) : allCrons.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">no crons yet — start with “New cron”.</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150">no crons yet — start with “New cron”.</p>
         ) : visible.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">No crons match “{q.trim()}”.</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150">No crons match “{q.trim()}”.</p>
         ) : (
-          <ul className="space-y-px">
+          <ul className="space-y-px animate-in fade-in-0 duration-150">
             {visible.map((c) => (
               <CronRow key={c.id} cron={c} active={activeId === c.id} />
             ))}
@@ -195,7 +195,7 @@ const AgentRow = memo(function AgentRow({
         <div className="flex items-start gap-2 min-w-0">
           <span
             className={cn(
-              'mt-1.5 h-1.5 w-1.5 rounded-full shrink-0',
+              'mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 transition-colors',
               a.activeSessionCount > 0 ? 'bg-emerald-500' : 'border border-muted-foreground/40',
             )}
             aria-hidden="true"
@@ -280,11 +280,11 @@ export function RecentAgents() {
             ))}
           </div>
         ) : workers.length === 0 && pendingAdds.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">no agents yet — start with “New agent”.</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150">no agents yet — start with “New agent”.</p>
         ) : visible.length === 0 && pendingAdds.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">No agents match “{q.trim()}”.</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150">No agents match “{q.trim()}”.</p>
         ) : (
-          <ul className="space-y-px">
+          <ul className="space-y-px animate-in fade-in-0 duration-150">
             {visible.map((a) => (
               <AgentRow key={a.id} agent={a} active={activeName === a.name} onPrefetch={prefetchAgent} />
             ))}
@@ -382,7 +382,7 @@ const SessionRow = memo(function SessionRow({
       >
         <div className="flex items-start gap-2 min-w-0">
           <span
-            className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0', status.dot, status.pulse && 'animate-pulse')}
+            className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 transition-colors', status.dot, status.pulse && 'animate-pulse')}
             aria-hidden="true"
           />
           <div className="min-w-0 flex-1">
@@ -1001,11 +1001,11 @@ export function RecentSessions() {
             ))}
           </div>
         ) : nothingToShow ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">
+          <p className="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150">
             {q.trim() ? `No chats match “${q.trim()}”.` : filter ? `no sessions for ${filter}.` : 'no chats yet — start a New chat.'}
           </p>
         ) : byAgent ? (
-          <>
+          <div className="animate-in fade-in-0 duration-150">
             {agentSections.map((sec) => {
               // Shut by default — at this many sessions the useful thing is the
               // index of agents. The one you're reading starts open, until you say
@@ -1027,7 +1027,7 @@ export function RecentSessions() {
                     <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/50">{sec.rows.length}</span>
                   </button>
                   {open && (
-                    <ul className="space-y-px pl-2">
+                    <ul className="space-y-px pl-2 animate-in fade-in-0 slide-in-from-top-1 duration-150">
                       {sec.rows.map((s) => (
                         <SessionRow
                           key={s.id}
@@ -1046,9 +1046,9 @@ export function RecentSessions() {
                 </div>
               );
             })}
-          </>
+          </div>
         ) : (
-          <>
+          <div className="animate-in fade-in-0 duration-150">
             {/* Drawers first, then whatever is still loose. Hidden while searching:
                 a search should return one flat list of hits, not make you open
                 folders to find them. */}
@@ -1076,7 +1076,7 @@ export function RecentSessions() {
                       <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/50">{rows.length}</span>
                     </button>
                     {!g.collapsed && (
-                      <ul className="space-y-px pl-2">
+                      <ul className="space-y-px pl-2 animate-in fade-in-0 slide-in-from-top-1 duration-150">
                         {rows.length === 0 ? (
                           <li className="px-2 py-1 text-[11px] text-muted-foreground/60">empty</li>
                         ) : (
@@ -1114,7 +1114,7 @@ export function RecentSessions() {
                 />
               ))}
             </ul>
-          </>
+          </div>
         )}
       </div>
       {putAwayCount > 0 && (

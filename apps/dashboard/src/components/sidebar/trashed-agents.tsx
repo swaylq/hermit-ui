@@ -33,7 +33,7 @@ export function TrashedAgents() {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="w-full px-3 py-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70 hover:text-muted-foreground cursor-pointer"
+        className="w-full px-3 py-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70 hover:text-muted-foreground transition-colors cursor-pointer"
       >
         <Trash2 className="h-3 w-3" />
         <span>Recycle bin</span>
@@ -41,7 +41,7 @@ export function TrashedAgents() {
         <ChevronDown className={cn('ml-auto h-3.5 w-3.5 transition-transform', open && 'rotate-180')} />
       </button>
       {open && (
-        <ul className="px-2 pb-2 space-y-px max-h-52 overflow-y-auto">
+        <ul className="px-2 pb-2 space-y-px max-h-52 overflow-y-auto animate-in fade-in-0 slide-in-from-top-1 duration-150">
           {items.map((a) => (
             <li
               key={a.id}
@@ -87,7 +87,7 @@ function PurgeButton({ name, onConfirm }: { name: string; onConfirm: () => void 
   }, [armed]);
   if (armed) {
     return (
-      <span className="shrink-0 inline-flex items-center gap-0.5">
+      <span className="shrink-0 inline-flex items-center gap-0.5 animate-in fade-in-0 duration-100">
         <button
           type="button"
           onClick={() => { setArmed(false); onConfirm(); }}

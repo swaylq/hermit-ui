@@ -194,7 +194,7 @@ export function SessionCleanupView() {
             type="button"
             onClick={() => void runCleanup()}
             disabled={busy || archiveN + trashN === 0}
-            className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer disabled:opacity-50"
           >
             <Brush className="h-3.5 w-3.5" />
             {busy ? 'Cleaning…' : 'Clean up'}
@@ -224,7 +224,7 @@ export function SessionCleanupView() {
         </div>
 
         {showTrash && (
-          <div className="mt-3 space-y-0.5 border-t border-border pt-3">
+          <div className="mt-3 space-y-0.5 border-t border-border pt-3 animate-in fade-in-0 duration-150">
             {(trash?.rows.length ?? 0) === 0 && <p className="py-2 text-xs text-muted-foreground">The bin is empty.</p>}
             {trash?.rows.map((r) => (
               <div key={r.id} className="flex items-center gap-2 rounded-md px-1 py-1.5 text-xs">
@@ -238,7 +238,7 @@ export function SessionCleanupView() {
                   type="button"
                   title="Restore"
                   onClick={() => restore.mutate({ id: r.id })}
-                  className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-foreground cursor-pointer"
+                  className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                 </button>
@@ -253,7 +253,7 @@ export function SessionCleanupView() {
                       danger: true,
                     })) purgeNow.mutate({ id: r.id });
                   }}
-                  className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-rose-500 cursor-pointer"
+                  className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-rose-500 transition-colors cursor-pointer"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
@@ -273,7 +273,7 @@ export function SessionCleanupView() {
           <DialogOverlay />
           <DialogPrimitive.Popup
             data-slot="dialog-content"
-            className="fixed top-1/2 left-1/2 z-50 flex max-h-[80vh] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 outline-none sm:max-w-lg"
+            className="fixed top-1/2 left-1/2 z-50 flex max-h-[80vh] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 outline-none sm:max-w-lg duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
           >
             <div>
               <p className="text-sm font-semibold">Move {picked.size} to the recycle bin?</p>
@@ -286,7 +286,7 @@ export function SessionCleanupView() {
 
             <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
               {(preview?.trash ?? []).map((v: Verdict) => (
-                <label key={v.id} className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-1.5 text-xs hover:bg-muted/50">
+                <label key={v.id} className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-1.5 text-xs hover:bg-muted/50 transition-colors">
                   <input
                     type="checkbox"
                     checked={picked.has(v.id)}

@@ -54,7 +54,7 @@ function AnimatedBar({ pct, color }: { pct: number; color: string }) {
   return (
     <div className="h-2 w-full overflow-hidden rounded-full bg-muted ring-1 ring-foreground/5">
       <div
-        className={`h-full rounded-full ${color} transition-[width] duration-[900ms] ease-out`}
+        className={`h-full rounded-full ${color} transition-[width,background-color] duration-[900ms] ease-out`}
         style={{ width: `${width}%` }}
       />
     </div>
