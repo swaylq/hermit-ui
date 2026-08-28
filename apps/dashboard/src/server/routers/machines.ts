@@ -25,14 +25,25 @@ const OPS_KINDS = ['upgrade-claude', 'restart-all-sessions', 'update-gateway', '
 // polled yet, and waiting is the correct behaviour there.
 const OP_IN_FLIGHT_MS = 10 * 60_000;
 
+// A `running` row this old is not work in progress — it is a gateway that died
+// between claiming the op and reporting on it, which is a normal ending for the
+// two ops that restart the gateway. Measured from the claim (startedAt) so a
+// request that waited hours for an offline machine is not born stale; older
+// rows have no claim stamp and fall back to when they were asked for.
+function opIsStale(row: { status: string; startedAt: Date | null; requestedAt: Date }): boolean {
+  return row.status === 'running' && (row.startedAt ?? row.requestedAt).getTime() < Date.now() - OP_IN_FLIGHT_MS;
+}
+
 function pendingRequest(machineId: string, kind: string) {
+  const cutoff = new Date(Date.now() - OP_IN_FLIGHT_MS);
   return prisma.machineRequest.findFirst({
     where: {
       machineId,
       kind,
       OR: [
         { status: 'pending' },
-        { status: 'running', requestedAt: { gt: new Date(Date.now() - OP_IN_FLIGHT_MS) } },
+        { status: 'running', startedAt: { gt: cutoff } },
+        { status: 'running', startedAt: null, requestedAt: { gt: cutoff } },
       ],
     },
     select: { id: true },
@@ -476,18 +487,30 @@ export const machinesRouter = router({
   // Latest request per kind — drives the panel's status/output. Polled while a
   // request is in flight so "running…" → "done" updates without a refresh.
   opsStatus: machineProcedure.query(async ({ ctx }) => {
-    const rows = await prisma.machineRequest.findMany({
-      where: { machineId: ctx.machine.id, kind: { in: OPS_KINDS } },
-      orderBy: { requestedAt: 'desc' },
-      // One row per kind is all the panels show, and only the newest of each.
-      take: 5 * OPS_KINDS.length,
-      select: { id: true, kind: true, status: true, output: true, error: true, requestedAt: true, resolvedAt: true },
-    });
+    // One query per kind rather than one capped query across all of them: with
+    // N newest rows overall, a kind that was run twenty times in a row hides
+    // every other kind's last result, and the panel then shows no result for an
+    // op that is genuinely running.
+    const [upgrade, restartAll, updateGateway, restartGateway] = await Promise.all(
+      OPS_KINDS.map((kind) =>
+        prisma.machineRequest.findFirst({
+          where: { machineId: ctx.machine.id, kind },
+          orderBy: { requestedAt: 'desc' },
+          select: { id: true, kind: true, status: true, output: true, error: true, requestedAt: true, startedAt: true, resolvedAt: true },
+        }),
+      ),
+    );
+    // `stale` travels with the row so the buttons disable on exactly the rule
+    // the mutations refuse on — a client deciding for itself would go on
+    // spinning over a row the server would happily accept a replacement for.
+    // Spread inline rather than through a generic helper: a `<T extends {...}>`
+    // wrapper collapses T to its constraint here, and every field the panels
+    // render (output, error, resolvedAt) silently drops off the client's type.
     return {
-      upgrade: rows.find((r) => r.kind === 'upgrade-claude') ?? null,
-      restartAll: rows.find((r) => r.kind === 'restart-all-sessions') ?? null,
-      updateGateway: rows.find((r) => r.kind === 'update-gateway') ?? null,
-      restartGateway: rows.find((r) => r.kind === 'restart-gateway') ?? null,
+      upgrade: upgrade && { ...upgrade, stale: opIsStale(upgrade) },
+      restartAll: restartAll && { ...restartAll, stale: opIsStale(restartAll) },
+      updateGateway: updateGateway && { ...updateGateway, stale: opIsStale(updateGateway) },
+      restartGateway: restartGateway && { ...restartGateway, stale: opIsStale(restartGateway) },
     };
   }),
 
@@ -516,6 +539,9 @@ export const machinesRouter = router({
           status: input.status,
           ...(input.output !== undefined ? { output: input.output.slice(0, 8000) } : {}),
           ...(input.error !== undefined ? { error: input.error.slice(0, 2000) } : {}),
+          // The claim stamp, written here rather than by the gateway so an
+          // older gateway's ack sets it too.
+          ...(input.status === 'running' ? { startedAt: new Date() } : {}),
           ...(input.status === 'done' || input.status === 'error' ? { resolvedAt: new Date() } : {}),
         },
       });

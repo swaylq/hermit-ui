@@ -500,6 +500,12 @@ model MachineRequest {
   // DB only for the seconds between enqueue and claim. Never logged/redacted out.
   payload     String?   @db.Text
   requestedAt DateTime  @default(now())
+  // When the gateway CLAIMED it (its first `running` ack), stamped server-side
+  // by machines.ackRequest. How long an op has been running is measured from
+  // here, not from requestedAt: a request queued while the machine was offline
+  // can sit pending for hours, and ageing it from when it was asked would make
+  // it look stale the moment it finally started.
+  startedAt   DateTime?
   resolvedAt  DateTime?
 
   @@index([machineId, status])

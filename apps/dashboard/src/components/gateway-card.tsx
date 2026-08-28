@@ -27,9 +27,15 @@ type OpRow = {
   error: string | null;
   requestedAt: string | Date;
   resolvedAt: string | Date | null;
+  // Server's verdict: `running`, but for long enough that the gateway is not
+  // coming back to finish it. Both ops here end by killing the process that
+  // would have reported — a gateway that dies a breath too early leaves exactly
+  // this row, and without the flag the button spins for good.
+  stale: boolean;
 };
 
-const inFlight = (r: OpRow | null | undefined) => r?.status === 'pending' || r?.status === 'running';
+const inFlight = (r: OpRow | null | undefined) =>
+  !!r && !r.stale && (r.status === 'pending' || r.status === 'running');
 
 function fmtExact(d: string | Date | null | undefined): string | undefined {
   if (!d) return undefined;
@@ -40,10 +46,12 @@ function fmtExact(d: string | Date | null | undefined): string | undefined {
 // Last run of one op: state, when, and whatever the host printed.
 function OpResult({ row }: { row: OpRow }) {
   const label =
+    row.stale ? 'No result' :
     row.status === 'pending' ? 'Queued' :
     row.status === 'running' ? 'Running' :
     row.status === 'done' ? 'Done' : 'Failed';
   const tone =
+    row.stale ? 'text-amber-500' :
     row.status === 'done' ? 'text-emerald-500' :
     row.status === 'error' ? 'text-rose-500' :
     row.status === 'running' ? 'text-sky-500' : 'text-muted-foreground';
@@ -60,6 +68,11 @@ function OpResult({ row }: { row: OpRow }) {
           {relTime(row.resolvedAt ?? row.requestedAt)}
         </span>
       </div>
+      {row.stale && (
+        <p className="text-muted-foreground">
+          It started and never reported back — most likely the gateway restarted before it could. Safe to run again.
+        </p>
+      )}
       {row.error && <p className="text-rose-400 break-words">{row.error}</p>}
       {row.output && (
         <pre className="max-h-48 overflow-auto rounded bg-background/60 p-2 text-[11px] font-mono whitespace-pre-wrap break-words text-foreground/80">
@@ -86,6 +99,9 @@ export function GatewayCard() {
   const update = trpc.machines.requestUpdateGateway.useMutation({ onSuccess: onQueued });
   const restart = trpc.machines.requestRestartGateway.useMutation({ onSuccess: onQueued });
   const [confirm, setConfirm] = useState(false);
+  // A queue call that FAILS produces no row at all, so without this the button
+  // just snaps back and a confirmed restart looks identical to a mis-click.
+  const queueError = (m: { error: { message: string } | null }) => m.error?.message ?? null;
 
   const updateBusy = update.isPending || inFlight(updateRow);
   const restartBusy = restart.isPending || inFlight(restartRow);
@@ -119,6 +135,7 @@ export function GatewayCard() {
             {updateBusy ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Working…</> : 'Update'}
           </Button>
         </div>
+        {queueError(update) && <p className="text-xs text-rose-400">Could not queue it: {queueError(update)}</p>}
         {updateRow && <OpResult row={updateRow} />}
 
         <div className="flex items-start gap-3">
@@ -151,6 +168,7 @@ export function GatewayCard() {
             {restartBusy ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Restarting…</> : confirm ? 'Confirm restart' : 'Restart'}
           </Button>
         </div>
+        {queueError(restart) && <p className="text-xs text-rose-400">Could not queue it: {queueError(restart)}</p>}
         {restartRow && <OpResult row={restartRow} />}
       </div>
     </Card>

@@ -16,8 +16,16 @@ const GIT_TIMEOUT_MS = 3 * 60_000;
 const NPM_TIMEOUT_MS = 10 * 60_000;
 // Long enough for the ack HTTP call to land before pm2 kills this process.
 const RESTART_DELAY_SEC = 3;
+// An op holding the queue longer than this has hung, not slowed down.
+const BUSY_CEILING_MS = 20 * 60_000;
 
 let busy = false;
+let busySince = 0;
+// Set once a restart of THIS process is armed. Everything after that point is
+// work that will be killed part-way through, and a `git pull` or `npm install`
+// killed part-way through is how you get an .git/index.lock or a half-written
+// node_modules — i.e. a machine that needs an SSH session to recover.
+let restartArmed = false;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -113,6 +121,23 @@ async function sh(line: string, timeoutMs: number) {
   };
 }
 
+/**
+ * Ack that cannot throw. Every caller below is about to do something it must do
+ * whether or not the dashboard heard about it, and an ack that rejects used to
+ * mean both no result AND no action — the request row stranded on `running`,
+ * and the restart it was reporting never armed.
+ */
+async function ack(
+  id: string,
+  fields: { status: 'running' | 'done' | 'error'; output?: string; error?: string },
+): Promise<void> {
+  try {
+    await api.ackMachineRequest({ id, ...fields });
+  } catch (e) {
+    console.error('[machine-req] ack failed:', e instanceof Error ? e.message : String(e));
+  }
+}
+
 export type Pm2Self = { app: string; repo: string };
 
 /**
@@ -163,20 +188,25 @@ async function pm2Self(): Promise<Pm2Self | null> {
  * start never runs, which is the 5h33m blackout of 2026-08-23. Never delete,
  * never stop.
  *
- * Detached so the child starts its own session, and delayed a few seconds so
- * the ack we just wrote reaches the dashboard first — after this the process
- * that would report anything is gone.
+ * Detached, and delayed a few seconds — NOT to get the ack out (that call is
+ * already awaited and answered by the time we get here) but to let the tick
+ * that called this unwind first. Its output goes to a file because in a second
+ * or two there is no process left to report a failed restart with, and "pm2 was
+ * not on the PATH" has to be findable afterwards.
  *
  * No `--update-env` (same as gateway-watch.sh): it would overwrite the app's
  * stored env with whatever this shell has. A change to ecosystem.config.cjs
  * itself is therefore NOT picked up by a restart — that still needs
  * `pm2 start apps/gateway/ecosystem.config.cjs` by hand on the host.
  */
-function scheduleGatewayRestart(app: string): void {
-  const child = spawn('bash', ['-lc', `sleep ${RESTART_DELAY_SEC}; pm2 restart ${q(app)}`], {
-    detached: true,
-    stdio: 'ignore',
-  });
+function scheduleGatewayRestart(app: string, repo: string): void {
+  restartArmed = true;
+  const log = `${repo}/apps/gateway/logs/self-restart.log`;
+  const child = spawn(
+    'bash',
+    ['-lc', `sleep ${RESTART_DELAY_SEC}; pm2 restart ${q(app)} >> ${q(log)} 2>&1`],
+    { detached: true, stdio: 'ignore' },
+  );
   // A ChildProcess that emits 'error' with nobody listening throws, and an
   // uncaught throw here would take down the gateway for real rather than
   // restarting it. Log and let the request stand as acked.
@@ -184,11 +214,28 @@ function scheduleGatewayRestart(app: string): void {
   child.unref();
 }
 
+/**
+ * This checkout's HEAD, pulled OUT of the command's output rather than taken as
+ * the whole of it. `sh` runs a login shell and joins stdout with stderr, and on
+ * a box with a motd, a `You have mail`, or an nvm warning that stream is the
+ * SHA plus whatever else the shell felt like saying. Comparing those blobs to
+ * decide "did anything change?" would answer yes on an unchanged repo whenever
+ * the banner carries a clock — and the price of a wrong yes is every session on
+ * the machine losing its turn to a pointless restart.
+ *
+ * null means the question could not be answered, which is never treated as
+ * licence to restart.
+ */
+async function headSha(repo: string): Promise<string | null> {
+  const r = await sh(`git -C ${q(repo)} rev-parse HEAD`, GIT_TIMEOUT_MS);
+  const m = r.ok ? /\b[0-9a-f]{40}\b/.exec(r.out) : null;
+  return m ? m[0] : null;
+}
+
 async function runUpdateGateway(id: string): Promise<void> {
   const self = await pm2Self();
   if (!self) {
-    await api.ackMachineRequest({
-      id,
+    await ack(id, {
       status: 'error',
       error: 'this gateway is not a pm2 app (or pm2 is not on its PATH) — update it on the host',
     });
@@ -196,103 +243,115 @@ async function runUpdateGateway(id: string): Promise<void> {
   }
   const { app, repo } = self;
 
-  const before = await sh(`git -C ${q(repo)} rev-parse HEAD`, GIT_TIMEOUT_MS);
-  // --ff-only: on a machine nobody is looking at, refusing is the right answer
-  // to a diverged or dirty checkout. A merge commit invented here is one nobody
-  // would ever review.
-  const pull = await sh(`git -C ${q(repo)} pull --ff-only`, GIT_TIMEOUT_MS);
+  const before = await headSha(repo);
+  if (!before) {
+    await ack(id, { status: 'error', error: `not a readable git checkout: ${repo}` });
+    return;
+  }
+  const branch = await sh(`git -C ${q(repo)} rev-parse --abbrev-ref HEAD`, GIT_TIMEOUT_MS);
+
+  // `origin main` spelled out, exactly as scripts/vps-deploy.sh does it. Without
+  // it "update to latest" means "fast-forward whatever branch this checkout
+  // happens to sit on", and this fleet leaves checkouts on wt/* branches all
+  // day. --ff-only so a diverged or dirty checkout is refused rather than
+  // resolved by a merge commit nobody would ever review.
+  const pull = await sh(`git -C ${q(repo)} pull --ff-only origin main`, GIT_TIMEOUT_MS);
   if (!pull.ok) {
-    await api.ackMachineRequest({
-      id,
+    await ack(id, {
       status: 'error',
-      output: pull.out.slice(-4000),
-      error: pull.timedOut ? 'git pull timed out' : 'git pull --ff-only failed',
+      output: [`on branch ${branch.out || '?'}`, pull.out].join('\n').slice(-4000),
+      error: pull.timedOut ? 'git pull timed out' : 'git pull --ff-only origin main failed',
     });
     return;
   }
-  const after = await sh(`git -C ${q(repo)} rev-parse HEAD`, GIT_TIMEOUT_MS);
+  const after = await headSha(repo);
+  if (!after) {
+    await ack(id, { status: 'error', output: pull.out.slice(-4000), error: 'could not read HEAD after the pull' });
+    return;
+  }
 
   // Nothing new → nothing to restart. A restart costs every live session on
-  // this machine its in-flight turn, so it is never paid for a no-op.
-  if (before.ok && after.ok && before.out === after.out) {
-    await api.ackMachineRequest({
-      id,
-      status: 'done',
-      output: `already up to date at ${after.out.slice(0, 8)} — not restarting`,
-    });
+  // this machine the turn it is mid-way through, and that is not a price to pay
+  // for a no-op.
+  if (before === after) {
+    await ack(id, { status: 'done', output: `already up to date at ${after.slice(0, 8)} — not restarting` });
     console.log('[machine-req] update-gateway → already up to date');
     return;
   }
 
-  const lines: string[] = [pull.out];
-  if (before.ok && after.ok) {
-    const log = await sh(
-      `git -C ${q(repo)} log --oneline ${q(before.out)}..${q(after.out)}`,
-      GIT_TIMEOUT_MS,
-    );
-    if (log.ok && log.out) lines.push('', log.out);
-  }
+  const lines: string[] = [`${before.slice(0, 8)} → ${after.slice(0, 8)} on ${branch.out || '?'}`];
+  const log = await sh(`git -C ${q(repo)} log --oneline ${q(before)}..${q(after)}`, GIT_TIMEOUT_MS);
+  if (log.ok && log.out) lines.push('', log.out);
 
   // Only when the dependency manifests actually moved — npm install is minutes.
-  const deps = before.ok && after.ok
-    ? await sh(
-        `git -C ${q(repo)} diff --name-only ${q(before.out)} ${q(after.out)} -- package-lock.json package.json 'apps/*/package.json' 'packages/*/package.json'`,
-        GIT_TIMEOUT_MS,
-      )
-    : { ok: true, out: 'package-lock.json', timedOut: false };
-  if (deps.out.trim()) {
+  const deps = await sh(
+    `git -C ${q(repo)} diff --name-only ${q(before)} ${q(after)} -- package-lock.json package.json 'apps/*/package.json' 'packages/*/package.json'`,
+    GIT_TIMEOUT_MS,
+  );
+  if (!deps.ok || deps.out.trim()) {
     // NODE_ENV=development on purpose: pm2 runs this gateway with
-    // NODE_ENV=production, under which npm PRUNES devDependencies — and the
-    // failure surfaces much later as a build or typecheck that names something
-    // unrelated. The install must not depend on who called it.
-    const install = await execCapture(
-      'bash',
-      ['-lc', `cd ${q(repo)} && npm install --no-audit --no-fund`],
-      { timeoutMs: NPM_TIMEOUT_MS, env: { ...process.env, NODE_ENV: 'development' } },
-    );
+    // NODE_ENV=production, under which npm PRUNES devDependencies — and that
+    // surfaces much later as a build or typecheck failure naming something
+    // unrelated. What gets installed must not depend on who called it. The git
+    // vars are here for the same reason as in `sh`: a git-URL dependency must
+    // fail rather than sit on a prompt until the timeout.
+    const install = await execCapture('bash', ['-lc', `cd ${q(repo)} && npm install --no-audit --no-fund`], {
+      timeoutMs: NPM_TIMEOUT_MS,
+      env: { ...process.env, NODE_ENV: 'development', GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -oBatchMode=yes' },
+    });
     const out = [install.stdout, install.stderr].filter(Boolean).join('\n').trim();
     if (install.status !== 0 || install.timedOut) {
-      await api.ackMachineRequest({
-        id,
+      await ack(id, {
         status: 'error',
         output: [...lines, '', out].join('\n').slice(-4000),
         error: install.timedOut ? 'npm install timed out' : `npm install exit ${install.status}`,
       });
       return;
     }
-    lines.push('', 'deps changed → npm install ok');
+    lines.push('', deps.ok ? 'deps changed → npm install ok' : 'could not diff the manifests → npm install ok');
   }
 
   lines.push('', `restarting ${app} in ${RESTART_DELAY_SEC}s`);
-  await api.ackMachineRequest({ id, status: 'done', output: lines.join('\n').trim().slice(-4000) });
-  console.log(`[machine-req] update-gateway → ${after.out.slice(0, 8)}, restarting`);
-  scheduleGatewayRestart(app);
+  await ack(id, { status: 'done', output: lines.join('\n').trim().slice(-4000) });
+  console.log(`[machine-req] update-gateway → ${after.slice(0, 8)}, restarting`);
+  scheduleGatewayRestart(app, repo);
 }
 
 async function runRestartGateway(id: string): Promise<void> {
   const self = await pm2Self();
   if (!self) {
-    await api.ackMachineRequest({
-      id,
+    await ack(id, {
       status: 'error',
       error: 'this gateway is not a pm2 app (or pm2 is not on its PATH) — restart it on the host',
     });
     return;
   }
-  // Acked BEFORE the restart is scheduled, not after: a moment later there is
-  // no process left to report with, and a row stuck on `running` would block
-  // the next request.
-  await api.ackMachineRequest({
-    id,
+  // Acked BEFORE the restart is armed, not after: a moment later there is no
+  // process left to report with. `ack` swallows its own failure precisely here —
+  // a dashboard that did not hear about the restart is a cosmetic problem, a
+  // restart that never happened because the bookkeeping call failed is not.
+  await ack(id, {
     status: 'done',
     output: `restarting ${self.app} in ${RESTART_DELAY_SEC}s — sessions on this machine lose the turn they are mid-way through and resume on their next message`,
   });
   console.log(`[machine-req] restart-gateway → ${self.app}`);
-  scheduleGatewayRestart(self.app);
+  scheduleGatewayRestart(self.app, self.repo);
 }
 
 export async function machineRequestTick(): Promise<void> {
-  if (busy) return; // ops can run for minutes (upgrade download / N×gap) — never overlap
+  // Once a restart of this process is armed, everything else in the queue would
+  // be started only to be killed part-way through. Whatever is left stays
+  // pending and is picked up by the gateway that comes back.
+  if (restartArmed) return;
+  if (busy) {
+    // ops run for minutes (an upgrade download, N × the restart gap) — never
+    // overlap them. The ceiling is the escape hatch: an op that hangs past it
+    // has stopped being work in progress, and holding the flag for good would
+    // mean the machine can no longer be told to restart either, which is the
+    // one instruction that fixes a wedged one.
+    if (Date.now() - busySince < BUSY_CEILING_MS) return;
+    console.error(`[machine-req] an op has held the queue for ${Math.round((Date.now() - busySince) / 60_000)}min — releasing it`);
+  }
   let reqs: Array<{ id: string; kind: string }>;
   try {
     reqs = await api.pollMachineRequests();
@@ -303,20 +362,27 @@ export async function machineRequestTick(): Promise<void> {
   if (reqs.length === 0) return;
 
   busy = true;
+  busySince = Date.now();
   try {
     for (const r of reqs) {
       try {
-        await api.ackMachineRequest({ id: r.id, status: 'running' }).catch(() => {});
+        await ack(r.id, { status: 'running' });
         if (r.kind === 'upgrade-claude') await runUpgrade(r.id);
         else if (r.kind === 'restart-all-sessions') await runRestartAll(r.id);
         else if (r.kind === 'update-gateway') await runUpdateGateway(r.id);
         else if (r.kind === 'restart-gateway') await runRestartGateway(r.id);
-        else await api.ackMachineRequest({ id: r.id, status: 'error', error: `unknown kind: ${r.kind}` });
+        else await ack(r.id, { status: 'error', error: `unknown kind: ${r.kind}` });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`[machine-req] ${r.kind} failed:`, msg);
-        await api.ackMachineRequest({ id: r.id, status: 'error', error: msg }).catch(() => {});
+        await ack(r.id, { status: 'error', error: msg });
       }
+      // Both gateway ops end by arming a restart of this very process. Anything
+      // started after that point gets SIGKILLed a few seconds in — a git pull
+      // interrupted mid-checkout leaves .git/index.lock behind, and an npm
+      // install interrupted mid-write can leave the node_modules/.bin/tsx that
+      // pm2 execs as this app's script. Both need an SSH session to undo.
+      if (restartArmed) break;
     }
   } finally {
     busy = false;
