@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyMessagePush, type CachedMsg } from './merge-messages';
+import { applyMessagePush, foldPushes, type CachedMsg } from './merge-messages';
 
 type Row = CachedMsg & { id: string };
 function row(id: string, text: string, at = 1000): Row {
@@ -77,4 +77,38 @@ test('a role change counts as a change even when the content matches', () => {
   const out = applyMessagePush(prev, [{ ...row('a', 'x', 1), role: 'user' }]);
   assert.notEqual(out[0], prev[0]);
   assert.equal(out[0].role, 'user');
+});
+
+// ── Pushes held across the gap before the first window fetch answers ────────
+// A delta written into an empty cache IS the whole timeline downstream, which
+// on a mid-turn session replaced the transcript restored from IndexedDB with
+// the single row the push carried. They are held instead, then folded here.
+
+test('held frames land on the window that arrives after them', () => {
+  const held = [{ rows: [row('c', 'z', 3)] }, { rows: [row('d', 'w', 4)] }];
+  const out = foldPushes([row('a', 'x', 1), row('b', 'y', 2)], held);
+  assert.deepEqual(out.map((r) => r.id), ['a', 'b', 'c', 'd']);
+});
+
+test('the newest held version of a row wins', () => {
+  const held = [{ rows: [row('b', 'y', 2)] }, { rows: [row('b', 'yy', 2)] }];
+  const out = foldPushes([row('a', 'x', 1)], held);
+  assert.equal(out.length, 2);
+  assert.deepEqual(out[1].content, [{ type: 'text', text: 'yy' }]);
+});
+
+test('a row the window still carries but the stream reported gone leaves', () => {
+  const held = [{ rows: [row('c', 'z', 3)], gone: ['a'] }];
+  const out = foldPushes([row('a', 'x', 1), row('b', 'y', 2)], held);
+  assert.deepEqual(out.map((r) => r.id), ['b', 'c']);
+});
+
+test('no window to fold onto still yields the held rows, not nothing', () => {
+  const out = foldPushes<Row>(undefined, [{ rows: [row('c', 'z', 3)] }]);
+  assert.deepEqual(out.map((r) => r.id), ['c']);
+});
+
+test('folding nothing hands the window straight back', () => {
+  const base = [row('a', 'x', 1)];
+  assert.equal(foldPushes(base, []), base);
 });

@@ -42,7 +42,7 @@ import { usePrependAnchor } from '@/components/chat/use-prepend-anchor';
 import { useScrollStability } from '@/components/chat/use-scroll-stability';
 import { isVerticalWheelInput, readerMovedUp } from '@/components/chat/scroll-stability-core';
 import { useCachedTimeline, useTimelineWriteThrough } from '@/lib/chat-cache/use-chat-cache';
-import { applyMessagePush } from '@/lib/chat-cache/merge-messages';
+import { applyMessagePush, foldPushes, type PushFrame } from '@/lib/chat-cache/merge-messages';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
 import { EmptyChat } from '@/components/chat/empty-chat';
 import { TypingIndicator } from '@/components/chat/message-bits';
@@ -78,6 +78,11 @@ const INITIAL_WINDOW = 60;
 // changes. Covers a multi-step composer growth (each new line is its own resize,
 // and the browser's own scroll adjustment lands a frame later).
 const SETTLE_AFTER_RESIZE_MS = 400;
+
+// Ceiling on stream frames held while the first window fetch is still in
+// flight (see heldPushesRef). Reached only if that fetch never settles, in
+// which case the oldest frames are also the least likely to still matter.
+const HELD_PUSH_LIMIT = 200;
 
 // Frames of "hold the end" granted to an explicit jump-to-latest while the
 // conversation is still growing — long enough to outlast the smooth scroll it
@@ -410,6 +415,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       placeholderData: keepPreviousData,
     },
   );
+  type WindowRow = NonNullable<typeof messages.data>[number];
+  // Stream pushes that arrived before this window's first fetch answered, held
+  // rather than written — see foldPushes, and the flush effect below the cache
+  // hook that owns letting them go. Capped so a query that never settles can't
+  // grow this without bound; the oldest frames are the ones the query's own
+  // result is most likely to already contain.
+  const heldPushesRef = useRef<PushFrame<WindowRow>[]>([]);
 
   // ── Live updates via Server-Sent Events ──────────────────────────────────
   // Stream the message list as it changes and write each push into the query
@@ -499,7 +511,20 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                 const frame = JSON.parse(dataLine.slice(5).trim());
                 const rows = Array.isArray(frame) ? frame : frame?.rows ?? [];
                 const gone = Array.isArray(frame) ? undefined : frame?.gone;
-                utils.chat.listMessages.setData({ sessionId, limit }, (prev) => applyMessagePush(prev, rows, gone));
+                // A delta is a fragment, and a fragment written into a cache
+                // that has nothing in it becomes the entire timeline. On the
+                // first connect the initial full-window emit is skipped, so
+                // that empty gap is real — one round trip wide, and a session
+                // mid-turn pushes into it. Hold those frames; the effect by the
+                // cache hook folds them onto the window the moment it lands.
+                // (`[]` is a real answer — an empty session — not a gap.)
+                if (utils.chat.listMessages.getData({ sessionId, limit }) === undefined) {
+                  const held = heldPushesRef.current;
+                  held.push({ rows, gone });
+                  if (held.length > HELD_PUSH_LIMIT) held.splice(0, held.length - HELD_PUSH_LIMIT);
+                } else {
+                  utils.chat.listMessages.setData({ sessionId, limit }, (prev) => applyMessagePush(prev, rows, gone));
+                }
               } catch { /* ignore a malformed frame */ }
             }
           }
@@ -556,6 +581,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       document.removeEventListener('visibilitychange', onVisibility);
       ctrl?.abort();
       setStreamConnected(false);
+      // Held frames belong to the window this stream was reading. Another
+      // session's window must never inherit them.
+      heldPushesRef.current = [];
     };
   }, [sessionId, limit, utils]);
 
@@ -839,6 +867,31 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     () => messages.data ?? (cachedRows && cachedRows.length > 0 ? cachedRows : undefined),
     [messages.data, cachedRows]
   );
+
+  // Let the held stream frames go (see heldPushesRef). Two ways out:
+  //
+  //  · the window landed — fold them onto it, newest frame winning, so the
+  //    rows that arrived during the fetch are on screen in the SAME paint as
+  //    the window itself rather than a frame later;
+  //  · the fetch gave up (no data, not fetching, errored) — there is no window
+  //    coming, so fold them onto whatever the local cache restored instead.
+  //    Holding past that point would leave the reader watching a transcript
+  //    that has visibly stopped moving while the stream is still pushing.
+  //
+  // A layout effect: it runs in the same commit that first renders the window.
+  const streamStalled = messages.data === undefined && !messages.isFetching && messages.isError;
+  useIsoLayoutEffect(() => {
+    if (heldPushesRef.current.length === 0) return;
+    if (messages.data === undefined && !streamStalled) return;
+    const held = heldPushesRef.current;
+    heldPushesRef.current = [];
+    // The disk cache stores createdAt as a string; the query window holds Dates.
+    const restored: WindowRow[] | undefined = cachedRows?.map((r) => ({
+      id: r.id, role: r.role, content: r.content,
+      createdAt: new Date(r.createdAt), authoredBy: r.authoredBy ?? null,
+    }));
+    utils.chat.listMessages.setData({ sessionId, limit }, (prev) => foldPushes(prev ?? restored, held));
+  }, [messages.data, streamStalled, cachedRows, sessionId, limit, utils]);
 
   // Older history, paged separately from the live window and served from the
   // local cache whenever it has the page. See use-older-pages.ts.

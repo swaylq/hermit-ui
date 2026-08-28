@@ -75,3 +75,33 @@ export function applyMessagePush<T extends CachedMsg>(
   if (out.length === prev.length && out.every((m, i) => m === prev[i])) return prev;
   return out;
 }
+
+/** One frame off the stream: the rows it changed, and the ids that left the window. */
+export type PushFrame<T> = { rows: readonly T[]; gone?: readonly string[] };
+
+/**
+ * Fold pushes that arrived BEFORE the window they belong to.
+ *
+ * The first stream connect asks the server to skip its initial full-window emit
+ * — `listMessages` is already in flight for the same window, and sending it
+ * twice costs ~150KB on open. That leaves a gap of one round trip in which the
+ * stream can push a delta at a cache that has nothing in it yet, and a delta
+ * applied to nothing IS the whole window as far as everything downstream can
+ * tell: on a session that is mid-turn (a push every ~250ms) opening the chat
+ * replaced the timeline restored from IndexedDB with the one row the push
+ * carried. Measured on production, 1440x900: 13 rows / 1746px of transcript
+ * became 1 row / 723px, one viewport, so the browser clamped scrollTop to 0 and
+ * the reader — who was correctly at the bottom 90ms earlier — was ~1100px above
+ * it until the query answered and the prepend anchor had walked the whole
+ * height back. Idle sessions never showed it because no push lands in the gap.
+ *
+ * So the pushes in that gap are held instead of written, and folded onto the
+ * window the moment it lands. Order is preserved: a later frame's version of a
+ * row wins, and an id reported gone stays gone.
+ */
+export function foldPushes<T extends CachedMsg>(
+  base: T[] | undefined,
+  frames: readonly PushFrame<T>[],
+): T[] {
+  return frames.reduce<T[]>((acc, f) => applyMessagePush(acc, f.rows, f.gone), base ?? []);
+}
