@@ -133,13 +133,22 @@ export function useCachedSessionMeta(): Map<string, CachedSession> {
  * The cached timeline for a session, for first paint. `null` means "not looked
  * up yet"; `[]` means "looked up, nothing cached" — the caller must distinguish
  * the two or it will flash an empty conversation.
+ *
+ * `enabled` exists because this reads EVERY row the store holds for the session,
+ * not a window's worth — batched, but still tens of ms of main thread on a long
+ * conversation. It used to run on every mount even when the sidebar's hover
+ * prefetch had already put the server's window in the query cache, which is the
+ * common desktop path: the read could not affect what was rendered (the caller
+ * only falls back to it while the query is pending) and it competed for the main
+ * thread with the markdown parse of the rows actually painting. Pass false when
+ * the window is already in hand.
  */
-export function useCachedTimeline(sessionId: string | null): CachedFullRow[] | null {
+export function useCachedTimeline(sessionId: string | null, enabled = true): CachedFullRow[] | null {
   // The loaded session is stored WITH its rows, so switching sessions derives
   // back to null instead of needing a synchronous reset inside the effect.
   const [loaded, setLoaded] = useState<{ sessionId: string; rows: CachedFullRow[] } | null>(null);
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || !enabled) return;
     let alive = true;
     void (async () => {
       await Promise.resolve(); // never settle synchronously within the effect body
@@ -150,7 +159,7 @@ export function useCachedTimeline(sessionId: string | null): CachedFullRow[] | n
     return () => {
       alive = false;
     };
-  }, [sessionId]);
+  }, [sessionId, enabled]);
   return sessionId && loaded?.sessionId === sessionId ? loaded.rows : null;
 }
 

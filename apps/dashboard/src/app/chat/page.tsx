@@ -57,6 +57,7 @@ import type { DictationHandle, DictationSource } from '@/components/chat/dictati
 import { FabDock } from '@/components/chat/fab-dock';
 import { parseLivePreview } from '@/lib/live-preview';
 import { INITIAL_WINDOW, timelineQueryInput, timelineStreamParams } from '@/lib/chat-window';
+import { readCachedSessions } from '@/lib/session-list-cache';
 import { ModelChip } from '@/components/chat/model-chip';
 import { runtimeShortLabel, runtimeDetail, hasTmuxPane, providerMark } from '@/lib/runtime-labels';
 
@@ -385,7 +386,23 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // 5s listSessions payload deliberately leaves out (P1-2). It polls at 5s; a
   // single-row PK query, so the extra poll is cheap and only runs on /chat.
   const sessionOne = trpc.chat.getSession.useQuery({ sessionId }, { enabled: !!sessionId, staleTime: 30_000, refetchInterval: 5_000 });
-  const session = sessionMeta.data?.find((s) => s.id === sessionId) ?? sessionOne.data ?? undefined;
+  // Last resort for the first frame of a MACHINE switch, which is a full
+  // document navigation: React Query starts empty, so both queries above are a
+  // round trip away (~108 ms of Mac→VPS floor before either can answer) and the
+  // header showed a raw id with the composer disabled for that whole time. The
+  // row is already sitting in localStorage — the sidebar has been writing it
+  // there for exactly this reason — so read it synchronously during the first
+  // render.
+  //
+  // Ordered strictly worst-last: a real list row wins, then the real single-row
+  // fetch, then the snapshot. That ordering is the whole safety argument — the
+  // snapshot can be seconds stale and must never outrank something fetched.
+  type SessionListRow = NonNullable<typeof sessionMeta.data>[number];
+  const cachedSessionRow = useMemo(
+    () => readCachedSessions<SessionListRow>()?.find((s) => s.id === sessionId),
+    [sessionId]
+  );
+  const session = sessionMeta.data?.find((s) => s.id === sessionId) ?? sessionOne.data ?? cachedSessionRow ?? undefined;
   // Live updates arrive via SSE (/api/chat/stream), written straight into this
   // query's cache. The poll below is only a fallback for when the stream isn't
   // connected (the gateway flushes block-level rows into Postgres either way).
@@ -878,7 +895,14 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // `cachedRows` is null until the IndexedDB lookup resolves, [] when there's
   // nothing stored. Only used while the server query is still pending — once
   // real data lands it always wins, so a stale cache can never mask live state.
-  const cachedRows = useCachedTimeline(sessionId);
+  // Only worth reading when the server window is not already in hand. On the
+  // desktop path the sidebar's hover prefetch has usually put it there before
+  // the click, and this read cannot change what renders (see `windowRows`
+  // below) — it would only take main thread away from the markdown parse that
+  // is painting. SessionPane is keyed by sessionId, so a fresh mount's
+  // `messages.data` is either a real cache hit or undefined; keepPreviousData
+  // has no previous observer to carry anything over from.
+  const cachedRows = useCachedTimeline(sessionId, !messages.data);
   useTimelineWriteThrough(sessionId, messages.data);
   const windowRows = useMemo(
     () => messages.data ?? (cachedRows && cachedRows.length > 0 ? cachedRows : undefined),
@@ -1430,10 +1454,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     const prev = lastSigRef.current;
     const firstSight = !prev || prev.id !== last.id;
     if (firstSight) {
-      // First time we observe THIS assistant row — true on mount, on session
-      // switch (SessionPane is reused without a key, so this ref carries over
-      // from the previous session), and when a fresh row actually appears mid
-      // turn. Content alone can't tell streaming-just-started from static
+      // First time we observe THIS assistant row — true on mount (which a
+      // session switch is: the pane is keyed by sessionId) and when a fresh row
+      // actually appears mid turn. Content alone can't tell streaming-just-started from static
       // history being seen for the first time; both look like a new id. Use
       // recency instead: only a row created in the last ~3s is plausibly still
       // streaming (same threshold the refetchInterval uses). Otherwise just
@@ -1637,9 +1660,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     const t = setInterval(publish, STATUS_REFRESH_MS);
     return () => clearInterval(t);
   }, [sessionId, liveStatus]);
-  // Stop speaking for a session we've left. SessionPane is reused across session
-  // switches (no key), so this cleanup runs with the OUTGOING id — which is
-  // exactly the one that must fall silent.
+  // Stop speaking for a session we've left. The pane is keyed by sessionId, so
+  // this cleanup runs on unmount with the OUTGOING id — which is exactly the one
+  // that must fall silent.
   useEffect(() => () => clearSessionStatus(sessionId), [sessionId]);
 
   // Which backend runs this session, resolved server-side (a session's own
