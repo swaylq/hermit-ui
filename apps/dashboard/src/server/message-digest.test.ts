@@ -33,6 +33,33 @@ test('a small tool_use is left whole — nothing to fetch on expand', () => {
   assert.equal(d, block);
 });
 
+// The timeline joins an ask CALL to its interaction CARD on the question string
+// itself, so clipping or reflowing that string silently unpairs them: the card
+// keeps its too-early slot and a bare `ask` chip renders beside the question.
+// 26 of the 405 ask calls on the production DB are long enough or multi-line
+// enough to hit this.
+for (const name of ['mcp__hermit__ask', 'hermit/ask', 'ask']) {
+  test(`an ask tool_use (${name}) survives whole, however long the question`, () => {
+    const question = `${big(400)}\n${big(400)}`;
+    const block = {
+      type: 'tool_use',
+      id: 't1',
+      name,
+      input: { question, options: [{ label: 'a' }, { label: 'b' }], multiSelect: false },
+    };
+    const [d] = digest([block]);
+    assert.equal(d, block, 'the join key must be byte-identical to the card’s');
+    assert.equal((d.input as Record<string, unknown>).question, question);
+  });
+}
+
+test('a non-ask tool_use that merely has a question field is still digested', () => {
+  const [d] = digest([
+    { type: 'tool_use', id: 't1', name: 'Search', input: { question: big(5_000), query: 'q' } },
+  ]);
+  assert.equal(d[DIGEST_FLAG], 1);
+});
+
 test('a big tool_result keeps its first line and its error flag', () => {
   const [d] = digest([
     { type: 'tool_result', tool_use_id: 't1', is_error: true, content: `boom: it failed\n${big(30_000)}` },

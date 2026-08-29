@@ -5,17 +5,23 @@
 // components/chat/fold-runs.ts). Collapsed, that capsule shows tool NAMES, a
 // one-line argument preview, an error count and a step count. Nothing else.
 //
-// Yet "load earlier" was shipping the whole thing. Measured on this machine's
-// production DB (193k messages, 904 MB of `content`):
+// Yet "load earlier" was shipping the whole thing. Re-measured on the production
+// DB 2026-08-29 (541,234 messages / 648 sessions, 2,018 MB of blocks — the
+// numbers below replace the 193k-message set this file used to quote):
 //
-//   tool_result   621 MB      thinking   223 MB
-//   tool_use       48 MB      text        11 MB   ← the conversation itself
+//   tool_result  1402 MB (69%)     thinking   418 MB (21%)
+//   tool_use      164 MB ( 8%)     text        40 MB ( 2%)  ← the conversation
 //
 // So a page of 60 raw messages costs ~1.1 MB to put ~13 readable rows on screen,
 // and roughly none of that megabyte is ever painted. Digesting it server-side
 // leaves the names and the first line — everything the collapsed capsule reads —
 // and drops the bodies, which the client fetches per-capsule via
 // `chat.getMessages` only if someone actually opens one.
+//
+// Note what the `thinking` row of that table really is: 401 of those 418 MB are
+// the `signature` blob, not reasoning text. `capMessageContent` now drops it on
+// both the read and the write path (server/message-cap.ts, note 3), which is why
+// the digest's own numbers below finally match its intent.
 //
 // Applied AFTER capMessageContent, and only to history (`listMessagesBefore`).
 // The live window stays full fidelity: it is what is streaming, what the user
@@ -24,6 +30,21 @@
 // Blocks that survive untouched: text · image · file · interaction. Those are
 // the conversation and the things the reader has to act on — a screenshot the
 // agent sent, a download chip, an unanswered question card.
+//
+// …and the `ask` tool_use, for a reason that is not about bytes. The timeline
+// joins an ask CALL to its interaction CARD on the question string itself
+// (message-timeline.tsx: `askCardByQuestion` is keyed by `input.question`, looked
+// up with `isAskToolUse(b) ? b.input.question : undefined`). `slimInput` both
+// clips to PREVIEW_CHARS and collapses whitespace, so a digested call carries a
+// question that no longer equals the card's — the lookup misses, the card is not
+// swapped in at the call site, and the standalone system row is no longer
+// suppressed either. The reader gets the card in its original too-early slot
+// PLUS a bare `ask` chip. Measured on the production DB 2026-08-29: of 405 ask
+// calls, 359 are large enough to be slimmed and 26 of those (a question over 180
+// chars, or one containing a newline) mismatch. Pass it through whole; it is one
+// block per question and the payload does not care.
+
+import { isAskToolUse } from '@/components/chat/sink-deliverables';
 
 /** Marks a block whose body was left behind on the server. */
 export const DIGEST_FLAG = '__d';
@@ -91,13 +112,23 @@ function digestBlock(b: unknown): unknown {
   const block = b as Record<string, unknown>;
 
   if (block.type === 'thinking') {
-    // Never kept: 223 MB of it, and the capsule shows only "💭 thinking · N chars".
+    // Never kept: the capsule shows only "💭 thinking · N chars".
+    //
+    // Returning an empty block by reference is only cheap because
+    // `capMessageContent` runs first and has already taken the `signature` off
+    // it — and 94% of thinking blocks in the DB are exactly that shape, an empty
+    // body beside a 4 KB base64 signature. While the signature was still
+    // attached, this early return handed history pages the whole 401 MB of it
+    // and made the digest look like a 1.5x win instead of a 6x one. If this
+    // function is ever called on raw column content, strip there too.
     const body = typeof block.thinking === 'string' ? block.thinking : typeof block.text === 'string' ? block.text : '';
     if (body.length === 0) return b;
     return { type: 'thinking', thinking: '', chars: body.length, [DIGEST_FLAG]: 1 };
   }
 
   if (block.type === 'tool_use') {
+    // The question card's join key. See the note at the top of this file.
+    if (isAskToolUse(b)) return b;
     if (roughSize(block.input) <= KEEP_WHOLE) return b;
     return {
       type: 'tool_use',

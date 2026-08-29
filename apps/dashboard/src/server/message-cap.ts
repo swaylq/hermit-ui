@@ -8,6 +8,18 @@
 //      NEVER displayed — pure download weight. We drop the base64 data.
 //   2. long `text` blocks / tool_result text (big pasted content or tool output).
 //      Truncated to a generous cap with an inline note.
+//   3. the `signature` of a `thinking` block — the base64 blob the extended-thinking
+//      API returns beside the reasoning text. Measured on the production DB
+//      2026-08-29: 401 MB across 99,988 thinking blocks, against 10 MB of actual
+//      reasoning text, and 94,246 of those blocks have NO text at all. The timeline
+//      renders a thinking block as `💭 thinking · N chars`, and fold-runs drops the
+//      step outright when N is 0 (fold-runs.ts:stepFor) — so for 94% of them we were
+//      shipping ~4 KB to paint nothing. Nothing in this repo reads `signature`:
+//      `--resume` replays the agent's own transcript under ~/.claude/projects, and
+//      this column was only ever a display source. It is base64, so it does not
+//      gzip either. Verified over all 648 sessions' newest-60 windows, gzipped:
+//      36 → 14 KB at the median, 91 → 30 KB at p90, 172 → 67 KB at p99. The
+//      digested history page (listMessagesBefore) goes 23 → 6 KB on the same set.
 //
 // IMPORTANT: only images INSIDE a tool_result are stripped — top-level `image`
 // blocks (user attachments) ARE rendered, so those pass through untouched. Other
@@ -35,6 +47,15 @@ function capBlock(b: unknown, insideToolResult: boolean): unknown {
   if (block.type === 'text' && typeof block.text === 'string') {
     const capped = capText(block.text);
     return capped === block.text ? b : { ...block, text: capped };
+  }
+
+  // A thinking block's `signature` is never rendered and never read back — see
+  // note 3 at the top. Drop it and keep the block otherwise intact, so an empty
+  // thinking block becomes small enough that the digest can leave it alone.
+  if (block.type === 'thinking' && typeof block.signature === 'string') {
+    const rest = { ...block };
+    delete rest.signature;
+    return rest;
   }
 
   // base64 image bytes inside a tool_result are never rendered → drop the data,
@@ -91,9 +112,20 @@ export function capMessageContent(content: unknown): unknown {
 // So: drop the same bytes the reader would have dropped, before they are stored.
 // What the timeline shows does not change — by construction, since the elided
 // shape is the one `capBlock` already produces.
+//
+// The same argument now covers a second shape: a `thinking` block's `signature`.
+// Measured 2026-08-29 — 401 MB of the 3,182 MB table, in 99,988 blocks, 94% of
+// which carry no reasoning text at all, and no reader anywhere in this repo. It
+// is base64, so it does not even compress on the way out. Stop storing it.
 function dropBlock(b: unknown, insideToolResult: boolean): unknown {
   if (!b || typeof b !== 'object') return b;
   const block = b as Record<string, unknown>;
+
+  if (block.type === 'thinking' && typeof block.signature === 'string') {
+    const rest = { ...block };
+    delete rest.signature;
+    return rest;
+  }
 
   if (insideToolResult && block.type === 'image' && block.source && typeof block.source === 'object') {
     const src = block.source as Record<string, unknown>;
@@ -123,10 +155,13 @@ function dropValue(content: unknown, insideToolResult: boolean): unknown {
 }
 
 /**
- * Strip the base64 payload of images nested inside tool_result blocks, so they
- * are never written to the database. Top-level `image` blocks — user uploads and
- * agent attachments — are rendered, and pass through untouched. Returns the SAME
- * reference when there was nothing to drop.
+ * Strip what the reader would have thrown away anyway, before it is written:
+ * the base64 payload of images nested inside tool_result blocks, and the
+ * `signature` of every thinking block. Top-level `image` blocks — user uploads
+ * and agent attachments — are rendered, and pass through untouched. Returns the
+ * SAME reference when there was nothing to drop.
+ *
+ * Name kept for its call sites; it has covered two shapes since 2026-08-29.
  */
 export function dropStoredImageBytes(content: unknown): unknown {
   return dropValue(content, false);
