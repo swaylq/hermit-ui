@@ -54,7 +54,6 @@ import { RunDetailContext, stepsFromRows, type RunResolver } from '@/components/
 import { isMachineryBlock } from '@/components/chat/fold-runs';
 import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
 import type { DictationHandle, DictationSource } from '@/components/chat/dictation-dock';
-import { FabDock } from '@/components/chat/fab-dock';
 import { parseLivePreview } from '@/lib/live-preview';
 import { INITIAL_WINDOW, timelineQueryInput, timelineStreamParams } from '@/lib/chat-window';
 import { readCachedSessions } from '@/lib/session-list-cache';
@@ -145,7 +144,7 @@ const NewChatPane = lazy(() => import('@/components/chat/new-chat-pane').then((m
 // preview-panel.
 const SessionDetailSheet = lazy(() => import('@/components/chat/session-detail-sheet').then((m) => ({ default: m.SessionDetailSheet })));
 const LivePreviewPanel = lazy(() => import('@/components/chat/preview-panel').then((m) => ({ default: m.LivePreviewPanel })));
-const PreviewFab = lazy(() => import('@/components/chat/preview-fab').then((m) => ({ default: m.PreviewFab })));
+const PreviewTab = lazy(() => import('@/components/chat/preview-tab').then((m) => ({ default: m.PreviewTab })));
 const DictationDock = lazy(() => import('@/components/chat/dictation-dock').then((m) => ({ default: m.DictationDock })));
 
 // Shown only while that chunk is in flight. Mirrors the pane's own frame (header
@@ -225,7 +224,7 @@ function ChatPageInner() {
       void import('@/components/chat/new-chat-pane');
       void import('@/components/chat/session-detail-sheet');
       void import('@/components/chat/preview-panel');
-      void import('@/components/chat/preview-fab');
+      void import('@/components/chat/preview-tab');
       void import('@/components/chat/dictation-dock');
     };
     (w.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1500)))(warm);
@@ -416,6 +415,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // rather than a boolean an effect has to reset: a withdrawn or replaced
   // registration stops matching and the panel closes by construction.
   const [previewOpenUrl, setPreviewOpenUrl] = useState<string | null>(null);
+  // The panel animates BOTH ways, so closing cannot just unmount it. `shown`
+  // drives the travel; the url keeps it mounted until the travel is over.
+  // Must match SLIDE_MS in preview-panel.tsx.
+  const [previewShown, setPreviewShown] = useState(false);
+  const previewExit = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The exact input the sidebar's hover-prefetch uses — see lib/chat-window.
   const timelineInput = useMemo(() => timelineQueryInput(sessionId), [sessionId]);
   const messages = trpc.chat.listMessages.useQuery(
@@ -715,11 +719,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // send waits ~0.4s for the translation, and an untranslated message typed
   // straight after would otherwise overtake it and land first.
   const sendChainRef = useRef<Promise<void>>(Promise.resolve());
-  // Realtime dictation lives in its own dock (above the composer) so the text
-  // arriving ~36×/second re-renders the composer's own draft and nothing else.
-  // All that reaches here is a ref to drive it and whether a run is live.
+  // Realtime dictation lives in its own component so the text arriving
+  // ~36×/second re-renders the composer's own draft and nothing else. It draws
+  // nothing, and nothing up here needs to know it is running — the composer
+  // lights its own mic. All that reaches here is a ref to start / stop / cancel.
   const dictationRef = useRef<DictationHandle>(null);
-  const [dictating, setDictating] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // Composer notice line: attachment-cap warnings (set in ComposeBar.addFiles) AND
   // send failures (set in onSend's onError) — so a rejected send explains itself
@@ -1791,7 +1795,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const startDictation = useCallback((source: DictationSource) => dictationRef.current?.start(source), []);
   const stopDictation = useCallback(() => dictationRef.current?.stop(), []);
   const cancelDictation = useCallback(() => dictationRef.current?.cancel(), []);
-  const onDictationActive = useCallback((live: boolean) => setDictating(live), []);
 
   // Stable callbacks for the memo'd ScheduleBar — inline arrows here would give it
   // a fresh prop identity on every SSE tick and defeat the memo. pickPrompt is
@@ -1834,20 +1837,43 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const showTakeover = canTakeover || takenOver;
   const hasLivePreview = !!livePreview && !session?.closedAt;
   const previewOpen = hasLivePreview && !!previewOpenUrl && previewOpenUrl === livePreview?.url;
+  // Shown only once it is mounted AND the browser has painted it closed — a
+  // transition needs a frame at the starting value or there is nothing to
+  // animate from, and the panel would simply appear at full width.
+  const previewSlidIn = previewOpen && previewShown;
   // Cmd/Ctrl+\ toggles the live-preview split — VS Code's split-editor key,
   // free in every browser. Same shape as the ⌘/ and ⌘F handlers above; a
   // no-op unless the session has a registered preview (the FAB's condition).
   const livePreviewUrl = hasLivePreview ? (livePreview?.url ?? null) : null;
+
+  const openPreview = useCallback((url: string) => {
+    if (previewExit.current) { clearTimeout(previewExit.current); previewExit.current = null; }
+    setPreviewOpenUrl(url);
+    // No frame-juggling here: the panel times its own enter (it is lazy-loaded,
+    // so this side cannot know when it exists). This flag only says "should be
+    // showing" — it keeps the panel mounted and tucks the tab away.
+    setPreviewShown(true);
+  }, []);
+
+  const closePreview = useCallback(() => {
+    setPreviewShown(false);
+    if (previewExit.current) clearTimeout(previewExit.current);
+    previewExit.current = setTimeout(() => { setPreviewOpenUrl(null); previewExit.current = null; }, 300);
+  }, []);
+
+  useEffect(() => () => { if (previewExit.current) clearTimeout(previewExit.current); }, []);
+
   useEffect(() => {
     if (!livePreviewUrl) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== '\\' || !(e.metaKey || e.ctrlKey)) return;
       e.preventDefault();
-      setPreviewOpenUrl((cur) => (cur === livePreviewUrl ? null : livePreviewUrl));
+      if (previewOpenUrl === livePreviewUrl) closePreview();
+      else openPreview(livePreviewUrl);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [livePreviewUrl]);
+  }, [livePreviewUrl, previewOpenUrl, openPreview, closePreview]);
 
   const secondaryActions = (
     <>
@@ -2374,15 +2400,14 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           </button>
       </div>
 
-        {/* Only the live-preview button floats now. Voice moved into the composer
-            (hold the box to talk, or tap the mic beside it), and takeover into the
-            suggestion row — neither was ever something you reached for mid-scroll. */}
-        {hasLivePreview && (
-          <FabDock count={1}>
-            <Suspense fallback={null}>
-              <PreviewFab open={previewOpen} onToggle={() => setPreviewOpenUrl(previewOpen ? null : (livePreview?.url ?? null))} />
-            </Suspense>
-          </FabDock>
+        {/* Nothing floats over the chat any more. Voice moved into the composer
+            (hold the box to talk, or tap the mic beside it), takeover into the
+            suggestion row, and the preview is a tab welded to the right edge —
+            the edge its panel comes out of. */}
+        {hasLivePreview && livePreviewUrl && (
+          <Suspense fallback={null}>
+            <PreviewTab open={previewSlidIn} onOpen={() => openPreview(livePreviewUrl)} />
+          </Suspense>
         )}
         {/* Plain wrapper — it used to be measured to keep the mic above this stack.
             The mic goes wherever it's dragged now; the div stays because it's one
@@ -2457,7 +2482,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               ref={dictationRef}
               sessionId={sessionId}
               composerRef={composerRef}
-              onActiveChange={onDictationActive}
               onNotice={setComposerNotice}
             />
           </Suspense>
@@ -2569,7 +2593,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           <LivePreviewPanel
             key={livePreview.url}
             preview={livePreview}
-            onClose={() => setPreviewOpenUrl(null)}
+            open={previewSlidIn}
+            onClose={closePreview}
             onPickSelector={pickSelector}
           />
         </Suspense>

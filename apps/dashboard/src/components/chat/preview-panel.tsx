@@ -11,6 +11,26 @@
 //             divider on its left edge — the chat stays fully usable, so the
 //             human can watch the page while telling the agent what to change.
 //
+// IT PULLS OPEN, and the two shapes pull differently: a phone slides the whole
+// layer in from the right, desktop animates the panel's WIDTH from zero so the
+// chat column is pushed aside rather than covered. `open` is the parent's "should
+// be showing" flag — it stays mounted through the closing animation, which is the
+// only reason the exit is visible at all.
+//
+// The ENTER frame is timed here and not by the parent, and that is load-bearing:
+// this component is lazy-loaded, so on the first open the parent's "next frame"
+// has come and gone while the chunk was still in flight — it would flip its flag
+// before this thing existed, and the panel would mount already open with nothing
+// to animate from. Only the element that is about to move knows when it has been
+// painted standing still. `entered` is that frame.
+//
+// The contents do NOT animate with it. Everything below the divider sits in a
+// wrapper pinned to the final width, so what the width transition does is
+// UNCOVER a laid-out panel instead of reflowing an iframe sixty times on the way.
+// That is also why the desktop width is a number here and not `45%`: you cannot
+// transition to a percentage of a box that is itself changing, and the wrapper
+// needs a figure to hold.
+//
 // Divider mechanics: pointer capture keeps the gesture alive across the iframe
 // (which also goes pointer-events-none while dragging — an iframe otherwise
 // swallows the move events the moment the cursor crosses into it). During the
@@ -51,6 +71,11 @@ import type { LivePreviewInfo } from '@/lib/live-preview';
 const W_KEY = 'hermit:live-preview-w';
 const MIN_W = 320;
 const MAX_W = 1100;
+/** The split before anyone drags the divider — was `lg:w-[45%] lg:max-w-[720px]`. */
+const DEFAULT_SPLIT = 0.45;
+const DEFAULT_MAX_W = 720;
+/** Open/close travel. Also the parent's unmount delay — keep the two in step. */
+const SLIDE_MS = 300;
 /** Keep this much room for the chat column (+ sidebar) no matter how far the divider goes. */
 const CHAT_MIN = 480;
 
@@ -135,14 +160,28 @@ function subPath(url: unknown, root: string): string {
 
 export function LivePreviewPanel({
   preview,
+  open,
   onClose,
   onPickSelector,
 }: {
   preview: LivePreviewInfo;
+  /** Showing (true) or on its way out (false). The parent keeps it mounted for both. */
+  open: boolean;
   onClose: () => void;
   /** A picked element's CSS selector, on its way to the composer. */
   onPickSelector?: (selector: string) => void;
 }) {
+  // See the note up top: mount closed, flip on the frame after, transition in.
+  const [entered, setEntered] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const id = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(id);
+  }, [open]);
+  // `open &&` is what makes the exit work without resetting `entered` on the way
+  // out (which would be a setState in an effect for no gain).
+  const shown = open && entered;
+
   const [gen, setGen] = useState(0); // hard refresh = remount the iframe
   const [copied, setCopied] = useState(false);
   // Covers the iframe with the panel's own background until the document fires
@@ -290,6 +329,19 @@ export function LivePreviewPanel({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  // The unconfigured split — what `lg:w-[45%] lg:max-w-[720px]` used to say in
+  // CSS, resolved to pixels because the open animation has to have a number to
+  // travel to. Same rule, same result; it just follows the viewport from here
+  // instead of from the cascade.
+  const [autoW, setAutoW] = useState(0);
+  useEffect(() => {
+    const read = () => setAutoW(Math.min(DEFAULT_MAX_W, Math.round(window.innerWidth * DEFAULT_SPLIT)));
+    read();
+    window.addEventListener('resize', read);
+    return () => window.removeEventListener('resize', read);
+  }, []);
+  const targetW = width ?? autoW;
+
   const persistWidth = useCallback((w: number | null) => {
     setWidth(w);
     try {
@@ -362,19 +414,27 @@ export function LivePreviewPanel({
     <div
       ref={panelRef}
       data-esc-layer=""
-      style={width != null ? ({ '--pv-w': `${width}px` } as React.CSSProperties) : undefined}
+      style={{ '--pv-w': `${targetW}px`, '--pv-ms': `${SLIDE_MS}ms` } as React.CSSProperties}
       className={cn(
         'flex flex-col bg-background',
-        // Phone: full-screen layer above the composer (z-50) and the FabDock (70),
-        // below dialogs (100+). pwa-safe-* because fixed layers pad the notch /
-        // home bar themselves (Sheet does; Overlay's children do).
+        // Phone: full-screen layer above the composer (z-50) and the preview tab
+        // (70), below dialogs (100+). pwa-safe-* because fixed layers pad the
+        // notch / home bar themselves (Sheet does; Overlay's children do).
         'fixed inset-0 z-[90] pwa-safe-t pwa-safe-b',
+        // Phone: the layer itself slides in off the right edge.
+        'transition-transform duration-[var(--pv-ms)] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform',
+        shown ? 'translate-x-0' : 'translate-x-full',
         // Desktop ≥lg: an in-flow flex column beside the chat (parent supplies
         // the row). relative (not static) so the divider handle can anchor to
-        // its left edge; inset-auto neutralizes the phone layer's inset-0.
-        'lg:relative lg:inset-auto lg:z-auto lg:shrink-0 lg:border-l lg:border-border',
-        width == null ? 'lg:w-[45%] lg:max-w-[720px]' : 'lg:w-[var(--pv-w)] lg:max-w-none',
-        dragging && 'select-none',
+        // its left edge; inset-auto neutralizes the phone layer's inset-0. No
+        // transform here — on this side the WIDTH is the animation, and it goes
+        // to zero rather than off-screen so the chat takes the space back.
+        'lg:relative lg:inset-auto lg:z-auto lg:shrink-0 lg:translate-x-0 lg:max-w-none',
+        'lg:transition-[width] lg:duration-[var(--pv-ms)]',
+        shown ? 'lg:w-[var(--pv-w)] lg:border-l lg:border-border' : 'lg:w-0',
+        // Dragging the divider writes the width straight to the CSS var every
+        // frame; a transition on top of that is a rubber band.
+        dragging && 'select-none lg:transition-none',
       )}
     >
       {/* Divider handle: an 8px hit area straddling the hairline border. The
@@ -399,6 +459,11 @@ export function LivePreviewPanel({
             : 'after:bg-transparent hover:after:bg-foreground/15 focus-visible:after:bg-foreground/30',
         )}
       />
+      {/* Everything below is held at the FINAL width while the panel travels to
+          it, so the width transition uncovers a finished layout instead of
+          re-laying-out the iframe on every frame. overflow-hidden lives here
+          rather than on the root, which would clip the divider handle in half. */}
+      <div className="flex h-full w-full min-w-0 flex-col overflow-hidden lg:w-[var(--pv-w)] lg:flex-none">
       {/* h-12 matches the chat header exactly — on lg+ the two sit on one line
           and the border-b runs straight across the split. */}
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
@@ -518,6 +583,7 @@ export function LivePreviewPanel({
             </span>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
