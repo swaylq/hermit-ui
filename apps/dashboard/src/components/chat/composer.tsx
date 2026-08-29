@@ -118,7 +118,8 @@ function StopPill({ onStop, stopping }: { onStop: () => void; stopping: boolean 
       className={cn(
         // h-9, matching the clear/send buttons beside it. The row is `items-end`,
         // so a shorter pill bottom-aligns and reads as sitting low rather than
-        // centred — which is exactly what it looked like at h-8.
+        // centred — which is exactly what it looked like at h-8. mr-1 is the
+        // gap to the send circle on its right.
         'mr-1 h-9 shrink-0 inline-flex items-center gap-1.5 rounded-full border border-rose-500/40',
         'px-2.5 text-xs font-medium text-rose-600 dark:text-rose-400',
         'transition-colors cursor-pointer hover:bg-rose-500/10',
@@ -588,6 +589,12 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   // never moves when a turn starts, because the textarea is flex-1 and absorbs
   // the pill's width. The 400 ms arm delay survives too — a turn can begin under
   // a finger already travelling toward that corner.
+  //
+  // "Beside the send circle" is literal, and it has to stay that way: order in
+  // this row is textarea · mic/✕ · Stop · send. The mic slot spent a few days
+  // wedged BETWEEN Stop and send, which quietly cost the pill the adjacency the
+  // whole arrangement is named for and left the two ghost icon buttons split
+  // across it. Anything new goes left of Stop, not into that gap.
   // See docs/composer-stop-misfire.md.
   const working = inFlight && !disabled;
   // The Brain's in-progress sentence shows only while the box is otherwise empty —
@@ -1052,9 +1059,8 @@ export const ComposeBar = forwardRef<ComposerHandle, {
           )}
           </div>
 
-          {working && onStop && <StopPill onStop={onStop} stopping={stopping} />}
-
-          {/* Right of the box, one slot. The mic is a TOGGLE — the same pixels
+          {/* Right of the box, one slot, and always LEFT of Stop (see `working`).
+              The mic is a TOGGLE — the same pixels
               start the dictation and end it — and while it is listening it is
               lit rather than swapped for some other glyph: the button you
               pressed is the button you press again, and the only thing that
@@ -1096,6 +1102,8 @@ export const ComposeBar = forwardRef<ComposerHandle, {
               <X className="h-5 w-5" />
             </button>
           ) : null}
+
+          {working && onStop && <StopPill onStop={onStop} stopping={stopping} />}
 
           {/* One button, one meaning, always in the same place: this circle sends.
               Nothing ever takes its slot (see the `working` note above). */}
