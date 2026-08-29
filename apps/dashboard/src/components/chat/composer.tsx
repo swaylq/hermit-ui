@@ -87,6 +87,27 @@ export function QueueBar({
   );
 }
 
+// Permission chatter from the mic — "请允许使用麦克风", "已授权 · 再按一下开始说话",
+// a denial. It lives ABOVE the suggestion chips rather than tucked against the
+// composer, because it is the answer to a system alert that has just covered
+// half the screen: the eye comes back to the middle of the page, not to the
+// 11px gap over the input. Same container geometry as everything else in that
+// stack (mx-auto max-w-3xl px-3) so it lines up rather than floats.
+//
+// The text is produced in ComposeBar (it owns the mic gesture) and rendered here
+// by the page — hence the callback rather than local state.
+export function MicHintBar({ hint }: { hint: string | null }) {
+  return (
+    <Collapse open={!!hint} className="mx-auto w-full max-w-3xl px-3">
+      <div className="flex justify-center pb-1.5">
+        <span className="rounded-full bg-foreground/85 px-2.5 py-1 text-[11px] font-medium text-background shadow-sm">
+          {hint}
+        </span>
+      </div>
+    </Collapse>
+  );
+}
+
 // ── Composer draft persistence ──────────────────────────────────────────────
 // Keep unsent text per session in localStorage so switching away and back
 // (SessionPane remounts on session change) doesn't lose what you typed. Cleared
@@ -214,6 +235,8 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   onDictateStop?: () => void;
   /** Throw the run away, including what it put in the draft. */
   onDictateCancel?: () => void;
+  /** Mic permission chatter, drawn by the page above the suggestion chips. */
+  onMicHint?: (text: string | null) => void;
 }>(function ComposeBar({
   sessionId,
   disabled,
@@ -234,6 +257,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   onDictate,
   onDictateStop,
   onDictateCancel,
+  onMicHint,
 }, ref) {
   // Draft is owned here (see note above) so typing doesn't re-render SessionPane.
   const [draft, setDraft] = useState(() => loadDraft(sessionId));
@@ -623,8 +647,12 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   // Released over "send": the run is closing and the words are still settling
   // (the last sentence, then the whole-passage correction). We send when they stop.
   const [holdSending, setHoldSending] = useState(false);
-  const [micHint, setMicHint] = useState<string | null>(null);
   const [micArming, setMicArming] = useState(false);
+  // A ref so authorizeMic (a useCallback with real deps) does not have to be
+  // rebuilt every time the page re-renders and hands us a new arrow.
+  const micHintRef = useRef(onMicHint);
+  useEffect(() => { micHintRef.current = onMicHint; });
+  const setMicHint = useCallback((t: string | null) => micHintRef.current?.(t), []);
   const cancelPillRef = useRef<HTMLDivElement>(null);
   const editPillRef = useRef<HTMLDivElement>(null);
   // pointerdown/move run ahead of React's re-render, so the gesture keeps its
@@ -666,7 +694,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
         setTimeout(() => setMicHint(null), denied ? 3600 : 2600);
       })
       .finally(() => { setMicArming(false); void refreshMicPermission(); });
-  }, []);
+  }, [setMicHint]);
 
   // The mic button beside the box: hands-free dictation straight into the draft.
   // No hold, no zones, nothing to aim at — it just starts adding words, and the
@@ -676,7 +704,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     setMicHint(null);
     if (!canOpenMicSilently()) { authorizeMic(); return; }
     onDictate?.('tap');
-  }, [authorizeMic, onDictate]);
+  }, [authorizeMic, onDictate, setMicHint]);
 
   const endHold = useCallback(() => {
     const h = holdRef.current;
@@ -900,16 +928,6 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             )}
           </div>
         )}
-        {/* Permission chatter from the mic — "请允许使用麦克风", "已授权 · 再按一下
-            开始说话", a denial. Its own line rather than the notice strip above,
-            which belongs to attachments and failed sends. */}
-        <Collapse open={!!micHint}>
-          <div className="mb-2 flex justify-center">
-            <span className="rounded-full bg-foreground/85 px-2.5 py-1 text-[11px] font-medium text-background">
-              {micHint}
-            </span>
-          </div>
-        </Collapse>
         <div
           className={cn(
             'relative flex items-end gap-1.5 rounded-[26px] border bg-background px-2 py-2 shadow-sm transition-all duration-100 ease-out',
@@ -1073,7 +1091,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
               onClick={dictating ? () => onDictateStop?.() : onMicTap}
               disabled={micArming}
               aria-label={dictating ? '结束听写' : '语音输入'}
-              title={micHint ?? (dictating ? '正在听 · 点一下结束' : '语音输入 · 说的话直接写进输入框')}
+              title={dictating ? '正在听 · 点一下结束' : '语音输入 · 说的话直接写进输入框'}
               className={cn(
                 'relative h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full transition-colors cursor-pointer',
                 'disabled:cursor-wait disabled:opacity-60',

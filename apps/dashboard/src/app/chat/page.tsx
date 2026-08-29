@@ -52,7 +52,7 @@ import { readTranslatePrefs } from '@/lib/translate-prefs';
 import { translateOutgoing } from '@/lib/translate-outbound';
 import { RunDetailContext, stepsFromRows, type RunResolver } from '@/components/chat/run-capsule';
 import { isMachineryBlock } from '@/components/chat/fold-runs';
-import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
+import { ComposeBar, MicHintBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
 import type { DictationHandle, DictationSource } from '@/components/chat/dictation-dock';
 import { parseLivePreview } from '@/lib/live-preview';
 import { INITIAL_WINDOW, timelineQueryInput, timelineStreamParams } from '@/lib/chat-window';
@@ -729,6 +729,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // send failures (set in onSend's onError) — so a rejected send explains itself
   // instead of silently restoring the draft.
   const [composerNotice, setComposerNotice] = useState<string | null>(null);
+  // Mic permission chatter. Produced in the composer (it owns the gesture),
+  // shown above the suggestion chips — see MicHintBar for why up there.
+  const [micHint, setMicHint] = useState<string | null>(null);
   // Optimistic outbound messages — render the user's bubble instantly on send so
   // it doesn't wait for the send round-trip + SSE echo (~200ms). Kept in a SEPARATE
   // overlay (NOT the query cache): the cache holds server rows keyed by server id,
@@ -2413,6 +2416,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             The mic goes wherever it's dragged now; the div stays because it's one
             flex item, and unwrapping it would respace the whole control column. */}
         <div>
+          <MicHintBar hint={micHint} />
           <ScheduleBar
             onStartIterate={startIterate}
             onStartCron={startCron}
@@ -2583,6 +2587,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             onDictate={session?.closedAt ? undefined : startDictation}
             onDictateStop={stopDictation}
             onDictateCancel={cancelDictation}
+            onMicHint={setMicHint}
           />
         </div>
       </div>
