@@ -461,6 +461,134 @@ export function wireQuietMs(home: string, sessionId: string | null, now = Date.n
   return Math.max(0, now - latest);
 }
 
+// ── finding the session a live turn is writing to ───────────────────────────
+
+/**
+ * How far ahead of a session's creation the spawn may sit and the dir still be
+ * credited to this turn. The CLI creates the dir within milliseconds of exec;
+ * the slack absorbs clock disagreement between the log's clock and Date.now,
+ * nothing more. Anything older is a PREVIOUS session — including one that
+ * received this exact prompt text the last time the user sent it.
+ */
+const DISCOVER_SPAWN_SLACK_MS = 10_000;
+
+/**
+ * How much of a wire.jsonl to read when fingerprinting it. The `metadata` and
+ * `turn.prompt` records open the file, but `profile.bind` (the inlined system
+ * prompt) and `llm.tools_snapshot` sit between them and run to tens of KB, so
+ * a small head would cut the prompt record off.
+ */
+const DISCOVER_HEAD_BYTES = 512 * 1024;
+
+/** First bytes of a file, or null when it cannot be read. */
+function readHead(file: string, bytes: number): string | null {
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const buf = Buffer.alloc(bytes);
+      const n = fs.readSync(fd, buf, 0, bytes, 0);
+      return buf.toString('utf8', 0, n);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** created_at from a wire.jsonl head's first line, or null. */
+function wireCreatedAtMs(head: string): number | null {
+  const nl = head.indexOf('\n');
+  try {
+    const row = JSON.parse(nl < 0 ? head : head.slice(0, nl)) as { type?: string; created_at?: number };
+    return row.type === 'metadata' && typeof row.created_at === 'number' ? row.created_at : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Does a wire.jsonl head hold a turn.prompt carrying exactly this text? */
+function headHasPrompt(head: string, promptPrefix: string): boolean {
+  for (const line of head.split('\n')) {
+    if (!line.includes('turn.prompt')) continue;
+    try {
+      const row = JSON.parse(line) as { type?: string; input?: Array<{ type?: string; text?: string }> };
+      if (row.type !== 'turn.prompt' || !Array.isArray(row.input)) continue;
+      for (const part of row.input) {
+        if (part?.type === 'text' && typeof part.text === 'string'
+          && part.text.slice(0, promptPrefix.length) === promptPrefix) return true;
+      }
+    } catch {
+      // a tail line cut mid-record by the head cap; the next candidate speaks
+    }
+  }
+  return false;
+}
+
+/**
+ * The session this turn is writing to, found on disk — for the window in which
+ * the gateway knows no id. The resume hint prints as a turn ENDS, so a first
+ * turn has no id while it runs, and a turn that dies mid-run never prints one.
+ * (2026-08-29, session cmte4wr4: a first turn's swarm was still writing its log
+ * six minutes before the watchdog fired, but with no id the reprieve check had
+ * nothing to ask — "no session log on disk" — and killed a working turn.)
+ *
+ * The prompt is the fingerprint: a fresh session's `agents/main/wire.jsonl`
+ * opens with a `turn.prompt` record whose text is byte-for-byte what we passed
+ * to `-p`. The creation time is the floor underneath it: only a dir the child
+ * we spawned could have created qualifies, so a genuinely wedged RESUMED
+ * session — whose dir is old — correctly finds nothing, and a re-sent identical
+ * message cannot resurrect a previous session's dir. The weak path (a fresh dir
+ * whose prompt record was cut off by the head cap) applies only when exactly
+ * ONE dir qualifies — two fresh dirs and no fingerprint means the answer would
+ * be a guess, and a wrong stamp resumes somebody else's conversation. That is
+ * worse than the kill this function exists to prevent.
+ *
+ * workDir is matched against the index verbatim (trailing slashes aside): a
+ * symlinked or differently-spelled agent dir just yields null, which is the
+ * same answer the watchdog gets today — never a wrong session.
+ */
+export function discoverTurnSession(
+  home: string,
+  workDir: string,
+  spawnedAt: number,
+  prompt: string,
+): string | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(home, 'session_index.jsonl'), 'utf8');
+  } catch {
+    return null;
+  }
+  const wantDir = workDir.replace(/\/+$/, '');
+  const promptPrefix = prompt.slice(0, 200);
+  let strong: { id: string; createdAt: number } | null = null;
+  let weak: { id: string; createdAt: number }[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.includes(wantDir)) continue;
+    let row: { sessionId?: string; sessionDir?: string; workDir?: string };
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue; // a truncated tail line
+    }
+    if (!row.sessionId || !row.sessionDir || !row.workDir) continue;
+    if (row.workDir.replace(/\/+$/, '') !== wantDir) continue;
+    const head = readHead(path.join(row.sessionDir, 'agents', 'main', 'wire.jsonl'), DISCOVER_HEAD_BYTES);
+    if (!head) continue;
+    const createdAt = wireCreatedAtMs(head);
+    if (createdAt === null || createdAt < spawnedAt - DISCOVER_SPAWN_SLACK_MS) continue;
+    if (headHasPrompt(head, promptPrefix)) {
+      if (!strong || createdAt > strong.createdAt) strong = { id: row.sessionId, createdAt };
+    } else {
+      weak.push({ id: row.sessionId, createdAt });
+    }
+  }
+  if (strong) return strong.id;
+  // No fingerprint: only an unambiguous answer is worth anything — see above.
+  return weak.length === 1 ? weak[0].id : null;
+}
+
 /**
  * Token counters from a slice of one session's wire log.
  *
@@ -571,6 +699,22 @@ export class KimiCodeRuntime implements AgentRuntime {
       existing.agentDirectory = session.agentDirectory;
       existing.modelPin = session.model?.trim() || null;
       existing.credentialId = session.credentialId ?? null;
+      // A handle that never learned its id — its only turn died before the
+      // resume hint printed — adopts one the DB gained out of band (an
+      // operator's recovery stamp carries exactly the id the hint would have).
+      // Without this the next turn spawns FRESH and the CLI's new session
+      // overwrites that stamp, stranding the conversation it points to. Only a
+      // null slot is filled: within a turn the hint is authoritative, never
+      // the DB's older value.
+      if (!existing.stampedSessionId) {
+        const recorded = session.externalSessionId?.trim() || null;
+        if (recorded && KIMI_SESSION_ID.test(recorded)) {
+          existing.stampedSessionId = recorded;
+          console.warn(
+            `[kimi] session=${session.id.slice(0, 8)}: adopted ${recorded.slice(0, 20)}… from the session row`,
+          );
+        }
+      }
       return existing;
     }
 
@@ -692,6 +836,7 @@ export class KimiCodeRuntime implements AgentRuntime {
     const home = kimiHome();
     childEnv.KIMI_CODE_HOME = home;
 
+    const spawnedAt = Date.now();
     const child = spawn(bin, kimiArgs(prompt, h.stampedSessionId, promptDir ? [promptDir] : []), {
       cwd: h.agentDirectory,
       // stderr is NOT merged and NOT an error signal: the CLI writes its tools'
@@ -704,6 +849,25 @@ export class KimiCodeRuntime implements AgentRuntime {
     h.child = child;
     h.working = true;
     h.interrupted = false;
+
+    /**
+     * Record the kimi session id on the handle and the DB row, from whichever
+     * path learns it first — the resume hint (a healthy turn's last line), the
+     * watchdog's disk discovery, or the exit handler's. One externalId for all
+     * of them, so a path that learns an id we already hold is a dedup'd no-op
+     * rather than a second identical line in the chat.
+     */
+    const stamp = (id: string): void => {
+      if (id === h.stampedSessionId) return;
+      h.stampedSessionId = id;
+      h.emit({
+        sessionId: h.sessionId,
+        role: 'system',
+        content: [{ type: 'text', text: `[kimi session ${id.replace(/^session_/, '').slice(0, 8)}]` }],
+        externalId: `kimi:${id}:hello`,
+        claudeSessionId: id,
+      });
+    };
 
     const translator = new KimiEventTranslator(turnTag);
     const goalTurn = isGoalPrompt(text);
@@ -729,14 +893,32 @@ export class KimiCodeRuntime implements AgentRuntime {
     // 15-minute quiet budget measured from the last log write; the reprieve is
     // logged so a runaway shows up in the gateway log, not just its kill.
     // `h.stampedSessionId` is read at fire time, not capture time: the first
-    // turn of a fresh session learns its id from stdout mid-turn.
+    // turn of a fresh session learns its id mid-turn (stdout hint, or the
+    // disk discovery above it when the hint has not printed yet).
     let exited = false;
     // Set by the watchdog just before it fires, read by the exit handler: the
     // difference between "kimi died" and "we killed a turn that was working".
     let silenceKill: { stdoutQuietMs: number; wireQuietMs: number | null } | null = null;
     let lastStdoutAt = Date.now();
     const silence = (delayMs: number): NodeJS.Timeout => setTimeout(() => {
-      const quietMs = wireQuietMs(kimiHome(), h.stampedSessionId);
+      let quietMs = wireQuietMs(kimiHome(), h.stampedSessionId);
+      if (quietMs === null || quietMs >= TURN_SILENCE_TIMEOUT_MS) {
+        // The id can be missing or stale while the turn is fine: the resume
+        // hint prints as a turn ENDS (a first turn has no id while it runs),
+        // and `-r` on an id kimi no longer has opens a NEW session under a new
+        // id. Find the session this child is actually writing to — its log
+        // identifies itself by the prompt it received — before believing the
+        // silence. A genuinely wedged turn finds nothing and dies as before.
+        const found = discoverTurnSession(kimiHome(), h.agentDirectory, spawnedAt, prompt);
+        if (found && found !== h.stampedSessionId) {
+          stamp(found);
+          quietMs = wireQuietMs(kimiHome(), found);
+          console.warn(
+            `[kimi] session=${h.sessionId.slice(0, 8)}: no id from the CLI yet, but the session log on disk `
+            + `names this turn ${found.slice(0, 20)}… — liveness read from there`,
+          );
+        }
+      }
       if (quietMs !== null && quietMs < TURN_SILENCE_TIMEOUT_MS) {
         const remainder = Math.max(1000, TURN_SILENCE_TIMEOUT_MS - quietMs);
         console.warn(
@@ -767,19 +949,7 @@ export class KimiCodeRuntime implements AgentRuntime {
         if (!msg) return;
 
         const learned = resumeHintId(msg);
-        if (learned && learned !== h.stampedSessionId) {
-          // Stamp the id onto the row so a gateway restart (and the next turn)
-          // can resume it. The sync route only writes when it differs, so this
-          // is idempotent.
-          h.stampedSessionId = learned;
-          h.emit({
-            sessionId: h.sessionId,
-            role: 'system',
-            content: [{ type: 'text', text: `[kimi session ${learned.replace(/^session_/, '').slice(0, 8)}]` }],
-            externalId: `kimi:${learned}:hello`,
-            claudeSessionId: learned,
-          });
-        }
+        if (learned) stamp(learned);
 
         for (const item of translator.translate(msg)) {
           sawContent = true;
@@ -812,6 +982,16 @@ export class KimiCodeRuntime implements AgentRuntime {
       cleanup();
       // Give the line reader a beat to flush its last lines before judging.
       setImmediate(() => {
+        // A turn that dies mid-run never prints the resume hint — it rides the
+        // LAST line — so the id the turn wrote under would be lost, and the
+        // failure note's "send another message and kimi picks up where it left
+        // off" would be a lie: the next message would open a FRESH session.
+        // The prompt in the session log identifies it; stamp what we find so
+        // resume (and the usage read below) work for killed and crashed turns.
+        if (!h.stampedSessionId) {
+          const found = discoverTurnSession(kimiHome(), h.agentDirectory, spawnedAt, prompt);
+          if (found) stamp(found);
+        }
         h.working = false;
         h.child = null;
         this.refreshUsage(h);

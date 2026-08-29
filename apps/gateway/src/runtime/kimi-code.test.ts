@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   kimiArgs, kimiFallbackPaths, kimiHome, kimiProviderType, kimiSpawnEnv, resolveKimiCommand,
-  scanWire, wireFileFor, wireQuietMs, turnFailed, turnFailureMessage, isGoalPrompt,
-  CONFLICTING_KIMI_VARS, GATEWAY_ONLY_VARS,
+  scanWire, wireFileFor, wireQuietMs, discoverTurnSession, turnFailed, turnFailureMessage, isGoalPrompt,
+  KimiCodeRuntime, CONFLICTING_KIMI_VARS, GATEWAY_ONLY_VARS,
 } from './kimi-code';
 import type { ModelCredential } from '../pi-config';
 
@@ -280,6 +280,165 @@ test('no id, no index entry, or no logs at all yields null, not a reprieve', () 
   assert.equal(wireQuietMs('/nonexistent-abcdef', sessionId), null);
   // Indexed, agents/main exists, but no wire.jsonl was ever written.
   assert.equal(wireQuietMs(home, sessionId), null);
+});
+
+// ── finding the session a live turn is writing to ──────────────────────────
+//
+// The resume hint rides the turn's LAST stdout line, so a first turn has no id
+// while it runs — and a turn killed mid-run never gets one. 2026-08-29, session
+// cmte4wr4: a first turn's swarm wrote to agents/agent-0/wire.jsonl until 6m35s
+// before the watchdog fired, but with no id the reprieve check had nothing to
+// ask and killed a working turn ("no session log on disk to check against").
+
+const DISCOVER_WORKDIR = '/tmp/game';
+
+function discoveryFixture(): {
+  home: string; spawnedAt: number;
+  add: (name: string, createdAt: number, prompt: string | null, workDir?: string) => string;
+} {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hermit-kimi-discover-'));
+  const spawnedAt = Date.now();
+  const index: string[] = [];
+  const add = (name: string, createdAt: number, prompt: string | null, workDir = DISCOVER_WORKDIR): string => {
+    const sessionId = `session_${name}`;
+    const dir = path.join(home, 'sessions', 'wd_game_0123456789ab', sessionId);
+    fs.mkdirSync(path.join(dir, 'agents', 'main'), { recursive: true });
+    const rows = [JSON.stringify({ type: 'metadata', protocol_version: '1.5', created_at: createdAt })];
+    if (prompt !== null) {
+      rows.push(JSON.stringify({
+        type: 'turn.prompt', agentId: 'main', input: [{ type: 'text', text: prompt }], time: createdAt + 30,
+      }));
+    }
+    fs.writeFileSync(path.join(dir, 'agents', 'main', 'wire.jsonl'), `${rows.join('\n')}\n`);
+    index.push(JSON.stringify({ sessionId, sessionDir: dir, workDir }));
+    fs.writeFileSync(path.join(home, 'session_index.jsonl'), `${index.join('\n')}\n`);
+    return sessionId;
+  };
+  return { home, spawnedAt, add };
+}
+
+test("discovery finds a first turn's session by the prompt in its log", () => {
+  const { home, spawnedAt, add } = discoveryFixture();
+  const old = add('old', spawnedAt - 3_600_000, 'unrelated earlier work');
+  const fresh = add('fresh', spawnedAt + 400, '把这件事做到完美');
+  assert.equal(discoverTurnSession(home, DISCOVER_WORKDIR, spawnedAt, '把这件事做到完美'), fresh);
+  assert.notEqual(fresh, old);
+});
+
+// The prompt record can be missing from the head slice (a huge inlined system
+// prompt plus tools snapshot pushes it past the read cap). With exactly one
+// fresh dir the creation time alone is still an unambiguous answer.
+test('a sole fresh dir is found even without its prompt in the head slice', () => {
+  const { home, spawnedAt, add } = discoveryFixture();
+  add('stale', spawnedAt - 3_600_000, null);
+  const fresh = add('fresh', spawnedAt + 400, null);
+  assert.equal(discoverTurnSession(home, DISCOVER_WORKDIR, spawnedAt, 'anything'), fresh);
+});
+
+// But two fresh dirs and no fingerprint is a guess, and a wrong stamp resumes
+// somebody else's conversation — worse than the kill this exists to prevent.
+test('two fresh dirs with no prompt fingerprint is ambiguous: null', () => {
+  const { home, spawnedAt, add } = discoveryFixture();
+  add('one', spawnedAt + 400, null);
+  add('two', spawnedAt + 900, null);
+  assert.equal(discoverTurnSession(home, DISCOVER_WORKDIR, spawnedAt, 'anything'), null);
+});
+
+// The strong fingerprint must beat recency: a dir created a beat later that
+// does NOT hold this turn's prompt is someone else's session.
+test('the prompt fingerprint outranks a newer dir without it', () => {
+  const { home, spawnedAt, add } = discoveryFixture();
+  const ours = add('ours', spawnedAt + 400, 'write the game');
+  add('theirs', spawnedAt + 900, 'something else entirely');
+  assert.equal(discoverTurnSession(home, DISCOVER_WORKDIR, spawnedAt, 'write the game'), ours);
+});
+
+// A RE-SENT identical message must not resurrect the previous session's dir:
+// the prompt matches, but that dir was not created by the child we spawned.
+test('an old session with the same prompt is not this turn', () => {
+  const { home, spawnedAt, add } = discoveryFixture();
+  add('yesterday', spawnedAt - 86_400_000, 'do the thing');
+  assert.equal(discoverTurnSession(home, DISCOVER_WORKDIR, spawnedAt, 'do the thing'), null);
+});
+
+// The genuinely wedged RESUMED session: its dir is old, nothing was created by
+// this child, and discovery must find nothing — the watchdog kills as before.
+test('a wedged resumed session still finds nothing', () => {
+  const { home, spawnedAt, add } = discoveryFixture();
+  add('wedged', spawnedAt - 3_600_000, 'the resumed prompt');
+  assert.equal(discoverTurnSession(home, DISCOVER_WORKDIR, spawnedAt, 'the resumed prompt'), null);
+});
+
+test("another workDir's sessions are invisible, trailing slash aside", () => {
+  const { home, spawnedAt, add } = discoveryFixture();
+  add('other', spawnedAt + 400, 'same prompt', '/tmp/other-game');
+  assert.equal(discoverTurnSession(home, '/tmp/other-game', spawnedAt, 'same prompt'), 'session_other');
+  assert.equal(discoverTurnSession(home, DISCOVER_WORKDIR, spawnedAt, 'same prompt'), null);
+  // The agent dir spelled with a trailing slash still matches the index row.
+  assert.equal(discoverTurnSession(home, '/tmp/other-game/', spawnedAt, 'same prompt'), 'session_other');
+});
+
+test('no index, an unreadable log, or a torn index line yields null', () => {
+  const { home, spawnedAt, add } = discoveryFixture();
+  assert.equal(discoverTurnSession('/nonexistent-abcdef', DISCOVER_WORKDIR, spawnedAt, 'x'), null);
+  // Indexed but the wire.jsonl was never written.
+  const id = `session_nowrite`;
+  const dir = path.join(home, 'sessions', 'wd_game_0123456789ab', id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.appendFileSync(path.join(home, 'session_index.jsonl'), `${JSON.stringify({ sessionId: id, sessionDir: dir, workDir: DISCOVER_WORKDIR })}\n`);
+  assert.equal(discoverTurnSession(home, DISCOVER_WORKDIR, spawnedAt, 'x'), null);
+  // A torn tail line is skipped, not fatal.
+  fs.appendFileSync(path.join(home, 'session_index.jsonl'), '{"sessionId":"session_tor');
+  const fresh = add('fresh', spawnedAt + 400, 'x');
+  assert.equal(discoverTurnSession(home, DISCOVER_WORKDIR, spawnedAt, 'x'), fresh);
+});
+
+// A handle whose only turn died before the resume hint knows no id. If the DB
+// row gains one out of band (a recovery stamp — the very id the hint would
+// have carried), the next ensure() must adopt it; otherwise the next turn
+// spawns FRESH and the CLI's new session overwrites the stamp, stranding the
+// conversation it pointed to. Observed through usage(): adoption is what lets
+// the totals be read out of the stamped session's log.
+test('a handle that never learned an id adopts one stamped into the DB', async () => {
+  const KIMI_ID = 'session_72bb3c42-303e-480e-89eb-564964409064';
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hermit-kimi-adopt-'));
+  const dir = path.join(home, 'sessions', 'wd_x_0123456789ab', KIMI_ID);
+  fs.mkdirSync(path.join(dir, 'agents', 'main'), { recursive: true });
+  fs.writeFileSync(
+    path.join(home, 'session_index.jsonl'),
+    `${JSON.stringify({ sessionId: KIMI_ID, sessionDir: dir, workDir: '/tmp/x' })}\n`,
+  );
+  fs.writeFileSync(path.join(dir, 'agents', 'main', 'wire.jsonl'), [
+    '{"type":"usage.record","agentId":"main","usage":{"inputOther":10,"output":5,"inputCacheRead":0,"inputCacheCreation":0},"time":1}',
+    '',
+  ].join('\n'));
+
+  const prevHome = process.env.HERMIT_KIMI_HOME;
+  process.env.HERMIT_KIMI_HOME = home;
+  const rt = new KimiCodeRuntime();
+  const emit = () => {};
+  const base = { id: 'sess-adopt-test', agentName: 'x', agentDirectory: '/tmp', model: null, credentialId: null };
+  try {
+    const h1 = await rt.ensure({ ...base, externalSessionId: null }, emit);
+    assert.equal(await rt.usage(h1), null, 'no id, no totals');
+    // The row is stamped out of band; the next submit's ensure() adopts it.
+    const adopted = await rt.ensure({ ...base, externalSessionId: KIMI_ID }, emit);
+    assert.equal((await rt.usage(adopted))?.totalTokens, 15, 'the stamped id was not adopted');
+    // A handle that HAS an id ignores the row — the hint is authoritative.
+    const keep = await rt.ensure({ ...base, externalSessionId: 'session_00000000-0000-4000-8000-000000000000' }, emit);
+    assert.equal((await rt.usage(keep))?.totalTokens, 15, "the row's value displaced the learned id");
+    // A non-kimi id in the row is not adopted.
+    const other = { ...base, id: 'sess-adopt-test-2' };
+    const h2 = await rt.ensure({ ...other, externalSessionId: null }, emit);
+    assert.equal(await rt.usage(h2), null);
+    const notKimi = await rt.ensure({ ...other, externalSessionId: 'a-claude-uuid' }, emit);
+    assert.equal(await rt.usage(notKimi), null, 'a foreign id was adopted');
+    await rt.stop(notKimi, 'kill');
+  } finally {
+    if (prevHome === undefined) delete process.env.HERMIT_KIMI_HOME;
+    else process.env.HERMIT_KIMI_HOME = prevHome;
+    await rt.stop({ sessionId: base.id, externalSessionId: '' }, 'kill');
+  }
 });
 
 // Real lines from a captured wire.jsonl. The counters are DISJOINT — billed
