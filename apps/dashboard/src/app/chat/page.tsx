@@ -1781,8 +1781,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
   // Empty-state chip / loop templates → fill compose, focus caret at end, resize.
   // (The value + textarea manipulation live in ComposeBar; this just drives it.)
+  // Whatever is already typed goes INTO the template rather than being thrown away:
+  // you describe the task in your own words, then pick the shape it runs in.
   const pickPrompt = useCallback((text: string) => {
-    composerRef.current?.setText(text);
+    composerRef.current?.setText(withDraft(text, taRef.current?.value ?? ''));
   }, []);
 
   // An element picked in the live-preview panel → APPEND its selector to the
@@ -2632,6 +2634,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 //
 //   ITERATE_TEMPLATE — the runs build on each other and there is a finish line, so
 //     the task carries its progress in a file and ends itself when it gets there.
+//     That finish line is "全部做完", not a blank to fill in: nobody can state a
+//     stop condition before starting, so the old <完成条件> slot went out unedited.
 //   CRON_TEMPLATE — a periodic check whose runs are independent and which nobody
 //     expects to finish.
 //
@@ -2642,8 +2646,30 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 // write unit tests, so runs came back with a passing count instead of the thing
 // working; the check that matters is the report you read, and for the perfect
 // chip, the fresh reviewer.
+
+// The blank each template leaves for the task itself. A chip fills it with the
+// current draft (pickPrompt); with nothing typed the blank stays, as a prompt to
+// write one. Before this, a chip overwrote the draft — so the one order that makes
+// sense, type then choose, silently threw the typing away.
+const TEMPLATE_SLOT = /<要做的事>|<目标>/;
+
+function withDraft(template: string, draft: string): string {
+  const task = draft.trim();
+  if (!task) return template;
+  // Function replacement, not a string: a draft containing $& or $1 would
+  // otherwise be spliced by replace()'s own substitution rules. The trailing
+  // full stop goes because the template supplies its own right after the slot.
+  if (TEMPLATE_SLOT.test(template)) {
+    const clause = task.replace(/[。.]+$/, '');
+    return template.replace(TEMPLATE_SLOT, () => clause);
+  }
+  // Slotless (the autonomy nudge, the empty-state starters) — the directive
+  // follows the task instead of replacing it.
+  return `${task}\n\n${template}`;
+}
+
 const ITERATE_TEMPLATE =
-  '开启循环任务：每 30 分钟，<要做的事>。每轮先读上一轮留下的进展文件再接着做，把结果发到这个对话；达成 <完成条件> 后自动停止。';
+  '开启循环任务：每 1 小时，<要做的事>。每轮先读上一轮留下的进展文件再接着做，把结果发到这个对话；全部做完后自动停止。';
 
 const CRON_TEMPLATE =
   '开启定时任务：每 60 分钟（时间上下浮动 ±10 分钟），<要做的事>。每次独立后台运行（不占用本对话上下文），跑完把结果发回这个对话，完整历史在 /cron 页面。';
