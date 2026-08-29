@@ -65,3 +65,11 @@ test('a pid still in the ps table next tick is escalated to SIGKILL', () => {
   const { kills } = planKills(rows, new Set([1000]));
   assert.deepEqual(kills, [{ pid: 1000, signal: 'SIGKILL' }]);
 });
+
+// The `/bin/` path segment is part of the signature too: a codex-shaped binary
+// living outside a bin directory (a build dir, a renamed copy) is not something
+// this gateway spawned, marker or not.
+test('a codex exec outside any bin directory is NOT touched', () => {
+  const r = row(43000, 1, '/x/build-out/codex exec --config mcp_servers.hermit.command="node"');
+  assert.equal(isCodexOrphan(r), false);
+});
