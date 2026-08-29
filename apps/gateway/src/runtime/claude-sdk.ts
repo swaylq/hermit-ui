@@ -68,6 +68,7 @@ import {
   newActivityState, applyActivityMessage, describeActivity, bashesRunningLongerThan, sessionBusy,
   type ActivityState, type RuntimeActivity,
 } from './claude-sdk-activity';
+import { notifyTurnBoundary } from './turn-boundary';
 import { claudeSdkEnv, applyCredentialEnv } from './claude-credentials';
 import { currentAuthFingerprint } from './pi-credentials';
 import { buildMcpServers } from '../mcp-config';
@@ -459,11 +460,52 @@ function retractLive(h: SdkHandle) {
   emitLive(h, liveRetraction(h.sessionId));
 }
 
+/**
+ * Tell the dashboard, now, what this session is doing.
+ *
+ * The 8s snapshot tick reports the same thing; this only removes the wait. Call
+ * it wherever `isWorking()` would change its answer — the whole point is that
+ * the browser stops having to guess across a 13s blind window (8s snapshot + 5s
+ * poll), which is what made one send read working → ready → working.
+ */
+function announceBoundary(h: SdkHandle) {
+  notifyTurnBoundary({
+    sessionId: h.sessionId,
+    // Kept literally in step with `isWorking` below — if that OR changes, this
+    // must change with it, or the instant push and the 8s snapshot would take
+    // turns overwriting each other with different answers.
+    working: sessionBusy(h.activity) === true || h.pending > 0 || h.statusBusy,
+    activity: describeActivity(h.activity, Date.now()),
+  });
+}
+
 function onSdkMessage(h: SdkHandle, msg: SDKMessage) {
   const m = msg as any;
   // Before anything else: every message is evidence about what the session is
   // doing, including the ones that produce no chat row.
+  //
+  // The CLI's own turn boundary is read across this call rather than from the
+  // frame: `applyActivityMessage` already owns which subtypes and which states
+  // count, and re-deriving that here is how the two would drift apart. Only a
+  // CHANGE is announced — `running` and `idle` arrive once per turn, so this is
+  // two pushes per turn, not one per frame.
+  const busyBefore = sessionBusy(h.activity);
   applyActivityMessage(h.activity, msg, Date.now());
+
+  // The CLI's own turn-over signal also settles `statusBusy`, which partials
+  // brought back to life: `status` does not reliably clear on its own, and
+  // isWorking ORs it in, so without this a stray frame could hold a finished
+  // session at "working" until the next turn ended.
+  //
+  // It runs BEFORE the announcement below and before the stream_event return,
+  // and both matter. `announceBoundary` reads `statusBusy` — the same OR
+  // `isWorking` uses — so announcing first would report the turn-over frame as
+  // "still working" whenever a `status: requesting` had not been cleared by the
+  // preceding `result`.
+  if (m.type === 'system' && m.subtype === 'session_state_changed' && m.state === 'idle') {
+    h.statusBusy = false;
+  }
+  if (sessionBusy(h.activity) !== busyBefore) announceBoundary(h);
 
   // Partial frames drive the placeholder row and produce nothing else — no chat
   // row of their own, no usage reading, no uuid worth remembering.
@@ -472,15 +514,6 @@ function onSdkMessage(h: SdkHandle, msg: SDKMessage) {
     if (moved === 'grew') scheduleLivePush(h);
     else if (moved === 'ended') retractLive(h);
     return;
-  }
-
-  // The CLI's own turn-over signal also settles `statusBusy`, which partials
-  // brought back to life: `status` does not reliably clear on its own, and
-  // isWorking ORs it in, so without this a stray frame could hold a finished
-  // session at "working" until the next turn ended.
-  if ((msg as any).type === 'system' && (msg as any).subtype === 'session_state_changed'
-      && (msg as any).state === 'idle') {
-    h.statusBusy = false;
   }
 
   // The init frame is the authoritative answer to "which transcript is this".
@@ -1002,6 +1035,12 @@ export class ClaudeSdkRuntime implements AgentRuntime {
         parent_tool_use_id: null,
         session_id: h.claudeUuid,
       } as SDKUserMessage);
+      // Before the CLI's own `running` frame, which lands a beat later. This is
+      // the earliest instant anything in the system knows a turn is starting,
+      // and the window it closes is the one users actually saw: between "send"
+      // and the first frame, a snapshot tick would honestly report idle, and the
+      // chat page read that as "the gateway looked, nothing is running".
+      announceBoundary(h);
       return true;
     } catch (e) {
       h.pending = Math.max(0, h.pending - 1);
@@ -1097,6 +1136,9 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       // if the interrupt did not take, the CLI's next `running` frame puts the
       // session straight back to busy, which `pending = 0` above can never do.
       h.activity.sessionState = 'idle';
+      // Same reason Stop must read as stopped immediately: waiting up to 13s for
+      // the snapshot to agree is the whole complaint this file is answering.
+      announceBoundary(h);
     } catch (e) {
       h.interrupting = false;
       console.error(`[claude-sdk] interrupt failed session=${h.sessionId.slice(0, 8)}:`, e);

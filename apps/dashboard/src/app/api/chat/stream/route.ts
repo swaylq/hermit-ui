@@ -18,7 +18,8 @@ import { NextRequest } from 'next/server';
 import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
 import { messageProjection } from '@/server/message-digest';
-import { subscribe as subscribeChat } from '@/server/chat-bus';
+import { subscribe as subscribeChat, subscribeStatus } from '@/server/chat-bus';
+import { sessionStatusFrame, statusFrameSignature } from '@/server/session-status-frame';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,6 +52,17 @@ export async function GET(req: NextRequest) {
   // rows, eliminating the open-time double-fetch (tRPC + SSE both shipping the
   // newest ~60). Genuine post-open changes still emit on the next tick.
   const skipInitial = req.nextUrl.searchParams.get('skipInitial') === '1';
+
+  // `status=1` says the client understands a second frame type on this stream —
+  // `event: status`, the session's runtime state (working/idle, alive, activity)
+  // the moment the gateway writes it, instead of on the browser's next 5s poll.
+  //
+  // Opt-in for the same reason `delta` is: during a deploy a tab still running
+  // the previous bundle is on this connection, and that bundle reads every frame
+  // as a message push (it looks at `data:` and ignores `event:`). It would fold a
+  // status frame into the timeline as an empty window. Old bundles do not ask, so
+  // they never see one.
+  const wantsStatus = req.nextUrl.searchParams.get('status') === '1';
 
   // `delta=1` says the client can merge a fragment: it gets {rows, gone} —
   // only what changed, plus the ids that have left the window — instead of the
@@ -91,8 +103,10 @@ export async function GET(req: NextRequest) {
   // 不匹配，故用 ReturnType（私有 alias，非导出契约）。
   type TimerHandle = ReturnType<typeof setTimeout>;
   let tickTimer: TimerHandle | undefined;
+  let statusTimer: TimerHandle | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
   let unsubscribeChat: () => void = () => {};
+  let unsubscribeStatus: () => void = () => {};
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -105,6 +119,45 @@ export async function GET(req: NextRequest) {
 
       let lastSig = '';
       let lastEmit = Date.now();
+
+      // ── the status channel ───────────────────────────────────────────────
+      // Signal-driven only: there is no interval for this. It runs when the
+      // gateway writes a snapshot for THIS session (chat-bus statusSubs), so a
+      // session nobody is pushing about costs nothing, and a turn boundary
+      // arrives about as fast as the gateway's POST commits.
+      let lastStatusSig: string | null = null;
+      const statusTick = async () => {
+        if (closed) return;
+        try {
+          const row = await prisma.chatSession.findFirst({
+            where: { id: sessionId, machineId: machine.id },
+            select: {
+              state: true, alive: true, activity: true, snapshotAt: true,
+              closedAt: true, restartRequestedAt: true,
+            },
+          });
+          if (!row || closed) return;
+          const frame = sessionStatusFrame(row);
+          const sig = statusFrameSignature(frame);
+          if (sig === lastStatusSig) return;
+          lastStatusSig = sig;
+          lastEmit = Date.now();
+          safeEnqueue(`event: status\ndata: ${JSON.stringify(frame)}\n\n`);
+        } catch {
+          // transient DB hiccup — the client's own 5s poll still carries state
+        }
+      };
+      // Same coalesce shape as the message tick: the 8s snapshot push arrives as
+      // one signal per session, but a turn boundary and a snapshot can land in
+      // the same instant.
+      const scheduleStatusTick = () => {
+        if (closed || statusTimer) return;
+        statusTimer = setTimeout(() => {
+          statusTimer = undefined;
+          void statusTick();
+        }, TICK_DEBOUNCE_MS);
+      };
+
       // What this connection has already put on the wire: row id → the updatedAt
       // it carried. That is the entire delta state, and it is bounded by the
       // window, so a long session costs no more to stream than a short one.
@@ -157,7 +210,9 @@ export async function GET(req: NextRequest) {
         closed = true;
         clearInterval(interval);
         clearTimeout(tickTimer);
+        clearTimeout(statusTimer);
         unsubscribeChat();
+        unsubscribeStatus();
         try { controller.close(); } catch { /* already closed */ }
       };
       if (req.signal.aborted) {
@@ -240,6 +295,13 @@ export async function GET(req: NextRequest) {
         }, TICK_DEBOUNCE_MS);
       };
       unsubscribeChat = subscribeChat(sessionId, scheduleTick);
+      if (wantsStatus) {
+        unsubscribeStatus = subscribeStatus(sessionId, scheduleStatusTick);
+        // One frame at open, unconditionally: the tab may have been in the
+        // background (this stream is torn down while hidden) and come back to a
+        // session whose state changed in between, with no signal owed to it.
+        void statusTick();
+      }
       if (skipInitial) {
         // Record what the client already has from tRPC, without re-sending it.
         // `lastSig` is deliberately left empty: the first tick then runs its
@@ -266,7 +328,9 @@ export async function GET(req: NextRequest) {
       closed = true;
       clearInterval(interval);
       clearTimeout(tickTimer);
+      clearTimeout(statusTimer);
       unsubscribeChat();
+      unsubscribeStatus();
     },
   });
 

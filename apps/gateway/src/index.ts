@@ -23,6 +23,7 @@
 
 import { collectAgentsFromList } from './collect/agents';
 import { collectSessionSnapshots } from './collect/session-snapshot';
+import { startSessionStatePush } from './collect/session-state-push';
 import { collectHostStat } from './collect/host-stat';
 import { collectUsage, usageWindowStart } from './collect/usage';
 import { collectUsageWindows } from './collect/window';
@@ -315,6 +316,13 @@ function loop(fn: () => Promise<void>, ms: number) {
   await pushKimiUsage();
   await pushPlanUsage(); // last — runs after the blocking ccusage scans, not starved by them
 })();
+
+// Turn boundaries reach the dashboard the instant the backend sees them, instead
+// of waiting out the 8s snapshot tick and then the browser's 5s poll. Costs one
+// tiny UPDATE per turn start and per turn end; everything expensive stays on the
+// 8s tick. Not a loop — it subscribes, so it has to be wired before any session
+// can run. See collect/session-state-push.ts.
+startSessionStatePush();
 
 // Hourly, and silent unless Anthropic's paused Agent-SDK billing split comes
 // back. A control request against a session that is already running, so it costs

@@ -7,6 +7,9 @@ import {
   snapshotSilenceMs,
   SNAPSHOT_STALE_MS,
   BACKGROUND_RESIDENT_MS,
+  mergeLiveStatus,
+  workingUnconfirmed,
+  WORKING_HOLD_CAP_MS,
 } from './session-status';
 
 // ── the label a working session shows ───────────────────────────────────────
@@ -421,3 +424,100 @@ test('a session that has never been spoken in has no silence to expire', () => {
   assert.equal(v.key, 'working');
 });
 
+
+// ── the pushed status frame ─────────────────────────────────────────────────
+// The stream carries the same row the poll does, only earlier. `snapshotAt` —
+// the gateway's clock on both sides — decides which is later; nothing here
+// compares against the browser's clock.
+
+const isoAt = (ms: number) => new Date(ms).toISOString();
+
+test('a newer pushed frame wins over the polled row', () => {
+  const merged = mergeLiveStatus(
+    { state: 'idle', alive: true, snapshotAt: new Date(1_000), activity: null },
+    { state: 'working', alive: true, activity: { kind: 'tool', label: 'Bash' }, snapshotAt: isoAt(2_000) },
+  );
+  assert.equal(merged?.state, 'working');
+  assert.deepEqual(merged?.activity, { kind: 'tool', label: 'Bash' });
+});
+
+test('a frame the poll has already caught up to is ignored', () => {
+  const row = { state: 'working', alive: true, snapshotAt: new Date(3_000), activity: null };
+  // Equal timestamps mean the same observation; prefer the row, which carries
+  // every column rather than four.
+  assert.equal(mergeLiveStatus(row, { state: 'idle', alive: true, activity: null, snapshotAt: isoAt(3_000) }), row);
+  assert.equal(mergeLiveStatus(row, { state: 'idle', alive: true, activity: null, snapshotAt: isoAt(2_000) }), row);
+});
+
+test('a frame never invents a session, and never touches what it does not carry', () => {
+  assert.equal(mergeLiveStatus(null, { state: 'working', alive: true, activity: null, snapshotAt: isoAt(9) }), null);
+  const merged = mergeLiveStatus(
+    { state: 'idle', alive: false, snapshotAt: new Date(1), closedAt: new Date(5), contextTokens: 42 },
+    { state: 'working', alive: true, activity: null, snapshotAt: isoAt(2) },
+  ) as unknown as Record<string, unknown>;
+  assert.equal(merged.closedAt instanceof Date, true, 'closedAt still outranks working downstream');
+  assert.equal(merged.contextTokens, 42);
+});
+
+// ── refusing to call a session idle on evidence that predates the turn ──────
+// This is the whole flicker in one rule. The chat page's fast local signals
+// (an unanswered user row; the tail bubble grew in the last 1.8s) lapse on
+// their own schedule — a tool call that runs three seconds without emitting
+// clears the second one — and the `state` underneath may not have been
+// rewritten since BEFORE the turn began.
+
+const T0 = 1_000_000;
+
+test('an idle reading on the same snapshot we were working on is not evidence', () => {
+  assert.equal(
+    workingUnconfirmed({
+      snapshotAt: new Date(T0 - 5_000),
+      lastWorkingSnapshotMs: T0 - 5_000,
+      lastWorkingAtMs: T0 - 2_000,
+      now: T0,
+    }),
+    true,
+  );
+});
+
+test('a genuinely newer snapshot releases the hold with no lag', () => {
+  assert.equal(
+    workingUnconfirmed({
+      snapshotAt: new Date(T0 - 1_000),   // the gateway looked again, after
+      lastWorkingSnapshotMs: T0 - 5_000,
+      lastWorkingAtMs: T0 - 2_000,
+      now: T0,
+    }),
+    false,
+    'that is a turn actually ending — showing ready must not be delayed',
+  );
+});
+
+test('a session never seen working holds nothing', () => {
+  assert.equal(
+    workingUnconfirmed({ snapshotAt: new Date(T0), lastWorkingSnapshotMs: 0, lastWorkingAtMs: 0, now: T0 }),
+    false,
+  );
+  // A brand-new session has no snapshot at all. Holding on 0 <= 0 would pin it
+  // amber from the first optimistic reading until the cap expired.
+  assert.equal(
+    workingUnconfirmed({ snapshotAt: null, lastWorkingSnapshotMs: 0, lastWorkingAtMs: T0 - 1, now: T0 }),
+    false,
+  );
+});
+
+test('a gateway that stops writing releases the hold rather than pinning amber', () => {
+  // Only reachable when snapshotAt has stopped moving — a live gateway rewrites
+  // it every 8s. The cap is under SNAPSHOT_STALE_MS so `stale` is what shows
+  // next, not a green `ready` over a session nobody is reporting on.
+  assert.ok(WORKING_HOLD_CAP_MS < SNAPSHOT_STALE_MS, 'stale must be reachable before the hold expires');
+  assert.equal(
+    workingUnconfirmed({
+      snapshotAt: new Date(T0 - 60_000),
+      lastWorkingSnapshotMs: T0 - 60_000,
+      lastWorkingAtMs: T0 - WORKING_HOLD_CAP_MS - 1,
+      now: T0,
+    }),
+    false,
+  );
+});

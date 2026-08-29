@@ -16,7 +16,10 @@ import { cn } from '@/lib/utils';
 import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { CtxBar } from '@/components/ctx-bar';
 import { contextWindowFor } from '@/lib/context-window';
-import { sessionStatusView } from '@/lib/session-status';
+import {
+  sessionStatusView, mergeLiveStatus, workingUnconfirmed, isRestingState, DELIVERY_GRACE_MS,
+  type LiveStatusFrame,
+} from '@/lib/session-status';
 import { dashboardReach } from '@/lib/dashboard-reach';
 import { useMarkSessionRead } from '@/lib/session-read';
 import { lastSessionId, rememberSession } from '@/lib/last-session';
@@ -404,6 +407,12 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // query's cache. The poll below is only a fallback for when the stream isn't
   // connected (the gateway flushes block-level rows into Postgres either way).
   const [streamConnected, setStreamConnected] = useState(false);
+  // The session's runtime state as the stream last pushed it (`event: status`).
+  // Same fields as the polled row, merged by `snapshotAt` — see mergeLiveStatus.
+  // This is what turns a turn boundary from "up to 13s away" (8s gateway tick +
+  // 5s browser poll) into "as fast as the gateway's POST", and it is why the
+  // header no longer has to lean on guesses that lapse mid-turn.
+  const [pushedStatus, setPushedStatus] = useState<LiveStatusFrame | null>(null);
   // Fixed live window — see INITIAL_WINDOW. Older history lives in `older`.
   const limit = INITIAL_WINDOW;
   const [findOpen, setFindOpen] = useState(false);
@@ -461,6 +470,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // EventSource) so we can send the x-asst-key header. Falls back to the poll
   // above if the stream drops.
   useEffect(() => {
+    // Belongs to the session this stream is about to open. SessionPane is reused
+    // across session switches without a key, so without this the previous
+    // conversation's status would drive this one's header until the first frame.
+    setPushedStatus(null);
     let ctrl: AbortController | null = null;
     let cancelled = false;
     let reconnectTimer: number | null = null;
@@ -532,14 +545,24 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             while ((idx = buf.indexOf('\n\n')) >= 0) {
               const frame = buf.slice(0, idx);
               buf = buf.slice(idx + 2);
-              const dataLine = frame.split('\n').find((l) => l.startsWith('data:'));
+              const lines = frame.split('\n');
+              const dataLine = lines.find((l) => l.startsWith('data:'));
               if (!dataLine) continue;
+              // Two frame types share this stream now. A frame with no `event:`
+              // is a message push — that is what the server sent before the
+              // status channel existed, and the shape a `status=0` server still
+              // sends.
+              const eventName = lines.find((l) => l.startsWith('event:'))?.slice(6).trim() ?? 'messages';
               try {
                 // `delta=1` gets {rows, gone}. The bare array is what a server
                 // that predates the flag sends, and what a tab still running the
                 // previous bundle would ask for — accept both so a deploy never
                 // leaves a page silently unable to parse its own stream.
                 const frame = JSON.parse(dataLine.slice(5).trim());
+                if (eventName === 'status') {
+                  setPushedStatus(frame as LiveStatusFrame);
+                  continue;
+                }
                 const rows = Array.isArray(frame) ? frame : frame?.rows ?? [];
                 const gone = Array.isArray(frame) ? undefined : frame?.gone;
                 // A delta is a fragment, and a fragment written into a cache
@@ -1399,6 +1422,22 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // happening, so the status sat on `ready` while your own message was already
   // visible above it. `pending` is pruned the moment the real row lands, so this
   // only ever covers the gap.
+  //
+  // The row every status decision below reads: the polled session, with the
+  // stream's pushed state folded in when that is the newer of the two.
+  //
+  // `activity` has to be spliced in explicitly — listSessions deliberately never
+  // carries it (chat.ts, the P1-2 payload rule) and `session` prefers the
+  // listSessions row, so taking it from `session` silently loses the rich
+  // "Bash · 47s" label the moment the list resolves, i.e. always.
+  const statusRow = useMemo(
+    () => mergeLiveStatus(
+      session ? { ...session, activity: sessionOne.data?.activity ?? null } : session,
+      pushedStatus,
+    ),
+    [session, sessionOne.data?.activity, pushedStatus],
+  );
+
   const optimisticUser = pending.length ? pending[pending.length - 1] : null;
   const lastMsg = messages.data?.[messages.data.length - 1];
   const lastMsgIsUser = optimisticUser ? true : lastMsg?.role === 'user';
@@ -1407,9 +1446,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     : lastMsg
     ? new Date(lastMsg.createdAt).getTime()
     : 0;
-  const snapTime = session?.snapshotAt ? new Date(session.snapshotAt).getTime() : 0;
+  const snapTime = statusRow?.snapshotAt ? new Date(statusRow.snapshotAt).getTime() : 0;
   const turnSettled =
-    session?.state === 'idle' && (snapTime > lastMsgTime || Date.now() - lastMsgTime > 90_000);
+    statusRow?.state === 'idle'
+    && (snapTime > lastMsgTime + DELIVERY_GRACE_MS || Date.now() - lastMsgTime > 90_000);
   const isWaitingAssistant = lastMsgIsUser && !turnSettled;
 
   // Any unresolved interaction (permission / question) in the loaded window?
@@ -1560,25 +1600,42 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue.data]);
-  // Status badge: gateway's pane-derived state, flipped to "working" instantly
-  // off our own in-flight signal. unread=false — we're looking at this session,
-  // so it's read by definition (never the red "unread" dot in its own header).
-  //
-  // `activity` (the "Bash · 47s" / "retrying 2/5" refinement) rides ONLY on the
-  // single-row getSession poll — listSessions deliberately never carries it
-  // (chat.ts, the P1-2 payload rule) — while `session` above prefers the
-  // listSessions row. So it has to be read off sessionOne explicitly: taking it
-  // from `session` silently lost the rich label the moment the list resolved,
-  // i.e. always, leaving the header on a bare "working" it promises not to be.
-  const status = sessionStatusView(
-    session ? { ...session, activity: sessionOne.data?.activity ?? null } : session,
-    // …and the reach record, so a poll of ours that stalled behind a busy
-    // dashboard cannot be read as the gateway having gone quiet. That mattered
-    // most here: `isInFlight` lapses in the gaps a long tool call leaves, so the
-    // header falls back to the snapshot at exactly the moment a finishing tool
-    // is stalling the polls that refresh it. See lib/dashboard-reach.
-    { liveWorking: isInFlight, unread: false, needsYou: !!pendingInteraction, ...dashboardReach() },
-  );
+  // Status badge, over `statusRow` (the polled session with the stream's pushed
+  // state folded in). unread=false — we're looking at this session, so it's read
+  // by definition, and never the red "unread" dot in its own header.
+  const statusOpts = {
+    // The reach record goes in so a poll of ours that stalled behind a busy
+    // dashboard is not read as the gateway having gone quiet. That mattered most
+    // here: the fast local signal lapses in the gaps a long tool call leaves, so
+    // the header falls back to the snapshot at exactly the moment a finishing
+    // tool is stalling the polls that refresh it. See lib/dashboard-reach.
+    unread: false, needsYou: !!pendingInteraction, ...dashboardReach(),
+  };
+  const baseStatus = sessionStatusView(statusRow, { ...statusOpts, liveWorking: isInFlight });
+  // When we last read this session as working, and which snapshot we were
+  // holding at the time. Written during render on purpose: it is a record of
+  // what this very render decided, and an effect would record it one render
+  // late — the render in between being exactly the flicker. Re-running the
+  // render with the same inputs writes the same values, so a double render
+  // (StrictMode, concurrent) changes nothing.
+  const workingSeenRef = useRef<{ snapMs: number; atMs: number }>({ snapMs: 0, atMs: 0 });
+  if (baseStatus.key === 'working') workingSeenRef.current = { snapMs: snapTime, atMs: Date.now() };
+  // A drop to resting is only believed when the snapshot behind it is newer than
+  // the one that was on screen while the session was working. Otherwise the fast
+  // local signal has merely lapsed — a tool call three seconds into its work,
+  // the gap between the send and the first assistant block — and the row under
+  // it has not been asked again since. See workingUnconfirmed.
+  const holdWorking =
+    isRestingState(baseStatus.key)
+    && workingUnconfirmed({
+      snapshotAt: statusRow?.snapshotAt,
+      lastWorkingSnapshotMs: workingSeenRef.current.snapMs,
+      lastWorkingAtMs: workingSeenRef.current.atMs,
+      now: Date.now(),
+    });
+  const status = holdWorking
+    ? sessionStatusView(statusRow, { ...statusOpts, liveWorking: true })
+    : baseStatus;
 
   // What the live run capsule puts in its header. Read off the raw activity
   // rather than `status.label`, which folds elapsed time into the string — the
@@ -1586,7 +1643,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // Returned as two PRIMITIVES: the activity object is a fresh identity on every
   // 5s poll, and handing that to memo(MessageTimeline) would re-render the whole
   // visible timeline four times a minute for a label that did not change.
-  const rawActivity = sessionOne.data?.activity as Record<string, unknown> | null | undefined;
+  // From the merged row, not the poll: a pushed status frame carries the current
+  // activity, and reading the 5s poll here would leave the capsule naming the
+  // PREVIOUS tool for up to five seconds after the header had moved on.
+  const rawActivity = statusRow?.activity as Record<string, unknown> | null | undefined;
   const runActivity = useMemo((): { label: string | null; detail: string | null } => {
     const a = rawActivity && typeof rawActivity === 'object' && !Array.isArray(rawActivity) ? rawActivity : null;
     if (!a) return { label: null, detail: null };

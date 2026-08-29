@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { prisma } from '@/server/db';
+import { fireStatus, hasStatusSubscriber } from '@/server/chat-bus';
 import { resolveMachine } from '../route';
 
 const Item = z.object({
@@ -32,6 +33,17 @@ const Item = z.object({
   activity: z.unknown(),
   // Process-tree RSS of the session's pane, MB (resource governance).
   rssMb: z.number().int().nullable().optional(),
+  /**
+   * Write only the keys this item actually carries.
+   *
+   * The default (full) shape is a REPLACEMENT: every column it knows about is
+   * written, and an absent key writes null. That is right for the 8s collector,
+   * which probes everything. It is wrong for the gateway's turn-boundary push
+   * (collect/session-state-push.ts), which knows `state`/`alive`/`activity` in
+   * memory and nothing else — sent as a full item it would blank the transcript
+   * path, both prompt snippets and the pane pid on every turn start.
+   */
+  partial: z.boolean().optional(),
 });
 const Body = z.object({ items: z.array(Item) });
 
@@ -54,6 +66,26 @@ export async function POST(req: NextRequest) {
   // batch (a rare DB error rolls the whole push back instead of committing a
   // prefix — harmless, the collector re-pushes the full snapshot next tick).
   const ops = body.items.map((it) => {
+    // A partial item writes what it carries and leaves the rest alone. Nothing
+    // below this branch runs for one — in particular the `?? null` defaults,
+    // which are exactly what it must not do.
+    if (it.partial) {
+      const patch: Prisma.ChatSessionUpdateManyMutationInput = { snapshotAt: now };
+      if (it.state !== undefined) patch.state = it.state;
+      if (it.alive !== undefined) {
+        patch.alive = it.alive;
+        // Same rule as the full path: a session whose process is back up is no
+        // longer hibernated.
+        if (it.alive) patch.hibernatedAt = null;
+      }
+      if (it.activity !== undefined) {
+        patch.activity = it.activity == null ? Prisma.DbNull : (it.activity as Prisma.InputJsonValue);
+      }
+      return prisma.chatSession.updateMany({
+        where: { id: it.sessionId, machineId: machine.id },
+        data: patch,
+      });
+    }
     // updateMany scoped to (machineId, id) — silently skips sessions the
     // gateway already cleaned up.
     const data: Prisma.ChatSessionUpdateManyMutationInput = {
@@ -93,5 +125,15 @@ export async function POST(req: NextRequest) {
   });
   const results = ops.length ? await prisma.$transaction(ops) : [];
   const updated = results.reduce((sum, r) => sum + r.count, 0);
+
+  // Wake the chat pages that have this session open, so a turn boundary shows up
+  // on screen in about the time the POST took rather than on their next 5s poll.
+  // `hasStatusSubscriber` first: this loop runs over every session on the machine
+  // every 8s, and open chat pages are a handful — the check is a Map lookup and
+  // keeps the no-subscriber case free. The SSE handler still decides whether the
+  // status actually CHANGED; this only says "worth a look".
+  for (const it of body.items) {
+    if (hasStatusSubscriber(it.sessionId)) fireStatus(it.sessionId);
+  }
   return NextResponse.json({ ok: true, updated });
 }

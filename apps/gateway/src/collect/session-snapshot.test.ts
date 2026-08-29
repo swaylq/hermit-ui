@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { probeRuntime, needsStoredUsage, readTailBytes, tailLines } from './session-snapshot';
+import { probeRuntime, needsStoredUsage, readTailBytes, tailLines, withQueued, type SessionSnapshot } from './session-snapshot';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -163,4 +163,45 @@ test('the read is bounded by the window even when the file is not', async () => 
   const got = await readTailBytes(p, 1024);
   assert.equal(got?.text.length, 1024);
   assert.equal(got?.whole, false);
+});
+
+// ── a message the gateway has accepted but not handed over yet ──────────────
+// The window between `chat.send` writing the row and the 2s chat tick
+// delivering it is real, and in it every runtime honestly answers "no turn".
+// A snapshot taken there used to write `idle` with a fresh `snapshotAt`, which
+// the chat page reads as "asked after my message, nothing running" — the
+// working → ready → working flicker.
+
+function snap(sessionId: string, state: string | null): SessionSnapshot {
+  return {
+    sessionId, pid: null, alive: state != null, state,
+    contextTokens: null, outputTokens: null, lastActivity: null,
+    transcriptPath: null, lastUserPrompt: null, lastAssistantText: null, rssMb: null,
+  };
+}
+
+test('an idle session holding an undelivered message reads as working', () => {
+  const out = withQueued([snap('a', 'idle')], [{ sessionId: 'a' }]);
+  assert.equal(out[0].state, 'working');
+});
+
+test('sessions with nothing queued are untouched', () => {
+  const rows = [snap('a', 'idle'), snap('b', 'idle')];
+  const out = withQueued(rows, [{ sessionId: 'a' }]);
+  assert.equal(out[0].state, 'working');
+  assert.equal(out[1].state, 'idle');
+  assert.equal(out[1], rows[1], 'same object — nothing to re-render downstream');
+});
+
+test('only idle is lifted: starting and dead stay as probed', () => {
+  // 'starting' says more than 'working' does, and a null state means there is
+  // no process to run the message — which is the fact worth showing.
+  assert.equal(withQueued([snap('a', 'starting')], [{ sessionId: 'a' }])[0].state, 'starting');
+  assert.equal(withQueued([snap('a', null)], [{ sessionId: 'a' }])[0].state, null);
+  assert.equal(withQueued([snap('a', 'working')], [{ sessionId: 'a' }])[0].state, 'working');
+});
+
+test('an empty queue is the identity', () => {
+  const rows = [snap('a', 'idle')];
+  assert.equal(withQueued(rows, []), rows);
 });

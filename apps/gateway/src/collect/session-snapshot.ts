@@ -614,5 +614,38 @@ export async function collectSessionSnapshots(): Promise<SessionSnapshot[]> {
     if (r.status === 'fulfilled') out.push(r.value);
     else console.error('[session-snapshots] probe failed:', r.reason);
   }
-  return out;
+  return withQueued(out, pending.messages);
+}
+
+/**
+ * A session holding a message it has not handed to the model yet is WORKING.
+ *
+ * No probe can see this, because it is not a fact about the model — it is a fact
+ * about the gateway's own queue. `chat.send` writes the row; `deliverMessages`
+ * picks it up on the next 2s chat tick, later still if a turn is already
+ * running. In between, every runtime honestly answers "no turn in flight", the
+ * snapshot writes `idle` with a fresh `snapshotAt`, and the chat page reads that
+ * pair as "the gateway looked after my message and nothing is happening" — so
+ * the optimistic yellow it had shown since the keypress is withdrawn, and the
+ * status reads ready until the turn actually starts. That is the working →
+ * ready → working flicker, and this is where it originates.
+ *
+ * `pending.messages` is the undelivered user queue and the collector already has
+ * it — the same poll that discovers which sessions to probe returns it. So this
+ * costs one Set build per tick and no query at all.
+ *
+ * Only 'idle' is lifted. A dead or still-booting session keeps what the probe
+ * said: 'starting' is more informative than 'working', and a null state means
+ * nothing is there to run the message, which is the truth worth showing.
+ */
+export function withQueued(
+  snapshots: SessionSnapshot[],
+  undelivered: Array<{ sessionId: string }>,
+): SessionSnapshot[] {
+  if (undelivered.length === 0) return snapshots;
+  const waiting = new Set(undelivered.map((m) => m.sessionId));
+  if (waiting.size === 0) return snapshots;
+  return snapshots.map((s) =>
+    s.state === 'idle' && waiting.has(s.sessionId) ? { ...s, state: 'working' } : s,
+  );
 }

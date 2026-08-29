@@ -56,6 +56,10 @@ export function timelineStreamParams(sessionId: string, opts: { skipInitial: boo
     sessionId,
     limit: String(INITIAL_WINDOW),
     delta: '1',
+    // We understand `event: status` frames — the session's runtime state pushed
+    // as the gateway writes it. Opt-in because a bundle that predates this reads
+    // every frame on the stream as a message push; see the route's `wantsStatus`.
+    status: '1',
   });
   if (TIMELINE_DIGEST) p.set('digest', '1');
   if (opts.skipInitial) p.set('skipInitial', '1');

@@ -296,6 +296,109 @@ export function snapshotSilenceMs(
   return Math.max(0, observedAt - silentSince);
 }
 
+/**
+ * What the chat stream's `event: status` frame carries — the same fields
+ * `sessionStatusView` reads, named the same, so it merges into a session row
+ * instead of becoming a second opinion beside one. See
+ * server/session-status-frame.ts for the sending half.
+ */
+export interface LiveStatusFrame {
+  state: string | null;
+  alive: boolean;
+  activity: unknown;
+  snapshotAt: string | null;
+}
+
+/**
+ * Fold a pushed status frame into the polled session row.
+ *
+ * Both describe the same row; the frame is just earlier. `snapshotAt` decides
+ * which one is later, and it is the gateway's clock on both sides — no
+ * comparison against the browser's, which is the mistake that made `turnSettled`
+ * below fragile in the first place.
+ *
+ * A frame is never allowed to REMOVE a session or contradict the fields it does
+ * not carry (`closedAt`, `restartRequestedAt`, the token counts): it replaces
+ * exactly the four it does.
+ */
+export function mergeLiveStatus<T extends SessionRuntimeLike>(
+  s: T | null | undefined,
+  live: LiveStatusFrame | null | undefined,
+): T | null | undefined {
+  if (!s || !live) return s;
+  const rowAt = toMs(s.snapshotAt) ?? 0;
+  const liveAt = toMs(live.snapshotAt) ?? 0;
+  // Equal timestamps mean the poll has already caught up to this frame — prefer
+  // the row, which carries every field rather than four.
+  if (liveAt <= rowAt) return s;
+  return { ...s, state: live.state, alive: live.alive, activity: live.activity, snapshotAt: live.snapshotAt };
+}
+
+/**
+ * How long a just-sent message may sit in the queue before a snapshot saying
+ * "idle" is allowed to mean the turn is over.
+ *
+ * A send writes a row; the gateway's chat tick picks it up and hands it to the
+ * backend on its own 2s schedule, later still if a turn is already running. In
+ * between, `state` is honestly 'idle' — nothing is running yet — and a snapshot
+ * that lands in that gap carries a `snapshotAt` later than the message. Reading
+ * that pair as "the gateway looked after my message and saw nothing" is what
+ * withdrew the optimistic yellow and rendered ready one beat after send.
+ *
+ * The gateway now reports a queued message as working (collect/session-snapshot),
+ * so this is the fallback for the machines and backends whose gateway has not
+ * been updated yet. Wider than the 2s tick, and paid only by a turn that never
+ * starts — which the 90s backstop beside it still clears.
+ */
+export const DELIVERY_GRACE_MS = 4_000;
+
+/**
+ * How long "I saw it working" can outlive the snapshot that said so.
+ *
+ * Only reached when the gateway has gone quiet — a live one rewrites `snapshotAt`
+ * every 8s, which releases the hold below on its own. This is the bound that
+ * stops a gateway dying mid-turn from pinning a session amber forever, and it is
+ * comfortably under SNAPSHOT_STALE_MS so `stale` is what shows next, not `ready`.
+ */
+export const WORKING_HOLD_CAP_MS = 30_000;
+
+/**
+ * Is a "not working" reading too weak to act on yet?
+ *
+ * The status the chat page shows is the OR of a fast local guess (an unanswered
+ * user row; the tail bubble grew in the last 1.8s) and the gateway's `state`.
+ * The guesses lapse on their own schedule — a tool call that runs three seconds
+ * without emitting clears the streaming one — and when a guess lapses, the
+ * status falls back to a `state` that may not have been rewritten since BEFORE
+ * the turn started. Reading that as "idle" is what produced working → ready →
+ * working out of one send.
+ *
+ * The fix is not a timer. It is refusing to accept an idle verdict from a
+ * snapshot that is no newer than the one we were already looking at when we last
+ * saw the session working: that snapshot has been asked and it did not say idle,
+ * it said nothing new at all. The moment a genuinely newer snapshot lands —
+ * which is exactly when a turn really ends — the hold releases with no lag.
+ *
+ * `lastWorkingSnapshotMs` is the row's `snapshotAt` at the last working reading,
+ * `lastWorkingAtMs` the wall-clock instant of it. Both 0 means we have never seen
+ * this session working, and there is nothing to hold.
+ */
+export function workingUnconfirmed(a: {
+  snapshotAt?: Date | string | null;
+  lastWorkingSnapshotMs: number;
+  lastWorkingAtMs: number;
+  now: number;
+}): boolean {
+  if (!a.lastWorkingAtMs) return false;
+  if (a.now - a.lastWorkingAtMs > WORKING_HOLD_CAP_MS) return false;
+  const snap = toMs(a.snapshotAt) ?? 0;
+  // A row that has never been snapshotted (a brand-new session) carries no
+  // evidence either way, and holding on `0 <= 0` would pin it working from the
+  // first optimistic reading until the cap. Require a real prior snapshot.
+  if (!a.lastWorkingSnapshotMs) return false;
+  return snap <= a.lastWorkingSnapshotMs;
+}
+
 export function sessionStatusView(
   s: SessionRuntimeLike | null | undefined,
   opts: {
