@@ -116,14 +116,36 @@ export function planWindow(input: WindowInput): WindowPlan {
   let padBottom = 0;
   for (let i = end; i < n; i++) padBottom += heights[i];
 
-  // Never hand back an empty window: a scroll position past the end (which
-  // happens for a moment while the list shrinks) would otherwise render nothing
-  // at all, and the user would see a blank pane rather than the last messages.
+  // A scroll position past the end walks `start` off the list. That happens
+  // whenever the list SHRINKS under a stale scrollTop — most often on open,
+  // where the local cache paints every row it holds (hundreds) and the server's
+  // 60-row window then replaces them.
+  //
+  // Anchor at the end and walk BACK until the kept band is covered.
+  //
+  // This used to return a single row (`start = n - 1`) and it is the reason the
+  // shrink was VISIBLE. Replayed through this function with the reported
+  // numbers — 600 cached rows at 90px, a 700px viewport, shrinking to 18 items
+  // — one row left 90px of message in a 700px viewport and 87% spacer. Worse,
+  // `use-timeline-window`'s remap branch carries the span of the previous plan
+  // across every later signature change and only falls through to a full
+  // recompute when the start row is MISSING, so a span of 1 was re-carried on
+  // every streaming tick and never widened again: the reader sat in a blank
+  // pane, with a scrollbar, for the rest of the turn.
+  //
+  // The band is `viewportHeight + overscan` rather than the usual
+  // `+ 2 * overscan` because there is nothing below the end to overscan into.
   if (start >= n) {
-    start = Math.max(0, n - 1);
+    end = n;
+    start = n;
+    const band = viewportHeight + overscan;
+    let covered = 0;
+    while (start > 0 && covered < band) {
+      start--;
+      covered += heights[start];
+    }
     padTop = 0;
     for (let i = 0; i < start; i++) padTop += heights[i];
-    end = n;
     padBottom = 0;
   }
   return { start, end, padTop, padBottom };

@@ -74,13 +74,35 @@ test('ragged heights are handled by position, not by index', () => {
   assert.equal(p.padTop, 1080);
 });
 
-test('a scroll position past the end still renders something', () => {
+test('a scroll position past the end renders enough to FILL the viewport', () => {
+  // "Renders something" is what this used to assert, and something was one row:
+  // 100px of message under 49,900px of spacer. That is what the user reported as
+  // a blank pane you can scroll around in.
   const heights = uniform(500);
-  const p = plan({ heights, scrollTop: 999_999 });
+  const p = plan({ heights, scrollTop: 999_999, viewportHeight: 900, overscan: 2700 });
   assert.ok(p.end > p.start, 'window is not empty');
-  assert.equal(p.end, 500);
+  assert.equal(p.end, 500, 'anchored at the end');
   const rendered = heights.slice(p.start, p.end).reduce((a, b) => a + b, 0);
+  assert.ok(rendered >= 900 + 2700, `covers viewport + overscan, got ${rendered}`);
   assert.equal(p.padTop + rendered + p.padBottom, 50_000);
+  assert.equal(p.padBottom, 0, 'nothing below the end to space out');
+});
+
+test('the reported blank pane: 600 cached rows replaced by an 18-item window', () => {
+  // The exact shape of the bug, from a phone opening a long session: the local
+  // cache paints every row it holds, the server's 60-message window replaces
+  // them, and the replan happens while scrollTop is still the tall list's.
+  const ROW = 90, VP = 700, OVERSCAN = VP * 3;
+  const scrollTop = 600 * ROW - VP; // pinned at the bottom of the cached list
+  const p = planWindow({
+    heights: uniform(18, ROW), scrollTop, viewportHeight: VP, overscan: OVERSCAN, threshold: 0,
+  });
+  const rendered = (p.end - p.start) * ROW;
+  // The whole 18-item list is shorter than one band, so all of it must render.
+  assert.deepEqual(p, { start: 0, end: 18, padTop: 0, padBottom: 0 });
+  // And the reader, wherever the browser clamps them inside it, sees messages.
+  const content = p.padTop + rendered + p.padBottom;
+  assert.ok(content <= 18 * ROW, 'no spacer invented under a short list');
 });
 
 test('an empty timeline is not a special case', () => {
