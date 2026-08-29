@@ -271,3 +271,13 @@ test('the notice set is capped and unseen notices pass the cap', () => {
   assert.equal(seen.size, 200, 'the cap is not exceeded');
   assert.equal(emitNoticeOnce(seen, row('warning 0')), false, 'seen ones still dedupe');
 });
+
+// SyncItem.content is `unknown` at the type level — a malformed row must pass
+// through, not crash the turn's event loop.
+test('a system row with non-array content passes without throwing', () => {
+  const seen = new Set<string>();
+  assert.equal(emitNoticeOnce(seen, { role: 'system', content: null } as any), true);
+  assert.equal(emitNoticeOnce(seen, { role: 'system', content: 'oops' } as any), true);
+  assert.equal(emitNoticeOnce(seen, { role: 'system', content: [null] } as any), true);
+  assert.equal(seen.size, 0, 'nothing malformed is remembered');
+});

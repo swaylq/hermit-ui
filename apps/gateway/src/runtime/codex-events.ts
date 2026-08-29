@@ -101,7 +101,9 @@ function mcpResultText(result: unknown): string {
  */
 export function emitNoticeOnce(seen: Set<string>, item: TranslatedItem): boolean {
   if (item.role !== 'system') return true;
-  const block = (item.content as Array<{ text?: unknown }>)[0];
+  // SyncItem.content is `unknown` at the type level; a caller that hands us a
+  // non-array must not crash the turn's event loop.
+  const block = (Array.isArray(item.content) ? item.content : [])[0] as { text?: unknown } | undefined;
   const text = typeof block?.text === 'string' ? block.text : '';
   if (!text.startsWith('[codex error]\n')) return true;
   if (seen.has(text)) return false;
