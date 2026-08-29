@@ -1,6 +1,6 @@
 ---
 name: perfect-goal
-description: Drive one goal to a finish a fresh reviewer signs off on. Write the goal down as a short checkable list, then work in rounds - each round builds, self-tests, captures a screenshot for anything with a UI, and hands the result to a fresh critic subagent that only reports real problems. Stop when a fresh critic finds no blocking problem, inside a 24-hour budget. Use when the user says "做到完美", "要求完美", "打磨到没问题", "严格验收", "反复改直到没问题", "perfect this", "make it flawless", "iterate until a reviewer has no complaints", or hands over a goal and expects it fully delivered rather than attempted.
+description: Drive one goal to a finish a fresh reviewer signs off on. Write the goal down as a short checkable list, then work in rounds - each round only has to BUILD. When the list looks met, drive the thing end to end once, screenshot anything with a UI, and hand it to a fresh critic subagent that only reports real problems. Stop when a fresh critic finds no blocking problem, inside a 24-hour budget. Use when the user says "做到完美", "要求完美", "打磨到没问题", "严格验收", "反复改直到没问题", "perfect this", "make it flawless", "iterate until a reviewer has no complaints", or hands over a goal and expects it fully delivered rather than attempted.
 user_invocable: true
 ---
 
@@ -55,25 +55,38 @@ whole effort, ask that one question with `mcp__hermit__ask` and keep going on th
 
 ## Phase 2 — rounds
 
-Keep a log at `<work dir>/goal/ROUNDS.md`. One block per round: 这轮改了什么、自测结果、评审提了
+Keep a log at `<work dir>/goal/ROUNDS.md`. One block per round: 这轮改了什么、build 过没过、评审提了
 什么、哪些修了哪些没修（以及为什么）、**本轮开始时间**。The clock is part of the log — this is
 how the 24-hour budget is tracked.
 
-Each round, in order:
+Steps 1 and 2 are every round. Steps 3 to 5 fire only when you believe the list is met —
+that is the difference between converging and testing yourself in circles.
 
 ### 1. Do the highest-severity open work
 
 One coherent theme per round. Fixing a blocking bug and restyling a footer in the same round
 makes the critic's verdict unattributable.
 
-### 2. Self-test before showing anyone
+### 2. Make sure it builds. That is the whole per-round bar.
 
-Make sure it builds and runs. You do not need to exhaustively re-test everything every round —
-just verify the thing you changed actually works.
+Run the project's build (or, for something with no build step, start it and see it come up).
+A round that does not build is not a round.
 
-### 3. Capture evidence — a screenshot is the minimum for any UI
+**Do not write unit tests to prove your change works, and never report a passing count as
+evidence.** Tests you wrote yourself encode your own assumptions — the same assumptions that
+produced the bug. They go green whether or not a person can use the thing. If the project
+already has a suite, running it before you land is a cheap regression check and worth doing;
+it is still not proof your feature works.
 
-Anything with a user interface needs at least one real screenshot per round, and the critic
+The proof is the next section, and it happens ONCE — when the list looks met, not every round.
+
+### 3. When the criteria look met — drive it end to end, once
+
+Not after every edit. Not every round. When you believe the 验收标准 are actually satisfied,
+use the thing the way a person would: open the page, click through the flow, run the command
+for real, throw real data at it. That single pass is what "tested" means here.
+
+A screenshot is the minimum for any UI: at least one real shot from that pass, and the critic
 must look at it. 「我测过了没问题」是这句话存在要防的东西。
 
 What to shoot:
@@ -98,7 +111,8 @@ Drive the game or the interaction with `browser_press_key` / `browser_click` /
 `browser_evaluate` between shots. For a page that needs a server, the `live-preview` skill puts
 it on a URL; for a longer automation, the `browser-automation` skill.
 
-Save everything to `<work dir>/goal/shots/round-<N>-<what>.png`.
+Save everything to `<work dir>/goal/shots/round-<N>-<what>.png`, `<N>` being the round
+that believed it was done.
 
 **Before you or the critic `Read` any image, run `{{AGENT_DIR}}/scripts/safe-image.sh <path>` and
 read the path it prints.** A non-zero exit means stop and report it — never read the original as a
@@ -106,6 +120,10 @@ fallback. A malformed or oversized image makes every later API call in that sess
 including the one that would tell the user about it.
 
 ### 4. Hand it to a critic
+
+Same trigger as step 3 — when the list looks met, not every round. A critic spun up after
+every small edit is the dense testing this skill is trying to avoid; it burns rounds and
+trains you to discount its findings.
 
 Spawn a subagent with your harness's subagent tool — `Agent` on newer Claude Code, `Task` on
 older; `subagent_type: "general-purpose"`. Fresh context is the whole point: do not summarise
@@ -209,6 +227,9 @@ exactly the shape of this skill. `GOAL.md` and `ROUNDS.md` are what carry the wo
   critic. That is the floor; it is not a production stills shoot.
 - **Report failures honestly.** A round where the build broke is a round that says the build
   broke. This skill is worthless the moment its log starts flattering the work.
+- **Build every round; test once.** The per-round gate is the build. The end-to-end pass and
+  the critic come when the criteria look met — testing densely does not find more, it just
+  makes each result cheaper to ignore.
 - **The clock is part of the plan, not an afterthought.** Scope the goal for 24 hours at the
   start; do not discover the limit at hour 23.
 - One goal at a time. Two goals in flight means neither has a critic that understands it.

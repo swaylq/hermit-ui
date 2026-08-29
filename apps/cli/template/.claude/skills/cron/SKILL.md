@@ -35,7 +35,9 @@ Two families of ask, one mechanism:
 1. **Task** — what one run does. Concrete and verifiable.
 2. **Interval** — 每 N 分钟 / 小时 / 天. Minimum 1 minute, maximum 7 days.
 3. **Finish line** — for the second family this is mandatory: a condition *this agent can check
-   by itself*. "看起来不错" is not one; "`npm test` 全绿且首页截图里没有横向滚动条" is.
+   by itself*. "看起来不错" is not one; "打开首页截图，桌面宽度下没有横向滚动条" is.
+   Make it something the run OBSERVES, not something it asserts about its own code — a green
+   suite the same agent wrote is not a finish line, it is a mirror.
    For the first family there is no finish line and the cron runs until the user stops it —
    confirm that is what they want.
 4. **Jitter (optional, encouraged for periodic checks)** — a ± random offset on the fire time
@@ -69,9 +71,13 @@ for the boot chain — do not hardcode a file list here), plus ./memory/<today>.
 
 Do this run: <THE TASK>
 
-Then SELF-TEST before reporting — run the build / test / metric / check that fits the work and
-confirm it actually passed. On failure: roll back, or record the failure honestly. NEVER
-report success you did not verify.
+Then CHECK IT BUILDS before reporting, and confirm the build actually passed. On failure:
+roll back, or record the failure honestly. NEVER report success you did not verify.
+
+Do not write unit tests to prove the round worked, and never report a passing count as the
+result — a suite you wrote yourself goes green on your own assumptions, including the wrong
+ones. When the task is finished (not every run), exercise it the way a person would once:
+open the page, run the command for real, look at the output.
 
 Then append a one-line result to ./memory/<today>.md.
 
@@ -181,9 +187,12 @@ prompt, run now, delete, and read every run's full output.
 
 ## Guardrails
 
-- **Verify every run.** Build, test or metric appropriate to the work. On failure, roll back
-  and say so. Three consecutive failures the same way: stop the cron (`CRON_DONE`) and put the
-  decision the user has to make at the top of that last report.
+- **Every run must build.** That is the gate — not a test suite, and never one you wrote to
+  prove yourself right. On failure, roll back and say so. Three consecutive failures the same
+  way: stop the cron (`CRON_DONE`) and put the decision the user has to make at the top of
+  that last report.
+- **Test once, at the end.** An iterating cron checks its finish line by USING the thing, on
+  the run that thinks it is done — not by re-running a suite every round.
 - **An iterating cron needs a finish line.** Without one it edits the same project forever.
 - **No hand-rolled schedulers.** No LaunchAgent, no `.plist`, no system crontab, no
   systemd-user timer. Those are invisible to the dashboard and bypass quota routing.

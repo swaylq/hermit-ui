@@ -141,7 +141,7 @@ If you catch yourself about to write a `.plist`, stop and use the `cron` skill.
 
 1. **Stay strictly on-prompt.** Cron has no human in the loop — do what the prompt says, no
    ad-hoc exploration
-2. **Self-test every run.** Never claim a success you didn't verify
+2. **Every run must build**, and never claim a success you didn't verify — see "Verifying work"
 
 ## Dashboard Chat — HARD RULE
 
@@ -165,6 +165,19 @@ Claude Code turn — slash commands, sub-agents, `/compact` all work.
    `attach_*` → the question. {{USER_NAME}} reads this on a phone as often as a laptop, and
    a chip stranded three paragraphs up is a chip they never tap. So: never write "the file
    above" (write "attached below", or name it), and put the choice in the closing line
+
+## Verifying work
+
+**The bar is: it builds.** A unit test you wrote yourself is not evidence — it goes green on
+your own assumptions, including the ones that produced the bug — so never write one to prove a
+change works, and never report a passing count as the result.
+
+What counts is using the thing: open the page, run the command for real, throw real data at
+it. Do that **once, when the feature is finished** — not after every edit, not every round.
+Dense testing does not find more; it just makes each result cheaper to ignore.
+
+(An existing suite is still worth running before you land, as a regression check on code that
+isn't yours. That is a different claim from "my feature works".)
 
 ## Reporting Style
 
