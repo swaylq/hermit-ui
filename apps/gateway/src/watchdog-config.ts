@@ -22,6 +22,12 @@ import { api } from './api';
 export interface GatewayWatchdogConfig {
   strayReaper: { enabled: boolean; ageMinutes: number; maxRoots: number };
   chromeReaper: { enabled: boolean; idleMinutes: number };
+  cpuReaper: {
+    enabled: boolean;
+    minCpuMinutes: number;
+    minCoreFraction: number;
+    confirmTicks: number;
+  };
   gatewayWatch: {
     loadMax: number;
     silentSec: number;
@@ -34,6 +40,7 @@ export interface GatewayWatchdogConfig {
 const DEFAULTS: GatewayWatchdogConfig = {
   strayReaper: { enabled: true, ageMinutes: 120, maxRoots: 25 },
   chromeReaper: { enabled: true, idleMinutes: 10 },
+  cpuReaper: { enabled: true, minCpuMinutes: 120, minCoreFraction: 0.9, confirmTicks: 3 },
   gatewayWatch: { loadMax: 60, silentSec: 600, wedgeFails: 100, confirmSec: 90, cooldownSec: 10800 },
 };
 
@@ -50,6 +57,7 @@ function parse(raw: unknown): GatewayWatchdogConfig {
   };
   const stray = sec('strayReaper');
   const chrome = sec('chromeReaper');
+  const cpu = sec('cpuReaper');
   const gw = sec('gatewayWatch');
   const bool = (v: unknown, fb: boolean) => (typeof v === 'boolean' ? v : fb);
   return {
@@ -61,6 +69,12 @@ function parse(raw: unknown): GatewayWatchdogConfig {
     chromeReaper: {
       enabled: bool(chrome.enabled, DEFAULTS.chromeReaper.enabled),
       idleMinutes: num(chrome.idleMinutes, DEFAULTS.chromeReaper.idleMinutes, 1, 24 * 60),
+    },
+    cpuReaper: {
+      enabled: bool(cpu.enabled, DEFAULTS.cpuReaper.enabled),
+      minCpuMinutes: num(cpu.minCpuMinutes, DEFAULTS.cpuReaper.minCpuMinutes, 10, 7 * 24 * 60),
+      minCoreFraction: num(cpu.minCoreFraction, DEFAULTS.cpuReaper.minCoreFraction, 0.5, 1),
+      confirmTicks: num(cpu.confirmTicks, DEFAULTS.cpuReaper.confirmTicks, 1, 20),
     },
     gatewayWatch: {
       loadMax: num(gw.loadMax, DEFAULTS.gatewayWatch.loadMax, 1, 10000),

@@ -269,6 +269,19 @@ export default function WatchdogsPage() {
           </WatchdogCard>
 
           <WatchdogCard
+            title="CPU orphan reaper"
+            habitat="gateway tick · every 5 min"
+            blurb="Kills orphaned processes pinned at ~90% of one core for hours — a dead &quot;while true&quot; loop is invisible to the browser reapers, so it is caught by its CPU instead (2026-08-29, 8 loops ran 12 days and held load at 8.4)."
+            delayed
+          >
+            <Enabled checked={draft.cpuReaper.enabled} onChange={(v) => set('cpuReaper', { ...draft.cpuReaper, enabled: v })} />
+            <Num label="Min accumulated CPU" value={draft.cpuReaper.minCpuMinutes} unit="min" onChange={(v) => set('cpuReaper', { ...draft.cpuReaper, minCpuMinutes: v })} />
+            <Num label="Pinned at" value={draft.cpuReaper.minCoreFraction} unit="× one core" onChange={(v) => set('cpuReaper', { ...draft.cpuReaper, minCoreFraction: v })} />
+            <Num label="Confirm samples" value={draft.cpuReaper.confirmTicks} unit="× 5 min" onChange={(v) => set('cpuReaper', { ...draft.cpuReaper, confirmTicks: v })} />
+            <LastAlert alert={alerts['cpu-leak']} />
+          </WatchdogCard>
+
+          <WatchdogCard
             title="Gateway watchdog"
             habitat="launchd · hourly · lives fully outside pm2 and the gateway"
             blurb="Restarts a gateway that fell out of pm2, restarts one that is triple-confirmed wedged (3h cooldown), and alerts on starvation: load over the ceiling or the gateway log silent. Off switch: the gateway-watch.off file on the machine."

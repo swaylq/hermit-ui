@@ -157,6 +157,12 @@ export const WATCHDOG_CONFIG_SCHEMA = z.object({
     maxRoots: z.number().min(1).max(1000),
   }),
   chromeReaper: z.object({ enabled: z.boolean(), idleMinutes: z.number().min(1).max(24 * 60) }),
+  cpuReaper: z.object({
+    enabled: z.boolean(),
+    minCpuMinutes: z.number().min(10).max(7 * 24 * 60),
+    minCoreFraction: z.number().min(0.5).max(1),
+    confirmTicks: z.number().min(1).max(20),
+  }),
   gatewayWatch: z.object({
     loadMax: z.number().min(1).max(10000),
     silentSec: z.number().min(60).max(86400),

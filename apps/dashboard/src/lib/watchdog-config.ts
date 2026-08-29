@@ -26,6 +26,12 @@ export interface WatchdogConfig {
   };
   strayReaper: { enabled: boolean; ageMinutes: number; maxRoots: number };
   chromeReaper: { enabled: boolean; idleMinutes: number };
+  cpuReaper: {
+    enabled: boolean;
+    minCpuMinutes: number;
+    minCoreFraction: number;
+    confirmTicks: number;
+  };
   gatewayWatch: {
     loadMax: number;
     silentSec: number;
@@ -58,6 +64,10 @@ export const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
   // Owned per-agent Chrome, idle without a browser-lock (apps/gateway/src/
   // chrome-reaper.ts).
   chromeReaper: { enabled: true, idleMinutes: 10 },
+  // Orphaned (ppid 1) processes pinned at ≥90% of one core: kill after 2h of
+  // accumulated CPU confirmed over 3 samples (apps/gateway/src/cpu-reaper.ts).
+  // Deliberately loose — a legit one-shot job never accumulates 2h of pure CPU.
+  cpuReaper: { enabled: true, minCpuMinutes: 120, minCoreFraction: 0.9, confirmTicks: 3 },
   // The launchd watchdog (scripts/gateway-watch.sh): starvation probes +
   // wedge-restart confirmations.
   gatewayWatch: { loadMax: 60, silentSec: 600, wedgeFails: 100, confirmSec: 90, cooldownSec: 10800 },
@@ -91,6 +101,7 @@ export function watchdogConfigOf(
   const hostRed = section(r.hostRed);
   const stray = section(r.strayReaper);
   const chrome = section(r.chromeReaper);
+  const cpu = section(r.cpuReaper);
   const gw = section(r.gatewayWatch);
   return {
     stuck: {
@@ -116,6 +127,12 @@ export function watchdogConfigOf(
     chromeReaper: {
       enabled: bool(chrome.enabled, d.chromeReaper.enabled),
       idleMinutes: num(chrome.idleMinutes, d.chromeReaper.idleMinutes, 1, 24 * 60),
+    },
+    cpuReaper: {
+      enabled: bool(cpu.enabled, d.cpuReaper.enabled),
+      minCpuMinutes: num(cpu.minCpuMinutes, d.cpuReaper.minCpuMinutes, 10, 7 * 24 * 60),
+      minCoreFraction: num(cpu.minCoreFraction, d.cpuReaper.minCoreFraction, 0.5, 1),
+      confirmTicks: num(cpu.confirmTicks, d.cpuReaper.confirmTicks, 1, 20),
     },
     gatewayWatch: {
       loadMax: num(gw.loadMax, d.gatewayWatch.loadMax, 1, 10000),

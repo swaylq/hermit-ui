@@ -43,6 +43,7 @@ import { knowledgeRequestTick, reconcileKnowledgeOnStartup } from './knowledge';
 import { globalMemoryTick } from './global-memory';
 import { seedPiConfigFromEnv } from './pi-config';
 import { chromeReaperTick } from './chrome-reaper';
+import { cpuReaperTick } from './cpu-reaper';
 import { strayReaperTick } from './stray-reaper';
 import { orphanPaneReaperTick } from './orphan-pane-reaper';
 import { codexOrphanReaperTick } from './codex-orphan-reaper';
@@ -346,6 +347,7 @@ loop(pushTakeoverWatch, 8_000); // reactive Brain poke on takeover block/finish 
 loop(() => safe('hibernate-tick', chatHibernateTick), 3_000); // manual hibernate requests
 loop(() => safe('chrome-reaper', chromeReaperTick), 5 * 60_000); // reap idle per-agent Chrome (~1GB each) the session-reaper leaves orphaned
 loop(() => safe('stray-reaper', strayReaperTick), 5 * 60_000); // kill NON-owned leaked headless browsers (age + count caps) — the bound a leaking script's own watchdog cannot be trusted to provide (2026-08-26, load 237 on sway003-macmini)
+loop(() => safe('cpu-reaper', cpuReaperTick), 5 * 60_000); // kill ORPHANED processes pinned at ≥90% of one core for hours (2026-08-29, 8 `while :; do :; done` loops ran 12 days, load 8.4)
 loop(() => safe('cleanup-sweep', async () => {
   const r = await api.runCleanupSweep();
   if (r?.archived) console.log(`[cleanup-sweep] archived ${r.archived}`);

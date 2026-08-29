@@ -12,6 +12,7 @@ import { hostHealth } from '@/lib/host-health';
 const ALERT_KINDS = [
   'stuck-messages',
   'chrome-leak',
+  'cpu-leak',
   'gateway-wedged',
   'high-load',
   'gateway-resurrected',
