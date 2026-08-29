@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { AGENTS_ROOT, PREVIEW_ALLOW_ROOTS } from '../config';
 
 export type PreviewMode = 'static' | 'proxy';
@@ -133,7 +134,30 @@ export function removeBySession(sessionId: string): PreviewEntry | null {
   if (!e) return null;
   byId.delete(e.previewId);
   persistSoon();
+  killProxyTarget(e);
   return e;
+}
+
+/**
+ * Proxy mode reverse-proxies to a loopback dev server the agent started (vite /
+ * next). The registry holds only the target URL, not a pid — the gateway does
+ * not own that process, the agent's shell does. When the session goes away the
+ * registration goes away, but the dev server would otherwise keep listening
+ * until the host reboots. Best-effort kill of whatever is listening on the
+ * pinned port; a process already gone (or lsof absent, e.g. Linux) is a no-op.
+ */
+function killProxyTarget(e: PreviewEntry): void {
+  if (e.mode !== 'proxy') return;
+  try {
+    const port = Number(new URL(e.target).port);
+    if (!Number.isInteger(port) || port <= 0) return;
+    const out = execFileSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' });
+    for (const pid of out.split('\n').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0)) {
+      try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+    }
+  } catch {
+    /* nothing listening, or lsof unavailable — nothing to kill */
+  }
 }
 
 /** Drop entries idle past the TTL; returns what was removed so the caller can clear the dashboard column. */

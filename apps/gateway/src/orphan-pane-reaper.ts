@@ -18,7 +18,7 @@
 // This also makes bulk session cleanup safe to build: without it, one click that
 // deletes 45 sessions manufactures 45 orphans and turns a tidy-up into an incident.
 
-import { listSessionsDetailed, tmuxPaneName, kill as killTmuxSession, type TmuxSessionInfo } from '@hermit-ui/tmux-driver';
+import { listSessionsDetailed, tmuxPaneName, killTree, type TmuxSessionInfo } from '@hermit-ui/tmux-driver';
 import { api } from './api';
 import { paneIsWorking } from './pane';
 
@@ -99,7 +99,10 @@ export async function orphanPaneReaperTick(): Promise<void> {
     // Re-check on the live pane. An orphan whose claude is mid-turn is still doing
     // work someone may be watching in tmux; let it finish and take it next tick.
     if (await paneIsWorking(paneId)) continue;
-    await killTmuxSession(paneId, 2_000).catch(() => {});
+    // killTree, not kill(): a deleted session's pane has no DB row, but its
+    // background shells (dev server, live-preview target) are just as orphaned
+    // as the claude root — reap the whole subtree, not just the pane.
+    await killTree(paneId, 2_000).catch(() => {});
     killed++;
     const idleH = ((now - p.activityAt) / 3.6e6).toFixed(1);
     console.log(`[orphan-pane] killed ${p.name} (no DB row, idle ${idleH}h)`);

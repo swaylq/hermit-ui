@@ -745,6 +745,77 @@ export async function hardKill(sessionId: string, graceMs = 5_000): Promise<bool
 }
 
 /**
+ * Kill a session's WHOLE process tree — the pane's claude root AND every
+ * background shell it spawned (`npm run dev &`, a live-preview proxy target,
+ * a leftover `while :; do :; done`). `kill()` and `hardKill()` both target only
+ * the claude root; a background shell claude leaves behind is reparented to
+ * pid 1 when the root dies and no pane reaper touches it. This walks the
+ * pane-pid subtree leaves-first, SIGTERMs it, then SIGKILLs whatever survived,
+ * then reclaims the tmux session itself.
+ */
+export async function killTree(sessionId: string, graceMs = 3_000): Promise<boolean> {
+  const name = paneName(sessionId);
+  const r = tmux(['list-panes', '-t', `=${name}`, '-F', '#{pane_pid}'], { timeoutMs: 2_000 });
+  const root = Number((r.stdout || '').split('\n')[0]);
+  if (!r.ok || !Number.isInteger(root) || root <= 0) {
+    // No pane (or no pid): nothing to tree-kill, but still reclaim the session.
+    if (hasSession(name)) tmux(['kill-session', '-t', name]);
+    return !hasSession(name);
+  }
+
+  // Leaves first, root last — so a child is never orphaned by its parent's death.
+  const order = [...descendantsOf(root)].reverse();
+  for (const pid of order) {
+    try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+  }
+
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline) {
+    if (!hasSession(name)) return true;
+    await sleep(150);
+  }
+
+  for (const pid of order) {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+  }
+  try { process.kill(root, 'SIGKILL'); } catch { /* already gone */ }
+  if (hasSession(name)) tmux(['kill-session', '-t', name]);
+  return !hasSession(name);
+}
+
+/**
+ * Every descendant of `root`, root included, in no particular order. One `ps`
+ * snapshot → pid→children map → BFS. Pure enough to be exercised directly:
+ * it never touches tmux, only the process table.
+ */
+export function descendantsOf(root: number): number[] {
+  const r = spawnSync('ps', ['-axo', 'pid=,ppid='], { encoding: 'utf8', timeout: 5_000 });
+  const children = new Map<number, number[]>();
+  if (r.status === 0) {
+    for (const line of (r.stdout || '').split('\n')) {
+      const m = line.trim().match(/^(\d+)\s+(\d+)$/);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      const ppid = Number(m[2]);
+      const arr = children.get(ppid);
+      if (arr) arr.push(pid);
+      else children.set(ppid, [pid]);
+    }
+  }
+  const out: number[] = [];
+  const stack = [root];
+  const seen = new Set<number>();
+  while (stack.length) {
+    const pid = stack.pop()!;
+    if (seen.has(pid)) continue; // guard against a pid-reuse cycle
+    seen.add(pid);
+    out.push(pid);
+    for (const c of children.get(pid) ?? []) stack.push(c);
+  }
+  return out;
+}
+
+/**
  * Wait until the pane's REPL has rendered its composer prompt (the `❯` line is
  * visible) — i.e. claude is up and able to accept typed input. Typing BEFORE this
  * is the cold-start race that silently drops a session's first message: the keys

@@ -29,6 +29,7 @@ import {
   confirmSubmitted,
   sendInterrupt,
   kill as killTmuxSession,
+  killTree,
   acceptResumePromptAsFull,
   watchTranscript,
   encodedProjectDir,
@@ -45,6 +46,7 @@ import {
   tmuxPaneName,
 } from '@hermit-ui/tmux-driver';
 import { paneIsWorking, WORK_MARKER_RE, sessionTranscriptPath } from './pane';
+import { removeBySession as removePreviewBySession } from './preview/registry';
 import { extractText, hasToolResult, CcEvent, CcBlock } from './claude-code';
 
 import { runtimeFor, allRuntimes } from './runtime';
@@ -297,7 +299,15 @@ export async function hibernateOneSession(sessionId: string): Promise<boolean> {
     await Promise.all(allRuntimes().map((r) =>
       r.stop({ sessionId, externalSessionId: '' }, 'hibernate').catch(() => undefined)));
     piStates.delete(sessionId);
-    await killTmuxSession(sessionId, 2_000);
+    // killTree, not killTmuxSession: a plain /exit only kills the claude root and
+    // strands any background shell the agent left (dev server, live-preview
+    // target). killTree SIGTERMs the whole pane-pid subtree leaves-first.
+    await killTree(sessionId, 2_000);
+    // Retire the session's live-preview registration too — it is keyed by
+    // sessionId and would otherwise linger until the 24h TTL, and a proxy-mode
+    // target (the agent's dev server) dies with removeBySession even when it
+    // had escaped the pane tree (nohup'd, re-parented).
+    removePreviewBySession(sessionId);
     console.log(`[hibernate] killed session=${sessionId.slice(0, 8)}`);
     return true;
   } finally {
