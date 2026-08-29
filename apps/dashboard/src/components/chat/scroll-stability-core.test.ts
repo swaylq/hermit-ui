@@ -10,6 +10,7 @@ import {
   readerMovedUp,
   readerScrollTop,
   settleCompensation,
+  scrollerIsUnanchored,
   trimOutOfRangeDeviation,
 } from './scroll-stability-core';
 
@@ -306,4 +307,19 @@ test('trimming step by step converges to the same place as one drop', () => {
   }
   assert.equal(scrollTop, 0);
   assert.equal(deviation, 0, 'nothing is left for commitDeviation to discard');
+});
+
+// The one CSS declaration the whole attribution rule rests on.
+test('scrollerIsUnanchored accepts none, and nothing else the engine acts on', () => {
+  assert.equal(scrollerIsUnanchored('none'), true);
+  assert.equal(scrollerIsUnanchored('  NONE '), true, 'computed values are compared case-insensitively');
+  assert.equal(scrollerIsUnanchored('auto'), false, 'auto makes the engine a second writer of scrollTop');
+});
+
+test('a browser without the property is fine — it does not anchor either', () => {
+  // WebKit shipped overflow-anchor only in 2026-02; older engines report
+  // nothing here AND perform no scroll anchoring, so the invariant holds.
+  assert.equal(scrollerIsUnanchored(undefined), true);
+  assert.equal(scrollerIsUnanchored(''), true);
+  assert.equal(scrollerIsUnanchored(null), true);
 });

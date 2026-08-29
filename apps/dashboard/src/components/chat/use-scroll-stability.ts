@@ -9,6 +9,7 @@ import {
   logicalScrollTop as logicalTop,
   planBoundaryRebase,
   readerScrollTop as readerTop,
+  scrollerIsUnanchored,
   trimOutOfRangeDeviation,
 } from './scroll-stability-core';
 
@@ -73,12 +74,58 @@ type StabilityLogEntry = {
 
 const LOG_SIZE = 300;
 const stabilityLog: StabilityLogEntry[] = [];
+/** Layers whose overflow-anchor has already been checked — see assertUnanchored. */
+const checkedLayers = new WeakSet<HTMLElement>();
 function log(entry: StabilityLogEntry): void {
   stabilityLog.push(entry);
   if (stabilityLog.length > LOG_SIZE) stabilityLog.shift();
   if (typeof window !== 'undefined') {
     (window as unknown as { __scrollStabilityLog?: StabilityLogEntry[] }).__scrollStabilityLog = stabilityLog;
   }
+}
+
+/**
+ * The scroller must have browser scroll anchoring OFF, or this whole subsystem
+ * is reasoning from a false premise.
+ *
+ * Everything here attributes an unexplained change in `scrollTop` to the reader,
+ * on the grounds that we are the only other writer (prepend-anchor-core.ts).
+ * With `overflow-anchor: auto` the engine becomes a second writer and
+ * `planFrame`, `planTailFrame` and `forcedByClamp` all start quietly booking its
+ * adjustments as user input.
+ *
+ * That premise is held up by ONE declaration — `[overflow-anchor:none]` on the
+ * layer in chat/page.tsx — which for a long time was documented as coming from
+ * base-ui. It does not; the installed package sets it nowhere. So it looked like
+ * an unexplained utility class, and deleting it would have broken three
+ * algorithms at once without a single error. Check the computed value instead of
+ * trusting the class to still be there.
+ *
+ * Once per pane, on the frame the layer is first resolved.
+ */
+function assertUnanchored(layer: HTMLElement): void {
+  if (checkedLayers.has(layer)) return;
+  checkedLayers.add(layer);
+  if (typeof window === 'undefined') return;
+  const value = window.getComputedStyle(layer).overflowAnchor;
+  if (scrollerIsUnanchored(value)) return;
+  // Loud on purpose, and in production too: the symptom otherwise is a reading
+  // position that drifts on some devices and not others, which is the most
+  // expensive kind of bug this repo has.
+  console.error(
+    `[scroll-stability] the timeline layer has overflow-anchor: ${value}. It must be "none" — ` +
+      'the prepend anchor and the timeline window both assume the browser never moves scrollTop ' +
+      'on its own. Restore [overflow-anchor:none] on [data-scroll-stability-layer] in chat/page.tsx.'
+  );
+  log({
+    t: Date.now(),
+    kind: 'intent',
+    reason: `overflow-anchor:${value}`,
+    wanted: 0,
+    applied: 0,
+    deviation: 0,
+    scrollTop: 0,
+  });
 }
 
 /**
@@ -122,6 +169,7 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
     if (cached?.isConnected) return cached;
     const found = getViewport()?.querySelector('[data-scroll-stability-layer]') as HTMLElement | null;
     layerNode.current = found;
+    if (found) assertUnanchored(found);
     return found;
   }, [getViewport]);
 

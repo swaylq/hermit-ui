@@ -239,3 +239,29 @@ export function trimOutOfRangeDeviation(input: {
   if (excess <= 0 || input.deviation >= 0) return 0;
   return Math.min(excess, -input.deviation);
 }
+
+/**
+ * Is a scroller with this computed `overflow-anchor` safe for the attribution
+ * rule everything here rests on?
+ *
+ * That rule — "whatever moved `scrollTop` since our last write was the user,
+ * because we are the only other writer" (prepend-anchor-core.ts) — is not a
+ * property of this code. It is a property of ONE CSS declaration,
+ * `[overflow-anchor:none]`, sitting on the layer in chat/page.tsx. With browser
+ * scroll anchoring on, the engine becomes a second writer of `scrollTop`, and
+ * `planFrame`, `planTailFrame` and `forcedByClamp` all silently start
+ * attributing the engine's adjustments to the reader.
+ *
+ * The comment in prepend-anchor-core used to credit base-ui for setting it. It
+ * does not — grep the installed package, there are no hits — so the declaration
+ * could have been deleted as an unexplained utility class with nothing failing
+ * loudly. Hence a check.
+ *
+ * `undefined` / `''` means the browser does not implement the property, and a
+ * browser that does not implement it does not do scroll anchoring either, so
+ * the invariant holds for free. WebKit only shipped it in 2026-02.
+ */
+export function scrollerIsUnanchored(computedOverflowAnchor: string | undefined | null): boolean {
+  if (!computedOverflowAnchor) return true;
+  return computedOverflowAnchor.trim().toLowerCase() === 'none';
+}

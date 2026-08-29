@@ -16,10 +16,16 @@
 //     and leaves `scrollTop` alone.
 //
 // So: whatever moved `scrollTop` since our last write was the user, because we
-// are the only other writer — this scroller has `overflow-anchor: none` (base-ui
-// sets it on the viewport's content box), so the browser never silently adjusts
-// `scrollTop` on our behalf. Adopt that movement into the anchor and correct
-// only what remains.
+// are the only other writer — this scroller has `overflow-anchor: none`, so the
+// browser never silently adjusts `scrollTop` on our behalf. Adopt that movement
+// into the anchor and correct only what remains.
+//
+// That declaration is OURS, on `[data-scroll-stability-layer]` in chat/page.tsx.
+// This comment used to credit base-ui for it, which is wrong — the installed
+// package sets it nowhere — and that made a load-bearing class look like an
+// unexplained utility somebody could tidy away, taking planFrame, planTailFrame
+// and forcedByClamp with it and reporting nothing. `assertUnanchored` in
+// use-scroll-stability.ts now checks the computed value once per pane.
 
 /**
  * Corrections below this are not worth issuing.
