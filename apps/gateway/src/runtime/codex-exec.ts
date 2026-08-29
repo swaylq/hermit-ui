@@ -25,7 +25,7 @@ import { Codex, type CodexOptions, type Thread, type ThreadOptions, type Usage }
 import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
-import { translateCodexEvent } from './codex-events';
+import { translateCodexEvent, emitNoticeOnce } from './codex-events';
 import { installJsonlRepair } from './codex-jsonl-repair';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 
@@ -63,6 +63,13 @@ type CodexHandle = RuntimeHandle & {
   rolloutFile: string | null;
   /** Monotonic per-session turn counter, for turn keys. */
   turnSeq: number;
+  /**
+   * Non-fatal error notices already shown in the chat. Codex re-emits some of
+   * them on every turn (a long thread's heads-up landed 20 times in one
+   * session); the set lives on the handle so each distinct text is shown once
+   * per gateway process. See emitNoticeOnce in codex-events.ts.
+   */
+  seenNotices: Set<string>;
 };
 
 const live = new Map<string, CodexHandle>();
@@ -623,6 +630,7 @@ export class CodexExecRuntime implements AgentRuntime {
       lastTurn,
       rolloutFile,
       turnSeq: 0,
+      seenNotices: new Set(),
     };
     live.set(session.id, handle);
     return handle;
@@ -697,6 +705,12 @@ export class CodexExecRuntime implements AgentRuntime {
             continue;
           }
           for (const item of translateCodexEvent(ev, turnKey)) {
+            if (!emitNoticeOnce(h.seenNotices, item)) {
+              console.log(
+                `[codex] session=${h.sessionId.slice(0, 8)} repeated notice suppressed`,
+              );
+              continue;
+            }
             h.emit({ ...item, sessionId: h.sessionId, claudeSessionId: null });
           }
         }

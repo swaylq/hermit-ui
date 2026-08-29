@@ -87,6 +87,29 @@ function mcpResultText(result: unknown): string {
 }
 
 /**
+ * Per-session dedupe for non-fatal error notices. Codex re-emits some warnings
+ * on EVERY turn of a long thread — one session collected 20 copies of the same
+ * "long threads" heads-up, each a `[codex error]` row in the chat. The first
+ * copy of a given text is worth showing; the rest are noise. Returns true when
+ * the row should be emitted, false when it is a repeat. Anything that is not a
+ * non-fatal error row always passes.
+ *
+ * Session state lives in the caller (codex-exec's per-session handle), so this
+ * stays a pure function of (seen, item) and the dedupe survives across turns of
+ * one gateway process. A gateway restart shows the notice once more — after a
+ * restart that is information, not spam.
+ */
+export function emitNoticeOnce(seen: Set<string>, item: TranslatedItem): boolean {
+  if (item.role !== 'system') return true;
+  const block = (item.content as Array<{ text?: unknown }>)[0];
+  const text = typeof block?.text === 'string' ? block.text : '';
+  if (!text.startsWith('[codex error]\n')) return true;
+  if (seen.has(text)) return false;
+  seen.add(text);
+  return true;
+}
+
+/**
  * One completed (or in-flight) thread item -> chat rows.
  *
  * `final` says whether the item has reached a terminal state. A non-final item
@@ -172,6 +195,8 @@ function itemRows(item: ThreadItem, turnKey: string, final: boolean): Translated
     case 'error':
       // Non-fatal: the turn carries on. A system row rather than an assistant
       // one, so it reads as the harness speaking and not as the model's answer.
+      // Codex re-emits some of these every turn; codex-exec passes each row
+      // through emitNoticeOnce so a repeat never reaches the chat.
       return final
         ? [{
             role: 'system',

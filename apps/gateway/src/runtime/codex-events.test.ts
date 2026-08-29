@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { translateCodexEvent } from './codex-events';
+import { translateCodexEvent, emitNoticeOnce } from './codex-events';
 
 const completed = (item: unknown) => ({ type: 'item.completed', item } as any);
 
@@ -189,4 +189,69 @@ test('an empty agent message is dropped rather than synced blank', () => {
 // which looks like data loss rather than a new codex feature.
 test('an unknown item type is dropped', () => {
   assert.deepEqual(translateCodexEvent(completed({ id: 'item_9', type: 'something_new' }), 'k1'), []);
+});
+
+// A non-fatal error item is a system row, not an assistant message — the
+// harness speaking, not the model.
+test('a non-fatal error item becomes a system row', () => {
+  const out = translateCodexEvent(
+    completed({ id: 'item_3', type: 'error', message: 'Heads up: long thread' }),
+    'k1',
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].role, 'system');
+  assert.equal((out[0].content as any)[0].text, '[codex error]\nHeads up: long thread');
+});
+
+// Codex re-emits some warnings on every turn of a long thread (one session
+// collected 20 copies of the same heads-up). The first copy is information;
+// the rest are spam.
+test('the same notice is emitted once and suppressed afterwards', () => {
+  const seen = new Set<string>();
+  const event = () => translateCodexEvent(
+    completed({ id: 'item_3', type: 'error', message: 'Heads up: long thread' }),
+    'k1',
+  );
+  const emitted = [event(), event(), event()].map((rows) =>
+    rows.filter((row) => emitNoticeOnce(seen, row)),
+  );
+  assert.equal(emitted[0].length, 1, 'first copy reaches the chat');
+  assert.equal(emitted[1].length, 0, 'second copy is swallowed');
+  assert.equal(emitted[2].length, 0, 'and every later one too');
+});
+
+test('different notices are each shown once', () => {
+  const seen = new Set<string>();
+  const row = (message: string) => translateCodexEvent(
+    completed({ id: 'item_3', type: 'error', message }),
+    'k1',
+  );
+  assert.equal(row('warning one').filter((r) => emitNoticeOnce(seen, r)).length, 1);
+  assert.equal(row('warning two').filter((r) => emitNoticeOnce(seen, r)).length, 1);
+});
+
+// The dedupe must never eat ordinary content: assistant text, tool rows and
+// the other system rows (stream errors, failed turns) always pass.
+test('non-notice rows are never deduped', () => {
+  const seen = new Set<string>();
+  const agentText = translateCodexEvent(
+    completed({ id: 'item_0', type: 'agent_message', text: 'same words' }),
+    'k1',
+  );
+  assert.equal(agentText.filter((r) => emitNoticeOnce(seen, r)).length, 1);
+  // Same text again — an assistant row still passes, only error notices dedupe.
+  const again = translateCodexEvent(
+    completed({ id: 'item_0', type: 'agent_message', text: 'same words' }),
+    'k2',
+  );
+  assert.equal(again.filter((r) => emitNoticeOnce(seen, r)).length, 1);
+
+  const streamError = translateCodexEvent({ type: 'error', message: 'same words' } as any, 'k1');
+  assert.equal(streamError.filter((r) => emitNoticeOnce(seen, r)).length, 1);
+  const streamErrorAgain = translateCodexEvent({ type: 'error', message: 'same words' } as any, 'k2');
+  assert.equal(
+    streamErrorAgain.filter((r) => emitNoticeOnce(seen, r)).length,
+    1,
+    'stream errors are real failures, not repeatable notices',
+  );
 });
