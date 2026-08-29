@@ -11,6 +11,8 @@ import {
   safeSplitIndex,
   closesRunUnconditionally,
 } from './fold-runs';
+import { capMessageContent } from '@/server/message-cap';
+import { digestMessageContent } from '@/server/message-digest';
 
 const msg = (r: FoldedRow): FoldedMsg => {
   assert.equal(r.kind, 'msg');
@@ -322,4 +324,75 @@ test('safeSplitIndex never returns a point past what was asked for', () => {
   assert.equal(safeSplitIndex(msgs, 2), 2);
   assert.equal(safeSplitIndex(msgs, 1), 1);
   assert.equal(safeSplitIndex(msgs, 99), 3);
+});
+
+// ── the digest must be invisible until someone clicks ───────────────────────
+//
+// This is the property the live window's digest rests on (server/message-digest.ts,
+// lib/chat-window.ts): a COLLAPSED timeline folded from digested content must be
+// indistinguishable from one folded from full content. Everything the reader is
+// shown without expanding anything — row kinds, row keys, prose, tool names,
+// step and error counts, thinking lengths, the chip's last call — has to match.
+//
+// Verified once against production before the digest was turned on for the live
+// window: 648 sessions, 34,731 messages, 10,679 timeline rows, zero mismatches.
+// That run was a one-off; this is the guard that stays.
+test('folding digested content gives the same collapsed timeline as full content', () => {
+  const big = 'x'.repeat(30_000);
+  const msgs = [
+    row('user', [text('read the config and fix it')]),
+    row('assistant', [think('a'.repeat(6_000)), call('Read', { file_path: '/a/b/config.ts' })]),
+    row('user', [result(`export default {}\n${big}`)]),
+    row('assistant', [call('Write', { file_path: '/a/b/config.ts', content: big })]),
+    row('user', [result('boom: permission denied\n' + big, true)]),
+    row('assistant', [text('权限不够，我换个路径'), call('Bash', { command: `echo ${big}` })]),
+    row('user', [result([{ type: 'text', text: `first line\n${big}` }])]),
+    // A block-array result whose only payload is an image: the chip renders it
+    // empty either way, and the digest must not invent a subtitle for it.
+    row('user', [result([image()])]),
+    row('assistant', [think(''), text('done')]),
+    // The ask call the digest is required to leave whole — a long, multi-line
+    // question, which is exactly the shape that used to lose its card.
+    row('assistant', [askCall(`should I keep going?\n${'y'.repeat(400)}`)]),
+    row('assistant', [text('tail')], NEXT_DAY),
+  ];
+
+  const project = (rows: typeof msgs, digest: boolean) =>
+    rows.map((m) => ({
+      ...m,
+      content: digest
+        ? digestMessageContent(capMessageContent(m.content))
+        : capMessageContent(m.content),
+    }));
+
+  // Exactly what a reader sees with nothing expanded.
+  const collapsed = (rows: ReturnType<typeof project>) =>
+    foldRuns(rows as never).map((r) => {
+      if (r.kind !== 'run') {
+        const m = r as FoldedMsg;
+        return {
+          kind: r.kind,
+          key: r.key,
+          ids: r.ids,
+          blocks: m.blocks?.map((b) => (b.type === 'text' ? { t: 'text', text: b.text } : { t: b.type })),
+        };
+      }
+      const s = summarizeRun((r as FoldedRun).steps);
+      return {
+        kind: r.kind,
+        key: r.key,
+        ids: r.ids,
+        names: s.names,
+        calls: s.calls,
+        errors: s.errors,
+        thinkChars: s.thinkChars,
+        last: s.last?.name ?? null,
+      };
+    });
+
+  assert.deepEqual(collapsed(project(msgs, true)), collapsed(project(msgs, false)));
+
+  // And the thing that makes it worth doing.
+  const bytes = (digest: boolean) => JSON.stringify(project(msgs, digest)).length;
+  assert.ok(bytes(true) < bytes(false) / 10, `expected >10x, got ${bytes(false)} → ${bytes(true)}`);
 });
