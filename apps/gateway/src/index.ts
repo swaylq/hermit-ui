@@ -45,6 +45,7 @@ import { seedPiConfigFromEnv } from './pi-config';
 import { chromeReaperTick } from './chrome-reaper';
 import { strayReaperTick } from './stray-reaper';
 import { orphanPaneReaperTick } from './orphan-pane-reaper';
+import { codexOrphanReaperTick } from './codex-orphan-reaper';
 import { sessionPurgeTick } from './session-purge';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 import { startPreviewServers, previewSweepTick } from './preview';
@@ -281,6 +282,10 @@ function loop(fn: () => Promise<void>, ms: number) {
 
 // Initial run kicks all uploaders ASAP so the dashboard isn't empty.
 (async () => {
+  // First, before anything resumes a thread: reap codex execs the PREVIOUS
+  // gateway orphaned — they hold their threads' writer locks and every resume
+  // would fail on "already has an active writer" until they die.
+  await safe('codex-orphan', codexOrphanReaperTick);
   await pushAgents();
   await ensureBrainTick(); // after pushAgents: the brain's directory is fresh
   await pushGlobalSkillsTick();
@@ -339,6 +344,7 @@ loop(() => safe('cleanup-sweep', async () => {
 // different thresholds. No-op unless the machine has cleanupIdleDays set.
 loop(() => safe('session-purge', sessionPurgeTick), 10 * 60_000); // delete recycle-bin sessions past retention (confirmed released by every backend first)
 loop(() => safe('orphan-pane', orphanPaneReaperTick), 10 * 60_000); // kill hermit-* panes no DB row accounts for (deleted sessions leak ~500MB each)
+loop(() => safe('codex-orphan', codexOrphanReaperTick), 10 * 60_000); // kill codex execs a dead gateway left behind — they hold the thread's writer lock and the next resume dies on "active writer" (2026-08-29)
 loop(() => safe('agent-requests', agentRequestTick), 3_000);
 loop(() => safe('machine-requests', machineRequestTick), 3_000);
 loop(() => safe('file-transfers', fileTransferTick), 4_000);
