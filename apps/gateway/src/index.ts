@@ -155,13 +155,20 @@ async function pushPlanUsage() {
 // Codex plan consumption from its official app-server rate-limit method, plus
 // per-day tokens from rollout files. The short-lived app-server creates no
 // thread or model turn; it only reads the authenticated account snapshot.
-async function pushCodexUsage() {
+// Returns whether a non-null sample was actually synced, so the startup
+// sequence can say so once (the ticks themselves stay silent — tick-log.ts).
+async function pushCodexUsage(): Promise<boolean> {
+  let synced = false;
   await safe('codex-usage', async () => {
     const cu = await collectCodexUsage();
     // A failed live read returns null. Skipping preserves the last good row
     // instead of replacing both quota cards with blanks.
-    if (cu) await api.syncCodexUsage(cu);
+    if (cu) {
+      await api.syncCodexUsage(cu);
+      synced = true;
+    }
   });
+  return synced;
 }
 
 // Kimi Code subscription quota, straight from Moonshot's own `/v1/usages`.
@@ -301,7 +308,9 @@ function loop(fn: () => Promise<void>, ms: number) {
   await pushUsage();
   await pushUsageWindows();
   await pushCronTick();
-  await pushCodexUsage();
+  // One startup line an acceptance check can grep for: it proves THIS process
+  // made a non-null quota read, which a silent tick and the rollup cannot.
+  if (await pushCodexUsage()) console.log('[codex-usage] ok');
   await pushKimiUsage();
   await pushPlanUsage(); // last — runs after the blocking ccusage scans, not starved by them
 })();
@@ -356,7 +365,7 @@ loop(() => safe('global-memory', globalMemoryTick), 30_000);
 // Real plan % via `claude /usage` scrape — every 12 min (initial run is the last
 // step of the startup IIFE above, so it isn't starved by the ccusage block).
 loop(pushPlanUsage, 12 * 60_000);
-loop(pushCodexUsage, 12 * 60_000); // one short-lived app-server account read; no model turn
+loop(async () => { await pushCodexUsage(); }, 12 * 60_000); // one short-lived app-server account read; no model turn
 loop(pushKimiUsage, 12 * 60_000); // one GET to Moonshot; no-op on a machine with no Kimi credential
 // Usage is the dashboard's only source for spend numbers (the live ccusage
 // shell-out was removed). 30 min keeps ccusage's stdin scan light while still
