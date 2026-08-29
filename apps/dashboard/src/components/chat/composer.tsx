@@ -1022,12 +1022,12 @@ export const ComposeBar = forwardRef<ComposerHandle, {
                 // The box is the only place a hands-free run reports from now,
                 // and it says this for the second or two before the first words
                 // land on top of it.
-                ? '在听…'
+                ? 'listening…'
                 : touch
                 // Only where the gesture exists. On a desktop the box is held
                 // by nobody and ⌥ is the way in, so promising a hold would be
                 // an instruction that does nothing.
-                ? 'Ask anything · 按住说话'
+                ? 'Ask anything · hold to talk'
                 : 'Ask anything'
             }
             disabled={disabled || awaitingInput}
