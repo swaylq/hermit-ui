@@ -136,12 +136,12 @@ export const ScheduleBar = memo(function ScheduleBar({
           )}
           {/* The strictest of the three, so it sits last: "Run to done" stops when
               the agent thinks it is finished, this one stops when a fresh critic
-              subagent runs out of complaints twice over (the perfect-goal skill). */}
+              finds no real problem left, within a 24-hour budget (the perfect-goal skill). */}
           {!disabled && (
             <button
               type="button"
               onClick={onStartPerfect}
-              title="Write the goal as a checkable list, then keep going until a fresh critic finds nothing wrong — twice"
+              title="Write the goal as a checkable list, then keep going until a fresh critic finds no real problem — within 24 hours"
               className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
             >
               <span className="text-violet-500" aria-hidden="true">◎</span>
