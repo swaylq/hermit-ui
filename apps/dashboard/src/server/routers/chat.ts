@@ -15,7 +15,7 @@ import { sessionRecencyMs } from '../../lib/session-recency';
 import { backgroundOutstanding } from '../../lib/session-status';
 import { stripNulDeep } from '../sanitize';
 import { capMessageContent } from '../message-cap';
-import { digestMessageContent } from '../message-digest';
+import { messageProjection } from '../message-digest';
 import { extractSearchText, extractInteractionBlocks } from '../chat-text';
 import { generateSessionTitle } from '../session-title';
 import {
@@ -767,7 +767,31 @@ export const chatRouter = router({
     }),
 
   listMessages: agentProcedure
-    .input(z.object({ sessionId: z.string(), limit: z.number().int().min(1).max(1000).default(300) }))
+    .input(
+      z.object({
+        sessionId: z.string(),
+        limit: z.number().int().min(1).max(1000).default(300),
+        // The window as the collapsed timeline renders it — same projection
+        // `listMessagesBefore` has used for history since the run capsule
+        // landed, and for the same reason.
+        //
+        // This used to be refused on the grounds that the live window "is what
+        // is streaming, what the user interacts with, and it is bounded at 60
+        // rows anyway". Measured 2026-08-29 over all 648 sessions' newest-60
+        // windows, gzipped, that bound is worth 14 KB at the median but 30 KB
+        // at p90 and 67 KB at p99 — and it is paid on every session open, every
+        // machine switch, and every phone that has no hover to prefetch it.
+        // Digested: 6 / 9 / 21 KB.
+        //
+        // Nothing that streams is touched. The digest only rewrites
+        // tool_use / tool_result / thinking, and `text` — the typewriter's
+        // input, the height predictor's input, and the whole conversation — is
+        // passed through by reference. The bodies come back per-capsule via
+        // `getMessages` if someone opens one, which the timeline already does
+        // for history through the same resolver.
+        digest: z.boolean().default(false),
+      })
+    )
     .query(async ({ ctx, input }) => {
       // Owner check folded into the WHERE clause — drops the extra
       // chatSession.findUnique round trip. Returns [] for unknown or
@@ -797,7 +821,8 @@ export const chatRouter = router({
         // a mostly-null short string.
         select: { id: true, role: true, content: true, createdAt: true, authoredBy: true },
       });
-      return rows.reverse().map((r) => ({ ...r, content: capMessageContent(r.content) }));
+      const project = messageProjection(input.digest);
+      return rows.reverse().map((r) => ({ ...r, content: project(r.content) }));
     }),
 
   // ─── Local cache sync (browser IndexedDB) ─────────────────────────────────
@@ -982,9 +1007,7 @@ export const chatRouter = router({
       });
       const hasMore = rows.length > input.limit;
       const page = hasMore ? rows.slice(0, input.limit) : rows;
-      const project = input.digest
-        ? (c: unknown) => digestMessageContent(capMessageContent(c))
-        : capMessageContent;
+      const project = messageProjection(input.digest);
       return {
         rows: page.reverse().map((r) => ({ ...r, content: project(r.content) })),
         hasMore,
@@ -1015,8 +1038,10 @@ export const chatRouter = router({
   // The window AROUND a specific message — how a search hit outside the newest-N
   // window gets opened. listMessages only ever walks back from the newest row, so
   // without this a hit 20,000 messages deep would need 100 "load earlier" clicks.
-  // Returns the same shape (and the same capMessageContent treatment) as
-  // listMessages so the timeline can render it interchangeably.
+  // Returns the same shape (and the same projection) as listMessages so the
+  // timeline can render it interchangeably — including `digest`, which has to
+  // travel with it or a search hit would land in a window of a different
+  // fidelity from the one the reader just left.
   listMessagesAround: agentProcedure
     .input(
       z.object({
@@ -1024,6 +1049,7 @@ export const chatRouter = router({
         messageId: z.string(),
         before: z.number().int().min(0).max(200).default(40),
         after: z.number().int().min(0).max(200).default(40),
+        digest: z.boolean().default(false),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -1059,7 +1085,8 @@ export const chatRouter = router({
           select: { id: true, role: true, content: true, createdAt: true, authoredBy: true },
         }),
       ]);
-      const rows = [...before.reverse(), ...after].map((r) => ({ ...r, content: capMessageContent(r.content) }));
+      const project = messageProjection(input.digest);
+      const rows = [...before.reverse(), ...after].map((r) => ({ ...r, content: project(r.content) }));
       return {
         rows,
         hasBefore: before.length === input.before,

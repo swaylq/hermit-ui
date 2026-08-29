@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { capMessageContent, dropStoredImageBytes } from './message-cap';
-import { digestMessageContent } from './message-digest';
+import { digestMessageContent, messageProjection } from './message-digest';
 
 type Blk = Record<string, unknown>;
 const cap = (content: unknown[]): Blk[] => capMessageContent(content) as Blk[];
@@ -80,4 +80,26 @@ test('base64 inside a tool_result is elided; a top-level image is left alone', (
 test('a non-array content column is returned unchanged', () => {
   assert.equal(capMessageContent(null), null);
   assert.equal(capMessageContent('plain'), 'plain');
+});
+
+// ── the composed projection every read endpoint uses ────────────────────────
+
+test('messageProjection(false) is the cap alone', () => {
+  const content = [{ type: 'text', text: 'hi' }];
+  assert.equal(messageProjection(false)(content), content);
+});
+
+test('messageProjection(true) caps BEFORE it digests', () => {
+  // The ordering the empty-thinking early return depends on. Digest-then-cap
+  // would keep the signature, which is the bug this pairing exists to prevent.
+  const raw = [{ type: 'thinking', thinking: '', signature: SIG }];
+  assert.ok(JSON.stringify(messageProjection(true)(raw)).length < 60);
+});
+
+test('both projections leave prose alone', () => {
+  const prose = [{ type: 'text', text: '我先读一下这个文件' }];
+  for (const digest of [false, true]) {
+    const out = messageProjection(digest)(prose) as Blk[];
+    assert.equal(out[0].text, '我先读一下这个文件');
+  }
 });

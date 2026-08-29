@@ -17,7 +17,7 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
-import { capMessageContent } from '@/server/message-cap';
+import { messageProjection } from '@/server/message-digest';
 import { subscribe as subscribeChat } from '@/server/chat-bus';
 
 export const dynamic = 'force-dynamic';
@@ -63,6 +63,16 @@ export async function GET(req: NextRequest) {
   // without it and must keep getting whole windows, or it would merge fragments
   // into a list it thinks is complete and render a conversation with holes.
   const wantsDelta = req.nextUrl.searchParams.get('delta') === '1';
+
+  // `digest=1` says the client's window is the digested projection, so the rows
+  // pushed into it must be too. This MUST agree with the `digest` the client
+  // passed to chat.listMessages: the two transports merge by id into one list,
+  // and a full-fidelity row landing in a digested window would re-expand a
+  // capsule the reader had collapsed — and change its height under them.
+  //
+  // A flag, not a version bump, for the same reason as `delta` above: during a
+  // deploy both shapes are on the wire at once.
+  const project = messageProjection(req.nextUrl.searchParams.get('digest') === '1');
 
   // Ownership check up front — the per-tick query also scopes by machine, but
   // this gives a clean 404 instead of an empty stream.
@@ -209,7 +219,7 @@ export async function GET(req: NextRequest) {
               })
             : [];
           lastEmit = Date.now();
-          const payload = rows.map((r) => ({ ...r, content: capMessageContent(r.content) }));
+          const payload = rows.map((r) => ({ ...r, content: project(r.content) }));
           sendMessages(wantsDelta ? { rows: payload, gone } : payload);
 
           for (const id of gone) sent.delete(id);

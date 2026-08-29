@@ -56,6 +56,7 @@ import { ComposeBar, QueueBar, type ComposerHandle } from '@/components/chat/com
 import type { DictationHandle, DictationSource } from '@/components/chat/dictation-dock';
 import { FabDock } from '@/components/chat/fab-dock';
 import { parseLivePreview } from '@/lib/live-preview';
+import { INITIAL_WINDOW, timelineQueryInput, timelineStreamParams } from '@/lib/chat-window';
 import { ModelChip } from '@/components/chat/model-chip';
 import { runtimeShortLabel, runtimeDetail, hasTmuxPane, providerMark } from '@/lib/runtime-labels';
 
@@ -63,17 +64,6 @@ import { runtimeShortLabel, runtimeDetail, hasTmuxPane, providerMark } from '@/l
 // soft-keyboard return key inserts a newline there (a dedicated send button
 // handles sending), and the same gate drives the share-vs-download save path.
 
-// The LIVE window: the newest N messages, and the only thing listMessages (and
-// the SSE stream keyed on it) ever carries. Kept small so a session opens fast —
-// less JSON over the wire + far fewer markdown/highlight passes on first paint —
-// since the visible viewport is only ~15-20 messages. MUST match the sidebar's
-// `listMessages` prefetch limit (app-sidebar.tsx) so a session click stays a
-// cache hit.
-//
-// It is FIXED. "Load earlier" used to grow it, which made each click re-fetch
-// everything already on screen and dragged the SSE stream up with it; older
-// history is now paged separately by useOlderPages.
-const INITIAL_WINDOW = 60;
 
 // How long the message pane keeps re-asserting the bottom after its size
 // changes. Covers a multi-step composer growth (each new line is its own resize,
@@ -411,8 +401,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // rather than a boolean an effect has to reset: a withdrawn or replaced
   // registration stops matching and the panel closes by construction.
   const [previewOpenUrl, setPreviewOpenUrl] = useState<string | null>(null);
+  // The exact input the sidebar's hover-prefetch uses — see lib/chat-window.
+  const timelineInput = useMemo(() => timelineQueryInput(sessionId), [sessionId]);
   const messages = trpc.chat.listMessages.useQuery(
-    { sessionId, limit },
+    timelineInput,
     {
       // Fallback poll when SSE is down: 600ms during an active turn, 2s idle.
       refetchInterval: (q) => {
@@ -501,7 +493,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           // this window (avoids the open-time double-fetch). A RECONNECT does NOT
           // skip: it emits the current window once to catch up on anything that
           // landed during the disconnect gap.
-          const res = await authedFetch(`/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}&delta=1${isReconnect ? '' : '&skipInitial=1'}`, {
+          const res = await authedFetch(`/api/chat/stream?${timelineStreamParams(sessionId, { skipInitial: !isReconnect })}`, {
             signal: myCtrl.signal,
           });
           if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
@@ -538,12 +530,12 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                 // mid-turn pushes into it. Hold those frames; the effect by the
                 // cache hook folds them onto the window the moment it lands.
                 // (`[]` is a real answer — an empty session — not a gap.)
-                if (utils.chat.listMessages.getData({ sessionId, limit }) === undefined) {
+                if (utils.chat.listMessages.getData(timelineInput) === undefined) {
                   const held = heldPushesRef.current;
                   held.push({ rows, gone });
                   if (held.length > HELD_PUSH_LIMIT) held.splice(0, held.length - HELD_PUSH_LIMIT);
                 } else {
-                  utils.chat.listMessages.setData({ sessionId, limit }, (prev) => applyMessagePush(prev, rows, gone));
+                  utils.chat.listMessages.setData(timelineInput, (prev) => applyMessagePush(prev, rows, gone));
                 }
               } catch { /* ignore a malformed frame */ }
             }
@@ -605,7 +597,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       // session's window must never inherit them.
       heldPushesRef.current = [];
     };
-  }, [sessionId, limit, utils]);
+  }, [sessionId, timelineInput, utils]);
 
   const send = trpc.chat.send.useMutation({
     onSuccess: () => {
@@ -915,8 +907,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       id: r.id, role: r.role, content: r.content,
       createdAt: new Date(r.createdAt), authoredBy: r.authoredBy ?? null,
     }));
-    utils.chat.listMessages.setData({ sessionId, limit }, (prev) => foldPushes(prev ?? restored, held));
-  }, [messages.data, streamStalled, cachedRows, sessionId, limit, utils]);
+    utils.chat.listMessages.setData(timelineInput, (prev) => foldPushes(prev ?? restored, held));
+  }, [messages.data, streamStalled, cachedRows, sessionId, timelineInput, utils]);
 
   // Older history, paged separately from the live window and served from the
   // local cache whenever it has the page. See use-older-pages.ts.

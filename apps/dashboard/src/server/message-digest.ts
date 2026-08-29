@@ -23,9 +23,15 @@
 // both the read and the write path (server/message-cap.ts, note 3), which is why
 // the digest's own numbers below finally match its intent.
 //
-// Applied AFTER capMessageContent, and only to history (`listMessagesBefore`).
-// The live window stays full fidelity: it is what is streaming, what the user
-// interacts with, and it is bounded at 60 rows anyway.
+// Applied AFTER capMessageContent — always, through `messageProjection` at the
+// bottom of this file, which is the only supported way to compose the two.
+//
+// It covers the LIVE window too, as of 2026-08-29. It used not to, on the
+// grounds that the live window "is what is streaming, what the user interacts
+// with, and it is bounded at 60 rows anyway"; measured, that bound is 14 KB at
+// the median but 30 KB at p90 and 67 KB at p99 on the wire, paid on every
+// session open and every machine switch. Streaming is unaffected because the
+// digest never touches a `text` block.
 //
 // Blocks that survive untouched: text · image · file · interaction. Those are
 // the conversation and the things the reader has to act on — a screenshot the
@@ -45,6 +51,7 @@
 // block per question and the payload does not care.
 
 import { isAskToolUse } from '@/components/chat/sink-deliverables';
+import { capMessageContent } from './message-cap';
 
 /** Marks a block whose body was left behind on the server. */
 export const DIGEST_FLAG = '__d';
@@ -166,4 +173,20 @@ export function digestMessageContent(content: unknown): unknown {
     return d;
   });
   return changed ? out : content;
+}
+
+/**
+ * The projection a read endpoint applies to `content`, given whether the caller
+ * asked for the digested shape.
+ *
+ * Exists so the cap-then-digest ORDER is written once. The digest returns an
+ * empty thinking block by reference, so it can only be relied on to shed the
+ * signature if the cap has already run — getting that backwards is what made a
+ * digested history page carry all 401 MB of signature (see the thinking branch
+ * above). Every read path — listMessages, listMessagesBefore, listMessagesAround
+ * and /api/chat/stream — goes through here, which is also what keeps the SSE
+ * delta byte-identical to the window it merges into.
+ */
+export function messageProjection(digest: boolean): (content: unknown) => unknown {
+  return digest ? (c: unknown) => digestMessageContent(capMessageContent(c)) : capMessageContent;
 }

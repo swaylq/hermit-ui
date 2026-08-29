@@ -34,6 +34,7 @@ import { useSessionView, setSessionView, useAgentDrawers, setAgentDrawer, type S
 import { useLongPress } from '@/lib/use-long-press';
 import { readChatFilter, writeChatFilter } from '@/lib/chat-filter';
 import { readCachedSessions, writeCachedSessions } from '@/lib/session-list-cache';
+import { timelineQueryInput } from '@/lib/chat-window';
 import { markOptimisticTrash, clearOptimisticTrash } from '@/lib/optimistic-trash';
 import { ContextMenu } from '@/components/ui/context-menu';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-dialog';
@@ -663,11 +664,13 @@ export function RecentSessions() {
   // sessions on every dashboard open, which fired 8 full 60-message fetches —
   // for heavy sessions ~hundreds of KB (measured: 4 fetches ≈ 561KB) that
   // competed with the CURRENT session's own load and inflated server TTFB to
-  // ~1s. react-query's staleTime dedupes repeat hovers; limit MUST equal
-  // chat/page.tsx INITIAL_WINDOW so the open query key matches (no skeleton flash).
+  // ~1s. react-query's staleTime dedupes repeat hovers; the input comes from
+  // lib/chat-window so this key cannot drift from the one the chat page opens
+  // with — a mismatch is a SILENT miss, warming an entry nobody reads while
+  // every click still pays the network and flashes a skeleton.
   const prefetchSession = useCallback(
     (id: string) => {
-      void utils.chat.listMessages.prefetch({ sessionId: id, limit: 60 }, { staleTime: 60_000 });
+      void utils.chat.listMessages.prefetch(timelineQueryInput(id), { staleTime: 60_000 });
       // Warm the markdown chunk on the same intent — an app just loaded, then
       // a fast session switch, otherwise paints every bubble's Suspense
       // fallback while ~370KB flies (a column of height jitter). Same chunk

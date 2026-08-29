@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { trpc } from '@/lib/trpc';
+import { TIMELINE_DIGEST } from '@/lib/chat-window';
 import type { ScrollStability } from './use-scroll-stability';
 
 const STEP = 60;
@@ -61,8 +62,12 @@ export function useAnchoredWindow(
     scrolledFor.current = null;
   }, [appliedInitial]);
 
+  // Same fidelity as the live window (lib/chat-window). A hit fetched at full
+  // fidelity would drop the reader into a window whose capsules are all a
+  // different height from the ones they just left — and the anchor's whole job
+  // is to keep one row still while the rest lays out.
   const q = trpc.chat.listMessagesAround.useQuery(
-    { sessionId, messageId: anchorId ?? '', before, after: STEP },
+    { sessionId, messageId: anchorId ?? '', before, after: STEP, digest: TIMELINE_DIGEST },
     { enabled: !!anchorId && !!sessionId, staleTime: 5 * 60_000 }
   );
 

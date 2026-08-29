@@ -45,6 +45,14 @@ const INDEX_SESSION_ID = 'by_session_id';
 
 export const STORE_TEXT = 'text';
 export const STORE_SESSIONS = 'sessions';
+// The live window, as the server handed it over, so re-opening a session paints
+// before the network answers. Named `full` for the fidelity it USED to have: as
+// of 2026-08-29 the live window is fetched digested too (lib/chat-window), so
+// what lands here is the same projection `digest` holds. That is deliberate and
+// harmless — a COLLAPSED capsule renders identically from either, so the cached
+// paint and the server's answer are the same height — but it does mean the
+// `full`-before-`digest` preference in use-older-pages is now a tie-break, not a
+// fidelity choice, and rows written before that date are a mix.
 export const STORE_FULL = 'full';
 export const STORE_FULL_META = 'fullMeta';
 // History pages in their DIGESTED form: tool arguments trimmed to the preview
