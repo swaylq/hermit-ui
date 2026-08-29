@@ -96,8 +96,6 @@ export default function AppearancePage() {
   useEffect(() => setMounted(true), []);
   const current = mounted ? theme ?? 'system' : undefined;
 
-  // Floating voice-mic visibility (localStorage; the chat page reads it on mount
-  // + on cross-tab storage events). Default shown.
   // Translation (localStorage; chat reads it through useTranslatePrefs, which
   // subscribes to both the same-tab event and cross-tab `storage`).
   const [translate, setTranslate] = useState<TranslatePrefs>(DEFAULT_PREFS);

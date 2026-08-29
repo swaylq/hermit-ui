@@ -1,20 +1,25 @@
 'use client';
 
 // Realtime dictation, orchestrated. Owns the mic stream, the /api/asr socket, the
-// reveal animation, and the run's text; renders the DictationBar above the
-// composer while a run is live and writes the words into the draft.
+// reveal animation, and the run's text, and writes the words into the draft.
 //
-// WHY IT IS ITS OWN COMPONENT AND NOT PART OF VoiceMic:
+// IT RENDERS NOTHING. There used to be a status bar above the composer; it is
+// gone, because in neither way in was it the thing being looked at. A held run
+// has the full-screen overlay (hold-to-talk.tsx), which covered the bar anyway.
+// A hands-free run is watched IN THE BOX, where the words are landing — so all
+// it needs is the mic button staying lit, which the composer draws itself off
+// the `dictating` flag. A bar that reports on text you are already reading is
+// two places to look instead of one.
 //
-// · The bar belongs above the composer; the mic is a floating button that can be
-//   dragged anywhere. Two different places on screen.
+// WHY IT IS ITS OWN COMPONENT AND NOT PART OF THE COMPOSER:
+//
 // · The text changes ~36×/second while the reveal animation runs. If this state
 //   lived in SessionPane the whole chat pane would re-render at that rate; here
 //   only the composer's own draft state moves, which is what it was designed for.
-// · voice-mic.tsx is gesture code — permission timing on iOS, drag-vs-hold,
-//   push-to-talk — and gestures and pipelines are better kept apart.
+// · composer.tsx is gesture code — permission timing on iOS, hold-vs-tap-vs-
+//   scroll, push-to-talk — and gestures and pipelines are better kept apart.
 //
-// TWO WAYS IN, and the bar has to know which, because the way OUT differs:
+// TWO WAYS IN, and the run has to know which, because the way OUT differs:
 //   'hold' — the composer's box is still held down. Releasing finishes it, and
 //            where the finger is at that moment decides send / cancel / edit
 //            (composer.tsx owns that gesture; hold-to-talk.tsx draws it).
@@ -35,19 +40,23 @@ import {
   useCallback,
   useImperativeHandle,
   useRef,
-  useState,
 } from 'react';
 import { authedFetch } from '@/lib/asst-fetch';
 import { openAsrSocket, type AsrSocket } from '@/lib/asr-socket';
 import { startStreaming, releaseWarmMic, type VoiceStream } from '@/lib/voice-capture';
 import { joinSegments, worthRefining } from '@/lib/dictation-text';
 import { typeFrame, TYPE_TICK_MS } from '@/lib/typewriter';
-import { DictationBar, type DictationStatus } from '@/components/chat/dictation-bar';
-import { Collapse } from '@/components/chat/collapse';
 import type { ComposerHandle } from '@/components/chat/composer';
 
-/** How a run was started — decides how it ends, and what the bar shows. */
+/** How a run was started — it decides how the run ENDS. */
 export type DictationSource = 'hold' | 'tap';
+
+/**
+ * Where a run is. Nothing renders this any more; `start()` reads it to tell a
+ * live run from one that is only finishing its end-of-run correction pass, and
+ * those two want opposite things from a fresh press.
+ */
+type DictationStatus = 'connecting' | 'listening' | 'offline' | 'finishing' | 'refining' | 'error';
 
 /** A run this long is stopped on its own — a mic nobody closed is a bug. */
 const RUN_MAX_MS = 20 * 60_000;
@@ -95,17 +104,11 @@ export const DictationDock = forwardRef<DictationHandle, {
   /** Transient message for the composer's notice line. */
   onNotice?: (text: string) => void;
 }>(function DictationDock({ sessionId, composerRef, onActiveChange, onNotice }, ref) {
-  const [active, setActive] = useState(false);
-  const [source, setSource] = useState<DictationSource>('tap');
-  const [status, setStatus] = useState<DictationStatus>('connecting');
-  // start() runs inside a pointerdown and has to know the phase synchronously.
+  // A ref, not state: start() runs inside a pointerdown and has to know the
+  // phase synchronously, and now that nothing draws it there is no second reader
+  // that would need a re-render.
   const statusRef = useRef<DictationStatus>('connecting');
-  const setPhase = useCallback((s: DictationStatus) => { statusRef.current = s; setStatus(s); }, []);
-  const [pending, setPending] = useState(0);
-  const [silent, setSilent] = useState(false);
-  const [hint, setHint] = useState<string | null>(null);
-  const [startedAt, setStartedAt] = useState(0);
-  const [, tick] = useState(0);
+  const setPhase = useCallback((s: DictationStatus) => { statusRef.current = s; }, []);
 
   const sockRef = useRef<AsrSocket | null>(null);
   const streamRef = useRef<VoiceStream | null>(null);
@@ -118,7 +121,6 @@ export const DictationDock = forwardRef<DictationHandle, {
   // transcribed by anything that finished.
   const committedRef = useRef('');
   const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clockTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   // Which run we are on. The end-of-run pass outlives the words it corrects by
   // up to a few hundred ms, so everything it does afterwards — writing to the
   // draft, tearing the run down — is checked against this first. Without it, a
@@ -163,7 +165,6 @@ export const DictationDock = forwardRef<DictationHandle, {
 
   const setActiveBoth = useCallback((v: boolean, s: DictationSource | null) => {
     activeRef.current = v;
-    setActive(v);
     onActiveChange?.(v, s);
   }, [onActiveChange]);
 
@@ -175,7 +176,6 @@ export const DictationDock = forwardRef<DictationHandle, {
     refineAbort.current?.abort();
     refineAbort.current = null;
     if (silenceTimer.current) { clearTimeout(silenceTimer.current); silenceTimer.current = null; }
-    if (clockTimer.current) { clearInterval(clockTimer.current); clockTimer.current = null; }
     stopTyping();
     streamRef.current?.cancel();
     streamRef.current = null;
@@ -183,10 +183,7 @@ export const DictationDock = forwardRef<DictationHandle, {
     sockRef.current = null;
     composerRef.current?.endDictation(discard);
     setActiveBoth(false, null);
-    setPending(0);
-    setSilent(false);
     setPhase('connecting');
-    setHint(null);
     releaseWarmMic();
   }, [composerRef, setActiveBoth, stopTyping, setPhase]);
 
@@ -220,7 +217,6 @@ export const DictationDock = forwardRef<DictationHandle, {
     sockRef.current = null;
     settleTo(committedRef.current);
     setPhase('offline');
-    setPending(0);
     console.warn('[dictation] realtime unavailable, recording instead —', why);
   }, [settleTo, setPhase]);
 
@@ -311,7 +307,7 @@ export const DictationDock = forwardRef<DictationHandle, {
     if (activeRef.current) {
       // Still listening — every press opens the run as 'hold', so this is the
       // same run being re-labelled hands-free, not a second one.
-      if (statusRef.current !== 'refining') { setSource(src); onActiveChange?.(true, src); return; }
+      if (statusRef.current !== 'refining') { onActiveChange?.(true, src); return; }
       // Only the end-of-run pass is left, and it has just lost its claim on the
       // draft: the words it was correcting are about to have new ones after
       // them. Drop it (teardown aborts) and let this press start a real run.
@@ -319,17 +315,12 @@ export const DictationDock = forwardRef<DictationHandle, {
     }
     runIdRef.current += 1;
     setActiveBoth(true, src);
-    setSource(src);
     setPhase(realtimeUnavailable ? 'offline' : 'connecting');
-    setPending(0);
-    setHint(null);
-    setStartedAt(Date.now());
     modeRef.current = realtimeUnavailable ? 'batch' : 'stream';
     committedRef.current = '';
     targetRef.current = '';
     shownRef.current = '';
     composerRef.current?.beginDictation();
-    clockTimer.current = setInterval(() => tick((n) => n + 1), 1000);
 
     // Socket first (its handshake overlaps the mic opening), but startStreaming
     // still runs inside this same synchronous gesture — on iOS a getUserMedia
@@ -339,7 +330,6 @@ export const DictationDock = forwardRef<DictationHandle, {
         sockRef.current = openAsrSocket(sessionId, {
           onReady: () => setPhase('listening'),
           onState: (st) => {
-            setPending(st.pending);
             committedRef.current = st.tail;
             // Closed sentences AND the partial, revealed a character at a time.
             typeTo(joinSegments([st.tail, st.partial]));
@@ -362,7 +352,7 @@ export const DictationDock = forwardRef<DictationHandle, {
 
     startStreaming({
       onChunk: (pcm) => sockRef.current?.send(pcm),
-      onSilence: (s) => { setSilent(s); armSilenceStop(s); },
+      onSilence: armSilenceStop,
       maxMs: RUN_MAX_MS,
       onAutoStop: () => { onNotice?.('听写时长到上限，已结束'); stop(); },
     })
@@ -385,18 +375,5 @@ export const DictationDock = forwardRef<DictationHandle, {
     get active() { return activeRef.current; },
   }), [start, stop, cancel]);
 
-  return (
-    <Collapse open={active}>
-      <DictationBar
-        source={source}
-        pending={pending}
-        silent={silent}
-        status={status}
-        elapsedMs={startedAt ? Date.now() - startedAt : 0}
-        hint={hint}
-        onDone={stop}
-        onCancel={cancel}
-      />
-    </Collapse>
-  );
+  return null;
 });

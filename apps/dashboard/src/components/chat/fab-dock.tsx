@@ -23,7 +23,9 @@ const GAP = 8;
 const DRAG_PX = 8;
 /** A move within this window counts as "early" — after it, the press has committed. */
 export const HOLD_MS = 180;
-const POS_KEY = 'hermit:voice-mic-pos'; // unchanged: an existing position carries over
+// Named for the mic that used to live here (voice moved into the composer). Kept
+// as-is so anyone who had dragged the dock somewhere keeps that spot.
+const POS_KEY = 'hermit:voice-mic-pos';
 const SPRING = 'cubic-bezier(0.34, 1.35, 0.5, 1)';
 
 /**

@@ -14,7 +14,7 @@ import { isTouchPrimary } from '@/lib/save-file';
 import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { foldTail, newClaim, replaceTail, type DictationClaim } from '@/lib/dictation-text';
 import dynamic from 'next/dynamic';
-import { Plus, ArrowUp, Check, FileText, Loader2, Mic, X } from 'lucide-react';
+import { Plus, ArrowUp, FileText, Loader2, Mic, X } from 'lucide-react';
 import { msgText, type Attachment } from '@/components/chat/lib';
 import { Collapse } from '@/components/chat/collapse';
 import { originalFor } from '@/lib/translate-outbound';
@@ -1018,6 +1018,16 @@ export const ComposeBar = forwardRef<ComposerHandle, {
                 ? 'working… ↵ to queue next'
                 : uploadingCount > 0
                 ? `uploading ${uploadingCount}…`
+                : dictating
+                // The box is the only place a hands-free run reports from now,
+                // and it says this for the second or two before the first words
+                // land on top of it.
+                ? '在听…'
+                : touch
+                // Only where the gesture exists. On a desktop the box is held
+                // by nobody and ⌥ is the way in, so promising a hold would be
+                // an instruction that does nothing.
+                ? 'Ask anything · 按住说话'
                 : 'Ask anything'
             }
             disabled={disabled || awaitingInput}
@@ -1044,29 +1054,36 @@ export const ComposeBar = forwardRef<ComposerHandle, {
 
           {working && onStop && <StopPill onStop={onStop} stopping={stopping} />}
 
-          {/* Right of the box, one slot, three states: finish the dictation
-              that's running · start one (empty box — the mic replaces the ✕
-              that would have nothing to clear) · clear what you typed. */}
-          {dictating && onDictateStop ? (
+          {/* Right of the box, one slot. The mic is a TOGGLE — the same pixels
+              start the dictation and end it — and while it is listening it is
+              lit rather than swapped for some other glyph: the button you
+              pressed is the button you press again, and the only thing that
+              changed is that it is on. That is also the whole status display
+              for a hands-free run now; the words themselves are the rest of it.
+              With text typed, the slot is the ✕ it always was. */}
+          {(dictating || draft.length === 0) && onDictate && !disabled && !awaitingInput ? (
             <button
               type="button"
-              onClick={() => onDictateStop()}
-              aria-label="结束听写"
-              title="结束听写"
-              className="h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full bg-accent text-foreground hover:bg-accent/80 transition-colors cursor-pointer"
-            >
-              <Check className="h-5 w-5" />
-            </button>
-          ) : draft.length === 0 && onDictate && !disabled && !awaitingInput ? (
-            <button
-              type="button"
-              onClick={onMicTap}
+              onClick={dictating ? () => onDictateStop?.() : onMicTap}
               disabled={micArming}
-              aria-label="语音输入"
-              title={micHint ?? '语音输入 · 说的话直接写进输入框'}
-              className="h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60"
+              aria-label={dictating ? '结束听写' : '语音输入'}
+              title={micHint ?? (dictating ? '正在听 · 点一下结束' : '语音输入 · 说的话直接写进输入框')}
+              className={cn(
+                'relative h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full transition-colors cursor-pointer',
+                'disabled:cursor-wait disabled:opacity-60',
+                dictating
+                  ? 'text-rose-500 dark:text-rose-400'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+              )}
             >
-              {micArming ? <Loader2 className="h-5 w-5 animate-spin" /> : <Mic className="h-5 w-5" />}
+              {/* Breathing halo. Deliberately not animate-ping, which scales to
+                  twice the button and would wash over the send circle beside it. */}
+              {dictating && (
+                <span aria-hidden="true" className="absolute inset-0 animate-pulse rounded-full bg-rose-500/15 dark:bg-rose-400/20" />
+              )}
+              {micArming
+                ? <Loader2 className="h-5 w-5 animate-spin" />
+                : <Mic className="relative h-5 w-5" />}
             </button>
           ) : draft.length > 0 && !disabled ? (
             <button
