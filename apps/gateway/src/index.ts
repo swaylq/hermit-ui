@@ -284,8 +284,9 @@ function loop(fn: () => Promise<void>, ms: number) {
 (async () => {
   // First, before anything resumes a thread: reap codex execs the PREVIOUS
   // gateway orphaned — they hold their threads' writer locks and every resume
-  // would fail on "already has an active writer" until they die.
-  await safe('codex-orphan', codexOrphanReaperTick);
+  // would fail on "already has an active writer" until they die. Wait (briefly)
+  // for the SIGTERMs to take effect so the first resume can't hit a held lock.
+  await safe('codex-orphan', () => codexOrphanReaperTick(1500));
   await pushAgents();
   await ensureBrainTick(); // after pushAgents: the brain's directory is fresh
   await pushGlobalSkillsTick();
