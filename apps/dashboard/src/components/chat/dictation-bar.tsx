@@ -7,25 +7,19 @@
 // typed out a character at a time, so you watch them appear where you are going
 // to send them and the ASR's self-correction happens in place.
 //
-// ✓ AND ✕ LIVE HERE, not only on the floating mic, because the mic is not always
-// reachable. It is positioned against `window.innerHeight`, which on iOS does
-// NOT shrink when the on-screen keyboard opens — so a mic parked near the bottom
-// (the default) ends up behind the keyboard: invisible and untappable, which is
-// exactly what people hit. This bar rides in the composer's own stack and moves
-// with it, so a control here is always on screen.
+// ✓ AND ✕ LIVE HERE. This is what a hands-free run (tap the mic beside the box)
+// is steered with: it rides in the composer's own stack, directly above the
+// input, so it moves with the composer and is never behind the iOS keyboard.
 //
-// Both sit on the LEFT. The mic is draggable and this bar is not, so they can
-// overlap, and the mic's default corner is bottom-RIGHT — leaving the clock as
-// the only thing it can land on. Overlapping the clock is cosmetic; overlapping
-// the way out of a recording is the bug this exists to fix.
+// A press-and-hold run doesn't need it — that gesture has the full-screen
+// overlay, and its own finger, to end with (see hold-to-talk.tsx). The bar is
+// still rendered underneath that overlay's dim; nothing has to hide it.
 //
-// The mic still finishes a run too (release it, or tap it), and a held run can
-// be cancelled without lifting a finger by sliding up off the button — the
-// WeChat idiom, which is why the label says so in that mode.
+// No waveform. It was an animated canvas repainting every frame behind text
+// whose whole job is to be read, and it said nothing the pulsing dot doesn't.
 
 import { memo } from 'react';
 import { Check, Loader2, X } from 'lucide-react';
-import { VoiceWave } from '@/components/chat/voice-wave';
 import type { DictationSource } from '@/components/chat/dictation-dock';
 import { cn } from '@/lib/utils';
 
@@ -38,9 +32,7 @@ export type DictationStatus = 'connecting' | 'listening' | 'offline' | 'finishin
 
 export const DictationBar = memo(function DictationBar({
   source,
-  cancelArmed,
   pending,
-  level,
   silent,
   status,
   elapsedMs,
@@ -49,11 +41,8 @@ export const DictationBar = memo(function DictationBar({
   onCancel,
 }: {
   source: DictationSource;
-  /** Releasing now throws the run away — the finger is covering the button, so say it here. */
-  cancelArmed: boolean;
   /** Sentences still being corrected in the background. */
   pending: number;
-  level: number;
   /** The silence gate is shut — we stopped streaming because nobody is talking. */
   silent: boolean;
   status: DictationStatus;
@@ -70,15 +59,14 @@ export const DictationBar = memo(function DictationBar({
   // worth spelling out: the words are being recorded and will arrive together
   // when you finish, rather than live.
   const label =
-    cancelArmed ? '松开取消'
-    : status === 'connecting' ? '接通中…'
+    status === 'connecting' ? '接通中…'
     : status === 'finishing' ? '收尾中…'
     : status === 'refining' ? '通读整理中…'
     : status === 'error' ? (hint ?? '出错了')
     : status === 'offline' ? '实时转写不可用 · 正在录音，松开后转写'
     : silent ? '在听…'
-    : source === 'hold' ? '正在识别 · 松手结束，上滑取消'
-    : '正在识别';
+    : source === 'hold' ? '正在识别 · 松手结束'
+    : '正在识别 · ✓ 结束';
 
   return (
     // Same container as the composer below it (mx-auto / max-w-3xl / px-3) so the
@@ -88,15 +76,6 @@ export const DictationBar = memo(function DictationBar({
         className="relative flex items-center gap-2 overflow-hidden rounded-xl border border-white/10 bg-[#111319]/90 px-2.5 py-2 backdrop-blur-xl"
         style={{ boxShadow: '0 8px 28px -10px rgba(79,123,255,0.45), 0 2px 10px -2px rgba(0,0,0,0.5)' }}
       >
-        {/* The aurora, dimmed right down — this bar is read, not watched, so the
-            wave is a level indicator behind it rather than the main event. */}
-        <div className="pointer-events-none absolute inset-0 opacity-30">
-          <VoiceWave
-            phase={status === 'error' ? 'error' : status === 'finishing' || status === 'refining' ? 'transcribing' : 'recording'}
-            level={level}
-          />
-        </div>
-
         <button
           type="button"
           onClick={onCancel}
@@ -120,7 +99,7 @@ export const DictationBar = memo(function DictationBar({
         <span
           className={cn(
             'relative z-10 h-2 w-2 shrink-0 rounded-full transition-colors',
-            cancelArmed || status === 'error' ? 'bg-rose-400'
+            status === 'error' ? 'bg-rose-400'
               : silent || status === 'connecting' || status === 'finishing' || status === 'refining' ? 'bg-white/40'
               : status === 'offline' ? 'bg-amber-400'
               : 'animate-pulse bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.9)]',
@@ -131,7 +110,7 @@ export const DictationBar = memo(function DictationBar({
           <div
             className={cn(
               'truncate text-[13px] leading-5 transition-colors',
-              cancelArmed || status === 'error' ? 'text-rose-200' : status === 'offline' ? 'text-amber-200/80' : 'text-white/45',
+              status === 'error' ? 'text-rose-200' : status === 'offline' ? 'text-amber-200/80' : 'text-white/45',
             )}
           >
             {label}
@@ -147,8 +126,7 @@ export const DictationBar = memo(function DictationBar({
           </span>
         )}
 
-        {/* Last, and the only thing the floating mic can land on. */}
-        <span className="relative z-10 shrink-0 pr-9 text-[11px] font-medium tabular-nums text-white/70">
+        <span className="relative z-10 shrink-0 text-[11px] font-medium tabular-nums text-white/70">
           {mmss}
         </span>
       </div>

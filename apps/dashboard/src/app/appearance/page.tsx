@@ -16,11 +16,6 @@ const OPTIONS = [
   { value: 'dark', label: 'Dark', desc: '始终使用暗色', Icon: Moon },
 ] as const;
 
-const MIC_KEY = 'hermit:hide-voice-mic';
-function readMicShown() {
-  try { return localStorage.getItem(MIC_KEY) !== '1'; } catch { return true; }
-}
-
 // One switch, four uses. There is still no `ui/switch` in this app (see the
 // note in app/backends/page.tsx about why a second toggle STYLE is how two of
 // them drift) — this is that same markup, lifted to a local component now that
@@ -103,17 +98,6 @@ export default function AppearancePage() {
 
   // Floating voice-mic visibility (localStorage; the chat page reads it on mount
   // + on cross-tab storage events). Default shown.
-  const [micShown, setMicShown] = useState(true);
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- mount gate reading localStorage
-  useEffect(() => setMicShown(readMicShown()), []);
-  const toggleMic = () => {
-    setMicShown((v) => {
-      const next = !v;
-      try { localStorage.setItem(MIC_KEY, next ? '0' : '1'); } catch { /* ignore */ }
-      return next;
-    });
-  };
-
   // Translation (localStorage; chat reads it through useTranslatePrefs, which
   // subscribes to both the same-tab event and cross-tab `storage`).
   const [translate, setTranslate] = useState<TranslatePrefs>(DEFAULT_PREFS);
@@ -173,16 +157,12 @@ export default function AppearancePage() {
           </p>
 
           <div className="border-t border-border pt-4">
-            <h2 className="text-sm font-semibold text-foreground">Voice input</h2>
+            <h2 className="text-sm font-semibold text-foreground">语音输入</h2>
             <p className="text-xs text-muted-foreground mt-1">
-              A floating mic button in chat — hold to talk and your speech is transcribed into the composer; drag to
-              reposition. Saved on this device.
+              在聊天输入框上<strong className="font-medium">按住</strong>就开始说话，松手发送；按住时手指滑到左边取消，
+              滑到右边把这段话放进输入框再改。想边说边改，就点输入框右边的麦克风，说的话会一个字一个字写进去。
+              桌面端按住右侧 ⌥ 也能说话。
             </p>
-            <div className="mt-3">
-              <SettingRow title="Show the floating mic button">
-                <Switch checked={micShown} onToggle={toggleMic} mounted={mounted} label="Show the floating mic button" />
-              </SettingRow>
-            </div>
           </div>
 
           <div className="border-t border-border pt-4">

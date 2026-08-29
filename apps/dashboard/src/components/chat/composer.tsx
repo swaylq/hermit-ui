@@ -14,10 +14,13 @@ import { isTouchPrimary } from '@/lib/save-file';
 import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { foldTail, newClaim, replaceTail, type DictationClaim } from '@/lib/dictation-text';
 import dynamic from 'next/dynamic';
-import { Plus, ArrowUp, FileText, X } from 'lucide-react';
+import { Plus, ArrowUp, Check, FileText, Loader2, Mic, X } from 'lucide-react';
 import { msgText, type Attachment } from '@/components/chat/lib';
 import { Collapse } from '@/components/chat/collapse';
 import { originalFor } from '@/lib/translate-outbound';
+import { canOpenMicSilently, refreshMicPermission, requestMicAccess } from '@/lib/voice-capture';
+import { HoldToTalkOverlay, type HoldPhase, type HoldZone } from '@/components/chat/hold-to-talk';
+import type { DictationSource } from '@/components/chat/dictation-dock';
 
 // Lazy-load the zoomable image lightbox (its own ~20KB portal-overlay chunk) so
 // the chat composer's first paint doesn't carry it — only an attachment preview
@@ -128,6 +131,16 @@ function StopPill({ onStop, stopping }: { onStop: () => void; stopping: boolean 
   );
 }
 
+// ── press-and-hold-to-talk thresholds ───────────────────────────────────────
+/** Hold the empty box this long and the press has become "talking". */
+const HOLD_MS = 260;
+/** Travel this far before that and it was a scroll passing through, not a hold. */
+const BAIL_PX = 10;
+/** Slide this far sideways, from where the finger went down, to pick 取消 / 编辑. */
+const SLIDE_PX = 64;
+/** Below this the finger hasn't gone anywhere, so the pill hit-test stays off. */
+const PILL_MIN_PX = 24;
+
 const draftKey = (sid: string) => `hermit:draft:${sid}`;
 function loadDraft(sid: string): string {
   try { return localStorage.getItem(draftKey(sid)) ?? ''; } catch { return ''; }
@@ -159,8 +172,16 @@ export interface ComposerHandle {
   refineDictationTail: (tail: string) => void;
   /** What was in the draft before the run started — reference for the refine. */
   dictationBase: () => string;
-  /** End the run; the tail becomes ordinary draft text. */
-  endDictation: () => void;
+  /**
+   * End the run; the tail becomes ordinary draft text. `discard` throws that
+   * tail away instead, leaving the draft as it was before the run started.
+   *
+   * Discarding has to happen HERE rather than through a setDictationTail('')
+   * followed by an end: that call queues an updater which reads the run's claim
+   * when React gets round to it, by which point ending the run has already
+   * cleared the claim — so the updater bails and the words stay in the box.
+   */
+  endDictation: (discard?: boolean) => void;
 }
 
 export const ComposeBar = forwardRef<ComposerHandle, {
@@ -186,6 +207,12 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   ) => void;
   taRef: React.RefObject<HTMLTextAreaElement | null>;
   history: string[];
+  /** Start a dictation run of this kind (drives DictationDock). */
+  onDictate?: (source: DictationSource) => void;
+  /** Finish the run — the words stay in the draft. */
+  onDictateStop?: () => void;
+  /** Throw the run away, including what it put in the draft. */
+  onDictateCancel?: () => void;
 }>(function ComposeBar({
   sessionId,
   disabled,
@@ -203,6 +230,9 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   onSend,
   taRef,
   history,
+  onDictate,
+  onDictateStop,
+  onDictateCancel,
 }, ref) {
   // Draft is owned here (see note above) so typing doesn't re-render SessionPane.
   const [draft, setDraft] = useState(() => loadDraft(sessionId));
@@ -217,6 +247,10 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   // because the value changes ~36×/second, and on iOS repeatedly moving the
   // selection surfaces the fat caret handle. So it goes away for the duration.
   const [dictating, setDictating] = useState(false);
+  // Whether the textarea has the caret. Two things read it: the press-to-talk
+  // layer, which only covers a box nobody is typing in, and the mic button,
+  // which is the way to dictate once you ARE typing in it.
+  const [focused, setFocused] = useState(false);
   // Persist the draft per session (localStorage writes are cheap for short
   // text). Auto-cleared when the draft empties on send / Escape.
   useEffect(() => { saveDraft(sessionId, draft); }, [sessionId, draft]);
@@ -312,9 +346,13 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     dictationBase() {
       return dictRef.current?.base ?? '';
     },
-    endDictation() {
+    endDictation(discard = false) {
+      const st = dictRef.current;
       dictRef.current = null;
       setDictating(false);
+      // Same update that ends the run, so there is no window in which the claim
+      // is gone but the words it owns are still in the draft.
+      if (discard && st) setDraft((d) => foldTail(st, d, '').draft);
       // Now that the words have stopped arriving, put the caret where someone
       // would want to keep typing. Once, not per frame — and without focusing,
       // which would throw the on-screen keyboard up at someone who just finished
@@ -501,8 +539,12 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   const imgCount = attachments.filter((a) => (a.kind === 'ready' || a.kind === 'uploading') && a.isImage).length;
   const fileCount = attachments.filter((a) => (a.kind === 'ready' || a.kind === 'uploading') && !a.isImage).length;
 
-  const submit = () => {
-    const text = draft.trim();
+  // `override` exists for the press-and-hold send, which fires from an effect a
+  // beat after the last word lands: reading the textarea's own value there is
+  // exact, where this closure's `draft` is only as fresh as the render the
+  // effect was scheduled from.
+  const submit = (override?: string) => {
+    const text = (override ?? draft).trim();
     // `sending` is deliberately NOT a guard. An in-flight send (~0.2–0.5s,
     // longer with auto-translate) used to swallow an Enter whole — no bubble,
     // no feedback. Now every Enter goes through: onSend puts the bubble up
@@ -553,6 +595,261 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   const showBrainGhost = !!brainDraft && draft.length === 0 && !disabled;
   const canSend = !disabled && !awaitingInput && !queueFull && uploadingCount === 0 && (draft.trim().length > 0 || readyAttachments.length > 0);
 
+  // ── press and hold to talk ────────────────────────────────────────────────
+  // WeChat's idiom, on the "Ask anything" box: hold it, talk, and where the
+  // finger is when it lifts decides what happens — lift → send, slid left →
+  // throw away, slid right → drop into the composer to fix first.
+  //
+  // The press is taken by a TRANSPARENT LAYER over the textarea, not by the
+  // textarea itself, and only while the box is empty and unfocused. A long press
+  // on a real text field belongs to the platform: iOS answers it with the
+  // magnifier and a Paste callout, and there is no reliable way to call that off
+  // once it has started. A plain div has no such behaviour, so the layer takes
+  // the hold and hands a TAP straight back — it focuses the textarea, which is
+  // all tapping an empty box ever did. The moment the box has text or focus the
+  // layer is gone and the textarea is an ordinary textarea again.
+  //
+  // Touch only. On a desktop, click-and-hold on an input is idle fidgeting, not
+  // a request to be recorded; the mic button and ⌥ (below) are the way in there.
+  const [holdZone, setHoldZone] = useState<HoldZone | null>(null);
+  const [holdPhase, setHoldPhase] = useState<HoldPhase>('listening');
+  // Released over "send": the run is closing and the words are still settling
+  // (the last sentence, then the whole-passage correction). We send when they stop.
+  const [holdSending, setHoldSending] = useState(false);
+  const [micHint, setMicHint] = useState<string | null>(null);
+  const [micArming, setMicArming] = useState(false);
+  const cancelPillRef = useRef<HTMLDivElement>(null);
+  const editPillRef = useRef<HTMLDivElement>(null);
+  // pointerdown/move run ahead of React's re-render, so the gesture keeps its
+  // own copy of everything it has to decide from.
+  const holdRef = useRef({ id: -1, x: 0, y: 0, live: false, auth: false, bailed: false, zone: 'send' as HoldZone, timer: 0 as unknown as ReturnType<typeof setTimeout> });
+
+  // Touch-primary is a window read, so it can't decide the first (server) render.
+  const [touch, setTouch] = useState(false);
+  useEffect(() => setTouch(isTouchPrimary()), []);
+
+  // Keep the cached permission answer fresh: pointerdown reads it synchronously
+  // to decide whether it may open the mic, and iOS drops the grant ~10 min after
+  // capture stops. (Moved here from the old floating mic, unchanged.)
+  useEffect(() => {
+    void refreshMicPermission();
+    const id = setInterval(() => { if (!document.hidden) void refreshMicPermission(); }, 15_000);
+    const onVisible = () => { if (!document.hidden) void refreshMicPermission(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
+
+  // First-run (and post-expiry) authorization. Fired from the RELEASE so the
+  // system alert never lands mid-press — an alert raised under a held finger
+  // swallows the touch, and the pointerup that would have ended the run never
+  // arrives. requestMicAccess() must run synchronously inside this gesture's own
+  // call stack or WebKit stops treating it as user-initiated: do not await
+  // anything before it.
+  const authorizeMic = useCallback(() => {
+    setMicArming(true);
+    setMicHint('请允许使用麦克风');
+    requestMicAccess()
+      .then(() => {
+        setMicHint('已授权 · 再按一下开始说话');
+        setTimeout(() => setMicHint(null), 2400);
+      })
+      .catch((e: unknown) => {
+        const denied = (e as DOMException)?.name === 'NotAllowedError';
+        setMicHint(denied ? '麦克风被拒绝，去系统设置开启' : '麦克风不可用');
+        setTimeout(() => setMicHint(null), denied ? 3600 : 2600);
+      })
+      .finally(() => { setMicArming(false); void refreshMicPermission(); });
+  }, []);
+
+  // The mic button beside the box: hands-free dictation straight into the draft.
+  // No hold, no zones, nothing to aim at — it just starts adding words, and the
+  // ✓ in the same slot (or the bar above) stops it. First press on an
+  // unauthorized mic spends itself on the permission ask, same as the hold does.
+  const onMicTap = useCallback(() => {
+    setMicHint(null);
+    if (!canOpenMicSilently()) { authorizeMic(); return; }
+    onDictate?.('tap');
+  }, [authorizeMic, onDictate]);
+
+  const endHold = useCallback(() => {
+    const h = holdRef.current;
+    clearTimeout(h.timer);
+    h.id = -1;
+    h.live = false;
+    h.auth = false;
+    h.zone = 'send';
+    setHoldZone(null);
+  }, []);
+
+  const onHoldDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse') return;
+    const h = holdRef.current;
+    if (h.id !== -1 || micArming) return;
+    h.id = e.pointerId;
+    h.x = e.clientX;
+    h.y = e.clientY;
+    h.live = false;
+    h.auth = false;
+    h.bailed = false;
+    h.zone = 'send';
+    // Capture so the moves keep coming after the finger leaves this box — it is
+    // small and the slide targets are not on it. Wrapped because a pointer that
+    // has already been released (or was never a real one) makes this throw, and
+    // an exception here would abandon the gesture half-armed.
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* no live pointer */ }
+    h.timer = setTimeout(() => {
+      if (h.id === -1 || h.bailed) return;
+      h.live = true;
+      setHoldZone('send');
+      // Not authorized yet? Show the ask instead of recording — opening the mic
+      // here would raise the alert under the finger. The release does it.
+      if (!canOpenMicSilently()) {
+        h.auth = true;
+        setHoldPhase('auth');
+        return;
+      }
+      setHoldPhase('listening');
+      onDictate?.('hold');
+    }, HOLD_MS);
+  }, [micArming, onDictate]);
+
+  const onHoldMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const h = holdRef.current;
+    if (h.id !== e.pointerId) return;
+    const dx = e.clientX - h.x;
+    const dy = e.clientY - h.y;
+    if (!h.live) {
+      // Still deciding. Any real travel means the finger was going somewhere
+      // else — give the gesture back rather than starting to record.
+      if (Math.hypot(dx, dy) > BAIL_PX) { h.bailed = true; clearTimeout(h.timer); h.id = -1; }
+      return;
+    }
+    if (h.auth) return; // waiting to ask for permission — there are no zones yet
+    // Displacement decides, and landing ON a pill decides too, so a finger that
+    // aims at the target it can see is not second-guessed. The pill test is
+    // gated on having moved at all, or a press that started near a corner would
+    // read as "cancel" before the finger did anything.
+    const travelled = Math.hypot(dx, dy) > PILL_MIN_PX;
+    const onPill = (el: HTMLDivElement | null) => {
+      if (!travelled || !el) return false;
+      const r = el.getBoundingClientRect();
+      return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    };
+    const zone: HoldZone =
+      dx <= -SLIDE_PX || onPill(cancelPillRef.current) ? 'cancel'
+      : dx >= SLIDE_PX || onPill(editPillRef.current) ? 'edit'
+      : 'send';
+    if (zone !== h.zone) { h.zone = zone; setHoldZone(zone); }
+  }, []);
+
+  const onHoldUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const h = holdRef.current;
+    if (h.id !== e.pointerId) return;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+    const { live, auth, zone, bailed } = h;
+    endHold();
+    if (!live) {
+      // A tap on an empty box is a tap on an empty box: focus it. (Skipped when
+      // the finger travelled — that was a scroll passing through.)
+      if (!bailed) taRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (auth) { authorizeMic(); return; }
+    if (zone === 'cancel') { onDictateCancel?.(); return; }
+    if (zone === 'edit') {
+      onDictateStop?.();
+      taRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    // Send. Close the run and hold the overlay up on 'finishing' — the last
+    // sentence and the whole-passage correction are still landing, and sending
+    // the half of the sentence that had arrived is not what was said.
+    setHoldPhase('finishing');
+    setHoldZone('send');
+    setHoldSending(true);
+    onDictateStop?.();
+  }, [endHold, authorizeMic, onDictateCancel, onDictateStop, taRef]);
+
+  // The send itself, once the words have stopped moving. `dictating` goes false
+  // when the dock tears the run down, which is after the correction has been
+  // written into the draft — so this fires exactly once, on the final text.
+  const submitRef = useRef(submit);
+  // Deliberately no dep array: `submit` closes over the draft, which the
+  // dictation rewrites ~36×/second, so a dependency here would re-arm the
+  // timeout below on every frame and it would never fire.
+  useEffect(() => { submitRef.current = submit; });
+  useEffect(() => {
+    if (!holdSending) return;
+    const fire = () => {
+      setHoldSending(false);
+      setHoldZone(null);
+      submitRef.current(taRef.current?.value ?? '');
+    };
+    if (!dictating) { fire(); return; }
+    // A run that never tears down would otherwise hold the overlay forever (a
+    // socket that opened and then went quiet does exactly that). Send what we
+    // have rather than trapping the screen.
+    const t = setTimeout(fire, 9000);
+    return () => clearTimeout(t);
+  }, [holdSending, dictating, taRef]);
+
+  // Desktop push-to-talk: hold RIGHT Option (⌥). Capture starts on keydown so
+  // the first words aren't clipped; the short arm below only decides whether to
+  // KEEP it, and any other key pressed while arming aborts — that's an
+  // Option+arrow edit, not talking. (Moved here from the old floating mic.)
+  const dictatingRef = useRef(dictating);
+  dictatingRef.current = dictating;
+  useEffect(() => {
+    if (isTouchPrimary()) return; // touch holds the box instead
+    const st = { byKey: false, arm: 0 as unknown as ReturnType<typeof setTimeout> };
+    const onDown = (ev: KeyboardEvent) => {
+      if (ev.code !== 'AltRight') {
+        if (st.byKey && st.arm) { clearTimeout(st.arm); st.arm = 0 as never; st.byKey = false; onDictateCancel?.(); }
+        return;
+      }
+      if (ev.repeat || disabled || awaitingInput || dictatingRef.current) return;
+      st.byKey = true;
+      onDictate?.('hold');
+      st.arm = setTimeout(() => { st.arm = 0 as never; }, 180);
+    };
+    const onUp = (ev: KeyboardEvent) => {
+      if (ev.code !== 'AltRight' || !st.byKey) return;
+      st.byKey = false;
+      if (st.arm) { clearTimeout(st.arm); st.arm = 0 as never; onDictateCancel?.(); return; } // a tap, not talk
+      onDictateStop?.();
+    };
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+    };
+  }, [disabled, awaitingInput, onDictate, onDictateStop, onDictateCancel]);
+
+  // A press that never gets its pointerup — the tab going away mid-hold (iOS
+  // kills capture on backgrounding anyway). Without this the run stays open and
+  // the overlay owns the screen on return.
+  useEffect(() => {
+    const bail = () => {
+      if (!document.hidden || holdRef.current.id === -1) return;
+      const wasLive = holdRef.current.live;
+      endHold();
+      if (wasLive) onDictateCancel?.();
+    };
+    document.addEventListener('visibilitychange', bail);
+    return () => document.removeEventListener('visibilitychange', bail);
+  }, [endHold, onDictateCancel]);
+
+  // When a press MAY start a run: an empty box nobody is typing in.
+  const holdIdle = touch && !!onDictate && !disabled && !awaitingInput && !dictating && draft.length === 0 && !focused;
+  // Once one HAS started, the layer must stay mounted no matter what those
+  // inputs do — and they all change immediately: the words land in the draft,
+  // `dictating` goes true. A layer that unmounts under a held finger never
+  // delivers its pointermove or its pointerup, so the zones would be dead and
+  // the run would never end. Same rule the old floating mic had, for the same
+  // reason. `holdZone` is non-null for exactly the life of the gesture.
+  const holdable = holdIdle || holdZone !== null;
+
   return (
     <form
       className={cn('shrink-0 bg-background transition-colors', dragHover && 'bg-accent/30')}
@@ -596,6 +893,16 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             )}
           </div>
         )}
+        {/* Permission chatter from the mic — "请允许使用麦克风", "已授权 · 再按一下
+            开始说话", a denial. Its own line rather than the notice strip above,
+            which belongs to attachments and failed sends. */}
+        <Collapse open={!!micHint}>
+          <div className="mb-2 flex justify-center">
+            <span className="rounded-full bg-foreground/85 px-2.5 py-1 text-[11px] font-medium text-background">
+              {micHint}
+            </span>
+          </div>
+        </Collapse>
         <div
           className={cn(
             'relative flex items-end gap-1.5 rounded-[26px] border bg-background px-2 py-2 shadow-sm transition-all duration-100 ease-out',
@@ -639,11 +946,18 @@ export const ComposeBar = forwardRef<ComposerHandle, {
               </span>
             </div>
           )}
+          {/* The textarea gets a wrapper so the press-to-talk layer can be sized
+              to it exactly (absolute inset-0) instead of guessing at the row's
+              padding and button widths. flex-1 + min-w-0 moved off the textarea
+              and onto the wrapper; the box itself is now w-full inside it. */}
+          <div className="relative flex-1 min-w-0">
           <textarea
             ref={taRef}
             value={draft}
             onChange={onChange}
             onPaste={onPaste}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             onKeyDown={(e) => {
               // Escape belongs to the box you're typing in, never to the turn.
               // SessionPane listens for Esc on `window` to cancel the running
@@ -708,14 +1022,53 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             }
             disabled={disabled || awaitingInput}
             rows={1}
-            className="no-scrollbar flex-1 bg-transparent text-base sm:text-[15px] resize-none outline-none leading-relaxed min-h-[28px] max-h-[360px] overflow-auto py-1.5 text-foreground placeholder:text-muted-foreground/70 disabled:cursor-not-allowed"
+            className="no-scrollbar block w-full bg-transparent text-base sm:text-[15px] resize-none outline-none leading-relaxed min-h-[28px] max-h-[360px] overflow-auto py-1.5 text-foreground placeholder:text-muted-foreground/70 disabled:cursor-not-allowed"
             style={dictating ? { caretColor: 'transparent' } : undefined}
           />
+          {/* Press-and-hold to talk. Only over an EMPTY, UNFOCUSED box — see the
+              note by the gesture. touch-none kills the scroll/zoom the browser
+              would otherwise claim mid-hold; select-none and the suppressed
+              context menu keep the platform's long-press UI out of it. */}
+          {holdable && (
+            <div
+              aria-hidden="true"
+              className="absolute inset-0 touch-none select-none"
+              onPointerDown={onHoldDown}
+              onPointerMove={onHoldMove}
+              onPointerUp={onHoldUp}
+              onPointerCancel={onHoldUp}
+              onContextMenu={(e) => e.preventDefault()}
+            />
+          )}
+          </div>
 
           {working && onStop && <StopPill onStop={onStop} stopping={stopping} />}
 
-          {/* Clear the draft once there's text — mirrors the x on the other inputs. */}
-          {draft.length > 0 && !disabled && (
+          {/* Right of the box, one slot, three states: finish the dictation
+              that's running · start one (empty box — the mic replaces the ✕
+              that would have nothing to clear) · clear what you typed. */}
+          {dictating && onDictateStop ? (
+            <button
+              type="button"
+              onClick={() => onDictateStop()}
+              aria-label="结束听写"
+              title="结束听写"
+              className="h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full bg-accent text-foreground hover:bg-accent/80 transition-colors cursor-pointer"
+            >
+              <Check className="h-5 w-5" />
+            </button>
+          ) : draft.length === 0 && onDictate && !disabled && !awaitingInput ? (
+            <button
+              type="button"
+              onClick={onMicTap}
+              disabled={micArming}
+              aria-label="语音输入"
+              title={micHint ?? '语音输入 · 说的话直接写进输入框'}
+              className="h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60"
+            >
+              {micArming ? <Loader2 className="h-5 w-5 animate-spin" /> : <Mic className="h-5 w-5" />}
+            </button>
+          ) : draft.length > 0 && !disabled ? (
             <button
               type="button"
               onClick={() => { setDraft(''); taRef.current?.focus({ preventScroll: true }); }}
@@ -725,7 +1078,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
             >
               <X className="h-5 w-5" />
             </button>
-          )}
+          ) : null}
 
           {/* One button, one meaning, always in the same place: this circle sends.
               Nothing ever takes its slot (see the `working` note above). */}
@@ -748,6 +1101,15 @@ export const ComposeBar = forwardRef<ComposerHandle, {
           messages go to the agent&apos;s terminal · ↵ send · ⇧↵ newline · paste or drop images
         </p>
       </div>
+      {holdZone && (
+        <HoldToTalkOverlay
+          zone={holdZone}
+          phase={holdPhase}
+          text={draft}
+          cancelRef={cancelPillRef}
+          editRef={editPillRef}
+        />
+      )}
     </form>
   );
 });

@@ -146,7 +146,6 @@ const NewChatPane = lazy(() => import('@/components/chat/new-chat-pane').then((m
 const SessionDetailSheet = lazy(() => import('@/components/chat/session-detail-sheet').then((m) => ({ default: m.SessionDetailSheet })));
 const LivePreviewPanel = lazy(() => import('@/components/chat/preview-panel').then((m) => ({ default: m.LivePreviewPanel })));
 const PreviewFab = lazy(() => import('@/components/chat/preview-fab').then((m) => ({ default: m.PreviewFab })));
-const VoiceMic = lazy(() => import('@/components/chat/voice-mic').then((m) => ({ default: m.VoiceMic })));
 const DictationDock = lazy(() => import('@/components/chat/dictation-dock').then((m) => ({ default: m.DictationDock })));
 
 // Shown only while that chunk is in flight. Mirrors the pane's own frame (header
@@ -227,7 +226,6 @@ function ChatPageInner() {
       void import('@/components/chat/session-detail-sheet');
       void import('@/components/chat/preview-panel');
       void import('@/components/chat/preview-fab');
-      void import('@/components/chat/voice-mic');
       void import('@/components/chat/dictation-dock');
     };
     (w.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1500)))(warm);
@@ -719,10 +717,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const sendChainRef = useRef<Promise<void>>(Promise.resolve());
   // Realtime dictation lives in its own dock (above the composer) so the text
   // arriving ~36×/second re-renders the composer's own draft and nothing else.
-  // All that reaches here is a ref to drive it and two booleans the mic draws.
+  // All that reaches here is a ref to drive it and whether a run is live.
   const dictationRef = useRef<DictationHandle>(null);
   const [dictating, setDictating] = useState(false);
-  const [slideCancelArmed, setSlideCancelArmed] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // Composer notice line: attachment-cap warnings (set in ComposeBar.addFiles) AND
   // send failures (set in onSend's onError) — so a rejected send explains itself
@@ -795,16 +792,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   }, [sessionId, messages.data?.length]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
-
-  // Floating voice-mic visibility (Settings → hermit:hide-voice-mic). Read on
-  // mount + on cross-tab storage events so toggling it takes effect without a reload.
-  const [micHidden, setMicHidden] = useState(false);
-  useEffect(() => {
-    const read = () => { try { setMicHidden(localStorage.getItem('hermit:hide-voice-mic') === '1'); } catch { /* ignore */ } };
-    read();
-    window.addEventListener('storage', read);
-    return () => window.removeEventListener('storage', read);
-  }, []);
 
   // Track whether the messages viewport is pinned to the bottom. We only
   // auto-scroll when the user is already there — otherwise reading older
@@ -1804,10 +1791,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const startDictation = useCallback((source: DictationSource) => dictationRef.current?.start(source), []);
   const stopDictation = useCallback(() => dictationRef.current?.stop(), []);
   const cancelDictation = useCallback(() => dictationRef.current?.cancel(), []);
-  const onDictationActive = useCallback((live: boolean) => {
-    setDictating(live);
-    if (!live) setSlideCancelArmed(false);
-  }, []);
+  const onDictationActive = useCallback((live: boolean) => setDictating(live), []);
 
   // Stable callbacks for the memo'd ScheduleBar — inline arrows here would give it
   // a fresh prop identity on every SSE tick and defeat the memo. pickPrompt is
@@ -1848,7 +1832,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // The takeover chip stays visible while a takeover is LIVE even though canTakeover
   // has gone false — it's the way to take the conversation back.
   const showTakeover = canTakeover || takenOver;
-  const showMicFab = !micHidden && !session?.closedAt;
   const hasLivePreview = !!livePreview && !session?.closedAt;
   const previewOpen = hasLivePreview && !!previewOpenUrl && previewOpenUrl === livePreview?.url;
   // Cmd/Ctrl+\ toggles the live-preview split — VS Code's split-editor key,
@@ -2391,31 +2374,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           </button>
       </div>
 
-        {/* The mic floats alone. Takeover moved into the suggestion row above the
-            composer — it's a decision you make instead of typing, not something you
-            reach for mid-scroll. */}
-        {(showMicFab || hasLivePreview) && (
-          <FabDock count={(showMicFab ? 1 : 0) + (hasLivePreview ? 1 : 0)}>
+        {/* Only the live-preview button floats now. Voice moved into the composer
+            (hold the box to talk, or tap the mic beside it), and takeover into the
+            suggestion row — neither was ever something you reached for mid-scroll. */}
+        {hasLivePreview && (
+          <FabDock count={1}>
             <Suspense fallback={null}>
-              {showMicFab && (
-                // Never hidden while a run is live: the button IS the way out of
-                // one (release it, or tap it), and a button that unmounts
-                // mid-press never delivers its pointerup.
-                <VoiceMic
-                  hidden={false}
-                  dictating={dictating}
-                  cancelArmed={slideCancelArmed}
-                  onDictate={startDictation}
-                  onDictateStop={stopDictation}
-                  onDictateCancel={cancelDictation}
-                  onSlideCancelArm={setSlideCancelArmed}
-                />
-              )}
-              {/* Below the mic so the mic keeps its stored spot; only exists while
-                  the session has a registered preview — "hidden by default". */}
-              {hasLivePreview && (
-                <PreviewFab open={previewOpen} onToggle={() => setPreviewOpenUrl(previewOpen ? null : (livePreview?.url ?? null))} />
-              )}
+              <PreviewFab open={previewOpen} onToggle={() => setPreviewOpenUrl(previewOpen ? null : (livePreview?.url ?? null))} />
             </Suspense>
           </FabDock>
         )}
@@ -2492,7 +2457,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               ref={dictationRef}
               sessionId={sessionId}
               composerRef={composerRef}
-              cancelArmed={slideCancelArmed}
               onActiveChange={onDictationActive}
               onNotice={setComposerNotice}
             />
@@ -2592,6 +2556,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             stopping={cancelTurn.isPending}
             taRef={taRef}
             history={sentHistory}
+            onDictate={session?.closedAt ? undefined : startDictation}
+            onDictateStop={stopDictation}
+            onDictateCancel={cancelDictation}
           />
         </div>
       </div>

@@ -15,12 +15,11 @@
 //   push-to-talk — and gestures and pipelines are better kept apart.
 //
 // TWO WAYS IN, and the bar has to know which, because the way OUT differs:
-//   'hold' — the mic is still held down. Release finishes, sliding up cancels.
-//   'tap'  — hands-free. Tapping the mic again finishes it.
-// Either way the mic button stays on screen: a button that vanishes mid-press
-// never delivers its pointerup, and a held run would never end. The bar carries
-// its own ✓ and ✕ regardless, because the mic can be hidden behind the iOS
-// keyboard while the bar cannot — see dictation-bar.tsx.
+//   'hold' — the composer's box is still held down. Releasing finishes it, and
+//            where the finger is at that moment decides send / cancel / edit
+//            (composer.tsx owns that gesture; hold-to-talk.tsx draws it).
+//   'tap'  — hands-free, from the mic button beside the box. The ✓ in that same
+//            slot, or the one on the bar, finishes it.
 //
 // DEGRADING, NOT FAILING. There is no separate "old mode" any more, so this has
 // to cover everyone the socket can't serve: no DASHSCOPE_API_KEY, a scoped
@@ -95,9 +94,7 @@ export const DictationDock = forwardRef<DictationHandle, {
   onActiveChange?: (active: boolean, source: DictationSource | null) => void;
   /** Transient message for the composer's notice line. */
   onNotice?: (text: string) => void;
-  /** The held finger has slid up far enough that releasing will cancel. */
-  cancelArmed?: boolean;
-}>(function DictationDock({ sessionId, composerRef, onActiveChange, onNotice, cancelArmed = false }, ref) {
+}>(function DictationDock({ sessionId, composerRef, onActiveChange, onNotice }, ref) {
   const [active, setActive] = useState(false);
   const [source, setSource] = useState<DictationSource>('tap');
   const [status, setStatus] = useState<DictationStatus>('connecting');
@@ -105,7 +102,6 @@ export const DictationDock = forwardRef<DictationHandle, {
   const statusRef = useRef<DictationStatus>('connecting');
   const setPhase = useCallback((s: DictationStatus) => { statusRef.current = s; setStatus(s); }, []);
   const [pending, setPending] = useState(0);
-  const [level, setLevel] = useState(0);
   const [silent, setSilent] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState(0);
@@ -173,7 +169,9 @@ export const DictationDock = forwardRef<DictationHandle, {
 
   // Tear down every moving part. Safe to call twice; that happens routinely
   // (a socket failure and the user releasing can race).
-  const teardown = useCallback(() => {
+  // `discard` reaches the composer, which drops everything this run put in the
+  // draft. Only cancelling passes it; every other way out keeps the words.
+  const teardown = useCallback((discard = false) => {
     refineAbort.current?.abort();
     refineAbort.current = null;
     if (silenceTimer.current) { clearTimeout(silenceTimer.current); silenceTimer.current = null; }
@@ -183,10 +181,9 @@ export const DictationDock = forwardRef<DictationHandle, {
     streamRef.current = null;
     sockRef.current?.close();
     sockRef.current = null;
-    composerRef.current?.endDictation();
+    composerRef.current?.endDictation(discard);
     setActiveBoth(false, null);
     setPending(0);
-    setLevel(0);
     setSilent(false);
     setPhase('connecting');
     setHint(null);
@@ -297,9 +294,9 @@ export const DictationDock = forwardRef<DictationHandle, {
 
   const cancel = useCallback(() => {
     if (!activeRef.current) return;
-    settleTo('');
-    teardown();
-  }, [settleTo, teardown]);
+    stopTyping(); // no half-typed frame may land after the words are dropped
+    teardown(true);
+  }, [stopTyping, teardown]);
 
   const armSilenceStop = useCallback((isSilent: boolean) => {
     if (silenceTimer.current) { clearTimeout(silenceTimer.current); silenceTimer.current = null; }
@@ -365,7 +362,6 @@ export const DictationDock = forwardRef<DictationHandle, {
 
     startStreaming({
       onChunk: (pcm) => sockRef.current?.send(pcm),
-      onLevel: setLevel,
       onSilence: (s) => { setSilent(s); armSilenceStop(s); },
       maxMs: RUN_MAX_MS,
       onAutoStop: () => { onNotice?.('听写时长到上限，已结束'); stop(); },
@@ -393,9 +389,7 @@ export const DictationDock = forwardRef<DictationHandle, {
     <Collapse open={active}>
       <DictationBar
         source={source}
-        cancelArmed={cancelArmed}
         pending={pending}
-        level={level}
         silent={silent}
         status={status}
         elapsedMs={startedAt ? Date.now() - startedAt : 0}
