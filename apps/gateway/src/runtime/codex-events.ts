@@ -105,6 +105,10 @@ export function emitNoticeOnce(seen: Set<string>, item: TranslatedItem): boolean
   const text = typeof block?.text === 'string' ? block.text : '';
   if (!text.startsWith('[codex error]\n')) return true;
   if (seen.has(text)) return false;
+  // A cap, so a codex build that invents a fresh warning every turn cannot grow
+  // this set for the life of the process. Past the cap notices pass through —
+  // spam is bad, but silently dropping an unseen warning is worse.
+  if (seen.size >= 200) return true;
   seen.add(text);
   return true;
 }

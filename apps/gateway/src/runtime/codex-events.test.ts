@@ -255,3 +255,19 @@ test('non-notice rows are never deduped', () => {
     'stream errors are real failures, not repeatable notices',
   );
 });
+
+// A codex build that invents a fresh warning every turn must not grow the set
+// for the life of the process. Past the cap an unseen notice still shows —
+// spam is bad, silently dropping an unseen warning is worse.
+test('the notice set is capped and unseen notices pass the cap', () => {
+  const seen = new Set<string>();
+  const row = (message: string) => translateCodexEvent(
+    completed({ id: 'item_3', type: 'error', message }),
+    'k1',
+  )[0];
+  for (let i = 0; i < 200; i++) emitNoticeOnce(seen, row(`warning ${i}`));
+  assert.equal(seen.size, 200);
+  assert.equal(emitNoticeOnce(seen, row('warning 201')), true);
+  assert.equal(seen.size, 200, 'the cap is not exceeded');
+  assert.equal(emitNoticeOnce(seen, row('warning 0')), false, 'seen ones still dedupe');
+});

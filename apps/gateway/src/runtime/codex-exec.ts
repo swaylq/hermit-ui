@@ -706,8 +706,13 @@ export class CodexExecRuntime implements AgentRuntime {
           }
           for (const item of translateCodexEvent(ev, turnKey)) {
             if (!emitNoticeOnce(h.seenNotices, item)) {
+              // Say WHICH notice was swallowed — a bare "suppressed" line N
+              // times over is impossible to forensically distinguish.
+              const text = (item.content as Array<{ text?: unknown }>)[0]?.text;
               console.log(
-                `[codex] session=${h.sessionId.slice(0, 8)} repeated notice suppressed`,
+                `[codex] session=${h.sessionId.slice(0, 8)} repeated notice suppressed: ${
+                  String(text ?? '').split('\n')[1]?.slice(0, 80) ?? ''
+                }`,
               );
               continue;
             }

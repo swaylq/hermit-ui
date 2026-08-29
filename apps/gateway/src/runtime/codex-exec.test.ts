@@ -470,3 +470,73 @@ test('every codex client is built with the JSONL repair already installed', () =
 
   assert.ok(Object.hasOwn(exec, 'run'), 'run is the SDK prototype method unless someone wrapped it');
 });
+
+// The wiring itself, not just the helper: deleting the emitNoticeOnce call in
+// codex-exec's event loop must make a test go red, otherwise the dedupe only
+// exists on paper. A fake thread feeds the loop three copies of the same
+// non-fatal error; the chat must see exactly one.
+test('a repeated non-fatal notice reaches the chat once per session', async (t) => {
+  const home = fixtureHome();
+  const runtime = new CodexExecRuntime();
+  const emitted: Array<{ role: string; text: string }> = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let handle: any = null;
+  t.after(async () => {
+    if (handle) await runtime.stop(handle, 'kill');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  handle = await runtime.ensure({
+    id: `notice-dedupe-${Date.now()}`,
+    agentName: 'test',
+    agentDirectory: home,
+    externalSessionId: null,
+    model: 'gpt-5.6-sol',
+  }, (item) => emitted.push({
+    role: item.role,
+    text: String((item.content as Array<{ text?: string }>)[0]?.text ?? ''),
+  }));
+
+  const notice = () => ({
+    type: 'item.completed',
+    item: { id: 'item_3', type: 'error', message: 'Heads up: long thread' },
+  });
+  (handle as { thread: unknown }).thread = {    id: 'thread-fake',
+    runStreamed: async () => ({
+      events: (async function* () {
+        yield { type: 'thread.started', thread_id: 'thread-fake' };
+        yield notice();
+        yield notice();
+        yield notice();
+        yield {
+          type: 'item.completed',
+          item: { id: 'item_4', type: 'agent_message', text: 'done' },
+        };
+      })(),
+    }),
+  };
+
+  assert.equal(await runtime.submit(handle, 'hi', []), true);
+  // The turn is consumed in the background; wait for it to drain.
+  for (let i = 0; i < 100 && (await runtime.isWorking(handle)); i++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+
+  const notices = emitted.filter((e) => e.text.startsWith('[codex error]'));
+  assert.equal(notices.length, 1, 'three identical notices, one chat row');
+  assert.ok(
+    emitted.some((e) => e.text === 'done'),
+    'ordinary content after the notice still lands',
+  );
+
+  // A second turn on the same session: still suppressed — the dedupe lives on
+  // the handle, not on the turn.
+  assert.equal(await runtime.submit(handle, 'again', []), true);
+  for (let i = 0; i < 100 && (await runtime.isWorking(handle)); i++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.equal(
+    emitted.filter((e) => e.text.startsWith('[codex error]')).length,
+    1,
+    'the next turn does not re-show it either',
+  );
+});
