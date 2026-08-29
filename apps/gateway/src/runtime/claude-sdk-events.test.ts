@@ -224,7 +224,12 @@ test('a thinking block streams as a thinking block, not as text', () => {
   const st = newLiveState();
   applyStreamEvent(st, blockStart(0, 'thinking'));
   applyStreamEvent(st, thinkingDelta(0, 'weighing it up'));
-  assert.deepEqual(liveItem('s1', st.block!).content, [{ type: 'thinking', thinking: 'weighing it up' }]);
+  // Its LENGTH, not its text: the capsule only ever shows `💭 thinking · N
+  // chars`, and a placeholder cannot be expanded. Sending the body would repost
+  // the whole accumulation four times a second, Mac to VPS, for that number.
+  assert.deepEqual(liveItem('s1', st.block!).content, [
+    { type: 'thinking', thinking: '', chars: 'weighing it up'.length },
+  ]);
 });
 
 test('a tool_use block does not stream — half a JSON object is not a message', () => {

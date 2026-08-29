@@ -284,13 +284,36 @@ export function applyStreamEvent(state: LiveState, msg: SDKMessage): 'grew' | 'e
   return null;
 }
 
-/** The placeholder row, as the chat surface should currently render it. */
+/**
+ * The placeholder row, as the chat surface should currently render it.
+ *
+ * A THINKING block sends its length and not its text, because that is all the
+ * reader is shown: the timeline folds thinking into a run capsule whose
+ * collapsed label is `💭 thinking · N chars`, and there is no way to expand a
+ * placeholder — it is retracted and replaced by the real record the moment the
+ * block finishes.
+ *
+ * The text was costing a lot for that number. The push is trailing-edge at
+ * LIVE_PUSH_MS (250 ms), so a block streams about four frames a second, each
+ * carrying the WHOLE accumulation so far — quadratic in the block's length, and
+ * every frame is an HTTP POST from the gateway on the Mac to the dashboard on
+ * the VPS, plus a row rewrite in Postgres. An eight-second thinking block
+ * ending at 4 KB spent roughly 32 posts and ~64 KB doing it. Now it is ~32
+ * posts of a two-digit number, and Postgres rewrites a tiny row.
+ *
+ * TEXT still carries its text: that one IS rendered, token by token, and is
+ * what the typewriter reveals.
+ */
 export function liveItem(sessionId: string, block: LiveBlock): SyncItem {
   return {
     sessionId,
     role: 'assistant',
     content: block.kind === 'thinking'
-      ? [{ type: 'thinking', thinking: block.text }]
+      // `chars` is the field fold-runs.ts:stepFor reads in preference to the
+      // body, and the same shape server/message-digest.ts produces — so the
+      // capsule cannot tell a live thinking block from a digested historical
+      // one, which is the point.
+      ? [{ type: 'thinking', thinking: '', chars: block.text.length }]
       : [{ type: 'text', text: block.text }],
     externalId: liveExternalId(sessionId),
     claudeSessionId: null,
