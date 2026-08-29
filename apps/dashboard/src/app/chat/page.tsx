@@ -2637,8 +2637,13 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 //
 // Prompt templates stay in Chinese on purpose: they are typed at the AGENT, and the
 // English rule covers the product's own UI, not what you say to an agent.
+//
+// None of them tells the agent to test itself. "做完自己测一遍" read as an order to
+// write unit tests, so runs came back with a passing count instead of the thing
+// working; the check that matters is the report you read, and for the perfect
+// chip, the fresh reviewer.
 const ITERATE_TEMPLATE =
-  '开启循环任务：每 30 分钟，<要做的事>。每轮先读上一轮留下的进展文件再接着做，做完自己测试验证一遍，把结果（含验证结论）发到这个对话；达成 <完成条件> 后自动停止。';
+  '开启循环任务：每 30 分钟，<要做的事>。每轮先读上一轮留下的进展文件再接着做，把结果发到这个对话；达成 <完成条件> 后自动停止。';
 
 const CRON_TEMPLATE =
   '开启定时任务：每 60 分钟（时间上下浮动 ±10 分钟），<要做的事>。每次独立后台运行（不占用本对话上下文），跑完把结果发回这个对话，完整历史在 /cron 页面。';
@@ -2656,4 +2661,4 @@ const AUTONOMY_TEMPLATE = '按照你的推荐做，不再询问我，直到做�
 // names the mechanism (清单 / 评审 / 截图 / 24 小时) so the skill fires on it
 // rather than being read as ordinary emphasis.
 const PERFECT_TEMPLATE =
-  '把这件事做到完美：<目标>。先写一份每条都能验证的验收清单（越短越好），然后一轮轮做——每轮做完自己测一遍，有界面就截个图，再交给一个全新的评审 agent 看有没有真问题，把问题改掉；评审挑不出真问题就算完。全程不超过 24 小时：一开始就把范围裁到 24 小时内能交付，快到时直接收尾汇报。';
+  '把这件事做到完美：<目标>。先写一份每条都能验证的验收清单（越短越好），然后一轮轮做，有界面就截个图，再交给一个全新的评审 agent 看有没有真问题，把问题改掉；评审挑不出真问题就算完。全程不超过 24 小时：一开始就把范围裁到 24 小时内能交付，快到时直接收尾汇报。';
