@@ -47,7 +47,9 @@ Both are fixed by giving the repo a home on GitLab:
 {{AGENT_DIR}}/.claude/skills/worktree/gitlab-init.sh <repo>
 ```
 
-It creates the project under `swaylq/` on `git.daguchuangyi.com` (private), wires up
+It creates the project as **private, under `swaylq/`** on `git.daguchuangyi.com` — the
+namespace is passed explicitly and read back afterwards, so a token belonging to someone
+else fails loudly instead of quietly putting the repo somewhere else. Then it wires up
 `origin`, pushes, and installs a git credential helper that reads `GITLAB_TOKEN` out of
 the encrypted store on each call — so the plain `git fetch` / `git push` that `land`
 runs work afterwards, with the token never in a config file, a remote URL or an argv.

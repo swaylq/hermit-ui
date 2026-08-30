@@ -75,14 +75,30 @@ api() {
     curl -sS -K - --max-time 30 -X "$1" "$2"' _ "$method" "$HOST/api/v4/$path"
 }
 
+# The namespace is passed explicitly. Creating without namespace_id lands the project
+# wherever the token's owner defaults to — right with sway's token, wrong the moment a
+# store on another machine holds a different one, and the existence check below looks
+# under $NS regardless. The two halves have to agree.
+ns_id=$(api GET "namespaces/$NS" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])' 2>/dev/null) \
+  || die "no namespace '$NS' on $HOST for this token — check GITLAB_TOKEN in the secret store"
+
 encoded=$(printf '%s/%s' "$NS" "$name" | sed 's|/|%2F|g')
 if api GET "projects/$encoded" | grep -q '"ssh_url_to_repo"'; then
   echo "project $NS/$name already exists on GitLab — reusing it"
 else
-  api POST "projects?name=$name&path=$name&visibility=private" | grep -q '"ssh_url_to_repo"' \
-    || die "could not create $NS/$name on GitLab"
-  echo "created $HOST/$NS/$name (private)"
+  api POST "projects?name=$name&path=$name&namespace_id=$ns_id&visibility=private" \
+    | grep -q '"ssh_url_to_repo"' || die "could not create $NS/$name on GitLab"
+  echo "created $HOST/$NS/$name"
 fi
+
+# Say out loud where it went and that it is closed. A repo that silently landed in the
+# wrong namespace, or public, is not something you notice by reading a git remote.
+api GET "projects/$encoded" \
+  | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["path_with_namespace"], d["visibility"])' \
+  | { read -r where vis
+      [ "$where" = "$NS/$name" ] || die "project landed in $where, expected $NS/$name"
+      [ "$vis" = private ] || die "project is $vis, expected private"
+      echo "confirmed $where is private"; }
 
 # ── 4. remote + first push ───────────────────────────────────────────────────
 url="$HOST/$NS/$name.git"
