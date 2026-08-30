@@ -74,10 +74,10 @@ Do this run: <THE TASK>
 Then CHECK IT BUILDS before reporting, and confirm the build actually passed. On failure:
 roll back, or record the failure honestly. NEVER report success you did not verify.
 
-Do not write unit tests to prove the round worked, and never report a passing count as the
-result — a suite you wrote yourself goes green on your own assumptions, including the wrong
-ones. When the task is finished (not every run), exercise it the way a person would once:
-open the page, run the command for real, look at the output.
+A test you wrote yourself is weak evidence — it passes on your own assumptions, wrong ones
+included — so don't report a passing count as the result. When the task is finished (not
+every run), use it once the way a person would: open the page, run the command, look at the
+output.
 
 Then append a one-line result to ./memory/<today>.md.
 

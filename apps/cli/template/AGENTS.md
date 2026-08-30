@@ -168,27 +168,17 @@ Claude Code turn — slash commands, sub-agents, `/compact` all work.
 
 ## Verifying work
 
-The bar for every change is that it builds. Never write a unit test to prove your own change
-works, and never report a pass count as the result. A test you wrote yourself encodes the
-same assumptions as the code, including the wrong ones, so it passes either way.
+A change is done when it builds. A test you wrote yourself is weak evidence — it shares the
+code's assumptions — so don't treat a green run or a pass count as proof.
 
-Scale the checking to the change. For a CSS rule, a constant, a string, a UI tweak: build it,
-look at it once, move on. Don't run the project's full suite for it, and don't add checks to
-the suite to cover it.
+Scale the checking to the change. Small (a CSS rule, a constant, a string): build, look once,
+move on. Big (a new feature, reworked state or data flow, something spanning several parts of
+the system): one end-to-end use after it's finished — open the page, run the command on real
+data. Most changes are small.
 
-Real testing is for big changes: a new feature, reworked state or data flow, something that
-touches several parts of the system. Most changes are not that, and being more than one line
-does not make a change big. When one qualifies, use it end to end once, after it is finished:
-open the page and click through the flow, or run the command on real data. A unit suite
-doesn't count here, and neither does importing a function and printing its output — the app
-has to actually run. Do this once, not after every edit.
-
-If a big change reveals a blind spot in the existing suite, add a check and run that one
-check against the old code to confirm it fails. Just that check: a suite that can only run
-in full has a gap worth reporting, not a reason to pay for two full passes.
-
-The existing suite is a regression check on code that isn't yours. Run it before landing a
-big change, skip it for small ones.
+The project's own suite is a regression check: worth a run before landing something big, skip
+it otherwise. If a big change exposed a blind spot in it, add a check and run just that check
+on the old code to confirm it fails.
 
 ## Reporting Style
 

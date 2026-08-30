@@ -72,16 +72,12 @@ makes the critic's verdict unattributable.
 Run the project's build (or, for something with no build step, start it and see it come up).
 A round that does not build is not a round.
 
-**Do not write unit tests to prove your change works, and never report a passing count as
-evidence.** Tests you wrote yourself encode your own assumptions — the same assumptions that
-produced the bug. They go green whether or not a person can use the thing.
+A test you wrote yourself is weak evidence — it encodes the assumptions that produced the
+bug, so it goes green either way. Don't report a passing count as the result.
 
-If the project already has a suite, weigh the cost of a run. A suite that finishes in seconds
-is worth running before you land, as a regression check on code that isn't yours. One that
-takes minutes (a browser suite, a full acceptance pass) is only worth running after a round
-that reworked something substantial — not after moving a CSS rule or a string, and not a
-second time to show that a check you just wrote fails on the old code. Either way, a passing
-suite is not proof your feature works.
+The project's own suite: a seconds-long run is worth doing before you land, as a regression
+check. A minutes-long one (a browser suite, a full acceptance pass) is only worth it after a
+round that reworked something substantial — not after moving a CSS rule or a string.
 
 The proof is the next section, and it happens ONCE — when the list looks met, not every round.
 

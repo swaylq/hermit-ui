@@ -88,8 +88,11 @@ else:
     print('custom'); raise SystemExit(0)
 
 # Compute fully, sanity-check, then land atomically — never truncate in place.
+# The length check is exact arithmetic, not a threshold: a threshold guard blocked a
+# deliberate shortening of the section on 2026-08-30 and the failure was silent.
 assert '## Verifying work' in out and 'Scale the checking to the change' in out
-assert len(out) > len(s) - 400, 'unexpected shrinkage'
+expected = len(s) + len(want) - (len(cur) if cur is not None else 0)
+assert len(out) == expected, f'size mismatch: {len(out)} != {expected}'
 if not dry:
     tmp = tgt + '.rollout.tmp'
     open(tmp, 'w').write(out)
@@ -99,7 +102,7 @@ print(word)
 PY
 }
 
-updated=0; already=0; nofile=0; skipped=0; custom=0
+updated=0; already=0; nofile=0; skipped=0; custom=0; failed=0
 
 for dir in "$AGENTS_ROOT"/*/; do
   agent=$(basename "$dir")
@@ -127,10 +130,13 @@ for dir in "$AGENTS_ROOT"/*/; do
     added|appended|replaced)
       [ "$DRY" = 1 ] && echo "would rewrite $agent/AGENTS.md  (## Verifying work)"
       updated=$((updated+1)) ;;
+    *) echo "ERROR — splice failed on $agent/AGENTS.md (python stderr above)" >&2
+       failed=$((failed+1)) ;;
   esac
 done
 
 echo
-echo "updated $updated · already current $already · hand-edited $custom · no AGENTS.md $nofile · not an agent $skipped"
+echo "updated $updated · already current $already · hand-edited $custom · no AGENTS.md $nofile · not an agent $skipped · FAILED $failed"
+[ "$failed" -gt 0 ] && exit 1
 [ "$DRY" = 1 ] && echo "(dry run — nothing written)"
 exit 0
