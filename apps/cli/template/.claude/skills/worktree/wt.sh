@@ -22,6 +22,7 @@
 set -uo pipefail
 
 WT_ROOT="${HERMIT_WT_ROOT:-$HOME/.hermit/worktrees}"
+SELF_DIR=$(cd "$(dirname "$0")" && pwd -P)   # gitlab-init.sh sits next to this script
 
 die() { echo "wt: $*" >&2; exit 1; }
 
@@ -169,6 +170,51 @@ base_branch() {
 
 has_remote() { git -C "$1" remote | grep -q .; }
 
+# Two states in which a repo cannot be isolated at all. Both are ordinary for a project
+# someone started with `git init` and never pushed, and git reports both far too late
+# to be useful:
+#
+#   unborn     no commits. `git worktree add … HEAD` dies with "fatal: invalid
+#              reference: HEAD" — inside `enter`, long after `check` promised isolation.
+#   no-remote  nowhere to land. `land` falls back to moving the local base ref, which
+#              leaves the main checkout's FILES untouched, so every other session keeps
+#              reading the old code and nothing says so.
+#
+# text-game hit the first one on 2026-08-30: four sessions shared one directory with no
+# way to isolate, and spent an afternoon negotiating file ownership by message instead.
+repo_state() {
+  git -C "$1" rev-parse --verify --quiet HEAD >/dev/null 2>&1 || { echo unborn; return; }
+  has_remote "$1" || { echo no-remote; return; }
+  echo ready
+}
+
+# Says what to do about it. Returns 2 when isolation is IMPOSSIBLE (no commits), 1 when
+# it will work but land badly (no remote), 0 when the repo is fine. Only 2 blocks:
+# a no-remote repo has always worked here, it just lands into a local ref instead.
+repo_advice() {
+  local r=$1
+  case $(repo_state "$r") in
+    unborn)
+      echo "This repo has no commits yet, so it cannot be isolated at all —"
+      echo "'git worktree add' needs a real HEAD and dies on an unborn branch."
+      gitlab_hint "$r"
+      return 2 ;;
+    no-remote)
+      echo "Note: this repo has no remote, so 'land' can only move the local base ref —"
+      echo "the main checkout's FILES stay as they are and nothing says so. Workable, but"
+      echo "the other sessions read those files."
+      gitlab_hint "$r"
+      return 1 ;;
+  esac
+  return 0
+}
+
+gitlab_hint() {
+  echo "Put it on GitLab (one command, idempotent, and it refuses until you have decided"
+  echo "what to track — a worktree is a full checkout, so every session pays for it):"
+  echo "  $SELF_DIR/gitlab-init.sh $1"
+}
+
 # Am I inside a linked worktree already (rather than the main checkout)?
 in_worktree() {
   local r=$1
@@ -201,6 +247,7 @@ cmd_check() {
   fi
   echo "isolated=needed  siblings=$n  path=$r"
   echo "$sibs" | sed 's/^/  sibling: /'
+  repo_advice "$r"; [ $? -eq 2 ] && return 0
   echo "Run: $0 enter $r"
 }
 
@@ -212,6 +259,7 @@ cmd_enter() {
   r=$(repo_root "$repo") || die "not a git repo: $repo"
   [ -n "$r" ] || die "not a git repo: $repo"
   in_worktree "$r" && { echo "$r"; return 0; }   # already isolated
+  repo_advice "$r" >&2; [ $? -eq 2 ] && exit 1
 
   wt=$(wt_path "$r"); br=$(wt_branch)
 

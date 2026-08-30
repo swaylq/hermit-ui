@@ -32,6 +32,31 @@ Three answers:
 - `isolated=needed siblings=N` — go to step 2.
 - `isolated=already` — you're in a worktree. Carry on; land it when done.
 
+`check` and `enter` also warn about the **repo itself**. Two states are ordinary for a
+project someone started with `git init` and never pushed, and git only complains about
+them much later, in wording that names none of this:
+
+- *no commits yet* — isolation is impossible. `git worktree add` needs a real HEAD and
+  dies with `fatal: invalid reference: HEAD`. This one blocks.
+- *no remote* — it works, but `land` can only move a local ref, so the main checkout's
+  files stay as they are and nobody is told.
+
+Both are fixed by giving the repo a home on GitLab:
+
+```bash
+{{AGENT_DIR}}/.claude/skills/worktree/gitlab-init.sh <repo>
+```
+
+It creates the project under `swaylq/` on `git.daguchuangyi.com` (private), wires up
+`origin`, pushes, and installs a git credential helper that reads `GITLAB_TOKEN` out of
+the encrypted store on each call — so the plain `git fetch` / `git push` that `land`
+runs work afterwards, with the token never in a config file, a remote URL or an argv.
+
+It **refuses** while the repo has no commits, and prints the five biggest files it would
+otherwise take. Decide `.gitignore` before that first commit: a worktree is a full
+checkout, so every session pays for every byte you track. One repo here was 406MB, of
+which 344MB was source art that never needed to be in git.
+
 ## 2. Enter
 
 ```bash
@@ -72,6 +97,17 @@ worktree and its branch.
 disturbed. The main checkout simply reports "behind" until it pulls; that is expected,
 not a fault.
 
+**When the main checkout is the live thing, landing is not the last step.** A preview
+server serving it, another session reading it, a person looking at it — then add:
+
+```bash
+git -C <repo> pull --ff-only
+```
+
+`land` moves the repository, not those files. Skip the pull and your work is invisible
+to everyone else while nothing reports an error. A *rejected* pull means someone is
+editing a file you also changed — that, and only that, is worth a message to them.
+
 It refuses, loudly, when:
 
 - the worktree is dirty → commit or stash first;
@@ -97,7 +133,8 @@ and you decide.
 - Repos with submodules or git-LFS — not handled; do it by hand and say so.
 - Other agents' sessions. Different agent directories don't share repos, so they were
   never in conflict.
-- Non-git projects. Nothing to isolate.
+- Non-git projects — `git init` plus `gitlab-init.sh` first, then everything here
+  applies. Do not try to isolate a directory that is not a repo.
 
 ## Why it needs no lock file
 
