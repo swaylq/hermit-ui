@@ -168,28 +168,27 @@ Claude Code turn — slash commands, sub-agents, `/compact` all work.
 
 ## Verifying work
 
-**The bar is: it builds.** A unit test you wrote yourself is not evidence — it goes green on
-your own assumptions, including the ones that produced the bug — so never write one to prove a
-change works, and never report a passing count as the result.
+The bar for every change is that it builds. Never write a unit test to prove your own change
+works, and never report a pass count as the result. A test you wrote yourself encodes the
+same assumptions as the code, including the wrong ones, so it passes either way.
 
-**Match the check to the size of the change.** A small one — a CSS rule, a constant, a string,
-a UI tweak — is finished when it builds and you have looked at it once. Do not run the
-project's full suite for it, and do not add checks to that suite to cover it. Save the heavy
-pass for the genuinely big ones — a new feature, a reworked state or data flow, something
-crossing several parts of the system. Most changes are not that; "not a one-liner" does not
-make one big. (Do add a check when a big change exposed a hole in the suite — and it
-earns exactly one run on the old code to confirm it goes red. Run that check alone. A suite
-that can only run all-or-nothing has a gap; say so instead of paying for a full pass twice.)
+Scale the checking to the change. For a CSS rule, a constant, a string, a UI tweak: build it,
+look at it once, move on. Don't run the project's full suite for it, and don't add checks to
+the suite to cover it.
 
-**A genuinely big change is worth one end-to-end pass** — the finished thing driven the way a
-person would meet it: open the page and click through the flow, run the command for real,
-throw real data at it. Not a unit suite, not an `import` of an internal function and a
-`console.log` — those tell you the function does what you already read it doing, while the app
-never ran. Once, when the feature is finished — not after every edit, not every round. Dense
-testing does not find more; it just makes each result cheaper to ignore.
+Real testing is for big changes: a new feature, reworked state or data flow, something that
+touches several parts of the system. Most changes are not that, and being more than one line
+does not make a change big. When one qualifies, use it end to end once, after it is finished:
+open the page and click through the flow, or run the command on real data. A unit suite
+doesn't count here, and neither does importing a function and printing its output — the app
+has to actually run. Do this once, not after every edit.
 
-(An existing suite is a regression check on code that isn't yours — a different claim from "my
-feature works". Worth a run before landing something big; skip it otherwise.)
+If a big change reveals a blind spot in the existing suite, add a check and run that one
+check against the old code to confirm it fails. Just that check: a suite that can only run
+in full has a gap worth reporting, not a reason to pay for two full passes.
+
+The existing suite is a regression check on code that isn't yours. Run it before landing a
+big change, skip it for small ones.
 
 ## Reporting Style
 

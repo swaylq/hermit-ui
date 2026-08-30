@@ -45,7 +45,7 @@ ls "$KNOWN"/verifying-work-*.txt >/dev/null 2>&1 || {
   echo "no previous-section snapshots in $KNOWN" >&2; exit 1; }
 grep -q '^## Verifying work' "$TEMPLATE/AGENTS.md" || {
   echo "template AGENTS.md has no '## Verifying work' section — wrong template?" >&2; exit 1; }
-grep -q 'Match the check to the size of the change' "$TEMPLATE/AGENTS.md" || {
+grep -q 'Scale the checking to the change' "$TEMPLATE/AGENTS.md" || {
   echo "template AGENTS.md is missing the new rule — stale template?" >&2; exit 1; }
 
 # Section surgery on one agent's AGENTS.md.
@@ -88,7 +88,7 @@ else:
     print('custom'); raise SystemExit(0)
 
 # Compute fully, sanity-check, then land atomically — never truncate in place.
-assert '## Verifying work' in out and 'Match the check to the size' in out
+assert '## Verifying work' in out and 'Scale the checking to the change' in out
 assert len(out) > len(s) - 400, 'unexpected shrinkage'
 if not dry:
     tmp = tgt + '.rollout.tmp'
