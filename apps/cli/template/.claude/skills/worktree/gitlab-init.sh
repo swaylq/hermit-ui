@@ -35,11 +35,14 @@ if ! git -C "$r" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
   echo "track is a judgement call, and every session's worktree is a full copy of it."
   echo
   echo "The 5 biggest files git would take right now:"
-  git -C "$r" status --porcelain --untracked-files=all \
+  # -c core.quotepath=false: without it git escapes non-ASCII paths ("\346\210\230..."),
+  # the [ -f ] probe below can't find them, and exactly the files this warning exists
+  # for — big Chinese-named art — vanish from the list.
+  git -C "$r" -c core.quotepath=false status --porcelain --untracked-files=all \
     | sed 's/^...//' \
     | while read -r f; do [ -f "$r/$f" ] && echo "$(stat -f%z "$r/$f" 2>/dev/null || stat -c%s "$r/$f") $f"; done \
     | sort -rn | head -5 \
-    | awk '{ printf "  %6.1f MB  %s\n", $1/1048576, $2 }'
+    | awk '{ sz=$1; $1=""; sub(/^ /,""); printf "  %6.1f MB  %s\n", sz/1048576, $0 }'
   echo
   echo "Then:  git -C $r add -A && git -C $r commit -m 'baseline'"
   echo "       $0 $r"
@@ -98,7 +101,7 @@ if [ ! -x "$HELPER" ]; then
 #!/bin/sh
 [ "$1" = get ] || exit 0
 echo username=oauth2
-exec secret exec GITLAB_TOKEN -- sh -c 'echo "password=$GITLAB_TOKEN"'
+exec secret exec GITLAB_TOKEN -- sh -c 'printf "password=%s\n" "$GITLAB_TOKEN"'
 SH
   chmod +x "$HELPER"
   echo "installed git credential helper $HELPER"
