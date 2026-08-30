@@ -74,9 +74,13 @@ A round that does not build is not a round.
 
 **Do not write unit tests to prove your change works, and never report a passing count as
 evidence.** Tests you wrote yourself encode your own assumptions — the same assumptions that
-produced the bug. They go green whether or not a person can use the thing. If the project
-already has a suite, running it before you land is a cheap regression check and worth doing;
-it is still not proof your feature works.
+produced the bug. They go green whether or not a person can use the thing.
+
+If the project already has a suite, weigh what a run costs. Seconds — run it before you land,
+as a regression check on code that isn't yours. Minutes (a browser suite, a full acceptance
+pass) — only for a round that changed real behaviour, never for a round that moved a CSS rule
+or a string, and never a second time just to show that a check you wrote goes red on the old
+code. Either way it is not proof your feature works.
 
 The proof is the next section, and it happens ONCE — when the list looks met, not every round.
 
@@ -85,6 +89,9 @@ The proof is the next section, and it happens ONCE — when the list looks met, 
 Not after every edit. Not every round. When you believe the 验收标准 are actually satisfied,
 use the thing the way a person would: open the page, click through the flow, run the command
 for real, throw real data at it. That single pass is what "tested" means here.
+
+Scale it to what changed. A restyle or a copy edit is proven by looking at it; a suite adds
+nothing a screenshot doesn't already show.
 
 A screenshot is the minimum for any UI: at least one real shot from that pass, and the critic
 must look at it. 「我测过了没问题」是这句话存在要防的东西。

@@ -191,8 +191,10 @@ prompt, run now, delete, and read every run's full output.
   prove yourself right. On failure, roll back and say so. Three consecutive failures the same
   way: stop the cron (`CRON_DONE`) and put the decision the user has to make at the top of
   that last report.
-- **Test once, at the end.** An iterating cron checks its finish line by USING the thing, on
-  the run that thinks it is done — not by re-running a suite every round.
+- **Test once, at the end, and only if the change earns it.** An iterating cron checks its
+  finish line by USING the thing, on the run that thinks it is done — not by re-running a
+  suite every round. A run that only moved a CSS rule, a constant or a string is finished when
+  it builds and you have looked at it.
 - **An iterating cron needs a finish line.** Without one it edits the same project forever.
 - **No hand-rolled schedulers.** No LaunchAgent, no `.plist`, no system crontab, no
   systemd-user timer. Those are invisible to the dashboard and bypass quota routing.

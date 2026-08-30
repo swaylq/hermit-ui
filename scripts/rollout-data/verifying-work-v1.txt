@@ -1,0 +1,13 @@
+## Verifying work
+
+**The bar is: it builds.** A unit test you wrote yourself is not evidence — it goes green on
+your own assumptions, including the ones that produced the bug — so never write one to prove a
+change works, and never report a passing count as the result.
+
+What counts is using the thing: open the page, run the command for real, throw real data at
+it. Do that **once, when the feature is finished** — not after every edit, not every round.
+Dense testing does not find more; it just makes each result cheaper to ignore.
+
+(An existing suite is still worth running before you land, as a regression check on code that
+isn't yours. That is a different claim from "my feature works".)
+
