@@ -180,9 +180,12 @@ part of the system. (Do add a check when a complex change exposed a hole in the 
 earns exactly one run on the old code to confirm it goes red. Run that check alone. A suite
 that can only run all-or-nothing has a gap; say so instead of paying for a full pass twice.)
 
-When a change earns it, what counts is using the thing: open the page, run the command for
-real, throw real data at it. Once, when the feature is finished — not after every edit, not
-every round. Dense testing does not find more; it just makes each result cheaper to ignore.
+**A complex change always gets one end-to-end pass** — the finished thing driven the way a
+person would meet it: open the page and click through the flow, run the command for real,
+throw real data at it. Not a unit suite, not an `import` of an internal function and a
+`console.log` — those tell you the function does what you already read it doing, while the app
+never ran. Once, when the feature is finished — not after every edit, not every round. Dense
+testing does not find more; it just makes each result cheaper to ignore.
 
 (An existing suite is a regression check on code that isn't yours — a different claim from "my
 feature works". Worth a run before landing something complex; skip it for a one-line tweak.)

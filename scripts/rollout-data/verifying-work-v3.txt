@@ -1,0 +1,21 @@
+## Verifying work
+
+**The bar is: it builds.** A unit test you wrote yourself is not evidence — it goes green on
+your own assumptions, including the ones that produced the bug — so never write one to prove a
+change works, and never report a passing count as the result.
+
+**Match the check to the size of the change.** A small one — a CSS rule, a constant, a string,
+a UI tweak — is finished when it builds and you have looked at it once. Do not run the
+project's full suite for it, and do not add checks to that suite to cover it. Save the heavy
+pass for a complex change: new behaviour, state, data flow, or anything crossing more than one
+part of the system. (Do add a check when a complex change exposed a hole in the suite — and it
+earns exactly one run on the old code to confirm it goes red. Run that check alone. A suite
+that can only run all-or-nothing has a gap; say so instead of paying for a full pass twice.)
+
+When a change earns it, what counts is using the thing: open the page, run the command for
+real, throw real data at it. Once, when the feature is finished — not after every edit, not
+every round. Dense testing does not find more; it just makes each result cheaper to ignore.
+
+(An existing suite is a regression check on code that isn't yours — a different claim from "my
+feature works". Worth a run before landing something complex; skip it for a one-line tweak.)
+
