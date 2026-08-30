@@ -78,8 +78,8 @@ produced the bug. They go green whether or not a person can use the thing.
 
 If the project already has a suite, weigh what a run costs. Seconds — run it before you land,
 as a regression check on code that isn't yours. Minutes (a browser suite, a full acceptance
-pass) — only for a round that changed real behaviour, never for a round that moved a CSS rule
-or a string, and never a second time just to show that a check you wrote goes red on the old
+pass) — only for a round that reworked something substantial, never for a round that moved a
+CSS rule or a string, and never a second time just to show that a check you wrote goes red on the old
 code. Either way it is not proof your feature works.
 
 The proof is the next section, and it happens ONCE — when the list looks met, not every round.

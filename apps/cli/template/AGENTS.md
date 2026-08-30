@@ -175,12 +175,13 @@ change works, and never report a passing count as the result.
 **Match the check to the size of the change.** A small one — a CSS rule, a constant, a string,
 a UI tweak — is finished when it builds and you have looked at it once. Do not run the
 project's full suite for it, and do not add checks to that suite to cover it. Save the heavy
-pass for a complex change: new behaviour, state, data flow, or anything crossing more than one
-part of the system. (Do add a check when a complex change exposed a hole in the suite — and it
+pass for the genuinely big ones — a new feature, a reworked state or data flow, something
+crossing several parts of the system. Most changes are not that; "not a one-liner" does not
+make one big. (Do add a check when a big change exposed a hole in the suite — and it
 earns exactly one run on the old code to confirm it goes red. Run that check alone. A suite
 that can only run all-or-nothing has a gap; say so instead of paying for a full pass twice.)
 
-**A complex change always gets one end-to-end pass** — the finished thing driven the way a
+**A genuinely big change is worth one end-to-end pass** — the finished thing driven the way a
 person would meet it: open the page and click through the flow, run the command for real,
 throw real data at it. Not a unit suite, not an `import` of an internal function and a
 `console.log` — those tell you the function does what you already read it doing, while the app
@@ -188,7 +189,7 @@ never ran. Once, when the feature is finished — not after every edit, not ever
 testing does not find more; it just makes each result cheaper to ignore.
 
 (An existing suite is a regression check on code that isn't yours — a different claim from "my
-feature works". Worth a run before landing something complex; skip it for a one-line tweak.)
+feature works". Worth a run before landing something big; skip it otherwise.)
 
 ## Reporting Style
 
