@@ -46,26 +46,7 @@ if ! git -C "$r" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
   exit 1
 fi
 
-# ── 2. credentials ───────────────────────────────────────────────────────────
-# `wt.sh land` runs a bare `git fetch`/`git push`, so the token cannot live in this
-# script — it has to be something plain git finds on its own. A machine-wide helper
-# reads it out of the encrypted store per call: never in a config file, a remote URL
-# or an argv.
-HELPER=$HOME/.claude/bin/git-credential-gitlab-secret
-if [ ! -x "$HELPER" ]; then
-  mkdir -p "$(dirname "$HELPER")"
-  cat > "$HELPER" <<'SH'
-#!/bin/sh
-[ "$1" = get ] || exit 0
-echo username=oauth2
-exec secret exec GITLAB_TOKEN -- sh -c 'echo "password=$GITLAB_TOKEN"'
-SH
-  chmod +x "$HELPER"
-  echo "installed git credential helper $HELPER"
-fi
-git config --global "credential.$HOST.helper" "$HELPER"
-
-# ── 3. the GitLab project ────────────────────────────────────────────────────
+# ── 2. the GitLab project ────────────────────────────────────────────────────
 # The token goes to curl through a -K config on stdin, never on the command line —
 # argv is world-readable via ps.
 api() {
@@ -99,6 +80,30 @@ api GET "projects/$encoded" \
       [ "$where" = "$NS/$name" ] || die "project landed in $where, expected $NS/$name"
       [ "$vis" = private ] || die "project is $vis, expected private"
       echo "confirmed $where is private"; }
+
+# ── 3. credentials ───────────────────────────────────────────────────────────
+# `wt.sh land` runs a bare `git fetch`/`git push`, so the token cannot live in this
+# script — it has to be something plain git finds on its own. A machine-wide helper
+# reads it out of the encrypted store per call: never in a config file, a remote URL
+# or an argv.
+#
+# This comes AFTER the API calls on purpose. A machine whose store has no GITLAB_TOKEN
+# should fail without having had a script and a git config entry written into it —
+# spark is deliberately kept off this GitLab, and running the command there used to
+# leave both behind before giving up.
+HELPER=$HOME/.claude/bin/git-credential-gitlab-secret
+if [ ! -x "$HELPER" ]; then
+  mkdir -p "$(dirname "$HELPER")"
+  cat > "$HELPER" <<'SH'
+#!/bin/sh
+[ "$1" = get ] || exit 0
+echo username=oauth2
+exec secret exec GITLAB_TOKEN -- sh -c 'echo "password=$GITLAB_TOKEN"'
+SH
+  chmod +x "$HELPER"
+  echo "installed git credential helper $HELPER"
+fi
+git config --global "credential.$HOST.helper" "$HELPER"
 
 # ── 4. remote + first push ───────────────────────────────────────────────────
 url="$HOST/$NS/$name.git"
