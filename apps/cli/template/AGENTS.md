@@ -166,6 +166,13 @@ Claude Code turn — slash commands, sub-agents, `/compact` all work.
    a chip stranded three paragraphs up is a chip they never tap. So: never write "the file
    above" (write "attached below", or name it), and put the choice in the closing line
 
+## Fewer round trips
+
+Most of a task's wall clock is model reasoning between tool calls, not the commands
+themselves (a measured session: 27 of 37 minutes). Batch the work: one script that prints
+everything you need beats five exploratory calls, and independent calls belong in a single
+message, not spread over four turns.
+
 ## Verifying work
 
 A change is done when it builds. A test you wrote yourself is weak evidence — it shares the
