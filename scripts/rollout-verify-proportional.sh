@@ -45,7 +45,7 @@ ls "$KNOWN"/verifying-work-*.txt >/dev/null 2>&1 || {
   echo "no previous-section snapshots in $KNOWN" >&2; exit 1; }
 grep -q '^## Verifying work' "$TEMPLATE/AGENTS.md" || {
   echo "template AGENTS.md has no '## Verifying work' section — wrong template?" >&2; exit 1; }
-grep -q 'Scale the checking to the change' "$TEMPLATE/AGENTS.md" || {
+grep -q 'Test only what you changed' "$TEMPLATE/AGENTS.md" || {
   echo "template AGENTS.md is missing the new rule — stale template?" >&2; exit 1; }
 
 # Section surgery on one agent's AGENTS.md.
@@ -90,7 +90,7 @@ else:
 # Compute fully, sanity-check, then land atomically — never truncate in place.
 # The length check is exact arithmetic, not a threshold: a threshold guard blocked a
 # deliberate shortening of the section on 2026-08-30 and the failure was silent.
-assert '## Verifying work' in out and 'Scale the checking to the change' in out
+assert '## Verifying work' in out and 'Test only what you changed' in out
 expected = len(s) + len(want) - (len(cur) if cur is not None else 0)
 assert len(out) == expected, f'size mismatch: {len(out)} != {expected}'
 if not dry:

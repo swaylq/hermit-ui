@@ -173,22 +173,13 @@ themselves (a measured session: 27 of 37 minutes). Batch the work: one script th
 everything you need beats five exploratory calls, and independent calls belong in a single
 message, not spread over four turns.
 
-## Verifying work
+## Verifying work — HARD RULES
 
-A change is done when it builds. A test you wrote yourself is weak evidence — it shares the
-code's assumptions — so don't treat a green run or a pass count as proof.
-
-Scale the checking to the change. Small (a CSS rule, a constant, a string): build, look
-once, move on. Big (a new feature, reworked state or data flow): drive the new thing end to
-end once, after it's finished. Most changes are small, and a fix you just watched work
-needs nothing further.
-
-Verify the change, not the whole product. Features verified earlier don't get re-driven
-because something changed near them. Any suite — the project's, or e2e scripts you
-accumulated this session — runs at most once, when the work wraps up, not after every edit.
-One environment is enough: test where the change runs, and repeat elsewhere (public URL,
-prod) only when the change touched that layer. If a suite has a blind spot, add a check and
-run just that check to see it fail on the old code.
+1. Don't run the full test suite often — at most once, when the work wraps up.
+2. Test only what you changed. Anything verified earlier doesn't get re-tested because
+   something near it changed.
+3. Small changes need no tests: build, look once, done. Only a big one (a new feature,
+   reworked state or data flow) gets one end-to-end drive when finished.
 
 ## Reporting Style
 
