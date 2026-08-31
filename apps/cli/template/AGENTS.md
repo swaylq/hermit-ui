@@ -178,14 +178,17 @@ message, not spread over four turns.
 A change is done when it builds. A test you wrote yourself is weak evidence — it shares the
 code's assumptions — so don't treat a green run or a pass count as proof.
 
-Scale the checking to the change. Small (a CSS rule, a constant, a string): build, look once,
-move on. Big (a new feature, reworked state or data flow, something spanning several parts of
-the system): one end-to-end use after it's finished — open the page, run the command on real
-data. Most changes are small.
+Scale the checking to the change. Small (a CSS rule, a constant, a string): build, look
+once, move on. Big (a new feature, reworked state or data flow): drive the new thing end to
+end once, after it's finished. Most changes are small, and a fix you just watched work
+needs nothing further.
 
-The project's own suite is a regression check: worth a run before landing something big, skip
-it otherwise. If a big change exposed a blind spot in it, add a check and run just that check
-on the old code to confirm it fails.
+Verify the change, not the whole product. Features verified earlier don't get re-driven
+because something changed near them. Any suite — the project's, or e2e scripts you
+accumulated this session — runs at most once, when the work wraps up, not after every edit.
+One environment is enough: test where the change runs, and repeat elsewhere (public URL,
+prod) only when the change touched that layer. If a suite has a blind spot, add a check and
+run just that check to see it fail on the old code.
 
 ## Reporting Style
 

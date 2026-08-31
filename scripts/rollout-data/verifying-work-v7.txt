@@ -1,0 +1,14 @@
+## Verifying work
+
+A change is done when it builds. A test you wrote yourself is weak evidence — it shares the
+code's assumptions — so don't treat a green run or a pass count as proof.
+
+Scale the checking to the change. Small (a CSS rule, a constant, a string): build, look once,
+move on. Big (a new feature, reworked state or data flow, something spanning several parts of
+the system): one end-to-end use after it's finished — open the page, run the command on real
+data. Most changes are small.
+
+The project's own suite is a regression check: worth a run before landing something big, skip
+it otherwise. If a big change exposed a blind spot in it, add a check and run just that check
+on the old code to confirm it fails.
+
