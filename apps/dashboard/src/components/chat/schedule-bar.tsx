@@ -11,7 +11,7 @@
 // See docs/cron-merge-design.md.
 
 import { memo, useState, useCallback } from 'react';
-import { ChevronDown, Bot } from 'lucide-react';
+import { ChevronDown, Bot, Eye } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
@@ -37,6 +37,7 @@ export const ScheduleBar = memo(function ScheduleBar({
   takeover,
   disabled,
   sessionId,
+  chatOnly,
 }: {
   onStartIterate: () => void;
   onStartCron: () => void;
@@ -52,6 +53,19 @@ export const ScheduleBar = memo(function ScheduleBar({
   takeover?: { active: boolean; busy: boolean; onToggle: () => void } | null;
   disabled?: boolean;
   sessionId: string;
+  /**
+   * Pure-chat session: the whole chip row is replaced by a marker saying so.
+   *
+   * Not a cosmetic choice. Every chip in that row asks the agent to go away and
+   * work — iterate to done, schedule a task, run to done, perfect it, hand over
+   * to Brain — and a pure-chat session can do none of them: no sub-agents, and
+   * cron_create is denied at the MCP stub. Offering them would be offering
+   * buttons that fail after you press them. The row is also the last thing you
+   * read before typing, which makes it the right place to say what this session
+   * is — better than a chip in the header meta line, where it reads as one more
+   * attribute rather than as the shape of the conversation.
+   */
+  chatOnly?: boolean;
 }) {
   // Cron tasks that REPORT into this session — DB /cron rows. Their own poll:
   // crons live in the dashboard DB and move on the gateway's clock (fires, status
@@ -77,6 +91,22 @@ export const ScheduleBar = memo(function ScheduleBar({
             runs off the screen edge rather than stopping 12px short of it.
             `overscroll-x-contain` keeps a swipe past the end from turning into
             iOS Safari's back-navigation gesture. */}
+        {chatOnly ? (
+          <div className="flex items-center gap-2 -mx-3 px-3 py-0.5">
+            <span
+              title="Pure chat: read-only tools. It can read files, search the web and add to its own memory — it cannot write or edit files, run commands, spawn sub-agents or schedule work. Fixed when the session was opened; start a new session to change it."
+              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-dashed border-border text-[12px] text-muted-foreground"
+            >
+              <Eye className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
+              pure chat
+            </span>
+            {/* Dashed border and no hover: this row is otherwise all buttons, and
+                the one thing it must not look like is another one. */}
+            <span className="min-w-0 truncate text-[11px] leading-tight text-muted-foreground/80">
+              read-only — it can look things up and remember, nothing else
+            </span>
+          </div>
+        ) : (
         <div className="flex items-center gap-2 -mx-3 px-3 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {takeover && (
             <button
@@ -149,6 +179,7 @@ export const ScheduleBar = memo(function ScheduleBar({
             </button>
           )}
         </div>
+        )}
       </div>
     </div>
   );
