@@ -26,7 +26,7 @@ Not one backend's write tools are forwarded by the gateway. `bash`, `write`,
 | pi | `--tools read,grep,find,ls`, unioned with hermit's extension tools | ✅ `memory_write` (extension) | ✅ pi's own docs give this exact recipe; the shipped `scout` mode already uses it |
 | omp | `--tools <read-only subset of its 31 built-ins>`, **not** unioned | ✅ `memory_write` (extension) | ✅ union would hard-error the spawn; documented in `pi-modes.ts` |
 | dsh | write/exec plugins removed from the `--patch` composition, **plus** `DSH_PERMISSION_MODE=read-only` | ❌ no hermit tool surface at all | ⚠️ plugin removal uses a mechanism this file already relies on; the `read-only` enum value is **unverified** — see below |
-| kimi | an agent profile in `KIMI_CODE_HOME`, bound with `--agent-file` on the first turn and restored automatically on resume | ❌ no hermit tool surface at all | ⚠️ tool names read out of the installed CLI; the profile itself is unverified end to end |
+| kimi | an agent profile in `KIMI_CODE_HOME`, bound with `--agent-file` on the first turn and restored automatically on resume; the allowlist names the read-only `mcp__hermit__*` tools too | ✅ `memory_write` (MCP) | ✅ MCP-tool gating by qualified name measured both directions (0.39.1) |
 | prime | `--tools <hermit extension tools only>` — which removes its single built-in | ✅ `memory_write` (extension) | ✅ trivially, and uselessly — see below |
 
 ### There are TWO hermit tool surfaces, not one
@@ -34,13 +34,14 @@ Not one backend's write tools are forwarded by the gateway. `bash`, `write`,
 Easy to get wrong, and worth stating plainly because a first pass at this
 feature got it wrong:
 
-- **MCP stub** (`mcp-stub.cjs`) — claude-sdk, claude-tmux, codex. Nine tools,
-  including the four `cron_*`.
+- **MCP stub** (`mcp-stub.cjs`) — claude-sdk, claude-tmux, codex, kimi-code.
+  Nine tools, including the four `cron_*`. kimi mounts it through its
+  user-global `mcp.json` rather than a `--mcp-config` flag it does not have.
 - **pi extension** (`hermit-pi-extension.ts`) — pi, omp, prime. Six tools, and
   **no cron tools at all**.
-- **dsh and kimi have neither.** The gateway injects nothing into them.
+- **dsh has neither.** The gateway injects nothing into it.
 
-So a change to the stub covers three backends, not six. Anything that must hold
+So a change to the stub covers four backends, not six. Anything that must hold
 for the pi family has to be made twice, in both surfaces — which is why
 `writeMemory` lives in `mcp-stub-util.cjs`, required by the stub and by the
 extension, rather than being implemented in either.
