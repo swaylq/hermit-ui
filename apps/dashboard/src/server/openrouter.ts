@@ -10,7 +10,19 @@ export async function openrouterChat(
   apiKey: string,
   model: string,
   messages: ORMessage[],
-  opts: { temperature?: number; reasoningOff?: boolean; timeoutMs: number; title?: string }
+  opts: {
+    temperature?: number;
+    reasoningOff?: boolean;
+    /**
+     * Some models refuse `reasoning: { enabled: false }` outright — Gemini 3.7
+     * Flash answers HTTP 400 "Reasoning is mandatory for this endpoint and
+     * cannot be disabled". For those, ask for the cheapest thinking there is
+     * instead of none.
+     */
+    reasoningEffort?: 'low' | 'medium' | 'high';
+    timeoutMs: number;
+    title?: string;
+  }
 ): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
@@ -18,6 +30,7 @@ export async function openrouterChat(
     const body: Record<string, unknown> = { model, messages };
     if (opts.temperature != null) body.temperature = opts.temperature;
     if (opts.reasoningOff) body.reasoning = { enabled: false };
+    else if (opts.reasoningEffort) body.reasoning = { effort: opts.reasoningEffort };
     const r = await fetch(OPENROUTER_URL, {
       method: 'POST',
       headers: {

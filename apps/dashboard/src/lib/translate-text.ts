@@ -187,11 +187,15 @@ export function shouldAutoTranslate(src: string, target: Lang): boolean {
  *
  * djb2 — short, stable across reloads, and collisions cost a re-translation
  * rather than a wrong answer, because the value is only ever a cache entry.
+ *
+ * `tag` is a plain string rather than a Lang because the same IndexedDB store
+ * holds the 「说人话」 rewrites (lib/plain-speak.ts), and two features writing
+ * one store must not be able to collide on a key. Every tag is a namespace.
  */
-export function blockKey(text: string, target: Lang): string {
+export function blockKey(text: string, tag: string): string {
   let h = 5381;
   for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
-  return `${target}:${text.length}:${(h >>> 0).toString(36)}`;
+  return `${tag}:${text.length}:${(h >>> 0).toString(36)}`;
 }
 
 // ── Assembling what is on screen ─────────────────────────────────────────────

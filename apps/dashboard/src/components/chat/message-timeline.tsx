@@ -25,6 +25,9 @@ import { TranslatedText } from '@/components/chat/translated-text';
 import { useTranslatePrefs } from '@/lib/translate-prefs';
 import { shouldAutoTranslate } from '@/lib/translate-text';
 import { originalFor } from '@/lib/translate-outbound';
+import { PlainSpeakPanel } from '@/components/chat/plain-speak-panel';
+import { canPlainSpeak } from '@/lib/plain-speak';
+import { retryPlain } from '@/lib/plain-speak-store';
 import { ToolChip, ToolBatchChip } from '@/components/chat/tool-chips';
 import { InteractionCard } from '@/components/chat/interaction-card';
 import { ChatImage, ChatFile } from '@/components/chat/file-preview';
@@ -365,6 +368,11 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
   // THIS message. Row-local on purpose: the override is a glance at one reply,
   // not a mode, and it should not outlive scrolling past.
   const [translateOverride, setTranslateOverride] = useState<boolean | null>(null);
+  // Is the 「说人话」 box open under THIS reply? Row-local like the override
+  // above, and for the same reason: it is a glance at one message, not a mode.
+  // Scrolling the row out of the window closes it; the rewrite itself survives
+  // in the store, so re-opening is free.
+  const [plainOpen, setPlainOpen] = useState(false);
 
   // A role='user' row is not automatically the human. During a Brain takeover the
   // Brain speaks in this slot, and the gateway's watchers drop `[dispatch update]`
@@ -511,6 +519,24 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
         : { label: '译', title: '翻译成中文' }
       : undefined;
 
+  // 「说人话」 — offered on any reply with enough prose in it to be worth
+  // unpacking, in either language. No setting gates it: nothing is spent until
+  // the button is pressed, and a reader who does not need it never presses it.
+  // (If the server has no OpenRouter key the panel says so on the first press
+  // and the store stops asking for the rest of the page load.)
+  const plainable = role === 'assistant' && !isSystem && !!sessionId && !!plainText && canPlainSpeak(plainText);
+  // Closing and re-opening is the retry gesture, so a refusal is cleared on the
+  // way in — see lib/plain-speak-store.ts.
+  const togglePlain = () => {
+    if (!plainOpen) retryPlain(plainText);
+    setPlainOpen((v) => !v);
+  };
+  const plainAction: { label: string; title: string } | undefined = plainable
+    ? plainOpen
+      ? { label: '收起', title: '收起这段转述' }
+      : { label: '说人话', title: '用普通话把这条回复重讲一遍' }
+    : undefined;
+
   // System messages (gateway-emitted banners like "[session restarted —
   // send a message to continue]") should read as inline notices, not real
   // conversation. Render them centered, muted, and full-width with a hairline
@@ -590,6 +616,7 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
             }
           />
         ))}
+        {plainOpen && plainText && <PlainSpeakPanel text={plainText} sessionId={sessionId} />}
         {streamingTail && (
           <div className="flex">
             <StreamingDots variant="bubble" dot={streamingDot} />
@@ -612,6 +639,8 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
               tone={isHumanUser ? 'on-dark' : 'on-light'}
               translateAction={translateAction}
               onTranslate={toggleTranslate}
+              plainAction={plainAction}
+              onPlain={togglePlain}
             />
           )}
         </div>
@@ -620,10 +649,10 @@ const MessageRow = memo(function MessageRow({ role, authoredBy, content, ts, str
   );
 });
 
-// Compact hover-action cluster shown below a message bubble. Copy, and — when
-// translation is switched on and this message has prose in it — a toggle
-// between the reply and its Chinese. Adding Edit/Regenerate later means
-// dropping more buttons here.
+// Compact hover-action cluster shown below a message bubble. Copy; 「说人话」,
+// which opens a plain-language retelling under the reply; and — when translation
+// is switched on and this message has prose in it — a toggle between the reply
+// and its Chinese. Adding Edit/Regenerate later means dropping more buttons here.
 //
 // `tone` flips foreground colors so the label stays readable on light vs dark
 // bubble backgrounds.
@@ -632,12 +661,17 @@ function MessageActions({
   tone,
   translateAction,
   onTranslate,
+  plainAction,
+  onPlain,
 }: {
   text: string;
   tone: 'on-light' | 'on-dark';
   /** Undefined → the button is not offered at all (feature off, nothing to translate). */
   translateAction?: { label: string; title: string };
   onTranslate?: () => void;
+  /** Undefined → this message has nothing worth rewriting (see lib/plain-speak.ts). */
+  plainAction?: { label: string; title: string };
+  onPlain?: () => void;
 }) {
   const [state, setState] = useState<'idle' | 'ok' | 'fail'>('idle');
   const copied = state === 'ok';
@@ -664,6 +698,17 @@ function MessageActions({
   );
   return (
     <>
+      {plainAction && (
+        <button
+          type="button"
+          onClick={onPlain}
+          aria-label={plainAction.title}
+          title={plainAction.title}
+          className={btn}
+        >
+          {plainAction.label}
+        </button>
+      )}
       {translateAction && (
         <button
           type="button"
