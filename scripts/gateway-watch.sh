@@ -294,6 +294,18 @@ if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
   [ -n "$D" ] && ALERT_POST_URL="${D%/}/api/sync/machine-alert"
 fi
 
+# ⚠️ ALWAYS write ${var}, never bare $var, in these Chinese messages.
+# Under `set -u` (line 74) a bare $var immediately followed by a CJK character —
+# `$pct）`, `$LOAD1（`, `$PID，` — makes bash read the character's UTF-8 bytes as
+# part of the variable NAME. The lookup fails, and the script dies right there:
+# not "the alert did not send", but "the watchdog exits before it ever reaches
+# the gateway-recovery branch below". A full disk or a starved machine is exactly
+# when that branch is needed.
+# Found 2026-09-02: three of these had been shipped since 2026-08-26 (high-load
+# and the log-went-silent alert), so those two had never been able to fire.
+# Scan for regressions with:
+#   grep -nP '\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]' scripts/gateway-watch.sh
+#
 # post_alert <kind> <message> [ttlMinutes] — best-effort; never fails the run.
 # The dashboard dedups per (machine, kind) and throttles re-pushes to 30min, so
 # hourly re-reports while a condition holds are one banner, not a stack.
@@ -337,6 +349,70 @@ alert() {  # $1=event  $2=detail — local JSON (kept for forensics) + dashboard
     *)                     : ;;
   esac
 }
+
+# ------------------------------------------------------------- disk headroom
+# Added 2026-09-02 after the 09-01 05:57 outage: the system disk filled, pm2 died
+# with 54 ENOSPC errors, the gateway went with it, and nobody was told for 3h57m.
+#
+# This block deliberately lives in gateway-watch rather than a hermit cron: a
+# hermit cron cannot fire when the gateway is dead, which is exactly the state a
+# full disk produces. It runs before every gateway case below and never exits.
+#
+# Thresholds are absolute GB, not a percentage. What breaks a build, an npm
+# install or a large copy is how many GB are left, not what fraction of the disk
+# that is — 10% of a 228G disk and 10% of a 2T disk are not the same risk.
+# The volume $HOME sits on, NOT a hardcoded path. `/System/Volumes/Data` is
+# macOS-only: on dgx-spark (Linux) `df -k` on it fails, this block takes its
+# "cannot read df" branch and that machine silently gets no disk monitoring at
+# all — the exact shape of the bug this same file was fixed for hours earlier.
+# $HOME is portable AND is the volume that actually matters: agents, caches,
+# worktrees and node_modules all live under it. Verified reading field 4/5
+# correctly on both macOS (df -k: Available, Capacity) and Linux (Available, Use%).
+DISK_VOL="${GW_DISK_VOL:-$HOME}"
+DISK_WARN_GB="${GW_DISK_WARN_GB:-30}"
+DISK_CRIT_GB="${GW_DISK_CRIT_GB:-15}"
+DISK_WARN_COOLDOWN="${GW_DISK_WARN_COOLDOWN:-43200}"   # 12h — warn is a drift signal
+DISK_CRIT_COOLDOWN="${GW_DISK_CRIT_COOLDOWN:-3600}"    # 1h  — critical repeats every run
+DISK_STAMP="$STATE_DIR/disk-alert-last"
+
+disk_check() {
+  local line availk avail_g pct level cooldown now last
+  line="$(df -k "$DISK_VOL" 2>/dev/null | tail -1)"
+  availk="$(printf '%s' "$line" | awk '{print $4}')"
+  pct="$(printf '%s' "$line" | awk '{print $5}')"
+  case "$availk" in ''|*[!0-9]*) say "[disk] cannot read df for $DISK_VOL — skipped"; return 0 ;; esac
+
+  avail_g=$(( availk / 1048576 ))
+  if   [ "$avail_g" -lt "$DISK_CRIT_GB" ]; then level=crit; cooldown="$DISK_CRIT_COOLDOWN"
+  elif [ "$avail_g" -lt "$DISK_WARN_GB" ]; then level=warn; cooldown="$DISK_WARN_COOLDOWN"
+  else
+    say "[disk] ok: ${avail_g}G free on $DISK_VOL (used $pct)"
+    rm -f "$DISK_STAMP" 2>/dev/null   # recovered — next dip alerts immediately
+    return 0
+  fi
+
+  now="$(date +%s)"
+  last=0
+  if [ -f "$DISK_STAMP" ]; then
+    last="$(cut -d' ' -f1 "$DISK_STAMP" 2>/dev/null || echo 0)"
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    # an escalation warn -> crit always alerts, even inside the warn cooldown
+    if [ "$level" = "$(cut -d' ' -f2 "$DISK_STAMP" 2>/dev/null)" ] \
+       && [ $((now - last)) -lt "$cooldown" ]; then
+      say "[disk] $level: ${avail_g}G free (used $pct) — alert already sent $((now - last))s ago, holding"
+      return 0
+    fi
+  fi
+
+  printf '%s %s\n' "$now" "$level" >"$DISK_STAMP"
+  say "[disk] $level: ${avail_g}G free on $DISK_VOL (used $pct)"
+  if [ "$level" = crit ]; then
+    post_alert "disk-critical" "系统盘只剩 ${avail_g}G（已用 ${pct}），写满会打死 pm2 和网关，需要立刻清理" 130
+  else
+    post_alert "disk-low" "系统盘余量降到 ${avail_g}G（已用 ${pct}），低于 ${DISK_WARN_GB}G 警戒线，建议清理" 800
+  fi
+}
+disk_check
 
 read -r ST PID <<<"$(gw_status)"
 
@@ -385,7 +461,7 @@ if [ -n "$LOAD1" ]; then
   OVER="$(python3 -c "print(1 if float('$LOAD1') > float('$LOAD_MAX') else 0)" 2>/dev/null)"
   if [ "$OVER" = "1" ]; then
     say "[high-load] load1=$LOAD1 > $LOAD_MAX"
-    post_alert "high-load" "load1=$LOAD1（阈值 $LOAD_MAX），机器正被拖垮，网关可能跟着饿死"
+    post_alert "high-load" "load1=${LOAD1}（阈值 ${LOAD_MAX}），机器正被拖垮，网关可能跟着饿死"
   fi
 fi
 
@@ -407,7 +483,7 @@ if [ "$AGE" -gt "$SILENT_SEC" ]; then
   # lands every ~5min). Total silence is the event-loop-deadlock shape that
   # case 2's counters cannot see (they are read from this very log).
   say "[silent] $APP online pid=$PID but its log has not been written for ${AGE}s — event loop suspected dead"
-  post_alert "gateway-wedged" "网关 ${AGE} 秒没写任何日志（事件循环疑似卡死），pid=$PID，消息投不下去"
+  post_alert "gateway-wedged" "网关 ${AGE} 秒没写任何日志（事件循环疑似卡死），pid=${PID}，消息投不下去"
   exit 0
 fi
 if [ "$AGE" -gt $((STALE_MIN * 60)) ]; then
