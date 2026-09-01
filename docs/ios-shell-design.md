@@ -236,8 +236,12 @@ model PushDevice {
 > ⚠️ **在 mac-local 上跑完模拟器，必须显式 `xcrun simctl shutdown all`。**
 >
 > `xcodebuild test` 退出**不会**带走模拟器。运行时进程（`SimRenderServer`、`SimMetalHost`、
-> `SimAudioProcessorService`、`launchd_sim`…）会变成 `ppid=1` 的孤儿继续空转，一个 booted
-> 的 iPhone 模拟器占约 4.8G 内存。关掉 Simulator.app 的窗口**不够**，那些进程还在。
+> `SimAudioProcessorService`、`launchd_sim`…）会变成 `ppid=1` 的孤儿继续空转（实测 285 个）。
+> 关掉 Simulator.app 的窗口**不够**，那些进程还在。
+>
+> **别用 `ps` 的 RSS 相加来估它占多少内存**——模拟器进程之间大量共享页，把 285 个 RSS 加
+> 起来会重复计数，2026-09-02 那晚两个 agent 分别加出 2.2G 和 4.8G，都不对。看**变化量**：
+> 关掉后空闲内存 +1176M、compressor -2237M、交换区 -3072M，**约 3.4G 的真实内存压力缓解**。
 >
 > 这在这台机器上不是小事：16G 内存长期被 Figma 和十几个 claude 会话吃满，再多 4.8G 就会
 > 触发内存压力，macOS 开始往**系统盘**写 1G 一个的交换文件。2026-09-02 凌晨实测：一个空转
