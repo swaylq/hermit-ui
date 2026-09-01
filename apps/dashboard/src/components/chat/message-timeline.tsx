@@ -10,7 +10,7 @@
 // machinery (fold-runs.ts) — so what remains is what someone said, plus one
 // expandable row standing in for how it was carried out.
 
-import { memo, useState, useCallback, useMemo } from 'react';
+import { Component, memo, useState, useCallback, useMemo } from 'react';
 import { useTimelineWindow, WINDOW_ROW_ATTR } from '@/components/chat/use-timeline-window';
 import type { ScrollStability } from '@/components/chat/use-scroll-stability';
 import { spacerBoxHeight, visibleSlice } from '@/components/chat/timeline-window';
@@ -280,6 +280,32 @@ function proseOf(blocks: Block[]): string {
   return out;
 }
 
+/**
+ * Calls `holdContentFloor` in React's before-mutation phase — the last moment
+ * the DOM still holds the list as the reader saw it painted.
+ *
+ * A class, and the only one in this file, because `getSnapshotBeforeUpdate` is
+ * the sole hook that runs there: effects run after the mutations, by which time
+ * the engine has already clamped `scrollTop` into the half-built layout (see
+ * `raiseContentFloor`). Renders nothing.
+ */
+class ContentFloorGuard extends Component<{
+  rows: number;
+  hold: (rowsBefore: number, rowsAfter: number) => void;
+}> {
+  getSnapshotBeforeUpdate(prev: Readonly<{ rows: number }>): null {
+    this.props.hold(prev.rows, this.props.rows);
+    return null;
+  }
+
+  // React warns about a snapshot nobody consumes; the consumer is the DOM.
+  componentDidUpdate(): void {}
+
+  render(): null {
+    return null;
+  }
+}
+
 function TimelineBody({
   items,
   ctx,
@@ -324,6 +350,7 @@ function TimelineBody({
   ));
   return (
     <div className="flex flex-col gap-3">
+      <ContentFloorGuard rows={shown.length} hold={scrollStability.holdContentFloor} />
       {win.padTop > 0 && <div data-window-spacer="top" style={{ height: spacerBoxHeight(win.padTop) }} aria-hidden />}
       {shown}
       {win.padBottom > 0 && <div data-window-spacer="bottom" style={{ height: spacerBoxHeight(win.padBottom) }} aria-hidden />}

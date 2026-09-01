@@ -3,14 +3,17 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   acceptableCompensation,
+  ageContentFloor,
   contentHeight as trueContentHeight,
   discardSubpixelDeviation,
   isVerticalWheelInput,
   logicalScrollTop as logicalTop,
   planBoundaryRebase,
+  raiseContentFloor,
   readerScrollTop as readerTop,
   scrollerIsUnanchored,
   trimOutOfRangeDeviation,
+  type ContentFloor,
 } from './scroll-stability-core';
 
 /** No native scroll events for this long means WebKit momentum has ended. */
@@ -56,6 +59,18 @@ export type ScrollStability = {
   hasBlockedUpwardIntent: () => boolean;
   /** True while the current scroll event belongs to app navigation/settlement. */
   isProgrammatic: () => boolean;
+  /**
+   * Stop the content layer from getting SHORTER for the next couple of frames,
+   * called from React's before-mutation phase with the row count either side of
+   * the commit about to land.
+   *
+   * A commit that adds rows re-inserts the ones below the insertion point, and
+   * a re-inserted node is detached first — so the engine sees a half-built list
+   * and clamps `scrollTop` into its range. See `raiseContentFloor` for the
+   * measurements; the floor only goes up for a commit that ADDS rows, and it
+   * expires on its own.
+   */
+  holdContentFloor: (rowsBefore: number, rowsAfter: number) => void;
 };
 
 type ProgrammaticMotion =
@@ -180,6 +195,38 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
     layer.style.transform = Math.abs(d) < 0.01 ? '' : `translateY(${-d}px)`;
     layer.style.willChange = Math.abs(d) < 0.01 ? '' : 'transform';
   }, [getLayer]);
+
+  const contentFloor = useRef<ContentFloor>(null);
+  const floorRaf = useRef<number | null>(null);
+
+  const paintContentFloor = useCallback(() => {
+    const layer = getLayer();
+    if (!layer) return;
+    const floor = contentFloor.current;
+    layer.style.minHeight = floor ? `${floor.height}px` : '';
+  }, [getLayer]);
+
+  const ageFloor = useCallback(() => {
+    contentFloor.current = ageContentFloor(contentFloor.current);
+    paintContentFloor();
+    floorRaf.current = contentFloor.current === null
+      ? null
+      : requestAnimationFrame(ageFloor);
+  }, [paintContentFloor]);
+
+  const holdContentFloor = useCallback((rowsBefore: number, rowsAfter: number) => {
+    const layer = getLayer();
+    if (!layer) return;
+    // `offsetHeight` is layout, so this is the conversation as the reader last
+    // saw it — the caller runs before React has touched the DOM.
+    const next = raiseContentFloor(contentFloor.current, {
+      measured: layer.offsetHeight, rowsBefore, rowsAfter,
+    });
+    if (next === contentFloor.current) return;
+    contentFloor.current = next;
+    paintContentFloor();
+    if (floorRaf.current === null) floorRaf.current = requestAnimationFrame(ageFloor);
+  }, [ageFloor, getLayer, paintContentFloor]);
 
   const markProgrammaticEvent = useCallback(() => {
     const version = ++programmaticEventVersion.current;
@@ -705,10 +752,14 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
     if (quietTimer.current !== null) clearTimeout(quietTimer.current);
     if (settleRaf.current !== null) cancelAnimationFrame(settleRaf.current);
     clearProgrammaticMotion();
+    if (floorRaf.current !== null) cancelAnimationFrame(floorRaf.current);
+    floorRaf.current = null;
+    contentFloor.current = null;
     const layer = getLayer();
     if (layer) {
       layer.style.transform = '';
       layer.style.willChange = '';
+      layer.style.minHeight = '';
     }
   }, [clearProgrammaticMotion, getLayer]);
 
@@ -717,13 +768,13 @@ export function useScrollStability(getViewport: () => HTMLElement | null): Scrol
       compensate, logicalScrollTop, contentHeight, maxScrollTop, readerScrollTop,
       scrollTo, scrollBy,
       getDeviation, isScrolling, hasReaderIntent, hasUpwardReaderIntent,
-      hasBlockedUpwardIntent, isProgrammatic,
+      hasBlockedUpwardIntent, isProgrammatic, holdContentFloor,
     }),
     [
       compensate, logicalScrollTop, contentHeight, maxScrollTop, readerScrollTop,
       scrollTo, scrollBy,
       getDeviation, isScrolling, hasReaderIntent, hasUpwardReaderIntent,
-      hasBlockedUpwardIntent, isProgrammatic,
+      hasBlockedUpwardIntent, isProgrammatic, holdContentFloor,
     ],
   );
 }

@@ -265,3 +265,64 @@ export function scrollerIsUnanchored(computedOverflowAnchor: string | undefined 
   if (!computedOverflowAnchor) return true;
   return computedOverflowAnchor.trim().toLowerCase() === 'none';
 }
+
+/**
+ * A floor under the content layer's height, held across one commit.
+ *
+ * Prepending history does not only INSERT DOM nodes. React moves the rows that
+ * follow the insertion point, and a moved node is detached from the document
+ * before it goes back in, so for part of the commit the layer holds a fraction
+ * of the conversation. WebKit recomputes the scroller's range from that
+ * half-built layout and clamps `scrollTop` into it. Measured on the live
+ * dashboard (WebKit 390x844, warm cache, a 22-row session): the layer went
+ * 1938 -> 958 -> 2409px while eight older rows landed, and the reader, sitting
+ * at the end at `scrollTop` 1046, came back at 66.
+ *
+ * Nothing downstream can tell that apart from a person scrolling up: the page's
+ * scroll listener books 980px of upward movement and drops the bottom pin, and
+ * the tail hold is abandoned by `tailHoldLost` because its gap has grown far
+ * past the slack. The session then opens 1,451px short of the end with the
+ * "down to latest" pill as the only way back. Three opens in three; the other
+ * five sessions in the same sweep never lost a row mid-commit and landed at 0.
+ *
+ * A `min-height` for the frames around the commit takes the half-built layout
+ * out of the engine's view without touching the reconciler: the box cannot get
+ * shorter, so there is no shrunken range to clamp into.
+ *
+ * Two bounds, both saying the same thing — a floor must never outlive the
+ * content it was measured from, or it is phantom space under the last message
+ * that sticky bottom will happily scroll into:
+ *
+ *   - only a commit that ADDS rows raises one, because that is the case where
+ *     the content is about to grow past the floor anyway;
+ *   - a floor expires after `FLOOR_FRAMES` frames and a live one is never
+ *     extended, so a timeline re-rendering every frame cannot keep one alive.
+ */
+export const FLOOR_FRAMES = 2;
+
+export type ContentFloor = { height: number; framesLeft: number } | null;
+
+export function raiseContentFloor(
+  current: ContentFloor,
+  input: { measured: number; rowsBefore: number; rowsAfter: number },
+): ContentFloor {
+  if (current) return current;
+  if (input.rowsAfter <= input.rowsBefore) return current;
+  if (!(input.measured > 0)) return current;
+  return { height: input.measured, framesLeft: FLOOR_FRAMES };
+}
+
+/**
+ * One animation frame older. `null` once it has expired, which is the signal to
+ * take the `min-height` back off.
+ *
+ * Two frames rather than one because the swap is not always a single commit: on
+ * a warm cache the window plan and the rows it describes can land in separate
+ * commits, with a forced layout in between — and that layout is exactly the one
+ * that clamps.
+ */
+export function ageContentFloor(current: ContentFloor): ContentFloor {
+  if (!current) return null;
+  const framesLeft = current.framesLeft - 1;
+  return framesLeft > 0 ? { height: current.height, framesLeft } : null;
+}
