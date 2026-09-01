@@ -13,9 +13,12 @@
 //   sessionId  string   the ChatSession the reply belongs to
 //   text       string   the reply's visible prose, flattened by the caller
 //
-// Returns { text, truncated }. `truncated` means the reply was longer than
-// MAX_INPUT_CHARS and only the head of it was rewritten — the note is already
-// appended to `text`, the flag is for the UI.
+// Returns { text, truncated, model }. `truncated` means the reply was longer
+// than MAX_INPUT_CHARS and only the head of it was rewritten — the note is
+// already appended to `text`, the flag is for the UI. `model` is which model
+// actually wrote it: the choice is an env var on the deployment, so without
+// this there is no way to tell from outside WHICH one a given rewrite came
+// from — and comparing two models is exactly what that env var is for.
 //
 // A failure answers with a `reason` the client can act on, because the two
 // interesting failures are not retryable and a button that invites a retry is
@@ -80,7 +83,7 @@ export async function POST(req: NextRequest) {
       console.error(`[plain-speak] gate rejected a ${out.length}-char ${PLAIN_MODEL} reply to a ${src.length}-char message`);
       return NextResponse.json({ error: 'rewrite rejected', reason: 'rejected' }, { status: 502 });
     }
-    return NextResponse.json({ text: truncated ? out + TRUNCATED_NOTE : out, truncated });
+    return NextResponse.json({ text: truncated ? out + TRUNCATED_NOTE : out, truncated, model: PLAIN_MODEL });
   } catch (e) {
     console.error('[plain-speak] failed —', String(e));
     return NextResponse.json(
