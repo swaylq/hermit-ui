@@ -284,7 +284,7 @@ export default function WatchdogsPage() {
           <WatchdogCard
             title="Gateway watchdog"
             habitat="launchd · hourly · lives fully outside pm2 and the gateway"
-            blurb="Restarts a gateway that fell out of pm2, restarts one that is triple-confirmed wedged (3h cooldown), and alerts on starvation: load over the ceiling or the gateway log silent. Off switch: the gateway-watch.off file on the machine."
+            blurb="Restarts a gateway that fell out of pm2, restarts one that is triple-confirmed wedged (3h cooldown), and alerts on starvation: load over the ceiling, the gateway log silent, or disk headroom under 30G (critical under 15G). Off switch: the gateway-watch.off file on the machine."
             delayed
           >
             <Num label="Load alert ceiling" value={draft.gatewayWatch.loadMax} onChange={(v) => set('gatewayWatch', { ...draft.gatewayWatch, loadMax: v })} />
@@ -297,7 +297,7 @@ export default function WatchdogsPage() {
                 ? `Gateway last restarted ${fmtWhen(status.host.gatewayStartedAt)}.`
                 : 'Gateway restart time shows here after this machine\u2019s next gateway restart.'}
             </p>
-            <LastAlert alert={alerts['gateway-wedged'] ?? alerts['high-load'] ?? alerts['gateway-resurrected'] ?? alerts['gateway-start-failed']} />
+            <LastAlert alert={alerts['disk-critical'] ?? alerts['gateway-wedged'] ?? alerts['high-load'] ?? alerts['gateway-resurrected'] ?? alerts['gateway-start-failed'] ?? alerts['disk-low']} />
           </WatchdogCard>
         </div>
       </div>

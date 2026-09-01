@@ -25,6 +25,14 @@ const KINDS = [
   'chrome-leak',
   'gateway-resurrected',
   'gateway-start-failed',
+  // Disk headroom, reported by the same watchdog. Absolute GB, not a percentage:
+  // what breaks a build or a large copy is how many GB are left, and 10% of a
+  // 228G disk is not 10% of a 4T one. warn is a drift signal (12h cooldown),
+  // critical repeats hourly. 2026-09-01: the system disk filled for 68 seconds,
+  // pm2 died with 54 ENOSPC errors, the gateway went with it, nobody was told
+  // for 3h57m.
+  'disk-low',
+  'disk-critical',
 ] as const;
 
 const Body = z.object({
