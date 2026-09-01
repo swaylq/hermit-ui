@@ -6,7 +6,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   RotateCw, Trash2, Terminal, Pencil, Search, FoldVertical, Sparkles,
-  MoreHorizontal, ChevronRight, SquarePen, Info, ArchiveRestore,
+  MoreHorizontal, ChevronRight, SquarePen, Info, ArchiveRestore, Eye,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -1870,9 +1870,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const startAutonomy = useCallback(() => pickPrompt(AUTONOMY_TEMPLATE), [pickPrompt]);
   const startPerfect = useCallback(() => pickPrompt(PERFECT_TEMPLATE), [pickPrompt]);
 
-  // The pure-chat chip in that same row. Unlike its four neighbours it does not
-  // fill the composer — it opens a NEW read-only session with this agent and
-  // navigates there, leaving this conversation exactly as it is.
+  // "Pure chat" — a header action (see secondaryActions). It opens a NEW
+  // read-only session with this agent and navigates there, leaving this
+  // conversation exactly as it is.
   //
   // A new session rather than a switch because the read-only tool surface is
   // decided when the child process is spawned (docs/chat-only-mode.md): setting
@@ -1975,6 +1975,24 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
   const secondaryActions = (
     <>
+      {/* Pure chat. In THIS group, not beside the new-chat button, because this
+          group is the one that folds — inline while the chat column is ≥40rem,
+          in the ⋯ tray below that — and because it is folded a second time by
+          being a ConfirmIconButton: the icon alone until you touch it, and only
+          then the words. Both foldings are the same judgement, that a control
+          you reach for occasionally should not spend the day taking up width.
+
+          Nothing here can switch a LIVE session to read-only — the tool surface
+          is chosen when the child is spawned — so it opens a new one instead,
+          which is also why it is not a toggle. */}
+      <ConfirmIconButton
+        icon={Eye}
+        confirmLabel="pure chat"
+        title="pure chat — start a NEW read-only session with this agent. It can look at files, search the web and add to its own memory, but cannot write, edit, run commands or spawn sub-agents. This conversation is untouched."
+        busy={creatingChat}
+        disabled={!session?.agentName}
+        onConfirm={startPureChat}
+      />
       <button
         type="button"
         onClick={() => { setDetailOpen(true); setMoreOpen(false); }}
@@ -2518,8 +2536,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             onStartCron={startCron}
             onStartAutonomy={startAutonomy}
             onStartPerfect={startPerfect}
-            onStartPureChat={startPureChat}
-            pureChatBusy={creatingChat}
             takeover={
               showTakeover
                 ? {

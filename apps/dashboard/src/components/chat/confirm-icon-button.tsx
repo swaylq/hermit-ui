@@ -23,6 +23,12 @@ const AUTO_DISARM_MS = 5_000;
 // auto-disarming after a few seconds. Used for destructive/disruptive session
 // actions (restart, delete) per "删除/restart 前都需要确认".
 //
+// `confirmLabel` also makes it the header's "folded control": an action whose
+// name is too long to sit in a 28px row all day, shown only once you have
+// touched it. Same two steps, and the second one then says what it does
+// ("pure chat") rather than "confirm" — which a destructive action does not
+// need, because its icon already said.
+//
 // ORDER IS LOAD-BEARING: cancel first, confirm LAST.
 //
 // Every place this renders is right-anchored — the chat header's action cluster
@@ -43,6 +49,7 @@ export function ConfirmIconButton({
   disabled = false,
   busy = false,
   danger = false,
+  confirmLabel,
 }: {
   icon: LucideIcon;
   title: string;
@@ -50,6 +57,12 @@ export function ConfirmIconButton({
   disabled?: boolean;
   busy?: boolean;
   danger?: boolean;
+  /**
+   * What the confirm half says, and — when given — it carries the button's own
+   * icon instead of the generic ✓. Default "confirm", which is right for
+   * "are you sure" on an action the icon already named.
+   */
+  confirmLabel?: string;
 }) {
   const [armed, setArmed] = useState(false);
   const armedAt = useRef(0);
@@ -81,11 +94,22 @@ export function ConfirmIconButton({
           title={`confirm — ${title}`}
           aria-label={`confirm — ${title}`}
           className={cn(
-            'inline-flex items-center gap-1 h-7 px-1.5 rounded text-xs font-medium cursor-pointer transition-colors',
+            // nowrap: a labelled confirm ("pure chat") wraps to two lines inside
+            // the phone's overflow tray, which is narrower than the header row,
+            // and a two-line pill is taller than every button beside it.
+            'inline-flex items-center gap-1 h-7 px-1.5 rounded text-xs font-medium whitespace-nowrap cursor-pointer transition-colors',
             danger ? 'text-rose-600 hover:bg-rose-500/10' : 'text-foreground hover:bg-accent',
           )}
         >
-          <Check className="h-3.5 w-3.5" /> confirm
+          {confirmLabel ? (
+            <>
+              <Icon className={cn('h-3.5 w-3.5', danger ? undefined : 'text-amber-500')} /> {confirmLabel}
+            </>
+          ) : (
+            <>
+              <Check className="h-3.5 w-3.5" /> confirm
+            </>
+          )}
         </button>
       </span>
     );

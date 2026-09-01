@@ -1,7 +1,7 @@
 # Pure-chat mode
 
-A session ticked **Pure chat** in the new-chat form — or started from the folded
-eye at the left of any session's chip row — spawns its child with a
+A session ticked **Pure chat** in the new-chat form — or started from the eye
+button in any session's header — spawns its child with a
 read-only tool surface: it can look at files and search the web, it cannot
 write, edit, run commands or spawn sub-agents. `ChatSession.chatOnly`, default
 false, decided when the session is opened.
@@ -177,7 +177,7 @@ way is a gate, and a missed one loses the field **silently**.
 
 ```
 new-chat-pane.tsx  →  chat.createSession (zod input + create data)
-schedule-bar.tsx   →  the same chat.createSession, via the chat page
+chat/page.tsx      →  the same chat.createSession (the header's eye)
                    →  ChatSession.chatOnly
 chat.pollPending select  →  api.ts pollChatPending type
                          →  chat-runner.ts PendingSession
@@ -195,17 +195,22 @@ three carry.
 This is a property of the child process, not a permission checked per call.
 Flipping it on a live session would do nothing until the child respawns, which
 is why nothing offers to switch one. A conversation that wants the other mode
-starts a new session, and the chip row above the composer carries both halves of
-that: a pure-chat session shows a dashed `pure chat` marker there in place of the
-row's usual work chips, and an ordinary session shows a folded eye icon that
-opens a NEW pure-chat session with the same agent and backend — the conversation
-you were in is untouched.
+starts a new session. The two halves of that live in different places, and
+deliberately so:
 
-The eye is folded to a 28px icon and takes a second tap, with the same 350ms
-guard `ConfirmIconButton` uses, because pressing it navigates away. Its two taps
-land on the same pixels, and the row is left-anchored, so the action sits FIRST
-in the opened chip — the mirror of that component, which is right-anchored and
-therefore puts confirm last.
+- **What this session IS** — the chip row above the composer. A pure-chat
+  session shows a dashed `pure chat` marker there in place of the row's usual
+  work chips (none of which it could carry out).
+- **Starting another one** — the eye in the header's top-right cluster, a
+  `ConfirmIconButton` with `confirmLabel="pure chat"`. It opens a NEW pure-chat
+  session with the same agent and backend and navigates there; the conversation
+  you were in is untouched.
+
+The header button is folded twice, which is the point of it: it sits in the
+group that collapses into the ⋯ tray below 40rem, and it is an icon until you
+tap it. The second tap is also a guard — pressing it navigates away — and it
+reuses ConfirmIconButton's 350ms dead time and its cancel-first ordering rather
+than restating either.
 
 ## Adding a backend
 

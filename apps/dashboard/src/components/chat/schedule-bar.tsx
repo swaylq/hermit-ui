@@ -10,8 +10,8 @@
 // reportSessionId migration), so the loop is gone and a cron absorbed both jobs.
 // See docs/cron-merge-design.md.
 
-import { memo, useState, useCallback, useEffect, useRef } from 'react';
-import { ChevronDown, Bot, Eye, X } from 'lucide-react';
+import { memo, useState, useCallback } from 'react';
+import { ChevronDown, Bot, Eye } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
@@ -34,8 +34,6 @@ export const ScheduleBar = memo(function ScheduleBar({
   onStartCron,
   onStartAutonomy,
   onStartPerfect,
-  onStartPureChat,
-  pureChatBusy,
   takeover,
   disabled,
   sessionId,
@@ -45,17 +43,6 @@ export const ScheduleBar = memo(function ScheduleBar({
   onStartCron: () => void;
   onStartAutonomy: () => void;
   onStartPerfect: () => void;
-  /**
-   * Start a NEW pure-chat session with the same agent — this conversation is
-   * left exactly as it is.
-   *
-   * It cannot be a switch on THIS session: the read-only tool surface is chosen
-   * when the child process is spawned, so flipping it on a live one would
-   * change nothing until a respawn (docs/chat-only-mode.md).
-   */
-  onStartPureChat: () => void;
-  /** The createSession call is in flight — the collapsed icon shows a spinner dot. */
-  pureChatBusy?: boolean;
   /**
    * The Brain-takeover control, when this session can have one. It sits FIRST in
    * this row — handing the conversation over belongs with "iterate to done" and
@@ -121,14 +108,6 @@ export const ScheduleBar = memo(function ScheduleBar({
           </div>
         ) : (
         <div className="flex items-center gap-2 -mx-3 px-3 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {/* Leftmost, and folded to a 28px icon: every other chip in this row
-              steers the conversation you are already in, and this one leaves it
-              to start a different one. It has to be reachable without scrolling
-              the row, and it must not look like a fifth thing to ask this agent
-              to do — so it takes the least width a control can take until you
-              touch it. Not gated on `disabled`: a closed session can still be
-              the place you decide to go and talk to the same agent. */}
-          <PureChatChip onStart={onStartPureChat} busy={pureChatBusy} />
           {takeover && (
             <button
               type="button"
@@ -205,91 +184,6 @@ export const ScheduleBar = memo(function ScheduleBar({
     </div>
   );
 });
-
-// How long the opened chip refuses a click, and how long it stays open with
-// nothing else happening.
-//
-// The guard exists for the same reason ConfirmIconButton has one: the tap that
-// OPENS this control and the tap that fires it land on the same pixels — the
-// row is left-anchored, so the chip grows RIGHTWARD out of the icon and its
-// first 28px are exactly where the icon was. Without a dead time an impatient
-// double-tap would create a session the user only pointed at. 350ms clears
-// iOS's ~300ms double-tap window; a click inside it is dropped and the chip
-// stays open, so nothing is silently swallowed.
-//
-// Which child sits first is load-bearing for the same reason, and the answer is
-// the MIRROR of ConfirmIconButton's: that one is right-anchored and grows
-// leftward, so its confirm goes last. This one grows rightward, so the action
-// goes FIRST — second tap in the same place means yes, which is what everyone
-// tries.
-const PURE_CHAT_GUARD_MS = 350;
-const PURE_CHAT_AUTO_CLOSE_MS = 6_000;
-
-// "Start a pure chat" — folded to an icon by default, one tap to see what it is,
-// a second to open the session.
-//
-// Folded rather than a labelled chip because of what it costs to press by
-// accident: it navigates away from the conversation on screen. The other chips
-// in this row fill the composer with a template, which you can simply delete.
-function PureChatChip({ onStart, busy }: { onStart: () => void; busy?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const openedAt = useRef(0);
-  useEffect(() => {
-    if (!open) return;
-    const t = setTimeout(() => setOpen(false), PURE_CHAT_AUTO_CLOSE_MS);
-    return () => clearTimeout(t);
-  }, [open]);
-
-  const settled = () => Date.now() - openedAt.current >= PURE_CHAT_GUARD_MS;
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => { openedAt.current = Date.now(); setOpen(true); }}
-        disabled={busy}
-        aria-expanded={false}
-        aria-label="pure chat"
-        title="Pure chat — opens a NEW read-only session with this agent. Tap to see what it does."
-        className="shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors cursor-pointer hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 disabled:cursor-wait disabled:opacity-60"
-      >
-        {busy ? (
-          <span className="text-[11px] leading-none" aria-hidden="true">&#8230;</span>
-        ) : (
-          <Eye className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
-        )}
-      </button>
-    );
-  }
-
-  return (
-    <span className="shrink-0 inline-flex items-center gap-1.5">
-      <button
-        type="button"
-        onClick={() => { if (!settled()) return; setOpen(false); onStart(); }}
-        title="Opens a NEW session with the same agent, read-only: it can look at files, search the web and add to its own memory, but cannot write, edit, run commands or spawn sub-agents. This conversation is untouched."
-        className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-border text-[12px] text-muted-foreground hover:border-foreground/30 hover:text-foreground hover:bg-accent/40 transition-colors cursor-pointer"
-      >
-        <Eye className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
-        New pure chat
-      </button>
-      <button
-        type="button"
-        onClick={() => { if (settled()) setOpen(false); }}
-        aria-label="close"
-        title="close"
-        className="shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
-      >
-        <X className="h-3.5 w-3.5" aria-hidden="true" />
-      </button>
-      {/* What it is, in the one place you will read it: on a phone there is no
-          hover, so the title attribute above is desktop-only. */}
-      <span className="shrink-0 whitespace-nowrap text-[11px] leading-tight text-muted-foreground/80">
-        read-only, same agent &#183; this chat stays as it is
-      </span>
-    </span>
-  );
-}
 
 function DetailRow({ k, v }: { k: string; v: string }) {
   return (
