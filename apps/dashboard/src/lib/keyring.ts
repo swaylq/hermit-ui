@@ -13,7 +13,11 @@
 // `scoped`/`agentName` mark an AGENT SHARE entry: its `key` is a `shr_…` token
 // that grants access to only that one agent (vs a machine key). The UI reads
 // these to render the stripped scoped shell; the server is the real boundary.
-export type KeyringEntry = { id: string; name: string; key: string; hostname?: string | null; alias?: string | null; scoped?: boolean; agentName?: string | null };
+// `baseUrl` is the ORIGIN of the dashboard deployment this entry lives on
+// (`https://hermit.zhinan.tech`). Empty/absent = this origin, which is what
+// every entry meant before multi-deployment support, so old keyrings keep
+// working untouched. See lib/api-base.ts for how it is applied.
+export type KeyringEntry = { id: string; name: string; key: string; hostname?: string | null; alias?: string | null; scoped?: boolean; agentName?: string | null; baseUrl?: string | null };
 
 const KEYRING = 'asst-dashboard-keyring';
 const ACTIVE = 'asst-dashboard-active';
@@ -127,10 +131,14 @@ export async function migrateLegacyKey(): Promise<void> {
 export type MachineInfo = { id: string; name: string; alias?: string | null; hostname?: string | null; lastSeen?: string | null };
 
 // Raw machines.me with an ARBITRARY key (not the shared tRPC client, which only
-// carries the active key). Used for add-validation and per-machine status dots.
-export async function fetchMachineByKey(key: string): Promise<MachineInfo | null> {
+// carries the active key AND is pinned to the active backend). Used for
+// add-validation and per-machine status dots — both of which must be able to
+// reach an entry that is NOT the active one, possibly on another deployment,
+// hence the explicit `base`.
+export async function fetchMachineByKey(key: string, base = ''): Promise<MachineInfo | null> {
   if (!key) return null;
   const url =
+    (base || '') +
     '/api/trpc/machines.me?batch=1&input=' +
     encodeURIComponent(JSON.stringify({ '0': { json: null } }));
   const r = await fetch(url, { headers: { 'x-asst-key': key } });
@@ -157,8 +165,8 @@ export function renameEntry(id: string, alias: string | null) {
 
 // Set a machine's server-side alias using an ARBITRARY key, so the switcher can
 // rename any machine (not just the active one). Returns the saved alias.
-export async function setMachineAlias(key: string, alias: string | null): Promise<string | null> {
-  const r = await fetch('/api/trpc/machines.setAlias?batch=1', {
+export async function setMachineAlias(key: string, alias: string | null, base = ''): Promise<string | null> {
+  const r = await fetch((base || '') + '/api/trpc/machines.setAlias?batch=1', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-asst-key': key },
     body: JSON.stringify({ '0': { json: { alias } } }),

@@ -7,6 +7,7 @@ import { httpBatchLink, httpLink, loggerLink, splitLink } from '@trpc/client';
 import superjson from 'superjson';
 import { trpc } from '@/lib/trpc';
 import { getActiveKey } from '@/lib/keyring';
+import { apiUrl, adoptMachineFromUrl } from '@/lib/api-base';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { KeyboardShortcuts } from '@/components/keyboard-shortcuts';
 import { ChatCacheRoot } from '@/components/chat-cache-root';
@@ -35,10 +36,19 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   });
 
   const [trpcClient] = useState(() => {
+    // A notification tap can name the workspace it came from (`?m=<machineId>`).
+    // Apply it HERE — before the client below reads the backend — so the whole
+    // tab comes up on the right deployment instead of switching after paint.
+    adoptMachineFromUrl();
     // Both ends of the split share the transport config — only the batching
     // differs.
     const http = {
-      url: '/api/trpc',
+      // The active keyring entry decides WHICH deployment this tab talks to —
+      // '' (this origin) for a local machine, `https://other-host` for one on a
+      // second dashboard. Read once here rather than per request because
+      // switching entries is a full page reload, so it cannot change under a
+      // live client. On the server this is always '/api/trpc'.
+      url: apiUrl('/api/trpc'),
       transformer: superjson,
       headers() {
         return { 'x-asst-key': getActiveKey() };

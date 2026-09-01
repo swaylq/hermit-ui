@@ -76,11 +76,17 @@ function decodeBase64Url(s: string): Uint8Array<ArrayBuffer> {
 
 /**
  * Register one subscription against one machine key. Raw fetch rather than the
- * shared tRPC client because that client only ever carries the ACTIVE key, and we
- * need to subscribe every machine in the keyring.
+ * shared tRPC client because that client only ever carries the ACTIVE key and is
+ * pinned to the ACTIVE backend, and we need to subscribe every machine in the
+ * keyring — which may span deployments, hence the per-entry `base`.
+ *
+ * A subscription is minted against ONE VAPID public key, so deployments that
+ * share a browser must share their VAPID keypair; otherwise the far one stores
+ * the row happily and every send is rejected by the push service. See
+ * `.env.example` (VAPID_PUBLIC_KEY).
  */
-async function registerForKey(key: string, subscription: PushSubscriptionJSON): Promise<boolean> {
-  const r = await fetch('/api/trpc/push.registerWeb?batch=1', {
+async function registerForKey(key: string, subscription: PushSubscriptionJSON, base = ''): Promise<boolean> {
+  const r = await fetch((base || '') + '/api/trpc/push.registerWeb?batch=1', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-asst-key': key },
     body: JSON.stringify({ '0': { json: { subscription } } }),
@@ -88,8 +94,8 @@ async function registerForKey(key: string, subscription: PushSubscriptionJSON): 
   return r.ok;
 }
 
-async function unregisterForKey(key: string, token: string): Promise<boolean> {
-  const r = await fetch('/api/trpc/push.unregister?batch=1', {
+async function unregisterForKey(key: string, token: string, base = ''): Promise<boolean> {
+  const r = await fetch((base || '') + '/api/trpc/push.unregister?batch=1', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-asst-key': key },
     body: JSON.stringify({ '0': { json: { token } } }),
@@ -140,7 +146,7 @@ export async function subscribeWebPush(vapidPublicKey: string): Promise<Subscrib
 
   const json = sub.toJSON();
   const results = await Promise.all(
-    machines.map((e) => registerForKey(e.key, json).catch(() => false)),
+    machines.map((e) => registerForKey(e.key, json, e.baseUrl || '').catch(() => false)),
   );
   const registered = results.filter(Boolean).length;
   return {
@@ -166,7 +172,7 @@ export async function unsubscribeWebPush(): Promise<{ ok: boolean }> {
   if (!sub) return { ok: true };
 
   await Promise.all(
-    subscribableMachines().map((e) => unregisterForKey(e.key, sub.endpoint).catch(() => false)),
+    subscribableMachines().map((e) => unregisterForKey(e.key, sub.endpoint, e.baseUrl || '').catch(() => false)),
   );
   await sub.unsubscribe().catch(() => false);
   return { ok: true };

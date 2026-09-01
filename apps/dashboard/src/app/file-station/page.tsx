@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { HardDriveUpload, Loader2, CheckCircle2, XCircle, Trash2, FileUp } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { getActiveKey } from '@/lib/keyring';
+import { apiUrl } from '@/lib/api-base';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { Card } from '@/components/ui/card';
@@ -36,7 +37,7 @@ type Row = {
 function uploadXhr(file: File, destPath: string, unzip: boolean, onProgress: (p: number) => void): Promise<{ id: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/file-station/upload');
+    xhr.open('POST', apiUrl('/api/file-station/upload'));
     xhr.setRequestHeader('x-asst-key', getActiveKey());
     xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
     xhr.setRequestHeader('x-file-path', encodeURIComponent(destPath));

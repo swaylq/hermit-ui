@@ -29,6 +29,7 @@
 // treats that like any other failure and stays on press-and-hold.
 
 import { getActiveKey } from '@/lib/keyring';
+import { wsUrl } from '@/lib/api-base';
 import { joinSegments } from '@/lib/dictation-text';
 
 export interface DictationState {
@@ -70,8 +71,8 @@ const PREOPEN_MAX_BYTES = 4 * 16_000 * 2;
 const DONE_TIMEOUT_MS = 12_000;
 
 export function openAsrSocket(sessionId: string, events: AsrSocketEvents): AsrSocket {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const url = `${proto}://${location.host}/api/asr/${encodeURIComponent(sessionId)}`;
+  // Follows the active keyring entry's deployment; see lib/api-base.ts.
+  const url = wsUrl(`/api/asr/${encodeURIComponent(sessionId)}`);
 
   const segs: Seg[] = [];
   let partial = '';

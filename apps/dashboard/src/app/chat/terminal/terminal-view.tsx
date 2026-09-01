@@ -25,6 +25,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { getActiveKey } from '@/app/providers';
+import { wsUrl } from '@/lib/api-base';
 
 type Status =
   | { kind: 'connecting' }
@@ -168,8 +169,11 @@ export function TerminalView({ sessionId }: { sessionId: string }) {
     }, 20_000);
 
     // ── WebSocket bring-up (re-callable for reconnect) ───────────────────────
-    const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${wsScheme}://${window.location.host}/api/term/${encodeURIComponent(sessionId)}`;
+    // Host comes from the active keyring entry, not window.location — an entry
+    // pointing at another deployment must open its terminal THERE. wsUrl()
+    // falls back to this origin for a local machine. (Browsers can't set WS
+    // headers, so the key rides in the subprotocol, as before.)
+    const url = wsUrl(`/api/term/${encodeURIComponent(sessionId)}`);
     const key = getActiveKey();
 
     function connect() {

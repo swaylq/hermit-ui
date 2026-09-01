@@ -15,6 +15,7 @@ import dynamic from 'next/dynamic';
 import { saveFile } from '@/lib/save-file';
 import { Overlay } from '@/components/overlay';
 import { thumbUrlFor } from '@/lib/thumb-url';
+import { mediaUrl } from '@/lib/api-base';
 
 // Lazy-load the zoomable image lightbox (a portal overlay in its own ~20KB chunk)
 // so the chat route's first paint doesn't carry it — it's only needed once an
@@ -55,14 +56,19 @@ const ImageLightbox = dynamic(() => import('@/components/ui/image-lightbox').the
 // happens to paint it.
 const IMAGE_CAP_PX = 320;
 
-export function ChatImage({ url, width, height }: { url: string; width: number | null; height: number | null }) {
+export function ChatImage({ url: rawUrl, width, height }: { url: string; width: number | null; height: number | null }) {
   const [open, setOpen] = useState(false);
+  // Attachment URLs are stored relative ('/uploads/...'), so they resolve
+  // against the DOCUMENT origin — wrong when this tab is driving another
+  // deployment. mediaUrl() sends them to the active backend. Derive the
+  // thumbnail path FIRST: thumbUrlFor only matches a bare /uploads/ path.
+  const url = useMemo(() => mediaUrl(rawUrl), [rawUrl]);
   // The box is 320 CSS px; the `.safe.` file behind `url` is up to 2000px and
   // averages 535KB. Point the thumbnail at the derived 640px WebP (~16KB) and
   // keep `url` for the lightbox, which is the only place the big one is worth
   // its bytes. `thumbUrlFor` returns null for anything not thumbnail-able
   // (data: urls, gifs) and then nothing changes.
-  const thumb = useMemo(() => thumbUrlFor(url), [url]);
+  const thumb = useMemo(() => { const t = thumbUrlFor(rawUrl); return t ? mediaUrl(t) : null; }, [rawUrl]);
   const [src, setSrc] = useState(thumb ?? url);
   // A thumbnail can be missing for one request only — the /uploads route mints
   // it on demand — but if the encoder is absent on this box it never appears.
@@ -153,7 +159,8 @@ function classifyFile(name: string, mimeType: string | null) {
 //   · text → fetch text, render as Markdown (.md) or a <pre>
 //   · svg / pdf → typed Blob URL (image/svg+xml · application/pdf) so it renders
 //     regardless of the served content-type
-function FilePreviewBody({ url, name, c }: { url: string; name: string; c: ReturnType<typeof classifyFile> }) {
+function FilePreviewBody({ url: rawUrl, name, c }: { url: string; name: string; c: ReturnType<typeof classifyFile> }) {
+  const url = useMemo(() => mediaUrl(rawUrl), [rawUrl]);
   const [html, setHtml] = useState<string | null>(null);
   const [text, setText] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
@@ -209,7 +216,8 @@ function FilePreviewBody({ url, name, c }: { url: string; name: string; c: Retur
 // pdf / text) opens an in-app preview overlay — never a navigation — so the chat
 // is always one Close away. Other types (office docs, archives) download in place
 // via the share sheet / object-URL. Fixes the standalone-PWA "no way back" trap.
-export function ChatFile({ url, name, mimeType }: { url: string; name: string; mimeType: string | null }) {
+export function ChatFile({ url: rawUrl, name, mimeType }: { url: string; name: string; mimeType: string | null }) {
+  const url = useMemo(() => mediaUrl(rawUrl), [rawUrl]);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const c = useMemo(() => classifyFile(name, mimeType), [name, mimeType]);

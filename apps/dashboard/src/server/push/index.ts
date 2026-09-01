@@ -56,6 +56,7 @@ import { prisma } from '@/server/db';
 import { shouldPush, isUrgentKind, turnStillRunning, backgroundOutstanding } from './suppress';
 import { anyTransportConfigured, transportFor } from './transport';
 import type { PushEvent } from './types';
+import { withMachine } from '@/lib/machine-param';
 
 export type { PushEvent, PushKind } from './types';
 
@@ -260,7 +261,9 @@ async function deliver(event: PushEvent, known?: SessionState | null): Promise<D
   const payload = {
     title: event.title,
     body: event.body,
-    path: event.path,
+    // Name the machine so a tap lands on the right workspace even when the
+     // browser is currently showing another deployment. See lib/machine-param.
+     path: withMachine(event.path, event.machineId),
     collapseKey: event.collapseKey,
     kind: event.kind,
     // Marks the push time-sensitive so a Focus mode lets it through. The only

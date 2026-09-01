@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
 import { getKeyring, addMachine, removeMachine, getActiveEntry, fetchMachineByKey, migrateLegacyKey } from '@/lib/keyring';
+import { normalizeBase } from '@/lib/api-base';
 import { LoginScreen } from '@/components/login-screen';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -63,10 +64,26 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   if (count === 0) {
     return (
       <LoginScreen
-        onSubmit={async (k) => {
-          const m = await fetchMachineByKey(k).catch(() => null);
-          if (!m) return 'invalid key';
-          addMachine({ id: m.id, name: m.name, key: k, hostname: m.hostname });
+        onSubmit={async (k, baseRaw) => {
+          let origin: string;
+          try {
+            origin = normalizeBase(baseRaw);
+          } catch (ex) {
+            return ex instanceof Error ? ex.message : 'bad backend address';
+          }
+          // Distinguish "key rejected" from "never answered" — a cross-origin
+          // sign-in fails with a network error when the far end doesn't list
+          // this origin in CORS_ALLOW_ORIGINS.
+          let reached = true;
+          const m = await fetchMachineByKey(k, origin).catch(() => {
+            reached = false;
+            return null;
+          });
+          if (!m) {
+            if (!reached) return origin ? `can't reach ${origin} (CORS?)` : "can't reach the server";
+            return 'invalid key';
+          }
+          addMachine({ id: m.id, name: m.name, key: k, hostname: m.hostname, baseUrl: origin || null });
           window.location.href = '/chat';
           return null;
         }}

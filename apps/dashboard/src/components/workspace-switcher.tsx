@@ -18,7 +18,15 @@ import {
   type KeyringEntry,
 } from '@/lib/keyring';
 import { lastSessionId } from '@/lib/last-session';
+import { baseHost } from '@/lib/api-base';
 import { AddMachine } from './add-machine';
+
+// Second line of a switcher row. An entry on ANOTHER deployment leads with that
+// deployment's host, because two dashboards can each have a machine called
+// "mac-local" and the only thing that tells them apart is where they live.
+function subtitle(e: KeyringEntry): string {
+  return [baseHost(e.baseUrl), e.hostname].filter(Boolean).join(' · ');
+}
 
 const initials = (s: string) => (s || '?').slice(0, 2).toUpperCase();
 
@@ -134,7 +142,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
     let cancelled = false;
     Promise.all(
       getKeyring().map(
-        async (e) => [e.id, isOnline((await fetchMachineByKey(e.key))?.lastSeen)] as const,
+        async (e) => [e.id, isOnline((await fetchMachineByKey(e.key, e.baseUrl || ''))?.lastSeen)] as const,
       ),
     ).then((rows) => {
       if (!cancelled) setStatus(Object.fromEntries(rows));
@@ -211,7 +219,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
   const saveAlias = async (e: KeyringEntry) => {
     setSavingId(e.id);
     try {
-      const saved = await setMachineAlias(e.key, draft.trim() || null);
+      const saved = await setMachineAlias(e.key, draft.trim() || null, e.baseUrl || '');
       renameEntry(e.id, saved);
       setList(getKeyring());
       setEditingId(null);
@@ -243,8 +251,8 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
         </span>
         <span className={cn('flex-1 min-w-0 text-left', collapsed && 'lg:hidden')}>
           <span className="block text-sm font-medium truncate">{active ? displayName(active) : 'machine'}</span>
-          {active?.hostname && (
-            <span className="block text-[10px] text-muted-foreground truncate font-mono">{active.hostname}</span>
+          {active && subtitle(active) && (
+            <span className="block text-[10px] text-muted-foreground truncate font-mono">{subtitle(active)}</span>
           )}
         </span>
         <ChevronsUpDown className={cn('h-4 w-4 text-muted-foreground shrink-0', collapsed && 'lg:hidden')} />
@@ -333,8 +341,8 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                     className="flex-1 min-w-0 text-left cursor-pointer py-0.5 pr-1"
                   >
                     <span className="block text-[13px] truncate text-sidebar-foreground">{displayName(e)}</span>
-                    {e.hostname && (
-                      <span className="block text-[10px] text-muted-foreground truncate font-mono">{e.hostname}</span>
+                    {subtitle(e) && (
+                      <span className="block text-[10px] text-muted-foreground truncate font-mono">{subtitle(e)}</span>
                     )}
                   </button>
                   <button

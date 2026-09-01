@@ -45,11 +45,12 @@ function postToNative(msg: unknown): void {
 
 /**
  * Register one device token against one machine key. Raw fetch rather than the
- * shared tRPC client because that client only ever carries the ACTIVE key, and we
- * need to subscribe every machine in the keyring.
+ * shared tRPC client because that client only ever carries the ACTIVE key and is
+ * pinned to the ACTIVE backend, and we need to subscribe every machine in the
+ * keyring — which may span deployments, hence the per-entry `base`.
  */
-async function registerForKey(key: string, token: string, apnsEnv: ApnsEnv): Promise<boolean> {
-  const r = await fetch('/api/trpc/push.register?batch=1', {
+async function registerForKey(key: string, token: string, apnsEnv: ApnsEnv, base = ''): Promise<boolean> {
+  const r = await fetch((base || '') + '/api/trpc/push.register?batch=1', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-asst-key': key },
     body: JSON.stringify({ '0': { json: { token, apnsEnv, platform: 'ios' } } }),
@@ -72,7 +73,7 @@ export function installNativeBridge(): () => void {
       const machines = getKeyring().filter((e) => !e.scoped);
       void Promise.all(
         machines.map((e) =>
-          registerForKey(e.key, token, apnsEnv).catch(() => false),
+          registerForKey(e.key, token, apnsEnv, e.baseUrl || '').catch(() => false),
         ),
       ).then((results) => {
         postToNative({ type: 'registered', ok: results.filter(Boolean).length, of: machines.length });

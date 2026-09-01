@@ -12,6 +12,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Upload, FolderPlus, RotateCw, Loader2, X, Check } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { getActiveKey } from '@/lib/keyring';
+import { apiUrl } from '@/lib/api-base';
 import { Button } from '@/components/ui/button';
 import { type Selected, fmtSize, joinPath, parentOf } from '@/components/file-explorer/core';
 import { FileTree } from '@/components/file-explorer/file-tree';
@@ -22,7 +23,7 @@ const MAX_UPLOAD = 100 * 1024 * 1024; // 100 MB per the spec
 function uploadXhr(file: File, destPath: string, onProgress: (p: number) => void): Promise<{ id: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/file-station/upload');
+    xhr.open('POST', apiUrl('/api/file-station/upload'));
     xhr.setRequestHeader('x-asst-key', getActiveKey());
     xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
     xhr.setRequestHeader('x-file-path', encodeURIComponent(destPath));

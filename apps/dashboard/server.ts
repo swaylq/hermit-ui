@@ -127,11 +127,67 @@ function sendBrowser(sock: WSWebSocket, payload: unknown) {
 const TERM_PATH_RE = /^\/api\/term\/([^\/?#]+)$/;
 const GATEWAY_PATH = '/api/gateway/ws';
 
+// ── Cross-origin API access ──────────────────────────────────────────────────
+// One installed PWA is bound to ONE origin, but the browser keyring can hold
+// entries pointing at other deployments (KeyringEntry.baseUrl), so a tab served
+// by dash.swaylab.ai may call THIS server's API. That works because the
+// credential is the `x-asst-key` request header rather than a cookie — but a
+// custom header makes every request non-simple, so the browser sends an OPTIONS
+// preflight first and refuses the real request unless we answer it.
+//
+// Empty allowlist (the default) = no cross-origin access at all, i.e. exactly
+// today's behaviour. Set CORS_ALLOW_ORIGINS to a comma-separated list of the
+// origins that may drive this deployment, e.g.
+//   CORS_ALLOW_ORIGINS=https://dash.swaylab.ai
+// Credentials are never allowed: there is no cookie or session to protect, and
+// leaving them off means a hostile page still cannot ride an existing login.
+const CORS_ORIGINS = new Set(
+  (process.env.CORS_ALLOW_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean),
+);
+const CORS_PATH_RE = /^\/(api|uploads)\//;
+const CORS_FALLBACK_HEADERS = 'content-type, x-asst-key, x-file-name, x-file-path, x-file-unzip';
+
+/**
+ * Add CORS headers when this is a cross-origin call from an allowlisted origin.
+ * Returns true when the request was fully answered (a preflight), in which case
+ * the caller must NOT pass it to Next — Next would 405 an OPTIONS on a route
+ * that only exports GET/POST.
+ */
+function applyCors(req: IncomingMessage, res: import('node:http').ServerResponse): boolean {
+  const origin = req.headers.origin;
+  const path = (req.url || '/').split('?')[0];
+  if (!origin || !CORS_PATH_RE.test(path)) return false;
+  // Vary regardless of the outcome: the response for one Origin must never be
+  // served from a shared cache to another.
+  res.setHeader('Vary', 'Origin');
+  if (!CORS_ORIGINS.has(origin)) return false;
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    // Echo what was asked for — the allowlist above is the real boundary, and
+    // echoing means a new client header never turns into a silent CORS failure.
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      (req.headers['access-control-request-headers'] as string) || CORS_FALLBACK_HEADERS,
+    );
+    res.setHeader('Access-Control-Max-Age', '86400');
+    res.writeHead(204).end();
+    return true;
+  }
+  return false;
+}
+
 const app = next({ dev, port });
 const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
   const server = createServer((req, res) => {
+    // Preflights are answered here and go no further; everything else picks up
+    // the Allow-Origin header on the way out.
+    if (applyCors(req, res)) return;
     // Defer everything to Next — including 404s on /api/* routes that don't
     // exist. WS upgrade is handled separately on the 'upgrade' event.
     handle(req, res, parseUrl(req.url || '/', true));

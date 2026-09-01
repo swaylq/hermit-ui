@@ -10,9 +10,14 @@
 // several others, the tRPC client injects it in its own `headers()` link, and
 // the terminal WS carries it as a subprotocol — those keep their own paths.
 import { getActiveKey } from '@/lib/keyring';
+import { apiUrl } from '@/lib/api-base';
 
 export function authedFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('x-asst-key', getActiveKey());
-  return fetch(input, { ...init, headers });
+  // Absolute-path call sites ('/api/...') follow the active keyring entry to
+  // whichever deployment it names; a fully-qualified URL or a Request object is
+  // passed through as given. See lib/api-base.ts.
+  const target = typeof input === 'string' ? apiUrl(input) : input;
+  return fetch(target, { ...init, headers });
 }
