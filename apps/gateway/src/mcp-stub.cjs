@@ -1140,6 +1140,16 @@ rl.on('line', async (line) => {
       return;
     }
     if (method === 'tools/list') {
+      // No HERMIT_SESSION_ID means this stub was NOT spawned for a hermit
+      // session — the kimi-code backend declares this server in the shared
+      // ~/.kimi-code/mcp.json, so the human's own interactive `kimi` runs load
+      // it too. Those get a connected server with ZERO tools rather than a
+      // startup failure or a list of tools that can only 404: invisible where
+      // it does not belong, functional where it does.
+      if (!SESSION_ID) {
+        sendResult(id, { tools: [] });
+        return;
+      }
       const listed = BRAIN ? TOOLS.concat(BRAIN_TOOLS) : TOOLS;
       sendResult(id, {
         tools: CHAT_ONLY

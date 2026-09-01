@@ -79,16 +79,17 @@ export type RuntimeSession = {
    * (cron-runner.ts → cronPaneEnv, pinned by a test); this is what lets a cron
    * keep that refusal after moving off the pane.
    *
-   * Honoured by claude-sdk, pi-rpc, omp-rpc and prime-rpc — the four that give a
-   * child the hermit tool surface. codex-exec does not honour it yet (it has
-   * always had this, since codex crons predate the flag). dsh-exec needs no
-   * flag: it has no hermit tool surface and never receives the key.
+   * Honoured by claude-sdk, pi-rpc, omp-rpc, prime-rpc and kimi-code — the
+   * five that give a child the hermit tool surface. codex-exec does not honour
+   * it yet (it has always had this, since codex crons predate the flag).
+   * dsh-exec needs no flag: it has no hermit tool surface and never receives
+   * the key.
    */
   hermitTools?: boolean;
   /**
    * The orchestrator ("义脑") session, which gets the brain-only cross-agent MCP
-   * tools. Only the backends that run a real Claude Code session read it; the
-   * others have no equivalent tool surface to widen.
+   * tools. Read by the backends that mount the hermit MCP stub — the Claude
+   * Code ones and kimi-code; the rest have no equivalent tool surface to widen.
    */
   isOrchestrator?: boolean;
   /**
@@ -102,8 +103,9 @@ export type RuntimeSession = {
    * inside the CLI — so each runtime honours this with its own switch:
    * claude-sdk and claude-tmux narrow `tools`, codex drops to its read-only OS
    * sandbox, pi and omp narrow `--tools`, dsh disables its write plugins, kimi
-   * gets deny rules in its config. prime cannot honour it usefully (one tool,
-   * `ipython`, is its entire surface) and loses that tool outright.
+   * binds an agent profile whose allow/deny lists cover MCP tools too. prime
+   * cannot honour it usefully (one tool, `ipython`, is its entire surface) and
+   * loses that tool outright.
    *
    * It is a SPAWN-TIME property: flipping it on a live session does nothing
    * until the child respawns.

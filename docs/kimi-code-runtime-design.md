@@ -215,25 +215,69 @@ the previous one's numbers — the same reason codex refreshes inside `usage()`.
 
 ## What is deliberately not wired
 
-- **The hermit tool surface.** kimi has MCP (`~/.kimi-code/mcp.json` plus a
-  project-local one) and hooks, so `set_session_title` / `attach_image` / `ask`
-  could be given to it. That is a separate piece of work: the stub the other
-  backends use is written against claude's MCP config shape, and `hermitTools`
-  is honoured by nobody here yet. A kimi session today has its own tools and no
-  hermit ones.
 - **`compact`.** kimi compacts itself (`[loop_control] reserved_context_size`),
   and its `/compact` is a TUI command — a slash command in `-p` is sent to the
   model as literal text. The handler says so rather than no-op'ing, because a
   silent no-op is indistinguishable from a wedged session.
-- **The context-bar denominator.** `contextWindowFor` still returns
-  `DEFAULT_CONTEXT_WINDOW` (1M) for anything that is not codex. That is right for
-  `k3` and wrong for `k3-256k`, which will read as a quarter-full bar. Fixing it
-  means teaching the dashboard about credential `modelLimits`, which is bigger
-  than this change and affects pi and dsh too.
 - **`kimi acp` and `kimi web`.** Both are real, official, and better surfaces for
   token-level streaming and bidirectional control than screen-scraping `-p`. If
   this backend ever needs partial-message streaming — `-p` only flushes at step
   boundaries — ACP is where to go, not a finer parse of this protocol.
+
+## The hermit tool surface (wired 2026-09-01)
+
+kimi has MCP, so the same stub every other backend mounts is declared in kimi's
+**user-global** `$KIMI_CODE_HOME/mcp.json` (`ensureHermitMcpConfig`, merged —
+the human's own servers are preserved, a malformed file is left alone, the
+write is atomic and skipped when current). That file is the one location that
+loads WITHOUT the workspace-trust gate: project-level mcp.json files wait for a
+trust prompt a headless turn can never answer (measured — a project-local probe
+server simply never registered).
+
+Two mechanism facts make it clean:
+
+- **No `env` block in the entry.** kimi spawns a stdio MCP server with its own
+  whole environment plus the config's overlay, so the HERMIT_SESSION_ID /
+  HERMIT_KEY / HERMIT_DASHBOARD_URL set on the kimi child reach the stub
+  untouched, and the machine key never sits at rest in the file. The corollary:
+  the human's interactive `kimi` loads the entry too, gets a stub with no
+  HERMIT_SESSION_ID — and the stub serves ZERO tools in that case, connected
+  and invisible instead of an error.
+- **Print mode auto-approves MCP calls** (measured), and tools arrive named
+  `mcp__hermit__<name>` — the qualified name is also what an agent profile's
+  `tools` allowlist gates by (measured both directions), which is how a
+  pure-chat kimi session keeps the read-only half of the surface plus
+  `memory_write` while the stub itself drops the cron mutations.
+
+`hermitTools: false` (a cron fire) sets none of the env, so the same mcp.json
+entry yields a zero-tool stub — no second code path. The entry's
+`toolTimeoutMs` (4h5m) sits just above the stub's 4h ask ceiling, same as the
+claude path.
+
+## The watchdog's third opinion (2026-09-01)
+
+Stdout silence + a quiet session log tree still had one blind spot: a SINGLE
+long model response. kimi flushes its wire log at step boundaries, and one k3
+response at max thinking effort has been measured at 401s — nothing caps it
+under the 15-minute budget, and the first-turn kill of session cmte4wr4 died to
+exactly this. Before firing, the watchdog now also asks whether the child
+process burned any CPU since the timer was armed (`ps -o time=`, `childCpuMs`).
+A process mid-response is parsing a stream and burns CPU; one deadlocked on a
+read does not. kimi's subagents run in-process, so one pid covers a swarm. ps
+being unanswerable does NOT save a turn — missing data falls back to the old
+verdict, because a watchdog that cannot fire is worse than one with a blind
+spot — and the failure note only claims "no CPU burned" when ps actually said
+so.
+
+## The context bar's denominator (2026-09-01)
+
+`contextWindowFor` now has a kimi-code branch: k3 → 1,048,576, the 256k
+variants → 262,144, unknown → 262,144, which is the CLI's own fallback for an
+env model with no declared window — a bar that over-reads the window is the
+dangerous direction (kimi's compaction arrives first). The gateway half is
+already right whenever the credential declares modelLimits, and
+pi-model-limits.ts gained the kimi families so a credential that does not still
+spawns the CLI with the right `KIMI_MODEL_MAX_CONTEXT_SIZE`.
 
 ## Prompts travel on argv, mostly
 

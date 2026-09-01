@@ -47,7 +47,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
@@ -57,6 +57,8 @@ import { chatOnlyPreamble } from './chat-only';
 import { readSecret } from './pi-credentials';
 import { getCredential, credentialDefaultModel, type ModelCredential } from '../pi-config';
 import { modelLimitsFor } from '../pi-model-limits';
+import { MCP_STUB_PATH } from '../mcp-config';
+import { ASST_KEY, DASHBOARD_URL } from '../config';
 
 /** Cumulative token counters, on the same basis as codex's and dsh's. */
 export type KimiTotals = {
@@ -83,6 +85,10 @@ type KimiHandle = RuntimeHandle & {
   credentialId: string | null;
   /** Pure-chat: bind a read-only agent profile on the first turn. */
   chatOnly: boolean;
+  /** Mount the hermit MCP tool surface (false on a cron fire). */
+  hermitTools: boolean;
+  /** Orchestrator session: the stub's brain-only tools come along. */
+  isOrchestrator: boolean;
   /** Set for the duration of a turn; the message queue's gate. */
   working: boolean;
   /** The in-flight turn's child. Null between turns. */
@@ -246,9 +252,12 @@ export const CONFLICTING_KIMI_VARS = [
  *
  * `ASST_KEY` is the gateway's own dashboard credential, and the gateway's
  * environment is the child's by default — so without this, `echo $ASST_KEY`
- * inside the agent's Bash tool prints the machine's key. This backend has no
- * hermit tool surface, so it needs no part of it. codex deletes the same
- * variable for the same reason (codex-exec.ts → codexChildEnv).
+ * inside the agent's Bash tool prints the machine's key. On a session with the
+ * hermit tool surface the same value rides HERMIT_KEY instead (the stub reads
+ * that name), matching the exposure the claude-sdk path has always had; the
+ * ASST_KEY spelling stays deleted so nothing depends on which name leaked.
+ * codex deletes the same variable for the same reason (codex-exec.ts →
+ * codexChildEnv).
  */
 export const GATEWAY_ONLY_VARS = ['ASST_KEY'] as const;
 
@@ -398,8 +407,14 @@ export function chatOnlyAgentFile(agentDirectory: string, home: string = kimiHom
     '---',
     'name: hermit-chat-only',
     'description: Pure-chat session — look and discuss, never modify.',
-    'tools: ["Read", "Glob", "Grep", "WebFetch", "WebSearch"]',
-    'disallowedTools: ["Write", "Edit", "Bash", "Task"]',
+    // The allowlist gates MCP tools by their qualified names too, so the
+    // read-only half of the hermit surface (everything but the cron mutations,
+    // which the stub itself drops under HERMIT_CHAT_ONLY) stays reachable —
+    // memory_write included, the mode's only route to disk. Binds at session
+    // creation: a pure-chat session created before this list existed keeps the
+    // profile it was created with.
+    'tools: ["Read", "Glob", "Grep", "WebFetch", "WebSearch", "mcp__hermit__set_session_title", "mcp__hermit__log_status", "mcp__hermit__attach_image", "mcp__hermit__attach_file", "mcp__hermit__ask", "mcp__hermit__cron_list", "mcp__hermit__memory_write"]',
+    'disallowedTools: ["Write", "Edit", "Bash", "Task", "mcp__hermit__cron_create", "mcp__hermit__cron_update", "mcp__hermit__cron_delete"]',
     '---',
     '',
     chatOnlyPreamble(agentDirectory),
@@ -408,6 +423,70 @@ export function chatOnlyAgentFile(agentDirectory: string, home: string = kimiHom
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(file, body);
   return file;
+}
+
+// ── the hermit tool surface, mounted through kimi's own MCP ────────────────
+
+/**
+ * The hermit server entry in kimi's user-global mcp.json.
+ *
+ * No `env` block ON PURPOSE: kimi spawns a stdio MCP server with its own whole
+ * environment plus the config's overlay (mergeStdioEnv — measured, not assumed),
+ * so the HERMIT_SESSION_ID / HERMIT_KEY / HERMIT_DASHBOARD_URL the gateway sets
+ * on the kimi child reach the stub untouched. Writing the machine key into this
+ * file would put it at rest in plaintext; inheriting keeps it in memory only.
+ * The corollary: the human's own interactive `kimi` loads this entry too, gets
+ * a stub with no HERMIT_SESSION_ID, and that stub serves zero tools — connected
+ * and invisible, never an error.
+ *
+ * toolTimeoutMs sits just ABOVE the stub's 4h ask ceiling (the same 4h5m the
+ * claude path uses) so a question left unanswered for hours returns the stub's
+ * clean "timed out" answer instead of kimi force-killing the tool call.
+ */
+const HERMIT_MCP_ENTRY = {
+  transport: 'stdio',
+  command: 'node',
+  args: [MCP_STUB_PATH],
+  toolTimeoutMs: 14_700_000,
+} as const;
+
+/**
+ * Declare the hermit server in `<home>/mcp.json`, preserving everything else.
+ *
+ * kimi has no `--mcp-config` flag and no config env var; the user-global file
+ * is the one location that loads without a workspace-trust gate (project-local
+ * files wait for a trust prompt that a headless turn can never answer —
+ * measured 2026-09-01). The write is atomic and skipped when the entry is
+ * already current, so the per-turn cost is one read. A file that does not
+ * parse is the human's own: warn and run WITHOUT the tool surface rather than
+ * clobber it.
+ */
+export function ensureHermitMcpConfig(home: string = kimiHome()): void {
+  const file = path.join(home, 'mcp.json');
+  let data: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('top level is not an object');
+    data = parsed as Record<string, unknown>;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(
+        `[kimi] ${file} exists but does not parse (${(e as Error).message}) — leaving it alone; no hermit tools this turn`,
+      );
+      return;
+    }
+  }
+  const servers = (data.mcpServers && typeof data.mcpServers === 'object' && !Array.isArray(data.mcpServers)
+    ? data.mcpServers
+    : {}) as Record<string, unknown>;
+  if (JSON.stringify(servers.hermit) === JSON.stringify(HERMIT_MCP_ENTRY)) return;
+  const next = { ...data, mcpServers: { ...servers, hermit: HERMIT_MCP_ENTRY } };
+  // Atomic: a concurrent turn reading a half-written file would fail its MCP
+  // load — and a failed MCP load must never be what a turn dies of.
+  fs.mkdirSync(home, { recursive: true });
+  const tmp = path.join(home, `.mcp.json.${process.pid}.tmp`);
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
+  fs.renameSync(tmp, file);
 }
 
 // ── usage, read back out of kimi's own session log ──────────────────────────
@@ -477,16 +556,19 @@ export function turnFailureMessage(a: {
   code: number | null;
   signal: string | null;
   sawContent: boolean;
-  silenceKill: { stdoutQuietMs: number; wireQuietMs: number | null } | null;
+  silenceKill: { stdoutQuietMs: number; wireQuietMs: number | null; cpuAdvanced: boolean | null } | null;
   stderrTail: string;
 }): string {
   const min = (ms: number) => `${Math.round(ms / 60_000)}min`;
   if (a.silenceKill) {
     const log = a.silenceKill.wireQuietMs === null
-      ? 'and it has no session log on disk to check against'
-      : `and its session log had been quiet for ${min(a.silenceKill.wireQuietMs)} too`;
-    return `the gateway stopped this turn: kimi printed nothing for ${min(a.silenceKill.stdoutQuietMs)}, ${log}. `
-      + 'Send another message and kimi picks the conversation up where it left off.';
+      ? 'it has no session log on disk to check against'
+      : `its session log had been quiet for ${min(a.silenceKill.wireQuietMs)} too`;
+    // null = ps could not say; the kill verdict then rests on the two silences
+    // alone, and the message claims nothing it does not know.
+    const cpu = a.silenceKill.cpuAdvanced === false ? ', and its process had burned no CPU' : '';
+    return `the gateway stopped this turn: kimi printed nothing for ${min(a.silenceKill.stdoutQuietMs)}, ${log}${cpu} — `
+      + 'wedged, not thinking. Send another message and kimi picks the conversation up where it left off.';
   }
   const what = a.sawContent ? 'the turn ended part-way through' : 'the turn produced nothing';
   const tail = a.stderrTail.trim().slice(-400);
@@ -515,6 +597,36 @@ export function wireQuietMs(home: string, sessionId: string | null, now = Date.n
   }
   if (latest === -Infinity) return null;
   return Math.max(0, now - latest);
+}
+
+/**
+ * CPU time a process has burned, in ms — or null when ps cannot say (the
+ * process already exited, or a platform without `ps -o time=`).
+ *
+ * The watchdog's third opinion, after stdout and the session's log tree. Both
+ * of those go silent for the WHOLE length of one long model response — kimi
+ * flushes its wire log at step boundaries, and a single k3 response at max
+ * thinking effort has been measured past six minutes, with nothing saying it
+ * stays under fifteen (2026-08-29, a 401s single response). A process
+ * mid-response is parsing a stream and burns CPU; one deadlocked on a read
+ * does not. It is the only signal left that separates "thinking" from
+ * "wedged", and kimi's subagents run in-process, so one pid covers a swarm.
+ */
+export function childCpuMs(pid: number): number | null {
+  let out: string;
+  try {
+    out = execFileSync('ps', ['-o', 'time=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000 }).trim();
+  } catch {
+    return null;
+  }
+  // `time` prints [[dd-]hh:]mm:ss[.frac] — macOS omits the days/hours it can.
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(out);
+  if (!m) return null;
+  const days = Number(m[1] ?? 0);
+  const hours = Number(m[2] ?? 0);
+  const mins = Number(m[3]);
+  const secs = Number(m[4]);
+  return Math.round((((days * 24 + hours) * 60 + mins) * 60 + secs) * 1000);
 }
 
 // ── finding the session a live turn is writing to ───────────────────────────
@@ -755,6 +867,8 @@ export class KimiCodeRuntime implements AgentRuntime {
       existing.agentDirectory = session.agentDirectory;
       existing.modelPin = session.model?.trim() || null;
       existing.credentialId = session.credentialId ?? null;
+      existing.hermitTools = session.hermitTools !== false;
+      existing.isOrchestrator = session.isOrchestrator ?? false;
       // A handle that never learned its id — its only turn died before the
       // resume hint printed — adopts one the DB gained out of band (an
       // operator's recovery stamp carries exactly the id the hint would have).
@@ -797,6 +911,8 @@ export class KimiCodeRuntime implements AgentRuntime {
       modelPin: session.model?.trim() || null,
       credentialId: session.credentialId ?? null,
       chatOnly: session.chatOnly ?? false,
+      hermitTools: session.hermitTools !== false,
+      isOrchestrator: session.isOrchestrator ?? false,
       working: false,
       child: null,
       interrupted: false,
@@ -893,6 +1009,23 @@ export class KimiCodeRuntime implements AgentRuntime {
     const home = kimiHome();
     childEnv.KIMI_CODE_HOME = home;
 
+    if (h.hermitTools) {
+      // The stub reads its routing from the environment kimi's MCP layer
+      // inherits from this child (see HERMIT_MCP_ENTRY — no env block there on
+      // purpose). A cron fire (hermitTools false) gets none of this, and the
+      // stub it loads from the same mcp.json, finding no HERMIT_SESSION_ID,
+      // serves zero tools.
+      childEnv.HERMIT_SESSION_ID = h.sessionId;
+      childEnv.HERMIT_DASHBOARD_URL = DASHBOARD_URL;
+      childEnv.HERMIT_KEY = ASST_KEY;
+      if (h.isOrchestrator) childEnv.HERMIT_BRAIN = '1';
+      if (h.chatOnly) {
+        childEnv.HERMIT_CHAT_ONLY = '1';
+        childEnv.HERMIT_AGENT_DIR = h.agentDirectory;
+      }
+      ensureHermitMcpConfig(home);
+    }
+
     const spawnedAt = Date.now();
     const agentFile = h.chatOnly && !h.stampedSessionId ? chatOnlyAgentFile(h.agentDirectory, home) : null;
     const child = spawn(bin, kimiArgs(prompt, h.stampedSessionId, promptDir ? [promptDir] : [], agentFile), {
@@ -956,8 +1089,19 @@ export class KimiCodeRuntime implements AgentRuntime {
     let exited = false;
     // Set by the watchdog just before it fires, read by the exit handler: the
     // difference between "kimi died" and "we killed a turn that was working".
-    let silenceKill: { stdoutQuietMs: number; wireQuietMs: number | null } | null = null;
+    let silenceKill: { stdoutQuietMs: number; wireQuietMs: number | null; cpuAdvanced: boolean | null } | null = null;
     let lastStdoutAt = Date.now();
+    // CPU baseline for the wedge-or-thinking verdict (childCpuMs). Sampled at
+    // arm time so the fire-time sample has something to compare against;
+    // throttled so a burst of step-boundary lines does not spawn ps per line.
+    let cpuSample: { at: number; ms: number } | null = null;
+    const sampleCpu = (force = false): void => {
+      if (child.pid === undefined) return;
+      if (!force && cpuSample && Date.now() - cpuSample.at < 5_000) return;
+      const ms = childCpuMs(child.pid);
+      if (ms !== null) cpuSample = { at: Date.now(), ms };
+    };
+    sampleCpu(true);
     const silence = (delayMs: number): NodeJS.Timeout => setTimeout(() => {
       let quietMs = wireQuietMs(kimiHome(), h.stampedSessionId);
       if (quietMs === null || quietMs >= TURN_SILENCE_TIMEOUT_MS) {
@@ -983,13 +1127,34 @@ export class KimiCodeRuntime implements AgentRuntime {
           `[kimi] session=${h.sessionId.slice(0, 8)}: stdout quiet, but the session log was written `
           + `${Math.round(quietMs / 1000)}s ago (a swarm works in silence) — letting the turn run`,
         );
+        sampleCpu(true);
         watchdog = silence(remainder);
         return;
       }
-      silenceKill = { stdoutQuietMs: Date.now() - lastStdoutAt, wireQuietMs: quietMs };
+      // stdout silent AND the log tree silent — one question left: is the
+      // process burning CPU? A single long model response looks exactly like
+      // this (no stdout, no log writes until the step ends) and killing it was
+      // the 2026-08-29 bug's surviving blind spot. ps unanswerable (null) does
+      // NOT save a turn: missing data falls back to the old verdict, because a
+      // watchdog that cannot fire at all is worse than one with a blind spot.
+      const cpuBefore = cpuSample;
+      sampleCpu(true);
+      const cpuAdvanced = cpuBefore && cpuSample
+        ? cpuSample.ms > cpuBefore.ms && cpuSample.at - cpuBefore.at > 30_000
+        : null;
+      if (cpuAdvanced) {
+        console.warn(
+          `[kimi] session=${h.sessionId.slice(0, 8)}: stdout and log quiet, but the process burned `
+          + `${cpuSample!.ms - cpuBefore!.ms}ms of CPU — a long model call, not a wedge — letting the turn run`,
+        );
+        watchdog = silence(TURN_SILENCE_TIMEOUT_MS);
+        return;
+      }
+      silenceKill = { stdoutQuietMs: Date.now() - lastStdoutAt, wireQuietMs: quietMs, cpuAdvanced };
       console.warn(
         `[kimi] session=${h.sessionId.slice(0, 8)}: no output for ${TURN_SILENCE_TIMEOUT_MS / 60000}min `
-        + `(session log ${quietMs === null ? 'not found' : `quiet ${Math.round(quietMs / 1000)}s`}) — killing the turn`,
+        + `(session log ${quietMs === null ? 'not found' : `quiet ${Math.round(quietMs / 1000)}s`}`
+        + `${cpuAdvanced === false ? ', no CPU burned' : ''}) — killing the turn`,
       );
       child.kill('SIGKILL');
     }, delayMs).unref();

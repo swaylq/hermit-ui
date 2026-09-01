@@ -7,6 +7,7 @@ import {
   kimiArgs, kimiFallbackPaths, kimiHome, kimiProviderType, kimiSpawnEnv, resolveKimiCommand,
   scanWire, wireFileFor, wireQuietMs, discoverTurnSession, turnFailed, turnFailureMessage, isGoalPrompt,
   KimiCodeRuntime, CONFLICTING_KIMI_VARS, GATEWAY_ONLY_VARS,
+  ensureHermitMcpConfig, chatOnlyAgentFile, childCpuMs,
 } from './kimi-code';
 import type { ModelCredential } from '../pi-config';
 
@@ -560,19 +561,21 @@ test('re-scanning an unchanged log reads nothing and keeps the totals', () => {
 const KILL = { code: null, signal: 'SIGKILL', sawContent: true, stderrTail: 'total 48\ndrwx------ agents\n' };
 
 test('a watchdog kill says the gateway did it, and drops the stderr tail', () => {
-  const m = turnFailureMessage({ ...KILL, silenceKill: { stdoutQuietMs: 15 * 60_000, wireQuietMs: 16 * 60_000 } });
+  const m = turnFailureMessage({ ...KILL, silenceKill: { stdoutQuietMs: 15 * 60_000, wireQuietMs: 16 * 60_000, cpuAdvanced: false } });
   assert.match(m, /gateway stopped this turn/);
   assert.match(m, /nothing for 15min/);
   assert.match(m, /quiet for 16min/);
+  assert.match(m, /burned no CPU/);
   assert.ok(!m.includes('drwx'), 'tool output must not be pasted under the reason');
   assert.ok(!m.includes('SIGKILL'), 'the signal is our own doing, not a diagnosis');
   assert.match(m, /Send another message/);
 });
 
 test('a watchdog kill with no session log says so rather than inventing a number', () => {
-  const m = turnFailureMessage({ ...KILL, silenceKill: { stdoutQuietMs: 15 * 60_000, wireQuietMs: null } });
+  const m = turnFailureMessage({ ...KILL, silenceKill: { stdoutQuietMs: 15 * 60_000, wireQuietMs: null, cpuAdvanced: null } });
   assert.match(m, /no session log on disk/);
   assert.ok(!/quiet for/.test(m));
+  assert.ok(!/CPU/.test(m), 'ps could not say — the message must not either');
 });
 
 test('a real crash keeps the CLI reason, labelled and capped', () => {
@@ -586,4 +589,101 @@ test('a real crash keeps the CLI reason, labelled and capped', () => {
 test('a crash with nothing on stderr adds no empty label', () => {
   const m = turnFailureMessage({ code: 127, signal: null, sawContent: false, silenceKill: null, stderrTail: '   \n' });
   assert.equal(m, 'kimi exited 127 — the turn produced nothing');
+});
+
+// ── the hermit MCP entry in kimi's user-global mcp.json ─────────────────────
+// kimi has no --mcp-config flag; the user-global file is the one location that
+// loads without the workspace-trust prompt a headless turn can never answer.
+
+test('mcp.json is created when absent, with only the hermit entry', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kimi-mcp-'));
+  try {
+    ensureHermitMcpConfig(home);
+    const data = JSON.parse(fs.readFileSync(path.join(home, 'mcp.json'), 'utf8'));
+    assert.equal(data.mcpServers.hermit.command, 'node');
+    assert.equal(data.mcpServers.hermit.toolTimeoutMs, 14_700_000);
+    // No env block: the stub inherits HERMIT_* from the kimi process, so the
+    // machine key never sits at rest in this file.
+    assert.equal(data.mcpServers.hermit.env, undefined);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('mcp.json keeps the human’s own servers and refreshes a stale hermit entry', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kimi-mcp-'));
+  try {
+    const file = path.join(home, 'mcp.json');
+    fs.writeFileSync(file, JSON.stringify({
+      mcpServers: {
+        brave: { command: 'npx', args: ['-y', '@brave/brave-search-mcp-server'] },
+        hermit: { command: 'node', args: ['/old/path/mcp-stub.cjs'] },
+      },
+      otherTopLevelKey: { untouched: true },
+    }));
+    ensureHermitMcpConfig(home);
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(data.mcpServers.brave, { command: 'npx', args: ['-y', '@brave/brave-search-mcp-server'] });
+    assert.deepEqual(data.otherTopLevelKey, { untouched: true });
+    assert.equal(data.mcpServers.hermit.toolTimeoutMs, 14_700_000);
+    assert.notDeepEqual(data.mcpServers.hermit.args, ['/old/path/mcp-stub.cjs']);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a malformed mcp.json is left alone, not clobbered', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kimi-mcp-'));
+  try {
+    const file = path.join(home, 'mcp.json');
+    fs.writeFileSync(file, '{ not json');
+    ensureHermitMcpConfig(home);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{ not json');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a current mcp.json is not rewritten', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kimi-mcp-'));
+  try {
+    ensureHermitMcpConfig(home);
+    const file = path.join(home, 'mcp.json');
+    const before = fs.statSync(file).mtimeMs;
+    ensureHermitMcpConfig(home);
+    assert.equal(fs.statSync(file).mtimeMs, before);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ── the pure-chat profile's MCP names ───────────────────────────────────────
+// kimi's allowlist gates MCP tools by their qualified names, so memory_write —
+// the mode's only route to disk — has to be named or a pure-chat kimi session
+// forgets everything it worked out.
+
+test('the pure-chat profile allows the read-only hermit tools and denies the cron mutations', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kimi-profile-'));
+  try {
+    const body = fs.readFileSync(chatOnlyAgentFile('/tmp/some-agent', home), 'utf8');
+    for (const allowed of ['mcp__hermit__memory_write', 'mcp__hermit__attach_image', 'mcp__hermit__ask']) {
+      assert.ok(body.includes(`"${allowed}"`), `allowlist names ${allowed}`);
+    }
+    assert.ok(!body.includes('"mcp__hermit__cron_create"') || body.includes('disallowedTools'),
+      'cron_create appears only in the denylist');
+    const deny = body.split('\n').find((l) => l.startsWith('disallowedTools:'))!;
+    for (const denied of ['cron_create', 'cron_update', 'cron_delete']) {
+      assert.ok(deny.includes(`mcp__hermit__${denied}`), `denylist names ${denied}`);
+    }
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ── CPU time as the wedge-or-thinking verdict ───────────────────────────────
+
+test('childCpuMs reads a live process and declines a dead one', () => {
+  const mine = childCpuMs(process.pid);
+  assert.ok(mine !== null && mine >= 0, `this process has burned CPU, got ${mine}`);
+  assert.equal(childCpuMs(999_999_999), null);
 });
