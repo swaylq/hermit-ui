@@ -16,11 +16,16 @@
 // Returns { text, truncated }. `truncated` means the reply was longer than
 // MAX_INPUT_CHARS and only the head of it was rewritten — the note is already
 // appended to `text`, the flag is for the UI.
+//
+// A failure answers with a `reason` the client can act on, because the two
+// interesting failures are not retryable and a button that invites a retry is
+// a button that wastes taps: `not-configured` (no key on this deployment) and
+// `provider-refused` (the key's account is barred from the model — see below).
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
-import { plainSpeak, acceptPlainSpeak, MAX_INPUT_CHARS, TRUNCATED_NOTE, PLAIN_MODEL } from '@/server/plain-speak';
+import { plainSpeak, acceptPlainSpeak, providerRefused, MAX_INPUT_CHARS, TRUNCATED_NOTE, PLAIN_MODEL } from '@/server/plain-speak';
 
 // A whole reply per request, so this is the ceiling on one round trip. Anything
 // above MAX_INPUT_CHARS is cut rather than refused: a 40k-character reply is
@@ -46,11 +51,19 @@ export async function POST(req: NextRequest) {
   if (!raw.trim()) return NextResponse.json({ error: 'text required' }, { status: 400 });
   if (raw.length > HARD_CAP) return NextResponse.json({ error: 'text too large' }, { status: 413 });
 
-  const orKey = process.env.OPENROUTER_API_KEY;
+  // A DEDICATED KEY, falling back to the shared one. Measured 2026-09-02: two
+  // paid OpenRouter accounts, and Google answers 403 "The request is prohibited
+  // due to a violation of provider Terms Of Service" to every Gemini model on
+  // ONE of them while deepseek works fine on both. It is a property of the
+  // account, not of the request — the same key is refused from any machine. So
+  // a deployment whose OPENROUTER_API_KEY is on the wrong side of that can
+  // point THIS feature at a key Google will serve, without moving session
+  // titling and voice polish off the key they already use.
+  const orKey = process.env.OPENROUTER_PLAIN_API_KEY || process.env.OPENROUTER_API_KEY;
   // Not an error — the reader already has the reply. 503 is the signal the
   // client latches on to stop offering the button, the same contract
   // /api/translate and /api/transcribe/refine use.
-  if (!orKey) return NextResponse.json({ error: 'plain speak not configured' }, { status: 503 });
+  if (!orKey) return NextResponse.json({ error: 'plain speak not configured', reason: 'not-configured' }, { status: 503 });
 
   const session = await prisma.chatSession.findFirst({
     where: { id: sessionId, machineId: scope.machine.id, ...(scope.scopedAgent ? { agentName: scope.scopedAgent } : {}) },
@@ -65,11 +78,14 @@ export async function POST(req: NextRequest) {
     const out = await plainSpeak(orKey, src);
     if (!acceptPlainSpeak(src, out)) {
       console.error(`[plain-speak] gate rejected a ${out.length}-char ${PLAIN_MODEL} reply to a ${src.length}-char message`);
-      return NextResponse.json({ error: 'rewrite rejected' }, { status: 502 });
+      return NextResponse.json({ error: 'rewrite rejected', reason: 'rejected' }, { status: 502 });
     }
     return NextResponse.json({ text: truncated ? out + TRUNCATED_NOTE : out, truncated });
   } catch (e) {
     console.error('[plain-speak] failed —', String(e));
-    return NextResponse.json({ error: 'rewrite failed', detail: String(e) }, { status: 502 });
+    return NextResponse.json(
+      { error: 'rewrite failed', reason: providerRefused(e) ? 'provider-refused' : 'failed', detail: String(e) },
+      { status: 502 },
+    );
   }
 }

@@ -93,6 +93,20 @@ export function acceptPlainSpeak(src: string, out: string): boolean {
 }
 
 /**
+ * Did the model's provider refuse this KEY, rather than this request?
+ *
+ * Google answers 403 "The request is prohibited due to a violation of provider
+ * Terms Of Service" to every Gemini model on some OpenRouter accounts —
+ * measured 2026-09-02 on two paid accounts, one served and one refused, the
+ * same key refused from every machine. Retrying cannot help, and the reader
+ * should be told the deployment's key is the problem rather than be invited to
+ * tap again.
+ */
+export function providerRefused(e: unknown): boolean {
+  return /HTTP 403/.test(String(e));
+}
+
+/**
  * Rewrite one reply. Returns the plain-language version, or throws — every
  * caller treats a failure as "leave the original on screen".
  */

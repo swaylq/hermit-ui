@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptPlainSpeak, plainSpeakMessages } from './plain-speak';
+import { acceptPlainSpeak, plainSpeakMessages, providerRefused } from './plain-speak';
 
 // A reply of the shape this feature exists for: correct, dense, and unreadable
 // unless you already know what it is about.
@@ -56,4 +56,13 @@ test('plainSpeakMessages: the reply is data between markers, and the fence comes
   // And the reply itself is inside the markers, whole.
   const inside = user.split('<<<REPLY>>>')[1]?.split('<<<END_REPLY>>>')[0] ?? '';
   assert.equal(inside.trim(), REPLY);
+});
+
+test('providerRefused: a 403 from the provider is a key problem, not a retryable one', () => {
+  assert.equal(
+    providerRefused(new Error('OpenRouter google/gemini-3.7-flash HTTP 403: The request is prohibited due to a violation of provider Terms Of Service.')),
+    true,
+  );
+  assert.equal(providerRefused(new Error('OpenRouter google/gemini-3.7-flash HTTP 502: upstream')), false);
+  assert.equal(providerRefused(new Error('fetch failed')), false);
 });

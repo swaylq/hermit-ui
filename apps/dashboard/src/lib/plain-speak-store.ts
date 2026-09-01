@@ -30,6 +30,9 @@ import { currentScope, getTranslations, putTranslations, evictTranslationsLru } 
 /** Whole replies rather than paragraphs, so the memory tier holds fewer. */
 const MAX_ENTRIES = 200;
 
+const BLOCKED_NO_KEY = '这台 dashboard 没配 OPENROUTER_API_KEY，转述用不了。';
+const BLOCKED_REFUSED = '模型方拒绝了这台 dashboard 的 OpenRouter key（403），换一把 key 才行。';
+
 const done = new Map<string, string>();
 /** Keys that came back refused or threw. Cleared by `retryPlain` on a re-tap. */
 const failed = new Set<string>();
@@ -38,11 +41,16 @@ const inflight = new Set<string>();
 const diskAsked = new Set<string>();
 
 /**
- * Latched when the route answers 503 — the server has no OPENROUTER_API_KEY and
- * that will not change during this page load. Every later tap is answered from
- * memory instead of costing a doomed round trip.
+ * Why this deployment cannot rewrite anything — latched for the page load, and
+ * shown to the reader instead of a retry hint.
+ *
+ * Two failures are configuration, not bad luck: no key at all, and a key whose
+ * OpenRouter account the model's provider refuses (Google answers 403 to every
+ * Gemini model on some accounts — see server/plain-speak.ts). Neither changes
+ * while the page is open, so latching one stops every other message on screen
+ * from paying for the same answer.
  */
-let notConfigured = false;
+let blocked: string | null = null;
 /** The LRU is checked once per page load, on the first write. */
 let evictChecked = false;
 
@@ -72,9 +80,9 @@ export function plainFailed(key: string): boolean {
   return failed.has(key);
 }
 
-/** True once the server has said it has no key. The UI says so and stops asking. */
-export function plainUnavailable(): boolean {
-  return notConfigured;
+/** Why the feature is off for this deployment, or null while it is fine. */
+export function plainBlocked(): string | null {
+  return blocked;
 }
 
 export function plainPending(key: string): boolean {
@@ -98,7 +106,7 @@ function remember(key: string, text: string): void {
  * refused is dropped here.
  */
 export function requestPlain(sessionId: string, text: string): void {
-  if (notConfigured || !sessionId || !text.trim()) return;
+  if (blocked || !sessionId || !text.trim()) return;
   const key = plainKey(text);
   if (done.has(key) || failed.has(key) || inflight.has(key)) return;
   inflight.add(key);
@@ -130,12 +138,14 @@ async function run(key: string, sessionId: string, text: string): Promise<void> 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, text }),
     });
-    if (r.status === 503) {
-      notConfigured = true;
-      return;
-    }
     if (!r.ok) {
-      failed.add(key);
+      const reason = await r
+        .json()
+        .then((j: { reason?: string }) => j?.reason)
+        .catch(() => undefined);
+      if (reason === 'not-configured') blocked = BLOCKED_NO_KEY;
+      else if (reason === 'provider-refused') blocked = BLOCKED_REFUSED;
+      else failed.add(key);
       return;
     }
     const { text: out } = (await r.json()) as { text?: string };
@@ -192,7 +202,7 @@ export function resetPlainSpeakStore(): void {
   failed.clear();
   inflight.clear();
   diskAsked.clear();
-  notConfigured = false;
+  blocked = null;
   evictChecked = false;
   version = 0;
 }

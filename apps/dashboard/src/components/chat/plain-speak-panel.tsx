@@ -22,7 +22,7 @@ import {
   requestPlain,
   getPlain,
   plainFailed,
-  plainUnavailable,
+  plainBlocked,
   subscribePlain,
   plainVersion,
 } from '@/lib/plain-speak-store';
@@ -46,7 +46,7 @@ export function PlainSpeakPanel({ text, sessionId }: { text: string; sessionId: 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const failed = useMemo(() => plainFailed(key), [key, version]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const unavailable = useMemo(() => plainUnavailable(), [version]);
+  const blocked = useMemo(() => plainBlocked(), [version]);
 
   return (
     <div className="mt-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 space-y-1">
@@ -60,10 +60,10 @@ export function PlainSpeakPanel({ text, sessionId }: { text: string; sessionId: 
         <div className="text-sm text-foreground/90">
           <TypedText text={value} typing streamKey={`plain:${key}`} />
         </div>
-      ) : unavailable ? (
-        <div className="text-xs text-muted-foreground">
-          这台 dashboard 没配 <code className="font-mono">OPENROUTER_API_KEY</code>，转述用不了。
-        </div>
+      ) : blocked ? (
+        // Configuration, not bad luck — say which, and do not invite a retry
+        // that cannot work.
+        <div className="text-xs text-muted-foreground">{blocked}</div>
       ) : failed ? (
         <div className="text-xs text-muted-foreground">没转述成功。收起再点一次可以重试。</div>
       ) : (
