@@ -3,11 +3,11 @@
 // JSX) so both can import it without a cycle — app-sidebar ↔ settings-tabs already
 // depend on each other. This is also the source the future Settings sidebar reads.
 
-import { Boxes, BarChart3, Wrench, HardDriveUpload, Brain, SunMoon, Activity, HelpCircle, Cpu, BellRing, Layers, ShieldCheck, type LucideIcon } from 'lucide-react';
+import { Boxes, BarChart3, Wrench, HardDriveUpload, Brain, SunMoon, Activity, HelpCircle, Cpu, BellRing, Layers, ShieldCheck, Trash2, type LucideIcon } from 'lucide-react';
 
 export type SettingsTabKey =
   | 'skills' | 'memory' | 'usage' | 'ops' | 'system' | 'files' | 'appearance' | 'help' | 'models' | 'push'
-  | 'backends' | 'watchdogs';
+  | 'backends' | 'watchdogs' | 'trash';
 
 export const SETTINGS_TABS: { key: SettingsTabKey; label: string; href: string; Icon: LucideIcon }[] = [
   { key: 'usage', label: 'Usage', href: '/usage', Icon: BarChart3 },
@@ -17,6 +17,9 @@ export const SETTINGS_TABS: { key: SettingsTabKey; label: string; href: string; 
   { key: 'models', label: 'Models', href: '/models', Icon: Cpu },
   { key: 'ops', label: 'Operations', href: '/ops', Icon: Wrench },
   { key: 'system', label: 'System', href: '/system', Icon: Activity },
+  // Directly under System: the cleanup card there is what fills this, and the two
+  // are read together ("what did the sweep just take?").
+  { key: 'trash', label: 'Recycle bin', href: '/trash', Icon: Trash2 },
   { key: 'watchdogs', label: 'Watchdogs', href: '/watchdogs', Icon: ShieldCheck },
   { key: 'push', label: 'Push', href: '/push', Icon: BellRing },
   { key: 'files', label: 'File Station', href: '/file-station', Icon: HardDriveUpload },

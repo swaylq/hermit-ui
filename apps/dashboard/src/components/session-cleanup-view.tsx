@@ -10,36 +10,20 @@
 // only ever about the recycle bin.
 
 import { useState } from 'react';
-import { Archive, Trash2, RotateCcw, ShieldCheck, Brush } from 'lucide-react';
+import Link from 'next/link';
+import { Archive, Trash2, ShieldCheck, Brush } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogPortal, DialogOverlay } from '@/components/ui/dialog';
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { REASON_LABEL, BLOCKER_LABEL } from '@/lib/cleanup-labels';
 
 function fmtIdle(days: number): string {
   if (days < 1) return `${Math.max(1, Math.round(days * 24))}h`;
   if (days < 30) return `${Math.round(days)}d`;
   return `${Math.round(days / 30)}mo`;
-}
-
-function fmtBytes(n: number): string {
-  if (!n) return '—';
-  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
-  if (n < 1024 * 1024 * 1024) return `${Math.round(n / 1024 / 1024)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
-}
-
-// Days left before the purge tick takes it. Negative means it is already due and
-// the next tick (10 min) will do it — say so rather than printing "-3 days left".
-function fmtDue(trashedAt: Date | string | null | undefined, retainDays: number): string {
-  if (!trashedAt) return '';
-  const ms = (typeof trashedAt === 'string' ? Date.parse(trashedAt) : trashedAt.getTime()) + retainDays * 86_400_000 - Date.now();
-  if (!Number.isFinite(ms)) return '';
-  if (ms <= 0) return 'due now';
-  const d = ms / 86_400_000;
-  return d < 1 ? `${Math.max(1, Math.round(ms / 3.6e6))}h left` : `${Math.round(d)}d left`;
 }
 
 function fmtAgo(d: Date | string | null | undefined): string {
@@ -63,31 +47,6 @@ type Verdict = {
   blockedBy: string | null;
 };
 
-// Mirrors server/session-cleanup.ts. Duplicated rather than imported so a client
-// bundle never pulls in the prisma-importing module.
-const REASON_LABEL: Record<string, string> = {
-  'dispatch-done': 'finished dispatch — its result was already reported back',
-  stillborn: 'never got a reply — a failed spawn, not a conversation',
-  empty: 'no messages at all',
-  'agent-trashed': 'its agent is in the trash',
-  idle: 'archived and untouched since',
-  manual: 'cleaned by hand',
-  blocked: 'something still points at it',
-};
-
-const BLOCKER_LABEL: Record<string, string> = {
-  cron: 'a cron reports into it',
-  unread: 'its last message is unread',
-  interaction: 'waiting on an answer from you',
-  queued: 'has an undelivered message',
-  unanswered: 'flagged: you asked, nobody answered',
-  working: 'working right now',
-  dispatch: 'wired to a Brain dispatch or takeover',
-  grouped: 'filed in a group',
-  named: 'you gave it a name',
-  kept: 'you marked it Keep',
-};
-
 function SessionLine({ v }: { v: Verdict }) {
   return (
     <span className="min-w-0 flex-1 truncate">
@@ -106,11 +65,6 @@ export function SessionCleanupView() {
   const cfg = trpc.chat.cleanupConfig.useQuery().data;
   const host = trpc.hosts.stat.useQuery(undefined, { refetchInterval: 60_000 }).data?.stat;
   const preview = trpc.chat.cleanupPreview.useQuery(undefined, { refetchInterval: 60_000 }).data;
-  // Unconditional: the bin is its own card below, always on screen. It used to hang
-  // off a "Trash (78)" text link nobody found — a recycle bin you have to know about
-  // is not a recycle bin, it is a hiding place.
-  const trash = trpc.chat.listTrashed.useQuery().data;
-
   const invalidate = () => {
     void utils.chat.cleanupPreview.invalidate();
     void utils.chat.cleanupConfig.invalidate();
@@ -120,9 +74,7 @@ export function SessionCleanupView() {
 
   const apply = trpc.chat.cleanupApply.useMutation({ onSuccess: invalidate });
   const trashSessions = trpc.chat.trashSessions.useMutation({ onSuccess: invalidate });
-  const restore = trpc.chat.restoreSession.useMutation({ onSuccess: invalidate });
   const keep = trpc.chat.keepSession.useMutation({ onSuccess: invalidate });
-  const purgeNow = trpc.chat.purgeNow.useMutation({ onSuccess: invalidate });
   const setConfig = trpc.chat.setCleanupConfig.useMutation({ onSuccess: () => void utils.chat.cleanupConfig.invalidate() });
 
   // The click: do the reversible work, then open the review for the rest. Nothing
@@ -164,14 +116,22 @@ export function SessionCleanupView() {
         <div className="mb-2 flex items-center justify-between">
           <span className="text-sm font-semibold">Session cleanup</span>
           <span className="text-xs tabular-nums text-muted-foreground">
-            {preview?.total ?? '—'} sessions{(preview?.trashed ?? 0) > 0 ? ` · ${preview?.trashed} in trash` : ''}
+            {preview?.total ?? '—'} sessions
+            {(preview?.trashed ?? 0) > 0 && (
+              <>
+                {' · '}
+                <Link href="/trash" className="underline-offset-2 hover:text-foreground hover:underline">
+                  {preview?.trashed} in the bin
+                </Link>
+              </>
+            )}
           </span>
         </div>
 
         <p className="mb-3 text-xs text-muted-foreground">
           Archiving takes a conversation out of the sidebar and puts its process to sleep. It runs
-          immediately and undoes in a click. The recycle bin is the only step that removes anything,
-          and it always asks first.
+          immediately and undoes in a click. The <Link href="/trash" className="underline underline-offset-2 hover:text-foreground">recycle bin</Link>{' '}
+          is the only step that removes anything, and it always asks first.
         </p>
 
         <div className="space-y-1 text-xs">
@@ -237,79 +197,6 @@ export function SessionCleanupView() {
             ? `Last run ${fmtAgo(cfg.lastCleanupAt)}${cfg.lastCleanupSummary ? ` — archived ${cfg.lastCleanupSummary.archived ?? 0}, binned ${cfg.lastCleanupSummary.trashed ?? 0}${cfg.lastCleanupSummary.auto ? ' (auto)' : ''}` : ''}`
             : 'Never run'}
         </p>
-      </Card>
-
-      {/* The recycle bin, as its own card rather than a link inside the one above:
-          it is the only place in the product where something is waiting to be
-          permanently deleted, and the countdown is only useful if you see it
-          without going looking. */}
-      <Card className="mt-4 p-4">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-sm font-semibold">Recycle bin</span>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            {trash?.rows.length ?? 0} session{(trash?.rows.length ?? 0) === 1 ? '' : 's'}
-            {(trash?.uploadBytesTotal ?? 0) > 0 ? ` · ${fmtBytes(trash?.uploadBytesTotal ?? 0)} of uploads` : ''}
-          </span>
-        </div>
-
-        <div className="mb-3 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
-          <span>Deleted permanently after</span>
-          <input
-            type="number"
-            min={1}
-            max={365}
-            key={cfg?.trashRetainDays ?? 14}
-            defaultValue={cfg?.trashRetainDays ?? 14}
-            onBlur={(e) => {
-              const v = Math.round(Number(e.target.value));
-              if (v >= 1 && v <= 365 && v !== cfg?.trashRetainDays) setConfig.mutate({ trashRetainDays: v });
-            }}
-            className="w-14 rounded border border-border bg-background px-1.5 py-0.5 text-right text-foreground tabular-nums"
-          />
-          <span>days in here — the conversation, its messages, its transcript and the files it uploaded.</span>
-        </div>
-
-        <div className="max-h-72 space-y-0.5 overflow-y-auto">
-          {(trash?.rows.length ?? 0) === 0 && <p className="py-2 text-xs text-muted-foreground">The bin is empty.</p>}
-          {trash?.rows.map((r) => (
-            <div key={r.id} className="flex items-center gap-2 rounded-md px-1 py-1.5 text-xs">
-              <span className="min-w-0 flex-1 truncate">
-                <span className="font-medium">{r.agentName}</span>
-                <span className="text-muted-foreground"> · {r.title || r.preview || 'untitled'}</span>
-              </span>
-              <span className="hidden shrink-0 text-muted-foreground/70 sm:inline">{REASON_LABEL[r.trashReason ?? ''] ?? r.trashReason}</span>
-              {r.uploadBytes > 0 && (
-                <span className="hidden w-16 shrink-0 text-right tabular-nums text-muted-foreground/70 sm:inline">{fmtBytes(r.uploadBytes)}</span>
-              )}
-              <span className="w-16 shrink-0 text-right tabular-nums text-muted-foreground" title={`binned ${fmtAgo(r.trashedAt)}`}>
-                {fmtDue(r.trashedAt, trash.retainDays)}
-              </span>
-              <button
-                type="button"
-                title="Restore"
-                onClick={() => restore.mutate({ id: r.id })}
-                className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                title="Delete now — irreversible"
-                onClick={async () => {
-                  if (await confirm({
-                    title: 'Delete permanently?',
-                    message: 'The conversation, its messages, its transcript and any files it uploaded are gone. This cannot be undone.',
-                    confirmLabel: 'Delete',
-                    danger: true,
-                  })) purgeNow.mutate({ id: r.id });
-                }}
-                className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-rose-500 transition-colors cursor-pointer"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
       </Card>
 
       <Dialog open={open} onOpenChange={setOpen}>
