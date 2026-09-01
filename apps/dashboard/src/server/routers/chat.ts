@@ -36,6 +36,7 @@ import {
   MAX_PER_RUN,
   type CleanupReason,
 } from '../session-cleanup';
+import { deleteSessionUploads, sessionUploadBytesMany } from '../session-uploads';
 
 const ContentBlock = z.union([
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -734,6 +735,7 @@ export const chatRouter = router({
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
       ctx.assertAgent(s.agentName);
       await prisma.chatSession.delete({ where: { id: input.id } });
+      await deleteSessionUploads([input.id]);
       return { ok: true };
     }),
 
@@ -1688,7 +1690,16 @@ export const chatRouter = router({
         trashReason: true, lastMessageAt: true, rssMb: true, contextTokens: true,
       },
     });
-    return { rows, retainDays: ctx.machine.trashRetainDays };
+    // What purging these would actually free. Read off the filesystem rather than
+    // stored on the row: uploads arrive from two different routes (the composer and
+    // the agent's attach_*), and a counter maintained in two places is a counter that
+    // eventually disagrees with the disk. Bounded by the `take` above.
+    const bytes = await sessionUploadBytesMany(rows.map((r) => r.id));
+    return {
+      rows: rows.map((r) => ({ ...r, uploadBytes: bytes.get(r.id) ?? 0 })),
+      uploadBytesTotal: [...bytes.values()].reduce((a, b) => a + b, 0),
+      retainDays: ctx.machine.trashRetainDays,
+    };
   }),
 
   // Take one back out of the bin. Restores it to exactly what it was — archived if
@@ -1751,18 +1762,31 @@ export const chatRouter = router({
     });
   }),
 
-  // Gateway confirms the pane is dead and the transcript is gone → drop the row.
-  // ChatMessage / Interaction cascade on their FKs; Cron.reportSessionId is
-  // SET NULL, which is why a cron pointing here is a hard blocker upstream — by
-  // the time we get here nothing should be pointing at these rows at all.
+  // Gateway confirms the pane is dead and the transcript is gone → drop the row,
+  // then the files it uploaded. ChatMessage / Interaction cascade on their FKs;
+  // Cron.reportSessionId is SET NULL, which is why a cron pointing here is a hard
+  // blocker upstream — by the time we get here nothing should be pointing at these
+  // rows at all.
+  //
+  // Uploads live on the DASHBOARD's disk (`<UPLOAD_DIR>/<sessionId>/`), not the
+  // machine's, which is why the gateway can delete the transcript but not these,
+  // and why the last step of the purge happens here rather than there.
   ackPurged: gatewayProcedure
     .input(z.object({ sessionIds: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
       if (input.sessionIds.length === 0) return { ok: true, purged: 0 };
-      const r = await prisma.chatSession.deleteMany({
+      // Which ids the WHERE actually matches, resolved before the delete: `deleteMany`
+      // returns a count, and deleting the uploads of a session whose row survived
+      // (wrong machine, restored a second ago) would gut a live conversation.
+      const rows = await prisma.chatSession.findMany({
         where: { id: { in: input.sessionIds }, machineId: ctx.machine.id, trashedAt: { not: null } },
+        select: { id: true },
       });
-      return { ok: true, purged: r.count };
+      if (rows.length === 0) return { ok: true, purged: 0 };
+      const ids = rows.map((row) => row.id);
+      const r = await prisma.chatSession.deleteMany({ where: { id: { in: ids }, machineId: ctx.machine.id } });
+      const files = await deleteSessionUploads(ids);
+      return { ok: true, purged: r.count, uploadDirs: files.dirs, uploadBytes: files.bytes };
     }),
 
   // ── Brain dispatch-watcher (docs/brain-design.md Phase 2) ──────────────────
