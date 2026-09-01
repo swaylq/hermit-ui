@@ -5,11 +5,12 @@
 // renders a conversation at 60% occupancy as a comfortable 15% bar. The number
 // under it was never wrong; the fraction was.
 //
-// Only codex is corrected here. claude-tmux keeps 1M (it is right), and pi keeps
-// it too — pi's real window varies per machine-configured model and the gateway
-// already tracks that in pi-model-limits.ts, which has no route to the client.
-// Fixing pi means plumbing that through, which is a separate change with its own
-// blast radius; quietly guessing here would be the same class of bug this fixes.
+// Codex and kimi-code are corrected here. claude-tmux keeps 1M (it is right),
+// and pi keeps it too — pi's real window varies per machine-configured model
+// and the gateway already tracks that in pi-model-limits.ts, which has no
+// route to the client. Fixing pi means plumbing that through, which is a
+// separate change with its own blast radius; quietly guessing here would be
+// the same class of bug this fixes.
 
 /** Claude Opus 5's window, and the historical default for every backend. */
 export const DEFAULT_CONTEXT_WINDOW = 1_000_000;
@@ -50,6 +51,34 @@ export function codexContextWindow(model: string | null | undefined): number {
 }
 
 /**
+ * Kimi Code model -> context window, longest matching prefix wins.
+ *
+ * The numbers are the credential's own modelLimits (Settings → Models), kept in
+ * step by hand: k3 runs its real 1M window, the 256k variants would otherwise
+ * read a genuinely full window as a quarter-full bar.
+ */
+const KIMI_WINDOWS: ReadonlyArray<{ prefix: string; window: number }> = [
+  // Ordered longest-first so `k3-256k` is not shadowed by `k3`.
+  { prefix: 'k3-256k', window: 262_144 },
+  { prefix: 'kimi-for-coding', window: 262_144 },
+  { prefix: 'k3', window: 1_048_576 },
+];
+
+/**
+ * What kimi-code gets when it names a model this table has never heard of: the
+ * CLI's own fallback. Without KIMI_MODEL_MAX_CONTEXT_SIZE the CLI assumes
+ * 262,144 for every env-configured model and compacts there, so a wider bar
+ * would be lying in the dangerous direction.
+ */
+export const KIMI_DEFAULT_WINDOW = 262_144;
+
+export function kimiContextWindow(model: string | null | undefined): number {
+  const id = (model ?? '').trim().toLowerCase();
+  if (!id) return KIMI_DEFAULT_WINDOW;
+  return KIMI_WINDOWS.find((m) => id.startsWith(m.prefix))?.window ?? KIMI_DEFAULT_WINDOW;
+}
+
+/**
  * The denominator for a session's context bar.
  *
  * dsh deliberately takes the default: its catalog (dsh-llm-deepseek) declares
@@ -59,5 +88,7 @@ export function contextWindowFor(
   runtime: string | null | undefined,
   model?: string | null,
 ): number {
-  return runtime === 'codex-exec' ? codexContextWindow(model) : DEFAULT_CONTEXT_WINDOW;
+  if (runtime === 'codex-exec') return codexContextWindow(model);
+  if (runtime === 'kimi-code') return kimiContextWindow(model);
+  return DEFAULT_CONTEXT_WINDOW;
 }

@@ -55,3 +55,20 @@ test('claude and pi keep the previous denominator', () => {
   assert.equal(contextWindowFor(null, null), DEFAULT_CONTEXT_WINDOW);
   assert.equal(contextWindowFor(undefined, undefined), DEFAULT_CONTEXT_WINDOW);
 });
+
+// The kimi-code half of the fix: k3's real window is 1M, but the 256k variants
+// on the same credential rendered a full window as a quarter-full bar.
+test('kimi-code models divide by their own windows', () => {
+  assert.equal(contextWindowFor('kimi-code', 'k3'), 1_048_576);
+  assert.equal(contextWindowFor('kimi-code', 'k3-256k'), 262_144);
+  assert.equal(contextWindowFor('kimi-code', 'kimi-for-coding'), 262_144);
+  assert.equal(contextWindowFor('kimi-code', 'kimi-for-coding-highspeed'), 262_144);
+});
+
+// The CLI's own fallback when nothing declares a window is 262,144 — the bar
+// repeats THAT number rather than inventing a wider one, because a bar that
+// over-reads the window is the dangerous direction (compaction arrives first).
+test('an unknown kimi model gets the CLI fallback, not 1M', () => {
+  assert.equal(contextWindowFor('kimi-code', null), 262_144);
+  assert.equal(contextWindowFor('kimi-code', 'k4-unreleased'), 262_144);
+});

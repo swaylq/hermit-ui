@@ -53,3 +53,10 @@ test('a malformed override falls back to the table instead of pinning nonsense',
 test('an override for an unknown model still leaves unset fields unset', () => {
   assert.deepEqual(modelLimitsFor('kimi-k3', { 'kimi-k3': { maxTokens: 8_000 } }), { maxTokens: 8_000 });
 });
+
+test('the kimi families resolve, longest prefix first', () => {
+  assert.deepEqual(modelLimitsFor('k3'), { contextWindow: 1_048_576, maxTokens: 131_072 });
+  assert.deepEqual(modelLimitsFor('k3-256k'), { contextWindow: 262_144, maxTokens: 131_072 });
+  assert.deepEqual(modelLimitsFor('kimi-for-coding'), { contextWindow: 262_144, maxTokens: 131_072 });
+  assert.deepEqual(modelLimitsFor('kimi-for-coding-highspeed'), { contextWindow: 262_144, maxTokens: 131_072 });
+});

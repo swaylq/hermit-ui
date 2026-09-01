@@ -39,6 +39,15 @@ const FAMILIES: ReadonlyArray<{ prefix: string; contextWindow: number; maxTokens
   { prefix: 'claude-fable-5', contextWindow: 1_000_000, maxTokens: 128_000 },
   { prefix: 'claude-mythos-5', contextWindow: 1_000_000, maxTokens: 128_000 },
   { prefix: 'claude-haiku-4-5', contextWindow: 200_000, maxTokens: 64_000 },
+  // The Kimi Code subscription's models. Not from pi's catalog — from the
+  // kimi-code credential's own modelLimits (Settings → Models), duplicated here
+  // so a credential that names none still spawns kimi with the right
+  // KIMI_MODEL_MAX_CONTEXT_SIZE; the CLI's own fallback is 262,144 for every
+  // env model, which would compact a k3 session at a quarter of its window.
+  // Longest prefix first so `k3-256k` is not shadowed by `k3`.
+  { prefix: 'k3-256k', contextWindow: 262_144, maxTokens: 131_072 },
+  { prefix: 'kimi-for-coding', contextWindow: 262_144, maxTokens: 131_072 },
+  { prefix: 'k3', contextWindow: 1_048_576, maxTokens: 131_072 },
 ];
 
 /** A relay may expose `anthropic/claude-opus-5`; it is the same model. */
