@@ -1,6 +1,7 @@
 # Pure-chat mode
 
-A session ticked **Pure chat** in the new-chat form spawns its child with a
+A session ticked **Pure chat** in the new-chat form — or started from the folded
+eye at the left of any session's chip row — spawns its child with a
 read-only tool surface: it can look at files and search the web, it cannot
 write, edit, run commands or spawn sub-agents. `ChatSession.chatOnly`, default
 false, decided when the session is opened.
@@ -176,12 +177,13 @@ way is a gate, and a missed one loses the field **silently**.
 
 ```
 new-chat-pane.tsx  →  chat.createSession (zod input + create data)
+schedule-bar.tsx   →  the same chat.createSession, via the chat page
                    →  ChatSession.chatOnly
 chat.pollPending select  →  api.ts pollChatPending type
                          →  chat-runner.ts PendingSession
                          →  runtime.ensure({ chatOnly })
                          →  each backend's boot()
-chat.getSession / listSessions / sessionDetail selects  →  the header chip
+chat.getSession / listSessions / sessionDetail selects  →  the marker in the chip row
 ```
 
 `listSessions` needs it too, not only `getSession`: the chat page's `session` is
@@ -192,9 +194,18 @@ three carry.
 
 This is a property of the child process, not a permission checked per call.
 Flipping it on a live session would do nothing until the child respawns, which
-is why there is no toggle in the session detail sheet — only a chip in the
-header stating what the session is. A conversation that wants the other mode
-starts a new session.
+is why nothing offers to switch one. A conversation that wants the other mode
+starts a new session, and the chip row above the composer carries both halves of
+that: a pure-chat session shows a dashed `pure chat` marker there in place of the
+row's usual work chips, and an ordinary session shows a folded eye icon that
+opens a NEW pure-chat session with the same agent and backend — the conversation
+you were in is untouched.
+
+The eye is folded to a 28px icon and takes a second tap, with the same 350ms
+guard `ConfirmIconButton` uses, because pressing it navigates away. Its two taps
+land on the same pixels, and the row is left-anchored, so the action sits FIRST
+in the opened chip — the mirror of that component, which is right-anchored and
+therefore puts confirm last.
 
 ## Adding a backend
 

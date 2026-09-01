@@ -1870,6 +1870,38 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const startAutonomy = useCallback(() => pickPrompt(AUTONOMY_TEMPLATE), [pickPrompt]);
   const startPerfect = useCallback(() => pickPrompt(PERFECT_TEMPLATE), [pickPrompt]);
 
+  // The pure-chat chip in that same row. Unlike its four neighbours it does not
+  // fill the composer — it opens a NEW read-only session with this agent and
+  // navigates there, leaving this conversation exactly as it is.
+  //
+  // A new session rather than a switch because the read-only tool surface is
+  // decided when the child process is spawned (docs/chat-only-mode.md): setting
+  // the flag on a live session would change nothing until it respawned.
+  //
+  // Same createSession mutation as the header's new-chat button, so both share
+  // one navigate-on-success.
+  //
+  // The mutation is destructured first because the dependency linter reads a
+  // member expression on a mutable object as "the whole object" — `mutate` and
+  // `isPending` as plain consts keep the dep list honest instead of silenced.
+  const { mutate: createChat, isPending: creatingChat } = newAgentChat;
+  const startPureChat = useCallback(() => {
+    const agentName = session?.agentName;
+    if (!agentName || creatingChat) return;
+    createChat({
+      agentName,
+      chatOnly: true,
+      // Same backend as the conversation you are in — including "no pin at
+      // all": a null column means "inherit the agent's default", and omitting
+      // the field inherits the same way, so a session that never pinned a
+      // backend does not acquire one on the way out.
+      ...(session?.runtime ? { runtime: session.runtime } : {}),
+      ...(session?.runtimeMode ? { runtimeMode: session.runtimeMode } : {}),
+      // No model, deliberately — the same call the new-chat form makes. The
+      // model comes from the backend's own default, then its credential's.
+    });
+  }, [session?.agentName, session?.runtime, session?.runtimeMode, creatingChat, createChat]);
+
   // The header's secondary actions, rendered TWICE (inline on ≥sm, in the mobile
   // tray on phones) — one definition so the two can't drift. Only one is visible
   // at a time, so the duplicated ConfirmIconButton arm-state is harmless.
@@ -2486,6 +2518,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             onStartCron={startCron}
             onStartAutonomy={startAutonomy}
             onStartPerfect={startPerfect}
+            onStartPureChat={startPureChat}
+            pureChatBusy={creatingChat}
             takeover={
               showTakeover
                 ? {
