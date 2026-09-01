@@ -52,12 +52,37 @@ export type ActivityState = {
   sessionState: 'idle' | 'running' | 'requires_action' | null;
   /** Set while the API is being retried; cleared by the next successful frame. */
   retry: { attempt: number; maxRetries: number; delayMs: number; atMs: number } | null;
-  /** Live background tasks — REPLACE semantics, the payload is the whole set. */
-  background: { taskId: string; description: string }[];
+  /**
+   * Live background tasks, keyed by task_id.
+   *
+   * The CLI's `background_tasks_changed` payload is the WHOLE set every time, so
+   * this is rebuilt on each frame — but a task keeps the moment it was FIRST
+   * seen, which is the only place an age can come from. That age is the point:
+   * "background" on its own cannot tell a 3-second build from a `du` over
+   * ~/Library that will never finish, and both look identical in the sidebar.
+   */
+  background: Map<string, BackgroundTask>;
 };
 
+/** One thing running outside the turn — a backgrounded Bash, or a subagent. */
+export type BackgroundTask = {
+  taskId: string;
+  /** The Bash `description` / the subagent's task, as the CLI reported it. */
+  description: string;
+  /** First frame this id appeared in. Survives every later REPLACE. */
+  startedAtMs: number;
+};
+
+/**
+ * How many background tasks the snapshot names. Past a handful the list stops
+ * being a thing you read and starts being weight on a column rewritten every 8s
+ * for every session on the machine; `backgroundCount` still says how many there
+ * really are.
+ */
+const BACKGROUND_LIST_CAP = 6;
+
 export function newActivityState(): ActivityState {
-  return { tools: new Map(), tasks: new Map(), status: null, sessionState: null, retry: null, background: [] };
+  return { tools: new Map(), tasks: new Map(), status: null, sessionState: null, retry: null, background: new Map() };
 }
 
 /**
@@ -87,6 +112,15 @@ export type RuntimeActivity = {
   retryInSec?: number;
   /** How many tasks are running in the background, when any are. */
   backgroundCount?: number;
+  /**
+   * The background tasks themselves, oldest first — what each one is and how
+   * long it has been going.
+   *
+   * `backgroundCount` stays the authoritative number; this list is capped, so a
+   * session that fires twenty of them does not put twenty descriptions in a
+   * column every snapshot rewrites.
+   */
+  backgroundTasks?: { id: string; description: string; elapsedSec: number }[];
 };
 
 /** The first line of whatever identifies this tool call, capped for a chip. */
@@ -194,10 +228,25 @@ export function applyActivityMessage(st: ActivityState, msg: unknown, nowMs: num
       return;
     }
     if (m.subtype === 'background_tasks_changed') {
-      // REPLACE semantics: the payload is every live background task.
-      st.background = Array.isArray(m.tasks)
-        ? m.tasks.map((t: any) => ({ taskId: String(t?.task_id ?? ''), description: String(t?.description ?? '') }))
-        : [];
+      // REPLACE semantics: the payload is every live background task. Rebuilt
+      // rather than mutated so a task that vanished is gone — but carried over
+      // by id, so `startedAtMs` is when the task started and not when the CLI
+      // last happened to mention it. A description is likewise kept when a later
+      // frame omits it; losing the only human-readable name for a task because
+      // one frame was terse would be the worst kind of flicker.
+      const next = new Map<string, BackgroundTask>();
+      for (const t of Array.isArray(m.tasks) ? m.tasks : []) {
+        const id = String((t as any)?.task_id ?? '');
+        if (!id) continue;
+        const prev = st.background.get(id);
+        const desc = String((t as any)?.description ?? '').trim();
+        next.set(id, {
+          taskId: id,
+          description: desc || prev?.description || '',
+          startedAtMs: prev?.startedAtMs ?? nowMs,
+        });
+      }
+      st.background = next;
       return;
     }
     return;
@@ -232,7 +281,17 @@ export function elapsedSecOf(t: RunningTool, nowMs: number): number {
  * pane could not report at all, so a limited session just looked hung.
  */
 export function describeActivity(st: ActivityState, nowMs: number): RuntimeActivity | null {
-  const backgroundCount = st.background.length || undefined;
+  // Oldest first: the one that has been running longest is the one worth naming
+  // and the one most likely to be stuck.
+  const bg = [...st.background.values()].sort((a, b) => a.startedAtMs - b.startedAtMs);
+  const backgroundCount = bg.length || undefined;
+  const backgroundTasks = bg.length
+    ? bg.slice(0, BACKGROUND_LIST_CAP).map((t) => ({
+        id: t.taskId,
+        description: t.description || 'background task',
+        elapsedSec: Math.max(0, Math.floor((nowMs - t.startedAtMs) / 1000)),
+      }))
+    : undefined;
 
   if (st.retry) {
     const waited = nowMs - st.retry.atMs;
@@ -245,11 +304,12 @@ export function describeActivity(st: ActivityState, nowMs: number): RuntimeActiv
       maxRetries: st.retry.maxRetries,
       retryInSec: left,
       backgroundCount,
+      backgroundTasks,
     };
   }
 
   if (st.status === 'compacting') {
-    return { kind: 'compacting', label: 'compacting', detail: 'summarising the conversation', backgroundCount };
+    return { kind: 'compacting', label: 'compacting', detail: 'summarising the conversation', backgroundCount, backgroundTasks };
   }
 
   // A subagent outranks its own inner tool: "which subagent" is the useful
@@ -261,6 +321,7 @@ export function describeActivity(st: ActivityState, nowMs: number): RuntimeActiv
       label: task.subagentType ?? 'subagent',
       detail: [task.description, task.lastTool].filter(Boolean).join(' · ') || undefined,
       backgroundCount,
+      backgroundTasks,
     };
   }
 
@@ -275,11 +336,12 @@ export function describeActivity(st: ActivityState, nowMs: number): RuntimeActiv
       detail: t.detail ?? undefined,
       elapsedSec: elapsedSecOf(t, nowMs),
       backgroundCount,
+      backgroundTasks,
     };
   }
 
   if (st.status === 'requesting') {
-    return { kind: 'thinking', label: 'thinking', backgroundCount };
+    return { kind: 'thinking', label: 'thinking', backgroundCount, backgroundTasks };
   }
 
   // Nothing in the foreground, but work is still going on somewhere.
@@ -287,8 +349,13 @@ export function describeActivity(st: ActivityState, nowMs: number): RuntimeActiv
     return {
       kind: 'background',
       label: 'background',
-      detail: st.background[0]?.description || undefined,
+      detail: backgroundTasks?.[0]?.description || undefined,
+      // The age of the OLDEST task, so the chip reads "background · 1h 28m"
+      // rather than a bare "background" that says the same thing at 3 seconds
+      // and at three hours.
+      elapsedSec: backgroundTasks?.[0]?.elapsedSec,
       backgroundCount,
+      backgroundTasks,
     };
   }
 

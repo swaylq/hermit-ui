@@ -36,6 +36,7 @@ import {
 } from '@/lib/runtime-labels';
 import { availableBackends, backendById, DEFAULT_BACKEND_ID } from '@/lib/backends';
 import { isPiMode, piModeLabel, PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, type PiMode } from '@/lib/pi-modes';
+import { backgroundTaskList, backgroundOutstanding, shortDuration } from '@/lib/session-status';
 
 function Row({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
   return (
@@ -58,6 +59,12 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 const DASH = <span className="text-muted-foreground/50">—</span>;
+
+/** How many background tasks a snapshot claims, for the "cannot say which" line. */
+function bgCount(activity: unknown): number {
+  const n = (activity as { backgroundCount?: unknown } | null)?.backgroundCount;
+  return typeof n === 'number' && n > 0 ? n : 0;
+}
 
 export function SessionDetailSheet({
   sessionId,
@@ -286,6 +293,52 @@ export function SessionDetailSheet({
 
         {d && (
           <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5 animate-in fade-in-0">
+            {/* What is running OUTSIDE the turn.
+                First, and only when there is any. This sheet opens from the
+                status chip now, and when that chip says "background" this is
+                the answer it was tapped for — a permanent empty row above the
+                backend picker would be neither.
+
+                A backgrounded Bash or subagent ends the turn the instant it
+                starts, so the session goes idle with work still going, and
+                every surface could say only the word "background". Which
+                command, and for how long, is the difference between a build
+                that is nearly done and a `du` over ~/Library that will still be
+                running tomorrow. */}
+            {backgroundOutstanding(d.activity) && (
+              <Section title="background">
+                {backgroundTaskList(d.activity).map((t) => (
+                  <div
+                    key={t.id}
+                    className="flex items-start gap-3 py-1.5 border-b border-border/40 last:border-0"
+                  >
+                    {/* The age gets the label column — it is the thing you scan
+                        this list for, and left-aligned durations compare by eye
+                        in a way a trailing one does not. Not `Row`, whose label
+                        is uppercased: "1H 28M" reads as a heading, not a clock. */}
+                    <span className="w-20 shrink-0 pt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {t.elapsedSec ? shortDuration(t.elapsedSec) : '—'}
+                    </span>
+                    <span className="min-w-0 flex-1 font-mono text-xs break-words text-foreground/90">
+                      {t.description}
+                    </span>
+                  </div>
+                ))}
+                {backgroundTaskList(d.activity).length === 0 && (
+                  <Row label="running">
+                    <span className="text-muted-foreground">
+                      {bgCount(d.activity)} task{bgCount(d.activity) === 1 ? '' : 's'} — this machine&apos;s gateway
+                      has not said which
+                    </span>
+                  </Row>
+                )}
+                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                  The turn ended; these did not. The session keeps its working dot until they finish, or
+                  for 30 minutes after the agent&apos;s last message — whichever comes first.
+                </p>
+              </Section>
+            )}
+
             <Section title="backend">
               <BackendPicker
                 value={shownBackend}

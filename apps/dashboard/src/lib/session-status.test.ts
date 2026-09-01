@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   sessionStatusView,
   activityLabel,
+  backgroundTaskList,
+  backgroundSummary,
   isRestingState,
   snapshotSilenceMs,
   SNAPSHOT_STALE_MS,
@@ -56,7 +58,30 @@ test('subagent, compaction and background each get their own wording', () => {
     'code-reviewer',
   );
   assert.equal(activityLabel({ kind: 'compacting', label: 'compacting' })?.label, 'compacting');
-  assert.equal(activityLabel({ kind: 'background', label: 'background', backgroundCount: 2 })?.label, 'background +2 bg');
+  // The background branch says how many and how long instead of "+N bg", which
+  // in this branch said the word twice.
+  assert.equal(activityLabel({ kind: 'background', label: 'background', backgroundCount: 2 })?.label, 'background ×2');
+  assert.equal(
+    activityLabel({
+      kind: 'background', label: 'background', backgroundCount: 1,
+      backgroundTasks: [{ id: 'b1', description: 'du -sh ~/Library', elapsedSec: 5332 }],
+    })?.label,
+    'background · 1h 28m',
+    'the age is the half that distinguishes a build from a runaway',
+  );
+});
+
+// A gateway older than the backgroundTasks field sends a count and nothing else.
+// It must still read, and it must not claim the list is empty.
+test('a count with no task list still labels and still counts as outstanding', () => {
+  const old = { kind: 'background', label: 'background', detail: 'rebuild v5', backgroundCount: 3 };
+  assert.equal(activityLabel(old)?.label, 'background ×3');
+  assert.equal(activityLabel(old)?.detail, 'rebuild v5');
+  assert.equal(backgroundTaskList(old).length, 0);
+  assert.equal(backgroundSummary(old), 'background ×3');
+  assert.equal(backgroundSummary({ kind: 'tool', label: 'Bash' }), null);
+  // A foreground tool with background work behind it is not a "background" row.
+  assert.equal(backgroundSummary({ kind: 'tool', label: 'Bash', backgroundCount: 2 }), 'working +2 bg');
 });
 
 test('background work is counted alongside the foreground', () => {
@@ -349,13 +374,36 @@ test('idle with background work still running reads as working, not unread', () 
     { unread: true },
   );
   assert.equal(v.key, 'working');
-  assert.equal(v.label, 'background +2 bg');
+  assert.equal(v.label, 'background ×2');
+  // Same state, different dot: nothing is moving in the foreground, and on a
+  // phone the dot is the only part of this that survives the truncation.
+  assert.equal(v.pulse, false);
+  assert.notEqual(v.dot, sessionStatusView({ alive: true, state: 'working' }).dot);
   assert.equal(v.detail, 'rebuild v5');
 });
 
 test('idle with background work is not "ready" either', () => {
   const v = sessionStatusView({ alive: true, state: 'idle', activity: { kind: 'background', backgroundCount: 1 } });
   assert.equal(v.key, 'working');
+});
+
+// The sidebar row carries no activity blob, so without this it read "working"
+// for every background-parked session — the exact "I cannot see WHERE the
+// background work is" this was built for.
+test('a row with only the precomputed note still names the background', () => {
+  const v = sessionStatusView(
+    { alive: true, state: 'idle', backgroundBusy: true, backgroundNote: 'background · 1h 28m' },
+  );
+  assert.equal(v.key, 'working');
+  assert.equal(v.label, 'background · 1h 28m');
+  // A real activity payload outranks it: a foreground tool is the better answer.
+  assert.equal(
+    sessionStatusView({
+      alive: true, state: 'working', backgroundNote: 'background · 1h 28m',
+      activity: { kind: 'tool', label: 'Bash', elapsedSec: 3, backgroundCount: 1 },
+    }).label,
+    'Bash · 3s +1 bg',
+  );
 });
 
 test('idle with nothing in the background is unchanged', () => {

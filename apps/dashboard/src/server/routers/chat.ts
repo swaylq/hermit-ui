@@ -12,7 +12,7 @@ import { prisma } from '../db';
 import { fire as fireChat } from '../chat-bus';
 import { QUEUE_LIMIT } from '../../lib/chat-queue';
 import { sessionRecencyMs } from '../../lib/session-recency';
-import { backgroundOutstanding } from '../../lib/session-status';
+import { backgroundOutstanding, backgroundSummary } from '../../lib/session-status';
 import { stripNulDeep } from '../sanitize';
 import { capMessageContent } from '../message-cap';
 import { messageProjection } from '../message-digest';
@@ -314,6 +314,11 @@ export const chatRouter = router({
       return rows.map(({ activity, ...r }) => ({
         ...r,
         backgroundBusy: backgroundOutstanding(activity),
+        // …plus the one line of it worth printing. Same rule as backgroundBusy —
+        // a fact chewed down to something the 5s poll can carry — because the
+        // sidebar is where you go to find out WHICH session is sitting on a
+        // background task, and it had no way to say.
+        backgroundNote: backgroundSummary(activity),
         ...resolveRuntime(r, byName.get(r.agentName), backends),
       }));
     }),

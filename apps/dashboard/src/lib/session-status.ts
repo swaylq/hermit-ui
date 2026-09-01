@@ -43,6 +43,19 @@ export interface SessionActivity {
   maxRetries?: number | null;
   retryInSec?: number | null;
   backgroundCount?: number | null;
+  /**
+   * What each background task IS, oldest first — added 2026-09-02. A gateway
+   * older than that sends only the count, which is why every reader here treats
+   * an absent list as "cannot say" and falls back to the count.
+   */
+  backgroundTasks?: { id?: string | null; description?: string | null; elapsedSec?: number | null }[] | null;
+}
+
+/** One background task, after the defensive read. */
+export interface BackgroundTaskView {
+  id: string;
+  description: string;
+  elapsedSec: number;
 }
 
 export interface SessionRuntimeLike {
@@ -89,6 +102,14 @@ export interface SessionRuntimeLike {
    */
   backgroundBusy?: boolean | null;
   /**
+   * The chip text for that background work — `background · 1h 28m` — also
+   * precomputed by chat.listSessions, and for the same reason: the sidebar is
+   * the surface where "which of my sessions is parked on something" gets
+   * answered, and without this every one of them just said "working".
+   * A few dozen bytes on the rows that have any; nothing on the rows that don't.
+   */
+  backgroundNote?: string | null;
+  /**
    * When the agent last said anything. Read for one purpose: deciding that an
    * outstanding background task has stopped being part of an answer — see
    * BACKGROUND_RESIDENT_MS.
@@ -110,12 +131,23 @@ export interface StatusView {
   detail?: string;
 }
 
-/** `47s`, `3m 20s` — short enough to sit in a header chip. */
-function shortDuration(sec: number): string {
+/**
+ * `47s`, `3m 20s`, `1h 28m` — short enough to sit in a header chip.
+ *
+ * The hours case is not decoration. A background task is the one thing here
+ * that routinely runs for hours, and `88m 52s` is a number you have to stop and
+ * divide before it means anything.
+ */
+export function shortDuration(sec: number): string {
   if (sec < 60) return `${sec}s`;
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return s ? `${m}m ${s}s` : `${m}m`;
+  if (sec < 3600) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return s ? `${m}m ${s}s` : `${m}m`;
+  }
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
 }
 
 /**
@@ -142,6 +174,55 @@ export function backgroundOutstanding(raw: unknown): boolean {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
   const n = (raw as SessionActivity).backgroundCount;
   return typeof n === 'number' && n > 0;
+}
+
+/**
+ * The background tasks a snapshot named, oldest first.
+ *
+ * Same defensive contract as `backgroundOutstanding`: an opaque Json column, so
+ * anything unrecognised reads as an empty list and never as an assertion. An
+ * empty list does NOT mean there is no background work — a gateway from before
+ * this field existed reports a count and nothing else; ask
+ * `backgroundOutstanding` for the yes/no.
+ */
+export function backgroundTaskList(raw: unknown): BackgroundTaskView[] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  const list = (raw as SessionActivity).backgroundTasks;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((t, i) => {
+    if (!t || typeof t !== 'object') return [];
+    const description = typeof t.description === 'string' && t.description.trim()
+      ? t.description.trim()
+      : 'background task';
+    const elapsedSec = typeof t.elapsedSec === 'number' && t.elapsedSec > 0 ? Math.floor(t.elapsedSec) : 0;
+    return [{ id: typeof t.id === 'string' && t.id ? t.id : `bg-${i}`, description, elapsedSec }];
+  });
+}
+
+/**
+ * `background · 1h 28m` / `background ×3 · 12m` — the chip text for a session
+ * whose only remaining work is outside the turn.
+ *
+ * ONE function because three surfaces print this and they must not drift: the
+ * chat header (which has the whole blob), the sidebar row (which gets this
+ * string precomputed by chat.listSessions, since the 5s poll does not carry the
+ * blob), and the tooltip on both. The age is the load-bearing half — "background"
+ * alone reads the same at three seconds and at three hours, which is exactly the
+ * complaint this was built for.
+ */
+export function backgroundSummary(raw: unknown): string | null {
+  if (!backgroundOutstanding(raw)) return null;
+  const a = raw as SessionActivity;
+  const n = typeof a.backgroundCount === 'number' ? a.backgroundCount : 0;
+  // Only when background work is ALL that is left. A session with a foreground
+  // tool running has background tasks too, and labelling that row "background"
+  // would name the sideshow: the tool is what the turn is waiting on. It keeps
+  // the word it had, plus how many are queued up behind it.
+  if (a.kind !== 'background') return `working +${n} bg`;
+  const oldest = backgroundTaskList(raw)[0];
+  const count = n > 1 ? ` ×${n}` : '';
+  const age = oldest && oldest.elapsedSec > 0 ? ` · ${shortDuration(oldest.elapsedSec)}` : '';
+  return `background${count}${age}`;
 }
 
 /**
@@ -216,7 +297,14 @@ export function activityLabel(raw: unknown): { label: string; detail?: string } 
     return { label: `${a.label || 'tool'}${t}${bg}`, detail: a.detail ?? undefined };
   }
   if (a.kind === 'background') {
-    return { label: `background${bg}`, detail: a.detail ?? undefined };
+    // Not `background${bg}`: this branch IS the background one, so the "+1 bg"
+    // suffix the other branches carry said the same word twice. What it says
+    // instead is how long — see backgroundSummary.
+    const tasks = backgroundTaskList(raw);
+    const detail = tasks.length
+      ? tasks.map((t) => `${t.description}${t.elapsedSec ? ` · ${shortDuration(t.elapsedSec)}` : ''}`).join('\n')
+      : (a.detail ?? undefined);
+    return { label: backgroundSummary(raw) ?? 'background', detail };
   }
   if (a.kind === 'thinking') return { label: `thinking${bg}`, detail: a.detail ?? undefined };
   return null;
@@ -429,13 +517,26 @@ export function sessionStatusView(
   }
   // A backend that can say WHAT it is doing gets to say it here; one that
   // cannot keeps the label it always had.
-  const working = (): StatusView => {
+  // `parked` = nothing in the foreground, but background work is outstanding.
+  // Same state key as working (something IS running and a reply is still to
+  // come) with a different dot, which is the whole point: on a phone the meta
+  // row truncates the label to "b…", so before this the two were one amber
+  // pulse and there was no way to tell a turn in flight from a session sitting
+  // on a `du` that will never finish. Steady and dimmed rather than pulsing:
+  // the pulse means "moving", and this is not moving.
+  const working = (opts2: { parked?: boolean } = {}): StatusView => {
     const a = activityLabel(s?.activity);
+    // The sidebar row has no `activity` blob — chat.listSessions strips it — so
+    // `activityLabel` returns null there and every background-parked session
+    // read as a bare "working". `backgroundNote` is the one line of that blob
+    // the poll does carry; used only as a FALLBACK, so a row that has the real
+    // thing keeps the richer label (a foreground tool outranks it).
+    const label = a?.label ?? s?.backgroundNote ?? 'working';
     return {
       key: 'working',
-      label: a?.label ?? 'working',
-      dot: 'bg-amber-400',
-      pulse: true,
+      label,
+      dot: opts2.parked ? 'bg-amber-400/50' : 'bg-amber-400',
+      pulse: !opts2.parked,
       detail: a?.detail,
     };
   };
@@ -488,7 +589,7 @@ export function sessionStatusView(
   // pane and never drives the reporting session's own state, so there is nothing
   // left to override it with. See docs/cron-merge-design.md.
   if (s.state === 'idle' && backgroundStillRunning(s, opts.now ?? Date.now())) {
-    return working();
+    return working({ parked: true });
   }
   // sky — recycling: a restart was requested; the pane is being killed and will
   // respawn on the next message. Outranks the !alive check below, since `alive`

@@ -62,7 +62,17 @@ export function sessionStatusFrame(row: StatusRow): SessionStatusFrame {
  * long tool call, and the counter the header shows is client-side anyway.
  */
 export function statusFrameSignature(f: SessionStatusFrame): string {
-  const a = f.activity as { kind?: unknown; label?: unknown; backgroundCount?: unknown } | null;
+  const a = f.activity as {
+    kind?: unknown; label?: unknown; backgroundCount?: unknown;
+    backgroundTasks?: { id?: unknown }[] | null;
+  } | null;
+  // WHICH background tasks, not just how many: one finishing as another starts
+  // holds the count still while the list underneath it is a different list, and
+  // the header would keep naming a task that ended. Ids only — their elapsed
+  // seconds are excluded for the same reason a tool's are, one frame a second.
+  const bgIds = Array.isArray(a?.backgroundTasks)
+    ? a.backgroundTasks.map((t) => String(t?.id ?? '')).join(',')
+    : '';
   return [
     f.state ?? '',
     f.alive ? '1' : '0',
@@ -71,5 +81,6 @@ export function statusFrameSignature(f: SessionStatusFrame): string {
     a?.kind ?? '',
     a?.label ?? '',
     a?.backgroundCount ?? '',
+    bgIds,
   ].join('|');
 }

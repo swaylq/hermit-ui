@@ -2184,16 +2184,25 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                       four letters of identity, the state is a sentence. The full
                       text is in the tooltip, which now carries the LABEL and not
                       just the detail, since the label is the half that gets cut. */}
-                  <span
-                    className="min-w-0 inline-flex items-center gap-1.5"
+                  {/* Tappable, like the backend chip two items along: this is
+                      the state, and the sheet is where the state is spelled out
+                      — which background tasks are running and for how long, the
+                      one thing the chip has no room to say. A phone has no
+                      hover, so the tooltip that carried the detail reached a
+                      laptop only. */}
+                  <button
+                    type="button"
+                    onClick={() => setDetailOpen(true)}
                     title={statusTitle}
+                    aria-label="session state — open details"
+                    className="min-w-0 inline-flex items-center gap-1.5 rounded px-1 -mx-1 cursor-pointer transition-colors hover:bg-accent/60 hover:text-foreground"
                   >
                     <span
                       className={cn('h-1.5 w-1.5 shrink-0 rounded-full transition-colors', status.dot, status.pulse && 'animate-pulse')}
                       aria-hidden="true"
                     />
                     <span className="max-w-[11rem] truncate">{status.label}</span>
-                  </span>
+                  </button>
                   <span className="shrink-0 text-muted-foreground/40">·</span>
                   {/* Which backend is actually running this session. Sits left of
                       ctx because both describe the run, not the conversation.
