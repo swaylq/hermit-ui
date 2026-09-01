@@ -94,6 +94,10 @@ OFF_FILE="${GW_OFF_FILE:-$STATE_DIR/gateway-watch.off}"
 ALERT="${GW_ALERT:-$STATE_DIR/gateway-watch-alert.json}"
 COOLDOWN="${GW_COOLDOWN_FILE:-$STATE_DIR/gateway-watch-lastrestart}"
 ECOSYSTEM="${GW_ECOSYSTEM:-apps/gateway/ecosystem.config.cjs}"
+# This script ships INSIDE the repo it watches (<repo>/scripts/gateway-watch.sh),
+# so its own location is a repo path that is always available and never depends on
+# the thing being repaired. See gw_repo below for why that matters.
+SELF_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
 LOCK="/tmp/gateway-watch-${APP}.lock"
 
 # Wedge thresholds. WEDGE_FAILS is "worst tick's consecutive-failure count in the
@@ -154,9 +158,20 @@ for p in d:
 ' "$APP" 2>/dev/null
 }
 
-# Where the repo lives, derived from the running app rather than hardcoded.
-gw_repo() {
-  [ -n "${GW_REPO:-}" ] && { echo "$GW_REPO"; return; }
+# Does this directory actually hold the ecosystem file we would start from?
+# The one property every caller of gw_repo needs, so checking it turns a guess
+# into a verified answer. GW_ECOSYSTEM may be absolute, in which case the
+# candidate directory is irrelevant to whether it exists.
+gw_has_eco() {
+  case "$ECOSYSTEM" in
+    /*) [ -f "$ECOSYSTEM" ] ;;
+    *)  [ -f "$1/$ECOSYSTEM" ] ;;
+  esac
+}
+
+# The repo path pm2 believes $APP runs from. Correct WHILE the app is registered,
+# and empty precisely when it is not — see gw_repo.
+gw_pm2_cwd() {
   pm2 jlist 2>/dev/null | python3 -c '
 import json,sys
 try: d=json.load(sys.stdin)
@@ -166,6 +181,37 @@ for p in d:
         cwd=p.get("pm2_env",{}).get("pm_cwd","") or ""
         print(cwd[:-len("/apps/gateway")] if cwd.endswith("/apps/gateway") else cwd); break
 ' "$APP" 2>/dev/null
+}
+
+# Where the repo lives. Candidates in order; a candidate wins only if the
+# ecosystem file is really there.
+#
+# THE ORDER IS THE FIX (2026-09-01). gw_pm2_cwd used to be the only source, and
+# it reads pm2's entry for $APP — but case 1 below is *defined* as "$APP has no
+# entry in pm2's table", so on the single path that needs a repo path there was
+# nothing to read and this returned empty. That broke two things at once, and the
+# second hid the first:
+#   * the recovery `cd` fell through to /nonexistent, logged
+#     `[fail] no checkout at '?'` and exited before `pm2 start` ever ran;
+#   * ENV_FILE below is derived from this too, so ASST_KEY never resolved and
+#     EVERY post_alert degraded to log-only — including `start-failed`, whose
+#     entire job is to say the gateway is down and could not be started.
+# Net effect on mac-local: the gateway stayed down 3h57m across four hourly
+# ticks, each of which logged that it had looked. The only trace was a JSON file
+# on the stricken machine's own disk.
+#
+# Deriving from the app was meant to keep one file working on every machine.
+# $SELF_REPO keeps that property — the script lives in the repo — without
+# depending on the process it exists to resurrect.
+gw_repo() {
+  local c
+  for c in "${GW_REPO:-}" "${SELF_REPO:-}" "$(gw_pm2_cwd)"; do
+    [ -n "$c" ] || continue
+    gw_has_eco "$c" || continue
+    printf '%s\n' "$c"
+    return 0
+  done
+  return 1
 }
 
 # "<worst-failing-in-a-row> <log-age-sec> <log-size-bytes>"; -1 for "cannot tell".
@@ -224,11 +270,24 @@ gw_can_reach_dashboard() {
 # nothing else changes — the watcher's real job must never fail over an alert.
 ASST_KEY=""
 ALERT_POST_URL="${DASH_URL%/}/api/sync/machine-alert"
+# Deliberately NOT `$(gw_repo)/apps/gateway/.env`. Being able to TELL someone
+# must not depend on being able to FIX — and it did: gw_repo only answers when a
+# usable ecosystem file exists, so on 2026-09-01, the one morning the gateway was
+# really gone, ASST_KEY never resolved and every post_alert degraded to log-only.
+# The alert that matters most is the one raised when nothing else worked, so this
+# walks the same candidates for the one property it actually needs: a readable .env.
+gw_env_file() {
+  local c
+  for c in "${GW_REPO:-}" "${SELF_REPO:-}" "$(gw_pm2_cwd)"; do
+    [ -n "$c" ] || continue
+    [ -f "$c/apps/gateway/.env" ] || continue
+    printf '%s\n' "$c/apps/gateway/.env"
+    return 0
+  done
+  return 1
+}
 ENV_FILE="${GW_ENV_FILE:-}"
-if [ -z "$ENV_FILE" ]; then
-  R="$(gw_repo)"
-  [ -n "$R" ] && ENV_FILE="$R/apps/gateway/.env"
-fi
+[ -z "$ENV_FILE" ] && ENV_FILE="$(gw_env_file)"
 if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
   ASST_KEY="$(grep -m1 '^ASST_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' \r')"
   D="$(grep -m1 '^DASHBOARD_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' \r')"
@@ -267,7 +326,15 @@ alert() {  # $1=event  $2=detail — local JSON (kept for forensics) + dashboard
     wedge-restarted)       post_alert "gateway-wedged" "网关持续连不上 dashboard，watchdog 确认后已重启（$2）" ;;
     wedge-restart-failed)  post_alert "gateway-start-failed" "网关卡死且 watchdog 重启失败（$2）" ;;
     wedged-cooldown)       post_alert "gateway-wedged" "网关疑似卡死，但冷却期内已重启过一次，留待人工（$2）" ;;
-    *)                     : ;;  # no-checkout / link-down 等本机侧问题，告警多半也发不出去，只留本地
+    # no-checkout was in the silent bucket below until 2026-09-01, on the theory
+    # that it is a local-side problem whose alert would not get out anyway. It is
+    # not: the dashboard was reachable all through that morning's 3h57m outage,
+    # and this is the one event meaning "the gateway is gone and I cannot start
+    # it" — exactly what a human needs pushed.
+    no-checkout)           post_alert "gateway-start-failed" "网关不在 pm2 里，watchdog 找不到可用的仓库检出，没能拉起（$2）" ;;
+    # link-down genuinely stays local: it means THIS MACHINE cannot reach the
+    # dashboard, so posting there is the one thing guaranteed not to work.
+    *)                     : ;;
   esac
 }
 
