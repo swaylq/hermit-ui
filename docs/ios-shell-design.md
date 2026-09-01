@@ -254,7 +254,21 @@ model PushDevice {
 > 跑一次 iOS 测试通过「内存不够 → 写交换文件」间接吃掉几个 G 系统盘——这条链没人会预料到，
 > 所以写在这里。
 >
-> 收尾一律：`xcrun simctl shutdown all`。验证：`xcrun simctl list devices booted` 应为空。
+> **收尾写进脚本，不要只写进文档**——`apps/ios/smoke.sh` 已经这么做了（`trap cleanup EXIT`），
+> 那才是以后真正的入口。而且只关**自己启动的那台**：先探一次 Booted 状态，别人已经开着的
+> 不动它。`xcrun simctl shutdown all` 会误伤同机其它会话正在用的模拟器——2026-09-02 那晚
+> 就发生过一次反向的：排查磁盘的人看到一个 booted 设备、`pgrep` 正好撞在测试循环的间隙查不到
+> `xcodebuild`，判成孤儿关掉，打断了一个正在跑的验收，对方还以为是自己脚本坏了。
+>
+> 同一个 trap 里顺便清两样，都默认落在系统盘：DerivedData（`$TMPDIR/hermit-ios-dd`，要迭代
+> 用 `HERMIT_KEEP_DERIVED=1` 保留），以及 `.xcresult` 结果包——**后者记着 test runner 的
+> 环境变量，机器密钥会躺在里面**，那不只是占空间。
+>
+> 验证：`xcrun simctl list devices booted` 应为空。
+>
+> 另：看这台机器的余量要用 `df -h /System/Volumes/Data`。`df -h /` 看的是只读系统卷，会
+> 显示 45–58% 这种健康数字，而同一时刻 Data 卷是 94%——两个卷共享容器可用空间，可用 GB
+> 一致而百分比差 36 个点。只看可用 GB 最不容易错。
 
 ---
 
