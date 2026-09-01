@@ -185,7 +185,7 @@ function resolveSkillPaths(mode: LoadedMode, agentDirectory: string): string[] {
  */
 export function buildModeArgs(
   mode: LoadedMode | null,
-  opts: { agentDirectory: string },
+  opts: { agentDirectory: string; chatOnly?: boolean },
 ): string[] {
   if (!mode) return [];
   const isOmp = mode.engine === 'omp';
@@ -197,7 +197,13 @@ export function buildModeArgs(
     else console.warn(`[pi-modes] ${mode.name}: extension "${rel}" not found at ${abs}`);
   }
 
-  if (isOmp) {
+  if (opts.chatOnly) {
+    // Pure chat: the tool list belongs to the caller, not to the mode — a mode
+    // recipe would hand back write tools, which is the one thing this mode
+    // exists to remove. pi-rpc and omp-rpc append their own list right after
+    // these args, in their own engine's vocabulary. Skipped here so `--tools`
+    // is emitted exactly once.
+  } else if (isOmp) {
     // No hermit-tools union here, and this is not an oversight. Measured on
     // both: pi activates four built-ins by default and its `--tools` covers
     // extension tools too, so a mode listing only built-ins would silently

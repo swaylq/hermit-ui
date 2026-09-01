@@ -40,6 +40,7 @@ import { readPiSession, rememberPiSession, resumablePiSession } from './pi-sessi
 import { getCredential, credentialDefaultModel } from '../pi-config';
 import { JsonlTransport, type RpcEvent } from './jsonl-transport';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
+import { HERMIT_TOOL_NAMES } from './pi-modes';
 
 /** The hermit tools extension, loaded into every child with --extension. */
 function hermitExtensionPath(): string {
@@ -293,6 +294,16 @@ export class PrimeRpcRuntime implements AgentRuntime {
     ];
     // Deliberately no `--tools`: prime has exactly one built-in tool and we want
     // it. An allowlist here could only subtract.
+    //
+    // Which is exactly what a pure-chat session asks for, and why prime is the
+    // one backend that cannot serve the mode usefully. That single tool,
+    // `ipython`, is where reading, writing, running commands and spawning
+    // sub-agents ALL happen, so there is no read-only subset to keep: the list
+    // below is hermit's extension tools and nothing else. Such a session can
+    // talk and hand things to the user; it cannot even read a file. sway chose
+    // this over pretending the backend supports the mode (2026-09-01), and the
+    // new-chat UI says so before you pick the combination.
+    if (session.chatOnly) args.push('--tools', HERMIT_TOOL_NAMES.join(','));
 
     // Resolved into a local first so the child's credential and the fingerprint
     // recorded for it come from ONE read — two reads could straddle a rotation

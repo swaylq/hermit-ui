@@ -22,7 +22,7 @@ export const MCP_STUB_PATH = path.join(path.dirname(fileURLToPath(import.meta.ur
  * option takes the object itself. Building the object once and serialising at
  * the edge keeps the two spawn paths from drifting.
  */
-export function buildMcpServers(chatSessionId: string, isBrain = false) {
+export function buildMcpServers(chatSessionId: string, isBrain = false, chatOnly = false) {
   return {
     hermit: {
       command: 'node',
@@ -42,11 +42,14 @@ export function buildMcpServers(chatSessionId: string, isBrain = false) {
         // The orchestrator ("义脑") session gets HERMIT_BRAIN=1 — the stub then
         // registers the brain-only cross-agent tools (roster/dispatch/...).
         ...(isBrain ? { HERMIT_BRAIN: '1' } : {}),
+        // Pure chat: the stub drops the three cron tools that would schedule
+        // full-tool work later. See mcp-stub.cjs CHAT_ONLY_DENIED.
+        ...(chatOnly ? { HERMIT_CHAT_ONLY: '1' } : {}),
       },
     },
   };
 }
 
-export function buildMcpConfigArg(chatSessionId: string, isBrain = false): string {
-  return JSON.stringify({ mcpServers: buildMcpServers(chatSessionId, isBrain) });
+export function buildMcpConfigArg(chatSessionId: string, isBrain = false, chatOnly = false): string {
+  return JSON.stringify({ mcpServers: buildMcpServers(chatSessionId, isBrain, chatOnly) });
 }

@@ -91,6 +91,24 @@ export type RuntimeSession = {
    * others have no equivalent tool surface to widen.
    */
   isOrchestrator?: boolean;
+  /**
+   * Pure-chat session: spawn the child with a READ-ONLY tool surface — it may
+   * look at files and search the web, but not write, edit, run commands or
+   * spawn sub-agents. Defaults to false; only a session the user ticked the box
+   * for passes true.
+   *
+   * Unlike hermitTools this is NOT one mechanism. No backend's write tools are
+   * forwarded by us — bash / write / edit / apply_patch / ipython all ship
+   * inside the CLI — so each runtime honours this with its own switch:
+   * claude-sdk and claude-tmux narrow `tools`, codex drops to its read-only OS
+   * sandbox, pi and omp narrow `--tools`, dsh disables its write plugins, kimi
+   * gets deny rules in its config. prime cannot honour it usefully (one tool,
+   * `ipython`, is its entire surface) and loses that tool outright.
+   *
+   * It is a SPAWN-TIME property: flipping it on a live session does nothing
+   * until the child respawns.
+   */
+  chatOnly?: boolean;
 };
 
 export type RuntimeImage = { path: string; mediaType: string };

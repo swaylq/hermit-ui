@@ -220,7 +220,15 @@ function threadOptions(session: RuntimeSession): ThreadOptions {
   return {
     workingDirectory: session.agentDirectory,
     skipGitRepoCheck: true,
-    sandboxMode: (process.env.HERMIT_CODEX_SANDBOX?.trim() || 'danger-full-access') as ThreadOptions['sandboxMode'],
+    // Pure chat wins over the env override on purpose: HERMIT_CODEX_SANDBOX is
+    // an operator's default for this machine, chatOnly is the user's choice for
+    // this session, and a default must not be able to widen it back. codex's
+    // read-only mode is enforced by the OS (seatbelt / landlock), not by the
+    // model's tool list, which makes it the hardest of the eight backends —
+    // `shell` and `apply_patch` both stop working rather than disappearing.
+    sandboxMode: (session.chatOnly
+      ? 'read-only'
+      : process.env.HERMIT_CODEX_SANDBOX?.trim() || 'danger-full-access') as ThreadOptions['sandboxMode'],
     approvalPolicy: (process.env.HERMIT_CODEX_APPROVAL?.trim() || 'never') as ThreadOptions['approvalPolicy'],
     model,
     modelReasoningEffort: effort as ThreadOptions['modelReasoningEffort'],
@@ -261,7 +269,7 @@ export function hermitMcpConfigFor(session: RuntimeSession): NonNullable<CodexOp
         args: [MCP_STUB_PATH],
         // Codex copies only these named variables from its own process into the
         // MCP child. Names are safe in `--config`; values stay out of argv.
-        env_vars: ['HERMIT_SESSION_ID', 'HERMIT_DASHBOARD_URL', 'HERMIT_KEY'],
+        env_vars: ['HERMIT_SESSION_ID', 'HERMIT_DASHBOARD_URL', 'HERMIT_KEY', 'HERMIT_CHAT_ONLY'],
         // Seconds. `ask` blocks until a human clicks a button in the dashboard,
         // for up to the stub's own 4h ceiling — a default tool timeout would
         // kill it long before, and the user's answer would land on a call that
@@ -287,6 +295,10 @@ export function codexChildEnv(session: RuntimeSession): Record<string, string> {
   env.HERMIT_SESSION_ID = session.id;
   env.HERMIT_DASHBOARD_URL = DASHBOARD_URL;
   env.HERMIT_KEY = ASST_KEY;
+  // Pure chat: codex's own tools are already caged by the read-only sandbox in
+  // threadOptions; this is what additionally drops the three cron tools from
+  // the hermit MCP surface, via the env_vars list above.
+  if (session.chatOnly) env.HERMIT_CHAT_ONLY = '1';
   return env;
 }
 

@@ -559,6 +559,17 @@ model ChatSession {
   // 'pi-rpc'; claude-tmux ignores it. null = inherit the agent's, then 'coding'.
   // See docs/pi-modes-design.md.
   runtimeMode       String?
+  // Pure-chat session: the child is spawned with a READ-ONLY tool surface — it
+  // can look at files and search the web, but cannot write, edit, run commands
+  // or spawn sub-agents. Chosen when the session is opened (it is a spawn-time
+  // property of the child, not a permission checked per call), so flipping it
+  // later only takes effect on the next spawn.
+  //
+  // Every backend enforces this with its OWN mechanism — there is no shared
+  // one, because no backend's write tools are forwarded by us; they all ship
+  // inside the CLI. See docs/chat-only-mode.md for the per-backend table.
+  // prime is the one backend that cannot honour it usefully.
+  chatOnly          Boolean   @default(false)
   claudeSessionId   String? // populated by gateway once SDK boots
   startedAt         DateTime  @default(now())
   lastMessageAt     DateTime?

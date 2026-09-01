@@ -30,6 +30,10 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
   // pi only. Same "explicit choice or null" shape as `runtime`: null means the
   // agent's default, resolved at render once the agent lookup lands.
   const [mode, setMode] = useState<PiMode | null>(null);
+  // Pure chat: a read-only child. Not derived from the agent, so it deliberately
+  // survives switching agents — it describes what you want THIS conversation to
+  // be, not who you are having it with.
+  const [chatOnly, setChatOnly] = useState(false);
   useEffect(() => {
     setPicked((cur) => cur || (preset && agents.includes(preset) ? preset : agents[0] ?? ''));
   }, [preset, agents]);
@@ -69,6 +73,9 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
   // actually runs pi — which now depends on the backend the user composed, not
   // on the card's own name.
   const isPiBackend = backendById(backends.data, chosen)?.harness === 'pi-rpc';
+  // prime is the one backend that cannot serve pure chat by halves — see the
+  // warning below the checkbox.
+  const isPrimeBackend = backendById(backends.data, chosen)?.harness === 'prime-rpc';
   const chosenMode: PiMode = mode ?? (isPiMode(agentMode) ? agentMode : DEFAULT_PI_MODE);
 
   const create = trpc.chat.createSession.useMutation({ onSuccess: (s) => onCreated(s.id) });
@@ -115,6 +122,7 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
               // session that states its mode keeps the one you started it in
               // when the agent's default is later edited.
               ...(isPiBackend ? { runtimeMode: chosenMode } : {}),
+              ...(chatOnly ? { chatOnly: true } : {}),
             });
           }}
         >
@@ -172,6 +180,35 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
               </span>
             </label>
           )}
+          {/* Pure chat. Sits below the backend because what it means in practice
+              depends on which one you picked — most notably for prime. */}
+          <label className="flex cursor-pointer items-start gap-2.5">
+            <input
+              type="checkbox"
+              checked={chatOnly}
+              onChange={(e) => setChatOnly(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-foreground"
+              aria-label="pure chat"
+            />
+            <span className="min-w-0">
+              <span className="block text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                Pure chat
+              </span>
+              <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
+                Read-only. It can look at files and search the web, but cannot write, edit, run
+                commands or spawn sub-agents — so replies come back faster and nothing on disk
+                changes.
+              </span>
+              {chatOnly && isPrimeBackend && (
+                <span className="mt-1.5 block text-[11px] leading-relaxed text-amber-600 dark:text-amber-500">
+                  prime can&apos;t do this by halves: its entire tool surface is one Python session,
+                  where reading and writing happen in the same place. A pure-chat prime session
+                  can talk and hand you files, but can&apos;t even read one. Pick another backend if
+                  it needs to look things up.
+                </span>
+              )}
+            </span>
+          </label>
           {/* No model field here on purpose. Starting a chat should be: agent,
               backend, mode, go. The model comes from the backend's own default,
               then its credential's ("默认模型" under Settings → Models). This used to be a free-text

@@ -19,7 +19,8 @@ import {
   providerEnv, machineProviderEnv, visionEnv,
   fingerprintAuthEnv, currentAuthFingerprint,
 } from './pi-credentials';
-import { resolveMode, buildModeArgs } from './pi-modes';
+import { resolveMode, buildModeArgs, HERMIT_TOOL_NAMES } from './pi-modes';
+import { CHAT_ONLY_PI_TOOLS } from './chat-only';
 import { readPiSession, rememberPiSession, resumablePiSession } from './pi-sessions';
 import { globalMemoryPrompt } from './context-files';
 import { getCredential, credentialDefaultModel } from '../pi-config';
@@ -441,7 +442,10 @@ export class PiRpcRuntime implements AgentRuntime {
     // whose session id has no ChatSession row for these tools to act on — drops
     // both. See RuntimeSession.hermitTools.
     const hermitTools = session.hermitTools !== false;
-    const modeArgs = buildModeArgs(mode, { agentDirectory: session.agentDirectory });
+    const modeArgs = buildModeArgs(mode, {
+      agentDirectory: session.agentDirectory,
+      chatOnly: session.chatOnly,
+    });
     const globalMemoryArg = globalMemoryPrompt();
     // The credential this backend was composed with — one entry of Settings →
     // Models, already chosen by the dashboard.
@@ -497,6 +501,13 @@ export class PiRpcRuntime implements AgentRuntime {
       args: [
         ...(hermitTools ? ['--extension', hermitExtensionPath()] : []),
         ...modeArgs,
+        // Pure chat: pi's 7 built-ins narrowed to the read-only 4. pi's --tools
+        // covers extension tools too, so hermit's must be unioned back in or a
+        // pure-chat session silently loses `ask` / `attach_file` — the same trap
+        // buildModeArgs documents for ordinary modes.
+        ...(session.chatOnly
+          ? ['--tools', [...new Set([...CHAT_ONLY_PI_TOOLS, ...HERMIT_TOOL_NAMES])].join(',')]
+          : []),
         // pi finds the agent's own AGENTS.md/CLAUDE.md by walking CWD's
         // ancestors, but the machine's global memory lives in ~/.claude/, which
         // is not on that path — so it is the one thing pi can never reach for

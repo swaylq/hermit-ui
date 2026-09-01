@@ -2181,6 +2181,19 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                       </>
                     ) : backendLabel}
                   </button>
+                  {/* Pure chat, next to the backend for the same reason the
+                      model is: what the child can DO is one question, and the
+                      answer has two halves. Read-only, so unlike the model chip
+                      there is nothing to click — the mode is fixed at spawn and
+                      a session that wants it back must be started again. */}
+                  {session?.chatOnly && (
+                    <span
+                      title="Pure chat — this session is read-only: no writing, no commands, no sub-agents."
+                      className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                    >
+                      chat only
+                    </span>
+                  )}
                   {/* Model, next to the backend that runs it — the two answer
                       one question together. Claude Code only: the pane driver
                       and the credential-backed harnesses take their model from

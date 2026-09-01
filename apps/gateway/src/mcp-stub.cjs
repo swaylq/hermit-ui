@@ -35,6 +35,18 @@ const KEY = process.env.HERMIT_KEY || '';
 // Only then are the cross-agent brain tools (roster / agent_activity / dispatch /
 // dispatch_result) registered + accepted — a normal agent never gets them.
 const BRAIN = process.env.HERMIT_BRAIN === '1';
+// A pure-chat session (HERMIT_CHAT_ONLY=1) may talk, look, and hand things to
+// the user — it may not change anything. Most of this surface is already
+// read-only or purely conversational; these three are not. They schedule work
+// that fires LATER as a normal turn with a full tool surface, so leaving them
+// on would route straight around the mode instead of respecting it.
+//
+// This is the only place a pure-chat rule is enforced once for every backend:
+// claude-sdk, claude-tmux, codex, pi, omp and prime all mount this same stub.
+// Everything else about the mode is per-backend, because every backend's write
+// tools live inside its own CLI. cron_list stays — reading a schedule is fine.
+const CHAT_ONLY = process.env.HERMIT_CHAT_ONLY === '1';
+const CHAT_ONLY_DENIED = new Set(['cron_create', 'cron_update', 'cron_delete']);
 
 function sendJson(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
@@ -900,6 +912,14 @@ async function dispatchBrainTool(name, args) {
 
 async function dispatchTool(name, args) {
   if (!SESSION_ID) throw new Error('HERMIT_SESSION_ID missing');
+  // Belt and braces, exactly as the brain tools do below: not listing a tool
+  // and refusing to run it are two different defences, and a resumed child may
+  // still hold a tool table from before the flag was set.
+  if (CHAT_ONLY && CHAT_ONLY_DENIED.has(name)) {
+    throw new Error(
+      `${name} is unavailable in a pure-chat session: it would schedule work that later runs with a full tool surface. Tell the user this needs an ordinary session.`,
+    );
+  }
   if (BRAIN_TOOL_NAMES.has(name)) {
     if (!BRAIN) throw new Error('brain tools are only available to the orchestrator (Brain) session');
     return dispatchBrainTool(name, args);
@@ -1077,7 +1097,8 @@ rl.on('line', async (line) => {
       return;
     }
     if (method === 'tools/list') {
-      sendResult(id, { tools: BRAIN ? TOOLS.concat(BRAIN_TOOLS) : TOOLS });
+      const listed = BRAIN ? TOOLS.concat(BRAIN_TOOLS) : TOOLS;
+      sendResult(id, { tools: CHAT_ONLY ? listed.filter((t) => !CHAT_ONLY_DENIED.has(t.name)) : listed });
       return;
     }
     if (method === 'tools/call') {

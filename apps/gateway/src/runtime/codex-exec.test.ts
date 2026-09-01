@@ -380,7 +380,13 @@ test('the stub inherits identity by variable name, with no values in Codex argv 
     id: 'sess-42', agentName: 'a', agentDirectory: '/tmp', externalSessionId: null, model: null, mode: null,
   });
   const hermit = (cfg.mcp_servers as any).hermit;
-  assert.deepEqual(hermit.env_vars, ['HERMIT_SESSION_ID', 'HERMIT_DASHBOARD_URL', 'HERMIT_KEY']);
+  // HERMIT_CHAT_ONLY joined the list so a pure-chat codex session's stub drops
+  // its three cron tools. Still an exact match on purpose: this list is what
+  // crosses into the MCP child, so it should be read deliberately, not grown by
+  // accident.
+  assert.deepEqual(hermit.env_vars, [
+    'HERMIT_SESSION_ID', 'HERMIT_DASHBOARD_URL', 'HERMIT_KEY', 'HERMIT_CHAT_ONLY',
+  ]);
   assert.equal(hermit.env, undefined);
   assert.doesNotMatch(JSON.stringify(cfg), /sess-42/);
   const child = codexChildEnv({

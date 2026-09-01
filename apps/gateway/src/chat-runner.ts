@@ -65,6 +65,7 @@ import { cronOwnedUuids } from './cron-uuids';
 // close an import cycle through ./runtime). Re-exported because cron-runner
 // imports it from here.
 import { buildMcpConfigArg } from './mcp-config';
+import { CHAT_ONLY_CLAUDE_TOOLS } from './runtime/chat-only';
 export { buildMcpConfigArg };
 
 /**
@@ -92,6 +93,8 @@ type PendingSession = {
   // pi only: which mode recipe the child is spawned with. Already resolved
   // against the agent's default by the dashboard.
   runtimeMode?: string | null;
+  // Pure-chat: spawn the child with a read-only tool surface.
+  chatOnly?: boolean;
 };
 
 // One outbound chat-message sync (the shape /api/sync/chat-message accepts).
@@ -639,6 +642,7 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
           mode: session.runtimeMode,
           credentialId: session.runtimeCredentialId,
           isOrchestrator: session.isOrchestrator ?? false,
+          chatOnly: session.chatOnly ?? false,
         },
         (item) => queueSync(state, item),
       );
@@ -1128,13 +1132,22 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     // self-defers in bypassPermissions mode, so nothing routes to the web and no
     // invisible TUI prompt can hang the chat. Revert this flag to restore gating.
     claudeArgs.push('--dangerously-skip-permissions');
-    claudeArgs.push('--mcp-config', buildMcpConfigArg(session.id, session.isOrchestrator ?? false));
+    claudeArgs.push(
+      '--mcp-config',
+      buildMcpConfigArg(session.id, session.isOrchestrator ?? false, session.chatOnly ?? false),
+    );
     // Default dashboard chat sessions to the highest reasoning effort. settings.json's
     // `effortLevel` only accepts low/medium/high, so `max` (top of low/medium/high/xhigh/
     // max) must come from the launch flag. Applies to fresh AND --resume spawns; an
     // already-running pane keeps its effort until it respawns. An unknown value would
     // just warn + fall back to default, so this can never break the launch.
     claudeArgs.push('--effort', 'max');
+    // Pure chat: hand claude a read-only built-in tool set. This REMOVES the
+    // others from the model's tool table rather than refusing them per call,
+    // and coexists with --dangerously-skip-permissions above (--restricted
+    // would not: it refuses bypassPermissions). MCP tools are unaffected, so
+    // the hermit surface added just above survives. See runtime/chat-only.ts.
+    if (session.chatOnly) claudeArgs.push('--tools', CHAT_ONLY_CLAUDE_TOOLS.join(','));
   }
 
   const { created, preExistingUuids } = ensureSession({

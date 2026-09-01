@@ -231,6 +231,7 @@ export const chatRouter = router({
         runtimeProvider: true,
         runtimeModel: true,
         runtimeMode: true,
+        chatOnly: true,
         snapshotAt: true,
         // Read, but NOT returned — the row below collapses it to one boolean.
         // The sidebar needs one fact out of this blob: whether the session has
@@ -352,6 +353,7 @@ export const chatRouter = router({
           runtimeProvider: true,
           runtimeModel: true,
           runtimeMode: true,
+          chatOnly: true,
           snapshotAt: true,
           // What the session is doing right now. getSession / sessionDetail
           // only, NOT the 5s listSessions poll: the only reader is the session
@@ -420,6 +422,7 @@ export const chatRouter = router({
           startedAt: true, lastMessageAt: true, lastReadAt: true, lastActivity: true,
           closedAt: true, hiddenAt: true, hibernatedAt: true, groupId: true,
           runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true,
+          chatOnly: true,
           claudeSessionId: true, transcriptPath: true,
           pid: true, alive: true, state: true, rssMb: true, activity: true,
           contextTokens: true, outputTokens: true, snapshotAt: true,
@@ -664,6 +667,9 @@ export const chatRouter = router({
         // dashboard has no view of what is on the machine's disk, so an unknown
         // name is the gateway's to fall back from (see resolveMode).
         runtimeMode: z.string().max(64).optional(),
+        // Pure-chat: spawn the child with a read-only tool surface. Omitted =
+        // false, which is what every caller that predates the checkbox does.
+        chatOnly: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -678,6 +684,7 @@ export const chatRouter = router({
           runtimeProvider: input.runtimeProvider ?? null,
           runtimeModel: input.runtimeModel ?? null,
           runtimeMode: input.runtimeMode ?? null,
+          chatOnly: input.chatOnly ?? false,
         },
       });
     }),
@@ -1324,6 +1331,9 @@ export const chatRouter = router({
       select: {
         id: true, agentName: true, claudeSessionId: true,
         runtime: true, runtimeProvider: true, runtimeModel: true, runtimeMode: true,
+        // Rides along to the gateway, which turns it into each backend's own
+        // read-only switch at spawn time. `...s` below carries it through.
+        chatOnly: true,
       },
     });
     if (sessions.length === 0) return { sessions: [], messages: [] };

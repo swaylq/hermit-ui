@@ -72,6 +72,7 @@ import { notifyTurnBoundary } from './turn-boundary';
 import { claudeSdkEnv, applyCredentialEnv } from './claude-credentials';
 import { currentAuthFingerprint } from './pi-credentials';
 import { buildMcpServers } from '../mcp-config';
+import { CHAT_ONLY_CLAUDE_TOOLS } from './chat-only';
 import { api } from '../api';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from '../config';
 import { CcBlock } from '../claude-code';
@@ -877,12 +878,20 @@ export class ClaudeSdkRuntime implements AgentRuntime {
         // Matches the pane's `--effort max`.
         effort: 'max',
         ...(session.model?.trim() ? { model: session.model.trim() } : {}),
+        // Pure chat: the SDK twin of the pane's `--tools`. Narrowing the
+        // BUILT-IN set removes the rest from the model's tool table (they are
+        // not refused — they are absent), which is what makes a pure-chat turn
+        // fast rather than merely safe. MCP tools are governed separately, by
+        // `mcpServers` below. See runtime/chat-only.ts.
+        ...(session.chatOnly ? { tools: CHAT_ONLY_CLAUDE_TOOLS } : {}),
         // The hermit tool surface, and the credential that authenticates it, go
         // together — a session that gets one and not the other has tools that
         // 401 instead of tools that are absent. `hermitTools: false` (an
         // ordinary cron fire, whose session id has no ChatSession row for these
         // tools to act on) therefore drops BOTH. See RuntimeSession.hermitTools.
-        mcpServers: hermitTools ? buildMcpServers(session.id, session.isOrchestrator ?? false) : {},
+        mcpServers: hermitTools
+          ? buildMcpServers(session.id, session.isOrchestrator ?? false, session.chatOnly ?? false)
+          : {},
         env: applyCredentialEnv({
           ...process.env,
           ...(hermitTools ? {

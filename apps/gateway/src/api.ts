@@ -139,6 +139,9 @@ export const api = {
       runtime?: string | null; runtimeProvider?: string | null;
       runtimeModel?: string | null; runtimeMode?: string | null;
       runtimeCredentialId?: string | null;
+      // Pure-chat: spawn the child read-only. Absent = false (a dashboard that
+      // predates the column simply never sends it).
+      chatOnly?: boolean;
     }>;
     messages: Array<{ id: string; sessionId: string; role: string; content: any; createdAt: string }>;
   }> => {

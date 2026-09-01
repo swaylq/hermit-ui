@@ -80,6 +80,8 @@ type KimiHandle = RuntimeHandle & {
   agentDirectory: string;
   modelPin: string | null;
   credentialId: string | null;
+  /** Pure-chat: bind a read-only agent profile on the first turn. */
+  chatOnly: boolean;
   /** Set for the duration of a turn; the message queue's gate. */
   working: boolean;
   /** The in-flight turn's child. Null between turns. */
@@ -345,13 +347,62 @@ export function isGoalPrompt(text: string): boolean {
  * it has to: the agent's tools are scoped to its workspace, so a prompt parked
  * in a temp file would be refused by the Read that was told to fetch it.
  */
-export function kimiArgs(prompt: string, resumeId: string | null, addDirs: string[] = []): string[] {
+export function kimiArgs(
+  prompt: string,
+  resumeId: string | null,
+  addDirs: string[] = [],
+  agentFile: string | null = null,
+): string[] {
   return [
     ...(resumeId ? ['-r', resumeId] : []),
+    // `--agent-file` binds a tool profile AT SESSION CREATION and kimi restores
+    // it automatically on every later resume — which is why it may only be
+    // passed when there is no `-r`: the CLI rejects the combination outright
+    // (OptionConflictError). One-shot flag, permanent effect.
+    ...(!resumeId && agentFile ? ['--agent-file', agentFile] : []),
     ...addDirs.flatMap((d) => ['--add-dir', d]),
     '--output-format', 'stream-json',
     '-p', prompt,
   ];
+}
+
+/**
+ * The pure-chat agent profile, written into KIMI_CODE_HOME on demand.
+ *
+ * kimi is the one backend whose tool surface is 100% its own — the gateway
+ * injects no MCP server and no extension — so the only way in is kimi's own
+ * agent-profile format. Tool names were read out of the installed CLI rather
+ * than guessed: Read / Write / Edit / Bash / Glob / Grep / Task / WebFetch /
+ * WebSearch.
+ *
+ * Belt AND braces on purpose: `tools` is the allowlist that should do the work,
+ * `disallowedTools` repeats the denial. If the allowlist key were ever renamed
+ * upstream, an unknown key is ignored silently and the session would come back
+ * fully armed — the denylist means such a drift costs a tool, not the mode.
+ *
+ * Content is fixed, so one file in the shared home serves every session.
+ */
+export function chatOnlyAgentFile(home: string = kimiHome()): string {
+  const file = path.join(home, 'hermit-chat-only.md');
+  const body = [
+    '---',
+    'name: hermit-chat-only',
+    'description: Pure-chat session — look and discuss, never modify.',
+    'tools: ["Read", "Glob", "Grep", "WebFetch", "WebSearch"]',
+    'disallowedTools: ["Write", "Edit", "Bash", "Task"]',
+    '---',
+    '',
+    'This session is in pure-chat mode. You can read files and search the web;',
+    'you cannot write or edit files, run commands, or spawn sub-agents.',
+    '',
+    'Answer from what you already know wherever you can, and look something up',
+    'only when the answer actually turns on it. The user chose this mode to get',
+    'a fast, considered reply — not a thorough investigation.',
+    '',
+  ].join('\n');
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(file, body);
+  return file;
 }
 
 // ── usage, read back out of kimi's own session log ──────────────────────────
@@ -740,6 +791,7 @@ export class KimiCodeRuntime implements AgentRuntime {
       agentDirectory: session.agentDirectory,
       modelPin: session.model?.trim() || null,
       credentialId: session.credentialId ?? null,
+      chatOnly: session.chatOnly ?? false,
       working: false,
       child: null,
       interrupted: false,
@@ -837,7 +889,8 @@ export class KimiCodeRuntime implements AgentRuntime {
     childEnv.KIMI_CODE_HOME = home;
 
     const spawnedAt = Date.now();
-    const child = spawn(bin, kimiArgs(prompt, h.stampedSessionId, promptDir ? [promptDir] : []), {
+    const agentFile = h.chatOnly && !h.stampedSessionId ? chatOnlyAgentFile(home) : null;
+    const child = spawn(bin, kimiArgs(prompt, h.stampedSessionId, promptDir ? [promptDir] : [], agentFile), {
       cwd: h.agentDirectory,
       // stderr is NOT merged and NOT an error signal: the CLI writes its tools'
       // own output and its "resuming session" notices there, so a turn that
