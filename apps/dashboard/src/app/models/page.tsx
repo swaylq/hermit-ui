@@ -104,7 +104,7 @@ export default function ModelsSettingsPage() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="models" />
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">
         <div className="mx-auto w-full max-w-3xl p-4 sm:p-6 space-y-5">
           <p className="text-xs leading-relaxed text-muted-foreground">
             The model sources this machine can authenticate to. Each one is an endpoint plus the{' '}

@@ -43,3 +43,40 @@ targets:
         # reads the REAL value back out of its embedded provisioning profile at
         # runtime (ProvisioningProfile.swift) rather than trusting a #if DEBUG.
         aps-environment: development
+    scheme:
+      testTargets:
+        - HermitTests
+        - HermitUITests
+
+  # Plain unit tests. Only for logic that can be wrong in a way a screenshot would
+  # not show — right now that is AppConfig.isInternal, which decides whether a URL
+  # stays inside the app or is handed to Safari.
+  HermitTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: HermitTests
+    dependencies:
+      - target: Hermit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.swaylab.hermit.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Hermit.app/Hermit"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+
+  # One end-to-end launch on a simulated phone. See HermitUITests/SmokeTests.swift
+  # and smoke.sh — for a shell whose whole job is "load the web app", this is worth
+  # more than unit tests around the seams.
+  HermitUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: HermitUITests
+    dependencies:
+      - target: Hermit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.swaylab.hermit.uitests
+        TEST_TARGET_NAME: Hermit
+        GENERATE_INFOPLIST_FILE: YES

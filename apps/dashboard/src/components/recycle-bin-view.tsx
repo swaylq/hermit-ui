@@ -96,7 +96,10 @@ export function RecycleBinView() {
               const v = Math.round(Number(e.target.value));
               if (v >= 1 && v <= 365 && v !== cfg?.trashRetainDays) setConfig.mutate({ trashRetainDays: v });
             }}
-            className="w-14 rounded border border-border bg-background px-1.5 py-0.5 text-right text-foreground tabular-nums"
+            /* text-base below md: anything under 16px makes iOS zoom the whole
+               page on focus, which ui/input.tsx already avoids this way. h-8 so
+               it is a real tap target rather than a 22px sliver. */
+            className="h-8 w-16 rounded border border-border bg-background px-2 text-right text-base text-foreground tabular-nums md:h-auto md:w-14 md:px-1.5 md:py-0.5 md:text-xs"
           />
           <span>days in here — the conversation, its messages, its transcript and the files it uploaded.</span>
         </div>
@@ -121,7 +124,7 @@ export function RecycleBinView() {
                 title="Restore"
                 aria-label={`restore ${r.title || r.id}`}
                 onClick={() => restore.mutate({ id: r.id })}
-                className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
+                className="shrink-0 inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground/60 hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
               </button>
@@ -137,7 +140,10 @@ export function RecycleBinView() {
                     danger: true,
                   })) purgeNow.mutate({ id: r.id });
                 }}
-                className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-rose-500 transition-colors cursor-pointer"
+                /* Wider gap than the row's own: the neighbour is "restore" and
+                   this one is irreversible. 18px targets 8px apart is a coin
+                   flip with a thumb. */
+                className="ml-1 shrink-0 inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground/60 hover:bg-muted hover:text-rose-500 transition-colors cursor-pointer"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -168,7 +174,7 @@ export function RecycleBinView() {
                 aria-label={`restore ${a.name}`}
                 onClick={() => restoreAgent.mutate({ name: a.name })}
                 disabled={restoreAgent.isPending}
-                className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-foreground transition-colors cursor-pointer disabled:opacity-40"
+                className="shrink-0 inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground/60 hover:bg-muted hover:text-foreground transition-colors cursor-pointer disabled:opacity-40"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
               </button>
@@ -194,12 +200,12 @@ function PurgeAgentButton({ name, onConfirm }: { name: string; onConfirm: () => 
   }, [armed]);
   if (armed) {
     return (
-      <span className="shrink-0 inline-flex items-center gap-0.5 animate-in fade-in-0 duration-100">
+      <span className="ml-1 shrink-0 inline-flex items-center gap-1.5 animate-in fade-in-0 duration-100">
         <button
           type="button"
           onClick={() => setArmed(false)}
           aria-label="cancel"
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted cursor-pointer"
+          className="inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-muted cursor-pointer"
         >
           <X className="h-3.5 w-3.5" />
         </button>
@@ -207,7 +213,7 @@ function PurgeAgentButton({ name, onConfirm }: { name: string; onConfirm: () => 
           type="button"
           onClick={() => { setArmed(false); onConfirm(); }}
           aria-label={`permanently delete ${name}`}
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-rose-600 hover:bg-rose-500/10 cursor-pointer"
+          className="inline-flex h-8 w-8 items-center justify-center rounded text-rose-600 hover:bg-rose-500/10 cursor-pointer"
         >
           <Check className="h-3.5 w-3.5" />
         </button>
@@ -220,7 +226,7 @@ function PurgeAgentButton({ name, onConfirm }: { name: string; onConfirm: () => 
       title={`permanently delete ${name}`}
       aria-label={`permanently delete ${name}`}
       onClick={() => setArmed(true)}
-      className="shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-rose-500/10 hover:text-rose-600 transition-colors cursor-pointer"
+      className="ml-1 shrink-0 inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground/60 hover:bg-rose-500/10 hover:text-rose-600 transition-colors cursor-pointer"
     >
       <Trash2 className="h-3.5 w-3.5" />
     </button>

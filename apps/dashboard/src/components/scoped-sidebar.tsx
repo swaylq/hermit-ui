@@ -52,7 +52,7 @@ export function ScopedSidebar({ agentName }: { agentName: string }) {
         aria-label="navigation"
         className={cn(
           'bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col shrink-0',
-          'fixed inset-y-0 left-0 z-50 w-[280px] transition-transform duration-200 ease-out pwa-safe-t pwa-safe-b',
+          'fixed inset-y-0 left-0 z-50 w-[280px] transition-transform duration-200 ease-out pwa-safe-t pwa-safe-b pwa-inflow-lg',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
           'lg:static lg:translate-x-0 lg:z-0 lg:w-[300px]',
         )}

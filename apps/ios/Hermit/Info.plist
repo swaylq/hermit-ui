@@ -78,7 +78,15 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 
-	<!-- The dashboard is HTTPS-only, so App Transport Security stays at its
-	     defaults (no exceptions). -->
+	<!-- The shipping origin is HTTPS. The single exception is local networking,
+	     which lets `-hermitOrigin http://localhost:4102` reach a dashboard build
+	     running on the developer's own Mac (apps/ios/smoke.sh). It permits plain
+	     HTTP to localhost / .local names ONLY — nothing on the public internet —
+	     and localhost is still a secure context, so getUserMedia is unaffected. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

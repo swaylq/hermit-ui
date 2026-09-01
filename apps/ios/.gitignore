@@ -3,3 +3,4 @@ Hermit.xcodeproj/
 *.xcworkspace/
 DerivedData/
 build/
+shots/

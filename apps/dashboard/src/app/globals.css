@@ -248,36 +248,121 @@
    use the real rendered height, measured in JS as --app-h (window.visualViewport
    .height), falling back to 100vh before the script runs (100vh is correct from a
    cold start in standalone, unlike dvh). See providers.tsx for the measurement. */
-.app-h { height: 100dvh; }
+/* ── App-like mode ────────────────────────────────────────────────────────────
+   Two very different containers need identical treatment: an installed PWA
+   window, and the native iOS shell in apps/ios. Both draw under the status bar
+   and the home indicator (viewport-fit=cover), and in both 100dvh is unreliable.
+
+   Everything below used to be gated on `@media (display-mode: standalone)` alone.
+   A WKWebView reports `browser`, so inside the shell — the app these adaptations
+   were written for — every one of them silently switched itself off: the sidebar
+   and sheet headers sat under the notch, the composer sat under the keyboard, and
+   the lightbox close button landed in the status bar where the system eats the
+   tap. The shell now puts `native-shell` on <html> before first paint
+   (WebViewController.shellMarkerScript), so both triggers feed the same six
+   variables and no value is written twice.
+
+   Outside both, none of the utilities below exist at all — which is the point:
+   they are unlayered, so a rule that merely evaluated to zero would still beat
+   the element's own Tailwind padding. */
+:root {
+  /* Only read inside the app-like blocks below, so these are the "script has not
+     measured yet" fallbacks rather than the browser-tab values. */
+  --app-height: var(--app-h, 100vh);
+  --safe-t: 0px;
+  --safe-b: 0px;
+  --safe-l: 0px;
+  --safe-r: 0px;
+  /* A bottom bar that already has its own padding ABSORBS the home-indicator
+     inset (max, not stack), so it sits snug above the indicator instead of
+     leaving an empty strip under its content. */
+  --safe-pb: 0.5rem;
+  --safe-sheet-top: 0.75rem;
+}
 @media (display-mode: standalone) {
-  .app-h { height: var(--app-h, 100vh); }
+  :root {
+    --safe-t: env(safe-area-inset-top);
+    --safe-b: env(safe-area-inset-bottom);
+    --safe-l: env(safe-area-inset-left);
+    --safe-r: env(safe-area-inset-right);
+    --safe-pb: max(0.5rem, env(safe-area-inset-bottom));
+    --safe-sheet-top: calc(env(safe-area-inset-top) + 0.75rem);
+  }
+}
+html.native-shell {
+  --safe-t: env(safe-area-inset-top);
+  --safe-b: env(safe-area-inset-bottom);
+  --safe-l: env(safe-area-inset-left);
+  --safe-r: env(safe-area-inset-right);
+  --safe-pb: max(0.5rem, env(safe-area-inset-bottom));
+  --safe-sheet-top: calc(env(safe-area-inset-top) + 0.75rem);
 }
 
-/* Installed-PWA safe areas. Only INSIDE a standalone PWA does the canvas extend
-   under the iOS status bar / home indicator (viewport-fit=cover), so these insets
-   apply only there — a normal browser tab is left exactly as it was. Applied to
-   the app shell (auth-gate) and the mobile drawer (app-sidebar) so their content
-   isn't occluded and the app background fills the status-bar / home-indicator
-   zones. On desktop the insets are 0, so this is a no-op there too. */
+.app-h { height: 100dvh; }
+
+/* The utilities themselves stay SCOPED to app-like mode — they must not merely
+   evaluate to zero outside it. These rules are unlayered, so they beat any
+   Tailwind padding utility on the same element regardless of order; an
+   unconditional `.pwa-pb-safe { padding-bottom: 0.5rem }` would quietly override
+   the composer's own `pb-3` in every browser tab. Written twice because a media
+   query and a class selector cannot be ORed in CSS; the VALUES live in the
+   variables above, so only the selectors are duplicated.
+   Applied to the app shell (auth-gate), the mobile drawer (app-sidebar) and the
+   sheets, so their content isn't occluded and the app background fills the
+   status-bar / home-indicator zones. */
 @media (display-mode: standalone) {
-  .pwa-safe-t { padding-top: env(safe-area-inset-top); }
-  .pwa-safe-b { padding-bottom: env(safe-area-inset-bottom); }
-  .pwa-safe-x {
-    padding-left: env(safe-area-inset-left);
-    padding-right: env(safe-area-inset-right);
-  }
-  /* For a bottom bar that already has its own bottom padding: ABSORB the home-
-     indicator inset into that padding (max, not stack) so the bar sits snug above
-     the indicator instead of leaving extra empty space below its content. */
-  .pwa-pb-safe { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
-  /* Overlay sheets (session detail, agent detail) and the image lightbox portal
-     to <body>, so they never sit inside the pwa-safe-* shell — without this their
-     header text and close button land under the iOS status bar, where the system
-     swallows the tap and the button looks dead. top must stay plain 0.75rem
-     outside standalone (the base class sets top-3; this media block overrides
-     it, and being unlayered it beats the layered utility regardless of order). */
-  .pwa-sheet-safe-top { top: calc(env(safe-area-inset-top) + 0.75rem); }
+  .app-h { height: var(--app-height); }
+  .pwa-safe-t { padding-top: var(--safe-t); }
+  .pwa-safe-b { padding-bottom: var(--safe-b); }
+  .pwa-safe-x { padding-left: var(--safe-l); padding-right: var(--safe-r); }
+  .pwa-pb-safe { padding-bottom: var(--safe-pb); }
 }
+html.native-shell.app-h,
+html.native-shell .app-h { height: var(--app-height); }
+html.native-shell .pwa-safe-t { padding-top: var(--safe-t); }
+html.native-shell .pwa-safe-b { padding-bottom: var(--safe-b); }
+html.native-shell .pwa-safe-x { padding-left: var(--safe-l); padding-right: var(--safe-r); }
+html.native-shell .pwa-pb-safe { padding-bottom: var(--safe-pb); }
+/* An overlay that becomes an in-flow column at ≥lg — the sidebar drawer, the
+   preview panel — is then a CHILD of the app shell, which already carries the
+   inset. `env()` is per-document, not per-element, so both apply and the column
+   starts one status-bar lower than the <main> beside it. Invisible on desktop
+   (insets are 0) and real on an iPad in landscape, which this target builds for.
+   Specificity has to beat the plain `.pwa-safe-*` rules above, hence the doubled
+   class and the repeated `html.native-shell`. */
+@media (display-mode: standalone) and (min-width: 64rem) {
+  .pwa-safe-t.pwa-inflow-lg { padding-top: 0; }
+  .pwa-safe-b.pwa-inflow-lg { padding-bottom: 0; }
+}
+@media (min-width: 64rem) {
+  html.native-shell .pwa-safe-t.pwa-inflow-lg { padding-top: 0; }
+  html.native-shell .pwa-safe-b.pwa-inflow-lg { padding-bottom: 0; }
+}
+
+/* Overlay sheets (session detail, agent detail) and the image lightbox portal to
+   <body>, so they never sit inside the pwa-safe-* shell — without this their
+   header text and close button land under the iOS status bar, where the system
+   swallows the tap and the button looks dead. Scoped for the same reason as the
+   block above: outside app-like mode the element's own `top-3` has to win. */
+@media (display-mode: standalone) {
+  .pwa-sheet-safe-top { top: var(--safe-sheet-top); }
+}
+html.native-shell .pwa-sheet-safe-top { top: var(--safe-sheet-top); }
+
+/* While the on-screen keyboard is up the app shell shrinks to the visible
+   viewport (--app-h), which drags everything anchored to `top-1/2` down onto the
+   composer — the preview edge-tab ended up sitting on the send button. `kb-open`
+   is set by providers.tsx, and only in app-like mode. */
+html.kb-open .preview-edge-tab {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* And nothing needs to clear the home indicator while the keyboard is over it:
+   WKWebView keeps reporting the bottom inset, which left the composer floating
+   ~34px above the keyboard. Same specificity as the app-like rules, placed after
+   them so it wins. */
+html.kb-open .pwa-pb-safe { padding-bottom: 0.5rem; }
 
 /* "Hermit" wordmark — a Cochin rendering baked to a transparent PNG, used as a
    CSS mask so its colour comes from the element's background

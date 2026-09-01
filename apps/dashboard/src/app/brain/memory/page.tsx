@@ -23,7 +23,7 @@ export default function BrainMemoryPage() {
         <span aria-hidden className="logo-crab-mono h-5 w-5 bg-foreground" />
         <span className="text-sm font-medium text-foreground">Brain · Memory</span>
       </header>
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">
         {agents.isPending ? (
           <Centered>loading…</Centered>
         ) : !brain ? (

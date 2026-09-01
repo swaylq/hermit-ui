@@ -107,7 +107,13 @@ export const ScheduleBar = memo(function ScheduleBar({
             </span>
           </div>
         ) : (
-        <div className="flex items-center gap-2 -mx-3 px-3 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        /* The row overflows on a phone — "Perfect it" starts past the right edge
+           of a 390px screen — and with the scrollbar hidden nothing said so. A
+           mask fades the last 1.5rem so there is visibly more to reach; it only
+           applies where the row actually scrolls (the utility is behind a
+           container query on the chat column, so a wide column keeps a hard
+           edge). */
+        <div className="flex items-center gap-2 -mx-3 px-3 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [mask-image:linear-gradient(to_right,#000_0,#000_calc(100%-1.5rem),transparent_100%)] @min-[34rem]:[mask-image:none]">
           {takeover && (
             <button
               type="button"

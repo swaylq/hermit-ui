@@ -2327,6 +2327,15 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           <div
             className={cn(
               '@min-[40rem]:hidden absolute right-full top-1/2 -translate-y-1/2 mr-1 z-20 flex items-center gap-1',
+              // Never wider than the room to its left. `100%` in this calc is the
+              // anchor's own width (the persistent cluster), so this is exactly
+              // "viewport minus the buttons I am floating left of". Without it the
+              // tray grew past the screen edge whenever the cluster gained a
+              // button (archived → Restore, a tmux session → terminal) or a
+              // confirm armed inside it (28px icon → 121px pill), and the cancel
+              // ✕ ended up off-screen behind an overflow-hidden ancestor.
+              'max-w-[calc(100vw-100%-1.5rem)] overflow-x-auto overscroll-x-contain',
+              '[scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
               'rounded-lg border border-border bg-popover/95 px-1 py-0.5 shadow-lg backdrop-blur-sm',
               'origin-right transition-[opacity,transform] duration-200 ease-out',
               moreOpen

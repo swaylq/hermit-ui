@@ -43,13 +43,16 @@ export function PreviewTab({ open, onOpen }: { open: boolean; onOpen: () => void
         // Above the composer (z-50), below the panel itself (90) and dialogs
         // (100+) — so on a phone, where the panel is a full-screen layer, the
         // panel simply covers it.
-        'group fixed right-0 top-1/2 z-[70] -translate-y-1/2',
-        'flex h-16 w-[30px] items-center justify-center',
+        'preview-edge-tab group fixed right-0 top-1/2 z-[70] -translate-y-1/2',
+        // 34px, not 30: half of a handle flush against the screen edge is
+        // already off-screen, and `hover:w-[34px]` never fires on a touch
+        // device — so the widened state has to be the resting one.
+        'flex h-16 w-[34px] items-center justify-center',
         // Flat against the edge, rounded away from it. No right border: the
         // screen edge is that side.
         'rounded-l-2xl border border-r-0 border-white/10 bg-[#111319]/85 backdrop-blur-xl',
         'cursor-pointer transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
-        'hover:w-[34px] hover:border-white/25 hover:bg-[#161b22]/90',
+        'hover:w-[38px] hover:border-white/25 hover:bg-[#161b22]/90',
         // Out of the way the moment the drawer starts arriving.
         open && 'pointer-events-none translate-x-full opacity-0',
       )}

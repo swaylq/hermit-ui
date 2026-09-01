@@ -18,6 +18,8 @@
 // (the FAB pointerdown / the PTT keydown) so getUserMedia + AudioContext.resume
 // are allowed.
 
+import { isNativeShell, setNativeMicActive } from './native-bridge';
+
 const TARGET_RATE = 16_000;
 // Keep the mic warm briefly after a recording so a back-to-back recording starts
 // instantly (no getUserMedia device-open latency → no clipped first words). This is
@@ -95,6 +97,9 @@ function noteGranted() {
   micPerm = 'granted';
   micPermAt = Date.now();
   lastCaptureAt = Date.now();
+  // A stream is open. In the native shell this is what puts iOS's audio session
+  // into a category that can actually record.
+  setNativeMicActive(true);
 }
 
 // How long after a successful capture we still assume the grant is live, when the
@@ -108,6 +113,12 @@ let lastCaptureAt = 0;
  * False means: don't open anything yet, offer an explicit tap-to-allow instead.
  */
 export function canOpenMicSilently(): boolean {
+  // Inside the native shell the host app answers the capture request itself
+  // (WKUIDelegate → .grant), so there is no prompt to protect the user from —
+  // and this is the app whose entire reason for existing is not having one.
+  // Without this, press-and-hold in the shell demands a redundant "tap to allow"
+  // on every cold launch and after every ~10 minutes idle.
+  if (isNativeShell()) return true;
   if (isMicWarm()) return true;
   const perm = micPermission();
   if (perm === 'granted') return true;
@@ -135,6 +146,8 @@ function releaseWarm() {
     warm.stream.getTracks().forEach((t) => t.stop());
     void warm.ctx.close();
     warm = null;
+    // Hand the audio route back — otherwise the shell keeps other apps ducked.
+    setNativeMicActive(false);
   }
 }
 

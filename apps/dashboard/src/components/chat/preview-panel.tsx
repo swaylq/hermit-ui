@@ -66,6 +66,7 @@ import { Check, ChevronLeft, ChevronRight, Copy, ExternalLink, RotateCw, SquareD
 import { cn } from '@/lib/utils';
 import type { LivePreviewInfo } from '@/lib/live-preview';
 import { readPreviewElementPick, type PreviewElementPick } from '@/components/chat/preview-element-pick';
+import { copyText } from '@/lib/copy-text';
 
 // ── divider width persistence ────────────────────────────────────────────────
 
@@ -422,7 +423,7 @@ export function LivePreviewPanel({
         // Phone: full-screen layer above the composer (z-50) and the preview tab
         // (70), below dialogs (100+). pwa-safe-* because fixed layers pad the
         // notch / home bar themselves (Sheet does; Overlay's children do).
-        'fixed inset-0 z-[90] pwa-safe-t pwa-safe-b',
+        'fixed inset-0 z-[90] pwa-safe-t pwa-safe-b pwa-inflow-lg',
         // Phone: the layer itself slides in off the right edge.
         'transition-transform duration-[var(--pv-ms)] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform',
         shown ? 'translate-x-0' : 'translate-x-full',
@@ -489,7 +490,10 @@ export function LivePreviewPanel({
         <span className="hidden shrink-0 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70 sm:inline">
           {preview.mode === 'static' ? 'static' : 'service'}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" title={preview.target}>
+        {/* A floor, not min-w-0: this is a flex-1 basis-0 item competing with
+            `here` below, and on a phone it lost every pixel — the header said
+            which PAGE you were on but never which service the preview was. */}
+        <span className="min-w-[4.5rem] flex-1 truncate font-mono text-[11px] text-muted-foreground" title={preview.target}>
           {shortTarget}
         </span>
         {/* Where inside the preview we are. Its own span, brighter than the
@@ -513,13 +517,15 @@ export function LivePreviewPanel({
             title={copied ? '已复制' : '复制预览链接'}
             className={copied ? 'text-emerald-500 hover:text-emerald-500' : undefined}
             onClick={() => {
-              navigator.clipboard?.writeText(preview.url).then(
-                () => {
-                  setCopied(true);
-                  window.setTimeout(() => setCopied(false), 1200);
-                },
-                () => {},
-              );
+              // Through copyText, not navigator.clipboard directly: that object is
+              // absent outside a secure context and can reject when Safari decides
+              // the gesture expired, and swallowing either leaves a button that
+              // flashes "已复制" having copied nothing.
+              void copyText(preview.url).then((ok) => {
+                if (!ok) return;
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 1200);
+              });
             }}
           >
             {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}

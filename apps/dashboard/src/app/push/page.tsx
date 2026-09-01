@@ -27,6 +27,14 @@ import {
   subscribeWebPush,
   unsubscribeWebPush,
 } from '@/lib/web-push-client';
+import {
+  getNativePushStatus,
+  isNativeShell,
+  onNativePushStatus,
+  readNativePushStatus,
+  requestNativePush,
+  type NativePushStatus,
+} from '@/lib/native-bridge';
 
 const PLATFORM_LABEL: Record<string, string> = {
   web: 'Web Push (PWA)',
@@ -47,21 +55,14 @@ export default function PushSettingsPage() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="push" />
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">
         <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-6">
           <div>
             <h2 className="text-sm font-semibold text-foreground">推送通知</h2>
-            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-              agent 回复、卡在权限确认上、定时任务失败、机器资源告警，都会推到手机锁屏。
-              下面两条路都<span className="text-foreground/80">不需要开发 app，也不需要付费 Apple 开发者账号</span>；
-              两个一起开也可以，同一条通知会按会话折叠，不会响两次。
-            </p>
+            <PushIntro />
           </div>
 
-          <WebPushCard
-            vapidPublicKey={status.data?.vapidPublicKey ?? null}
-            onChange={refresh}
-          />
+          <PushRouteCard vapidPublicKey={status.data?.vapidPublicKey ?? null} onChange={refresh} />
 
           <BarkCard
             defaultServer={status.data?.defaultBarkServer ?? 'https://api.day.app'}
@@ -76,6 +77,115 @@ export default function PushSettingsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The standing line — "neither route needs an app" — reads as nonsense to someone
+ * who is standing inside the app, where the first card IS that app.
+ */
+function PushIntro() {
+  const [native, setNative] = useState<boolean | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard mount gate
+  useEffect(() => setNative(isNativeShell()), []);
+  return (
+    <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+      agent 回复、卡在权限确认上、定时任务失败、机器资源告警，都会推到手机锁屏。
+      {native
+        ? '这台设备走原生 APNs（下面第一张卡片），Bark 可以再开一路当兜底；'
+        : '下面两条路都不需要开发 app，也不需要付费 Apple 开发者账号；'}
+      两个一起开也可以，同一条通知会按会话折叠，不会响两次。
+    </p>
+  );
+}
+
+// ── Which of the two iPhone routes is even applicable here ──────────────────
+
+/**
+ * Inside the native shell the Web Push card was worse than useless: `PushManager`
+ * does not exist in a WKWebView, so `pushSupport()` fell through to
+ * `needs-install` and the page told someone already standing inside the app to
+ * open Safari's share sheet and add it to the Home Screen. There is no Safari
+ * share sheet, and APNs already works. So the shell gets its own card.
+ *
+ * Mount-gated because both branches read `window`.
+ */
+function PushRouteCard({ vapidPublicKey, onChange }: { vapidPublicKey: string | null; onChange: () => void }) {
+  const [native, setNative] = useState<boolean | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard mount gate
+  useEffect(() => setNative(isNativeShell()), []);
+  if (native === null) return null;
+  return native ? <NativeAppCard /> : <WebPushCard vapidPublicKey={vapidPublicKey} onChange={onChange} />;
+}
+
+function NativeAppCard() {
+  const [st, setSt] = useState<NativePushStatus | null>(null);
+  const [timedOut, setTimedOut] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- adopts a status the shell may already have delivered
+    setSt(getNativePushStatus());
+    const off = onNativePushStatus(setSt);
+    readNativePushStatus();
+    // An older build of the app does not answer `pushStatus` at all. Without a
+    // deadline the card sits on "asking the app…" forever — on the one page whose
+    // job is to tell you whether notifications work.
+    const t = window.setTimeout(() => setTimedOut(true), 3000);
+    return () => { off(); window.clearTimeout(t); };
+  }, []);
+
+  const status = st?.status ?? 'unknown';
+  const registered = st?.registered ?? false;
+
+  return (
+    <section className="rounded-lg border border-border p-4">
+      <div className="flex items-start gap-3">
+        <Smartphone className="h-5 w-5 shrink-0 text-foreground/70 mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold text-foreground">原生 App · 这台 iPhone</h3>
+          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+            你正在 Hermit App 里，推送走系统的 APNs，
+            <span className="text-foreground/80">不需要「添加到主屏幕」</span>
+            ，也不需要下面的 Web Push。App 会把设备令牌交给网页，网页再替钥匙串里的每台机器各注册一次。
+          </p>
+
+          {status === 'denied' ? (
+            <Notice
+              tone="warn"
+              text="系统通知权限被拒绝了。iOS 只会问一次，改不了主意就得去「设置 → 通知 → Hermit」里打开，再回到这里。"
+            />
+          ) : status === 'notDetermined' ? (
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={requestNativePush}
+                className="rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background hover:opacity-90"
+              >
+                开启通知
+              </button>
+            </div>
+          ) : status === 'unknown' ? (
+            timedOut ? (
+              <Notice
+                tone="warn"
+                text="这个版本的 App 没有回报通知权限状态 —— 大概率是网页比 App 新。去 iOS「设置 → 通知 → Hermit」看一眼，或者装一个新版本的 App。"
+              />
+            ) : (
+              <p className="mt-3 text-[11px] text-muted-foreground">正在向 App 询问权限状态…</p>
+            )
+          ) : registered ? (
+            <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-emerald-500">
+              <CheckCircle2 className="h-3.5 w-3.5" /> 已授权，设备已在 APNs 注册
+            </p>
+          ) : (
+            <Notice
+              tone="warn"
+              text="已授权，但系统还没给出 APNs 令牌。模拟器上这是正常的（模拟器没有 APNs）；真机上通常是网络问题，重开一次 App 再看。"
+            />
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -83,7 +83,7 @@ export default function UsagePage() {
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="usage" />
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">
         <div className="max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
           {/* The accurate view — real Claude Max plan % scraped from `claude /usage`. */}
           <section>
@@ -490,12 +490,21 @@ function CodexBar({ label, window: reading, now }: { label: string; window: Code
       </div>
       <AnimatedBar pct={pct ?? 0} color={pctBarColor(pct ?? 0)} />
       <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground min-h-[14px]">
-        <span className="truncate">
+        {/* The countdown is the half of this line anyone reads, and as one
+            truncating span it was the half that got cut on a phone. Its own
+            shrink-0 sibling, so the absolute timestamp truncates first. */}
+        <span className="flex min-w-0 items-baseline gap-1">
           {validAt ? (
             <>
-              resets <span className="tabular-nums text-foreground/70">{formatShanghai(validAt, { withDate: true })}</span>{' '}
-              {DISPLAY_TZ_LABEL}
-              {left && <> · in <span className="tabular-nums text-foreground/70">{left}</span></>}
+              <span className="truncate">
+                resets <span className="tabular-nums text-foreground/70">{formatShanghai(validAt, { withDate: true })}</span>{' '}
+                {DISPLAY_TZ_LABEL}
+              </span>
+              {left && (
+                <span className="shrink-0 whitespace-nowrap">
+                  · in <span className="tabular-nums text-foreground/70">{left}</span>
+                </span>
+              )}
             </>
           ) : (
             'no reset reported'

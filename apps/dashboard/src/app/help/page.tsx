@@ -94,7 +94,7 @@ export default function HelpPage() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="help" />
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">
         <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 space-y-6">
           <div>
             <h2 className="text-sm font-semibold text-foreground">Using hermit-ui</h2>

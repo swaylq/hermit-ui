@@ -14,13 +14,85 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         UNUserNotificationCenter.current().delegate = self
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if let error { NSLog("[hermit] notification auth failed: \(error)") }
-            guard granted else { return }
-            // Must happen on the main thread; the callback lands on a background one.
-            DispatchQueue.main.async { application.registerForRemoteNotifications() }
-        }
+        // Deliberately NOT asking for permission here. At cold launch the user has
+        // not entered a machine key yet, so the web layer has nothing to register
+        // the token against — a "yes" is thrown away and a "no" is permanent and
+        // only reversible in iOS Settings. The web side asks instead, the moment it
+        // holds at least one key (lib/native-bridge.ts → `requestPush`).
+        //
+        // Someone who already said yes on an earlier launch is a different case:
+        // re-registering is silent, and the token can change, so do it now.
+        registerIfAlreadyAuthorized()
         return true
+    }
+
+    // MARK: - Notification permission, on the web layer's schedule
+
+    /// Ask the OS, but only if it has never been asked. Reports the resulting
+    /// status either way — the caller uses it to decide what to show.
+    func requestPushAuthorization(_ done: @escaping (String, Bool) -> Void) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .notDetermined else {
+                // Already answered. Re-asking cannot show the prompt again, so the
+                // honest move is to report the standing answer and let the page
+                // point at iOS Settings.
+                self.finish(settings.authorizationStatus, done)
+                return
+            }
+            center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                if let error { NSLog("[hermit] notification auth failed: \(error)") }
+                // Trust the callback's own answer. Re-reading settings right here
+                // can still come back `.notDetermined` for a beat, which would put
+                // the page back on "开启通知" immediately after a successful grant.
+                self.finish(granted ? .authorized : .denied, done)
+            }
+        }
+    }
+
+    /// Read the standing answer without ever prompting.
+    func readPushStatus(_ done: @escaping (String, Bool) -> Void) {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                done(Self.label(settings.authorizationStatus),
+                     UIApplication.shared.isRegisteredForRemoteNotifications)
+            }
+        }
+    }
+
+    private func registerIfAlreadyAuthorized() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                // Must happen on the main thread; the callback lands on a background one.
+                DispatchQueue.main.async { UIApplication.shared.registerForRemoteNotifications() }
+            default:
+                break
+            }
+        }
+    }
+
+    private func finish(_ status: UNAuthorizationStatus, _ done: @escaping (String, Bool) -> Void) {
+        DispatchQueue.main.async {
+            switch status {
+            case .authorized, .provisional, .ephemeral:
+                UIApplication.shared.registerForRemoteNotifications()
+            default:
+                break
+            }
+            done(Self.label(status), UIApplication.shared.isRegisteredForRemoteNotifications)
+        }
+    }
+
+    private static func label(_ status: UNAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined: return "notDetermined"
+        case .denied: return "denied"
+        case .authorized: return "authorized"
+        case .provisional: return "provisional"
+        case .ephemeral: return "ephemeral"
+        @unknown default: return "unknown"
+        }
     }
 
     // MARK: - APNs registration

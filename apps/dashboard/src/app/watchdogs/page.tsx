@@ -98,18 +98,22 @@ function Num({
   onChange: (v: number) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 text-sm">
-      <span className="w-40 shrink-0 text-muted-foreground">{label}</span>
-      <Input
-        type="number"
-        className="h-8 w-28"
-        value={Number.isFinite(value) ? value : ''}
-        onChange={(e) => {
-          const n = Number(e.target.value);
-          if (Number.isFinite(n)) onChange(n);
-        }}
-      />
-      {unit ? <span className="text-xs text-muted-foreground">{unit}</span> : null}
+    // Stacked on a phone. Side by side, a 160px label plus a 112px input left the
+    // unit ("× cpu count") 54px, so it wrapped to two lines inside a one-line row.
+    <label className="flex flex-col items-start gap-1 text-sm sm:flex-row sm:items-center sm:gap-2">
+      <span className="text-muted-foreground sm:w-40 sm:shrink-0">{label}</span>
+      <span className="flex items-center gap-2">
+        <Input
+          type="number"
+          className="h-8 w-28"
+          value={Number.isFinite(value) ? value : ''}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (Number.isFinite(n)) onChange(n);
+          }}
+        />
+        {unit ? <span className="whitespace-nowrap text-xs text-muted-foreground">{unit}</span> : null}
+      </span>
     </label>
   );
 }
@@ -174,7 +178,7 @@ export default function WatchdogsPage() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="watchdogs" />
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">
         <div className="mx-auto w-full max-w-3xl p-4 sm:p-6 space-y-5">
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm text-muted-foreground">

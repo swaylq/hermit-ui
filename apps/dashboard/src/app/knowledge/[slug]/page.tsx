@@ -55,7 +55,7 @@ function KnowledgeBaseEditor({ slug }: { slug: string }) {
         <DeleteBaseButton id={kb.id} name={kb.name} />
       </header>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">
         <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 space-y-5">
           <IntroEditor id={kb.id} intro={kb.intro} autoIntro={kb.autoIntro} onSaved={refresh} />
           <DocsSection

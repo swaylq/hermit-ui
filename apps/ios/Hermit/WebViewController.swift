@@ -31,6 +31,19 @@ final class WebViewController: UIViewController {
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.userContentController.add(bridge, name: NativeBridge.handlerName)
+        config.userContentController.addUserScript(Self.shellMarkerScript)
+
+        // The web layer decides WHEN to ask for notification permission, because
+        // only it knows whether there is a machine key to register a token
+        // against. See AppDelegate for why asking at launch was wrong.
+        bridge.onRequestPush = { done in Self.appDelegate?.requestPushAuthorization(done) }
+        bridge.onReadPushStatus = { done in Self.appDelegate?.readPushStatus(done) }
+        // The web layer knows exactly when a microphone stream is open; the
+        // permission callback does not (WebKit skips it while it still holds a
+        // grant). See `activateRecordingSession`.
+        bridge.onMicActive = { [weak self] active in
+            if active { self?.activateRecordingSession() } else { self?.releaseAudioSession() }
+        }
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.uiDelegate = self
@@ -57,6 +70,38 @@ final class WebViewController: UIViewController {
         ])
     }
 
+    private static var appDelegate: AppDelegate? { UIApplication.shared.delegate as? AppDelegate }
+
+    /// Tell the page, before its first paint, that it is inside the shell.
+    ///
+    /// The dashboard's iOS adaptations — safe-area padding, the measured
+    /// `--app-h` that keeps the composer above the keyboard, the ⌘-shortcuts —
+    /// were all written for an installed PWA and gated on
+    /// `@media (display-mode: standalone)`. A WKWebView reports `browser`, so
+    /// inside this app every one of them was switched off: headers under the
+    /// notch, the keyboard over the composer. A class on `<html>` is the cheapest
+    /// thing CSS can key off, and it has to be set at document start or the first
+    /// frame paints without it. (`<html suppressHydrationWarning>` in layout.tsx
+    /// means React will not fight over the attribute.)
+    private static let shellMarkerScript = WKUserScript(
+        source: """
+        (function () {
+          var mark = function () {
+            if (document.documentElement) {
+              document.documentElement.classList.add('native-shell');
+              return true;
+            }
+            return false;
+          };
+          if (!mark()) {
+            document.addEventListener('readystatechange', mark, { once: true });
+          }
+        })();
+        """,
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: true
+    )
+
     private func load() {
         webView.load(URLRequest(url: AppConfig.origin))
     }
@@ -67,6 +112,11 @@ final class WebViewController: UIViewController {
     }
 
     @objc private func didEnterForeground() {
+        // Nothing about audio here on purpose. The scene tears the session down on
+        // the way out, and the web layer switches it back on when it actually
+        // opens a stream (`onMicActive`) — re-activating on every foreground
+        // instead would duck whatever the user is listening to for the rest of
+        // the launch, after a single voice message.
         bridge.notifyForeground()
     }
 
@@ -103,6 +153,23 @@ final class WebViewController: UIViewController {
     }
 }
 
+// MARK: - Presenting on top
+
+extension UIViewController {
+    /// Present from whatever is actually frontmost. UIKit refuses (with a log line
+    /// and nothing else) when the receiver is already presenting something, which
+    /// is easy to hit here: a share sheet raised while a popup web view is up, a
+    /// JS alert fired from inside that popup.
+    @discardableResult
+    func presentOnTop(_ vc: UIViewController, animated: Bool = true) -> Bool {
+        var top: UIViewController = self
+        while let next = top.presentedViewController, !next.isBeingDismissed { top = next }
+        guard top.view.window != nil else { return false }
+        top.present(vc, animated: animated)
+        return true
+    }
+}
+
 // MARK: - WKUIDelegate
 
 extension WebViewController: WKUIDelegate {
@@ -124,6 +191,8 @@ extension WebViewController: WKUIDelegate {
             decisionHandler(.deny)
             return
         }
+        // Also activated by `onMicActive` a moment later; doing it here too means
+        // the very first recording is not racing the round trip.
         activateRecordingSession()
         decisionHandler(.grant)
     }
@@ -134,27 +203,57 @@ extension WebViewController: WKUIDelegate {
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = navigationAction.request.url {
-            if AppConfig.isInternal(url) { webView.load(URLRequest(url: url)) } else { openExternally(url) }
+        guard let url = navigationAction.request.url else { return nil }
+        guard AppConfig.isInternal(url) else {
+            openExternally(url)
+            return nil
         }
+        // Internal, but the page asked for a NEW window: the image lightbox's
+        // "open original", a markdown link with target="_blank". Loading it into
+        // this web view — what the shell used to do — throws away the open
+        // session, its scroll position and any unsent draft, with only a back
+        // swipe to undo it. Safari is no good either: it is a different cookie and
+        // storage jar, so an authed route would land on the sign-in screen.
+        //
+        // So: a second web view against the same persistent data store, presented
+        // on top. Close it and the session underneath is exactly where it was.
+        // Returning nil (rather than handing WebKit the new view) keeps this off
+        // the opener path entirely — nothing here needs `window.opener`, and a
+        // configuration WebKit owns is not ours to reshape.
+        let popup = PopupWebViewController(url: url)
+        popup.modalPresentationStyle = .pageSheet
+        presentOnTop(popup)
         return nil
+    }
+
+    /// Who is speaking. A dialog raised by the page itself needs no title; one
+    /// raised by a SUBFRAME does, because the live-preview panel embeds
+    /// agent-authored HTML from another origin with `allow-modals`, and an
+    /// untitled system alert reads as the app's own words. Safari names the site
+    /// for the same reason.
+    private func dialogTitle(for frame: WKFrameInfo) -> String? {
+        guard !frame.isMainFrame else { return nil }
+        let host = frame.securityOrigin.host
+        return host.isEmpty ? "Embedded content" : host
     }
 
     // JS dialogs have no native presentation in a web view — supply one, or
     // `alert()` silently does nothing.
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
-        let a = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+        let a = UIAlertController(title: dialogTitle(for: frame), message: message, preferredStyle: .alert)
         a.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
-        present(a, animated: true)
+        // Presented on top, and the handler runs if that fails: WebKit blocks the
+        // page until it is called, so a dropped presentation would freeze the tab.
+        if !presentOnTop(a) { completionHandler() }
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
-        let a = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+        let a = UIAlertController(title: dialogTitle(for: frame), message: message, preferredStyle: .alert)
         a.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
         a.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
-        present(a, animated: true)
+        if !presentOnTop(a) { completionHandler(false) }
     }
 }
 
@@ -165,6 +264,27 @@ extension WebViewController: WKNavigationDelegate {
                  decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else {
+            decisionHandler(.allow)
+            return
+        }
+        // `<a download>` / a blob the page built to save a file. First, because it
+        // is frame-agnostic: an `<a download>` inside the preview iframe is still a
+        // save, not a navigation. Without this the navigation is simply allowed and
+        // the whole dashboard is replaced by the raw image or PDF — the "no way
+        // back" trap the web side has its own workarounds for. The download
+        // delegate below turns it into a share sheet.
+        if navigationAction.shouldPerformDownload {
+            decisionHandler(.download)
+            return
+        }
+        // Only the MAIN frame is the shell's own navigation. A subframe belongs to
+        // the page, and the page deliberately embeds another origin: the live
+        // preview panel iframes preview.swaylab.ai so agent-authored HTML can
+        // never run on the dashboard's origin. Routing that through the off-site
+        // branch left the panel blank and slid a Safari sheet over the whole app.
+        // `targetFrame` is nil for a new window (target="_blank"), which must keep
+        // falling through to Safari — so this only relaxes real subframes.
+        if let target = navigationAction.targetFrame, !target.isMainFrame {
             decisionHandler(.allow)
             return
         }
@@ -214,7 +334,7 @@ extension WebViewController: WKNavigationDelegate {
         if url.scheme == "http" || url.scheme == "https" {
             let safari = SFSafariViewController(url: url)
             safari.modalPresentationStyle = .formSheet
-            present(safari, animated: true)
+            presentOnTop(safari)
         } else if UIApplication.shared.canOpenURL(url) {
             UIApplication.shared.open(url)
         }
@@ -228,11 +348,7 @@ extension WebViewController: WKDownloadDelegate {
                   decideDestinationUsing response: URLResponse,
                   suggestedFilename: String,
                   completionHandler: @escaping (URL?) -> Void) {
-        // A unique subdirectory keeps two downloads of the same filename from
-        // colliding (the destination must not already exist).
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        completionHandler(dir.appendingPathComponent(suggestedFilename))
+        completionHandler(DownloadScratch.destination(for: suggestedFilename))
     }
 
     func downloadDidFinish(_ download: WKDownload) {
@@ -243,7 +359,9 @@ extension WebViewController: WKDownloadDelegate {
         share.popoverPresentationController?.sourceRect = CGRect(
             x: view.bounds.midX, y: view.bounds.maxY, width: 0, height: 0
         )
-        present(share, animated: true)
+        // On top, not on `self`: with a popup web view already up, presenting from
+        // here is a no-op and the finished download vanishes without a word.
+        presentOnTop(share)
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {

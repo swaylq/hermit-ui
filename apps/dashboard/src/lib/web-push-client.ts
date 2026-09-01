@@ -17,10 +17,11 @@
 //     effect.
 
 import { getKeyring } from './keyring';
+import { isNativeShell } from './native-bridge';
 
 export type PushSupport =
   | { ok: true }
-  | { ok: false; reason: 'unsupported' | 'needs-install' | 'no-vapid-key' };
+  | { ok: false; reason: 'unsupported' | 'needs-install' | 'no-vapid-key' | 'native-shell' };
 
 /** Is the page running as an installed app rather than a browser tab? */
 export function isStandalone(): boolean {
@@ -38,6 +39,10 @@ export function isStandalone(): boolean {
  */
 export function pushSupport(vapidPublicKey: string | null): PushSupport {
   if (typeof window === 'undefined') return { ok: false, reason: 'unsupported' };
+  // The native shell has no Push API at all and does not need one — it is
+  // already registered for APNs. Checked before the VAPID key so the page never
+  // tells someone standing inside the app to go install the app.
+  if (isNativeShell()) return { ok: false, reason: 'native-shell' };
   if (!vapidPublicKey) return { ok: false, reason: 'no-vapid-key' };
   if (!('serviceWorker' in navigator) || !('Notification' in window)) {
     return { ok: false, reason: 'unsupported' };

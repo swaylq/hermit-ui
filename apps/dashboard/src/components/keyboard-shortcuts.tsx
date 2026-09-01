@@ -7,6 +7,7 @@
 import { useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { SHORTCUTS, isStandalone } from '@/lib/shortcuts';
+import { isNativeShell } from '@/lib/native-bridge';
 import { openGlobalSearch } from '@/lib/chat-cache/search-bus';
 
 function isTypingTarget(el: EventTarget | null): boolean {
@@ -20,7 +21,7 @@ export function KeyboardShortcuts() {
 
   const onKey = useCallback(
     (e: KeyboardEvent) => {
-      if (!isStandalone()) return;
+      if (!isStandalone() && !isNativeShell()) return;
       const typing = isTypingTarget(e.target);
       // ⌘K — global message search (every session's prose, from the local cache).
       // It used to focus the sidebar's list filter; that filter only ever matched

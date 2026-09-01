@@ -227,7 +227,7 @@ export function AppSidebar() {
           // mobile: fixed off-canvas drawer. pwa-safe-* keeps the drawer's header
           // below the iOS status bar + its footer above the home indicator when
           // installed (standalone); a normal browser tab is unaffected.
-          'fixed inset-y-0 left-0 z-50 w-[280px] transition-transform duration-200 ease-out pwa-safe-t pwa-safe-b',
+          'fixed inset-y-0 left-0 z-50 w-[280px] transition-transform duration-200 ease-out pwa-safe-t pwa-safe-b pwa-inflow-lg',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
           // desktop: in-flow, width animates on collapse
           'lg:static lg:translate-x-0 lg:z-0 lg:transition-[width] lg:duration-200',

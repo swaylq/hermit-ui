@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { Download, X, Share } from 'lucide-react';
+import { isNativeShell } from '@/lib/native-bridge';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -52,9 +53,12 @@ export function InstallPrompt() {
     const isIOS = /iphone|ipad|ipod/i.test(ua) ||
       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS
     const isSafari = /^((?!chrome|android|crios|fxios|edg).)*safari/i.test(ua);
+    // Never inside the native shell: there is no Safari share button to point at,
+    // and the app is already installed. WKWebView's default UA happens to carry no
+    // `Safari/` token so this was hidden by accident — say it on purpose.
     // One-time, mount-only platform check (empty deps — cannot cascade).
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (isIOS && isSafari) { setIosHint(true); setShow(true); }
+    if (isIOS && isSafari && !isNativeShell()) { setIosHint(true); setShow(true); }
 
     return () => {
       window.removeEventListener('beforeinstallprompt', onBIP);

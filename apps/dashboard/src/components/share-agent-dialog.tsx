@@ -12,6 +12,7 @@ import { trpc } from '@/lib/trpc';
 import { relTime } from '@/lib/format';
 import { Overlay } from '@/components/overlay';
 import { Button } from '@/components/ui/button';
+import { copyText } from '@/lib/copy-text';
 
 export function ShareAgentButton({ name }: { name: string }) {
   const [open, setOpen] = useState(false);
@@ -51,11 +52,12 @@ function ShareAgentDialog({ name, onClose }: { name: string; onClose: () => void
   const doRevoke = async () => { await revoke.mutateAsync({ agentName: name }); setToken(null); };
   const copy = async () => {
     if (!url) return;
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch { /* clipboard denied — the field is selectable as a fallback */ }
+    // copyText falls back to execCommand when navigator.clipboard is missing
+    // (plain http on the LAN) or rejects, and reports whether it worked — so the
+    // tick only appears when something really landed on the clipboard.
+    if (!(await copyText(url))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
   };
 
   return (

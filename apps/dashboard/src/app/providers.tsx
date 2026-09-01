@@ -11,7 +11,8 @@ import { apiUrl, adoptMachineFromUrl } from '@/lib/api-base';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { KeyboardShortcuts } from '@/components/keyboard-shortcuts';
 import { ChatCacheRoot } from '@/components/chat-cache-root';
-import { installNativeBridge } from '@/lib/native-bridge';
+import { installNativeBridge, isNativeShell } from '@/lib/native-bridge';
+import { isStandalone } from '@/lib/shortcuts';
 import { installImeDebug } from '@/lib/ime-debug';
 import { watchDashboardReach } from '@/lib/dashboard-reach';
 
@@ -104,6 +105,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const vv = window.visualViewport;
     const setVar = (h: number) => document.documentElement.style.setProperty('--app-h', `${Math.round(h)}px`);
+    const appLike = isStandalone() || isNativeShell();
 
     // Fill the TRUE screen. In an installed iOS PWA the layout viewport
     // (innerHeight / documentElement.clientHeight) is ~62px shorter than the real
@@ -124,6 +126,17 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       // the visual viewport when the keyboard appears, so height alone leaves the
       // composer floating too high). Otherwise fill the real screen.
       setVar(keyboardOpen ? ot + vh : sh);
+      // Whether the keyboard is COVERING the page is a different question from the
+      // one above, and it needs a different measurement. `vh < sh - 120` compares
+      // the window to the whole DISPLAY: right for --app-h (which wants to fill the
+      // real screen), permanently true for an installed desktop PWA window, an iPad
+      // in Split View, or the shell in landscape. Compare the visual viewport to
+      // the LAYOUT viewport instead — `innerHeight` does not shrink for the iOS
+      // keyboard, so the gap between them IS the keyboard, whatever size the window
+      // is. Pure geometry, so it also cannot latch: an earlier version ANDed in
+      // "an input is focused", and when that input was removed from the DOM WebKit
+      // fired neither focusout nor focusin, leaving the class stuck on.
+      document.documentElement.classList.toggle('kb-open', appLike && vh < ih - 120);
     };
     measure();
     window.addEventListener('resize', measure);
@@ -145,6 +158,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       vv?.removeEventListener('resize', measure);
       vv?.removeEventListener('scroll', measure);
       window.removeEventListener('focusout', onBlur);
+      document.documentElement.classList.remove('kb-open');
     };
   }, []);
 

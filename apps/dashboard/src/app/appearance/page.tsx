@@ -112,7 +112,7 @@ export default function AppearancePage() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="appearance" />
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">
         <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-4">
           <div>
             <h2 className="text-sm font-semibold text-foreground">主题外观</h2>

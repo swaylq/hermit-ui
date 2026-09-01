@@ -53,7 +53,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         <span aria-hidden className="logo-crab-mono h-5 w-5 bg-foreground" />
         <span className="text-sm font-medium text-foreground">Brain</span>
       </header>
-      <div className="flex-1 min-h-0 overflow-y-auto">{children}</div>
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">{children}</div>
     </div>
   );
 }

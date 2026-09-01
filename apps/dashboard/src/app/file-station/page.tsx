@@ -156,7 +156,7 @@ export default function FileStationPage() {
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="files" />
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">
         <div className="max-w-3xl w-full mx-auto p-4 sm:p-6 space-y-4">
           <p className="text-xs text-muted-foreground">
             把文件传到<span className="font-medium text-foreground/80">当前选中机器</span>的指定路径上（最大 300MB，支持 zip）。

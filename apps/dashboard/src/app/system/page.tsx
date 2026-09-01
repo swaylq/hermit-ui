@@ -9,7 +9,7 @@ export default function SystemPage() {
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <SettingsTabs active="system" />
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">
         <div className="mx-auto w-full max-w-3xl p-4 sm:p-6">
           <p className="mb-4 text-xs text-muted-foreground">
             The gateway and the resources it runs on, for the{' '}

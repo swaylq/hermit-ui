@@ -35,7 +35,7 @@ function AddAgentFallback() {
         <SidebarMobileToggle />
         <span className="text-sm font-medium text-foreground">Add agent</span>
       </header>
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pwa-safe-b">
         <div className="min-h-full flex flex-col items-center justify-center gap-4 p-4 sm:p-6">
           <div className="h-9 w-[136px] rounded-lg border border-border bg-card" />
           <div className="w-full max-w-md h-[420px] rounded-2xl border border-border bg-card shadow-sm" />

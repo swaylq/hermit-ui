@@ -106,3 +106,46 @@ Needs a real device — the simulator has no APNs.
    mode won't swallow it).
 4. Then the real thing: have an agent ask for a permission decision and confirm
    the notification arrives and opens the right session.
+
+## Verify it end to end (`smoke.sh`)
+
+One command builds the app, installs it on a simulated iPhone, signs in and
+screenshots the screens that behave differently inside the shell:
+
+```sh
+brew install xcodegen                       # once
+secret exec MAC001_KEY -- apps/ios/smoke.sh # against the deployed dashboard
+```
+
+The machine key is read from the environment (`HERMIT_TEST_KEY`, or `MAC001_KEY`
+as `secret exec` provides it) and forwarded to the test runner, so it never
+reaches argv or the repository; the result bundle, which records the runner's
+environment, is deleted at the end. Without a key the run still builds, launches
+and shoots the sign-in screen, then stops.
+
+To verify a change to `apps/dashboard` *before* it ships, point the shell at a
+build running on this Mac:
+
+```sh
+cd apps/dashboard && npx next build && PORT=4102 npx tsx server.ts &
+secret exec MAC001_KEY -- env HERMIT_ORIGIN=http://localhost:4102 apps/ios/smoke.sh
+```
+
+(Still through `secret exec` — typing the key on the command line puts it in shell
+history, which is the one place this whole arrangement is trying to keep it out of.)
+
+`-hermitOrigin` is a launch argument the app reads out of `UserDefaults`
+(`AppConfig.swift`); plain HTTP to `localhost` works because of the
+`NSAllowsLocalNetworking` exception in `Info.plist`, which permits nothing on the
+public internet. Screenshots land in `$HERMIT_SHOT_DIR` (default `apps/ios/shots`,
+gitignored).
+
+There are unit tests too — `HermitTests/AppConfigTests.swift`, covering
+`AppConfig.isInternal`, which decides whether a URL stays in the app or is handed
+to Safari. Both targets run under the same `Hermit` scheme, so `smoke.sh` covers
+them; on their own: `xcodebuild test -only-testing:HermitTests …`.
+
+The end-to-end test is `HermitUITests/SmokeTests.swift`. It asserts the things that
+are specific to being an app rather than a tab: no system permission prompt on
+the sign-in screen, the sign-in gate actually clearing, and each route rendering
+content.

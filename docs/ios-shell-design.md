@@ -49,7 +49,9 @@ iOS App  apps/ios/                        dash.swaylab.ai (VPS:4101, 单实例 t
              └◀────────────── 推送通知 ─────────────────────┘
 ```
 
-**网页侧改动极小**：新增 `lib/native-bridge.ts`（~90 行）+ 在 `Providers` 里挂一次。SSE、终端 WS、keyring、语音全部原样工作。
+**网页侧改动不大，但不是零**：`lib/native-bridge.ts` + 在 `Providers` 里挂一次，SSE、终端 WS、keyring 原样工作。
+除此之外网页层必须**知道自己在壳里**——`isNativeShell()` 的调用点见下面「四、壳要表明身份」。
+2026-08 之前这个函数定义了却一处没用，代价是网页端整套 iOS 适配在壳里全部失效。
 
 ---
 
@@ -172,14 +174,65 @@ payload 附 `path`（如 `/chat?session=<id>`）。App 收到点击 → 若 webv
 | 关注点 | 做法 |
 |---|---|
 | **数据持久化** | `WKWebsiteDataStore.default()` — localStorage 的 keyring 跨启动保留，key 只输一次 |
-| **安全区** | webview 铺满 window，`scrollView.contentInsetAdjustmentBehavior = .never`；网页已有 `viewport-fit=cover` + safe-area padding，壳不要重复插内边距 |
+| **安全区** | webview 铺满 window，`scrollView.contentInsetAdjustmentBehavior = .never`；网页负责插内边距，壳不要重复插——但网页那套是 `@media (display-mode: standalone)` 写的，WKWebView 报 `browser`，所以壳必须先给 `<html>` 打上 `native-shell` 标记，见「四」 |
 | **离线** | `didFailProvisionalNavigation` → 原生重试视图（**不能**指望 `offline.html`：SW 在 WKWebView 里对首次导航无能为力） |
-| **外链** | `decidePolicyFor navigationAction`：非本站 http(s) → `SFSafariViewController`；`tel:`/`mailto:` → `UIApplication.open`；其余 deny |
-| **附件下载** | `WKDownloadDelegate` → 存 tmp → `UIActivityViewController`。桌面端那个 `canShare` 坑（auto-memory `hermit-ui-desktop-download-share-gate`）在原生侧不存在 |
-| **回前台** | `willEnterForeground` → `evaluateJavaScript` 触发一次 `visibilitychange`，让网页 SSE 看门狗自己重连 |
+| **多部署** | 一个 App 可以驱动多个 dashboard 部署，而壳没有钥匙串（它故意不持有任何凭据），所以网页层在 `ready` 之后补发 `{type:'origins', origins:[...]}`，壳存进 `AppConfig.knownHosts`。少了这一步，第二个部署的图片和链接会被判成站外扔给 Safari —— 另一个存储仓，等于走出了 App。判定是带点的后缀匹配（`evilexample.com` 不算 `example.com` 的子域），单测在 `apps/ios/HermitTests/AppConfigTests.swift` |
+| **外链** | `decidePolicyFor navigationAction`，**只管主框架**：子框架是页面自己的事（预览面板 iframe 指向 `preview.swaylab.ai`，故意的另一个源），拦下来会让面板永远空白还弹出 Safari 浮层。非本站 http(s) → `SFSafariViewController`；`tel:`/`mailto:` → `UIApplication.open`；其余 deny |
+| **新窗口** | `target="_blank"` 走 `PopupWebViewController`：`createWebViewWith` 返回 nil，另建一个 webview（自己的 configuration，显式 `WKWebsiteDataStore.default()`，和主 webview 同一个仓）盖在上面。**不**用 WebKit 递过来的 configuration —— 那个对象是 WebKit 的，改它的 `userContentController` 是在动别人的东西；这里也不需要 opener 关系。塞回主 webview 会丢掉当前会话和没发出去的草稿；丢给 Safari 则是另一个 cookie 罐，登录态没了 |
+| **附件下载** | `navigationAction.shouldPerformDownload` → `.download`（`<a download>` 的那一半，少了它整个 dashboard 会被一张原图顶替），加 `WKDownloadDelegate` → 存 tmp → `UIActivityViewController`。桌面端那个 `canShare` 坑（auto-memory `hermit-ui-desktop-download-share-gate`）在原生侧不存在 |
+| **音频会话** | 网页层每次开/关麦克风流都发 `{type:'mic', active}`，壳据此 `setActive`。不能只靠权限回调（WebKit 手上还有授权时根本不回调，于是「录音 → 回桌面 → 回来再录」录到纯静音），也不能改成回前台就激活（那样一次语音之后，整个启动周期里每次回到前台都会压低别的 App 的声音，AirPods 还会从立体声掉到单声道） |
+| **回前台** | `willEnterForeground` → 下一个 runloop 再 `evaluateJavaScript` 触发一次 `visibilitychange`，**且只在 `document.hidden` 为 false 时发**——聊天页的处理函数在 hidden 为 true 时是断开而不是重连，而这一刻 WebKit 有没有翻回 false 取决于观察者注册顺序 |
 | **缩放** | `scrollView.pinchGestureRecognizer?.isEnabled = false` — 比网页那套 `gesturestart preventDefault` 干净 |
 | **终端页** | `/chat/terminal` 的 WS + subprotocol 在 WKWebView 原生支持，无需特殊处理 |
 | **下拉刷新** | v1 不做。webview 内多处自有滚动容器，`UIRefreshControl` 会打架；SSE 断线自愈已覆盖 |
+
+---
+
+## 四、壳要表明身份（2026-09 补）
+
+网页端所有 iOS 适配都写在 `@media (display-mode: standalone)` 或 `isStandalone()` 里。
+**WKWebView 报的是 `display-mode: browser`，`navigator.standalone` 是 undefined** —— 于是这些
+适配在它们本来要服务的这个 App 里整套静默失效：顶栏钻到刘海底下、键盘盖住输入框、
+lightbox 关闭按钮落在状态栏里被系统吃掉点击、`/push` 页叫一个已经在 App 里的人去
+「点 Safari 分享按钮添加到主屏幕」。
+
+做法：`WebViewController.shellMarkerScript` 在 documentStart 给 `<html>` 加 `native-shell` 类
+（必须是首帧之前，否则第一帧就是错的；`layout.tsx` 的 `<html suppressHydrationWarning>` 保证
+React 不会跟它抢这个属性）。CSS 侧 `globals.css` 把安全区和 `--app-h` 改成变量驱动，
+standalone 和 `html.native-shell` 喂同一组变量；JS 侧用 `isNativeShell()`。
+
+现在的调用点：
+
+| 位置 | 在壳里做什么 |
+|---|---|
+| `globals.css` | 安全区内边距 + `--app-h` 生效（否则完全不生效） |
+| `keyboard-shortcuts.tsx` | ⌘K / ⌘1-6 / `?` 生效（iPad 接键盘时看得见） |
+| `voice-capture.ts` `canOpenMicSilently()` | 直接返回 true —— 壳替网页应答授权，根本没有弹框要躲 |
+| `web-push-client.ts` `pushSupport()` | 返回 `native-shell`，不再谎报 `needs-install` |
+| `app/push/page.tsx` | 换成原生 APNs 状态卡片 |
+| `install-prompt.tsx` | 不显示「添加到主屏幕」横幅 |
+
+## 五、通知授权的时机（2026-09 改）
+
+原来在 `didFinishLaunchingWithOptions` 里就 `requestAuthorization`。那是冷启动的第一秒，
+用户还没输机器密钥 —— 网页层拿到令牌也没有机器可注册（`installNativeBridge` 是按 keyring
+逐台注册的，空钥匙串等于什么都不做），而 iOS 的通知授权**一辈子只问一次**，点了「不允许」
+就只能去系统设置里改。等于在最坏的时机问，答案还被扔掉。
+
+现在：App 启动只做「上次已经授权过 → 静默重新注册拿新令牌」；真正的询问由网页层在
+`installNativeBridge()` 里发起，条件是钥匙串里至少有一台非 scoped 的机器。
+`/push` 页还有一个显式按钮，供 `notDetermined` 状态下手动触发。
+
+协议（`NativeBridge`）：
+
+```
+web → native   { type: 'requestPush' }   问一次（已问过则只回报现状）
+web → native   { type: 'pushStatus'  }   只读，永不弹框
+native → web   window.__hermitNative.onPushStatus(status, registered)
+                 status: notDetermined | denied | authorized | provisional | ephemeral | unknown
+                 registered: 系统是否真的给了 APNs 令牌（模拟器上恒为 false）
+```
+
 
 ---
 

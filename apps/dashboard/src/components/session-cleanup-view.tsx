@@ -166,7 +166,7 @@ export function SessionCleanupView() {
                 const v = e.target.value.trim();
                 setConfig.mutate({ cleanupIdleDays: v ? Math.max(1, Math.round(Number(v))) : null });
               }}
-              className="w-14 rounded border border-border bg-background px-1.5 py-0.5 text-right text-foreground tabular-nums"
+              className="h-8 w-16 rounded border border-border bg-background px-2 text-right text-base text-foreground tabular-nums md:h-auto md:w-14 md:px-1.5 md:py-0.5 md:text-xs"
             />
             d <span className="text-muted-foreground/60">(blank = off)</span>
           </label>

@@ -18,9 +18,17 @@ import { getKeyring } from './keyring';
 
 export type ApnsEnv = 'sandbox' | 'production';
 
+/** What the OS says about notification permission, straight from the shell. */
+export type NativePushStatus = {
+  status: 'notDetermined' | 'denied' | 'authorized' | 'provisional' | 'ephemeral' | 'unknown';
+  /** Has iOS actually handed the app an APNs token? False on the simulator. */
+  registered: boolean;
+};
+
 interface NativeApi {
   onPushToken(token: string, apnsEnv: ApnsEnv): void;
   onDeepLink(path: string): void;
+  onPushStatus(status: NativePushStatus['status'], registered: boolean): void;
 }
 
 declare global {
@@ -33,6 +41,51 @@ declare global {
 /** True when running inside the native shell rather than a browser / PWA. */
 export function isNativeShell(): boolean {
   return typeof window !== 'undefined' && !!window.webkit?.messageHandlers?.hermit;
+}
+
+// Last status the shell reported, plus whoever is watching. Module-level so the
+// Settings → Push card can mount after the answer arrived and still see it.
+let pushStatus: NativePushStatus | null = null;
+const pushWatchers = new Set<(s: NativePushStatus) => void>();
+
+/** The shell's standing answer, or null if it hasn't said yet. */
+export function getNativePushStatus(): NativePushStatus | null {
+  return pushStatus;
+}
+
+/** Subscribe to status changes. Returns an unsubscribe. */
+export function onNativePushStatus(fn: (s: NativePushStatus) => void): () => void {
+  pushWatchers.add(fn);
+  return () => pushWatchers.delete(fn);
+}
+
+/**
+ * Tell the shell whether a live microphone stream exists right now.
+ *
+ * iOS needs the audio session in `.playAndRecord` or `getUserMedia` succeeds and
+ * records pure silence, with no error anywhere. The shell used to switch it on
+ * from the permission callback — which WebKit skips while it still holds a grant,
+ * so "record → home → come back → record" captured nothing. Driving it from here
+ * is exact: on while a stream is open, off the moment it is torn down, so nothing
+ * else's audio gets ducked for the rest of the launch.
+ */
+export function setNativeMicActive(active: boolean): void {
+  postToNative({ type: 'mic', active });
+}
+
+/** Ask the shell to read the permission answer. Never prompts. */
+export function readNativePushStatus(): void {
+  postToNative({ type: 'pushStatus' });
+}
+
+/**
+ * Ask the OS for notification permission, now. iOS only ever shows the prompt
+ * once per install, so the shell reports the standing answer when it has already
+ * been asked — which is why the Settings card can point at iOS Settings instead
+ * of leaving a button that looks broken.
+ */
+export function requestNativePush(): void {
+  postToNative({ type: 'requestPush' });
 }
 
 function postToNative(msg: unknown): void {
@@ -77,7 +130,17 @@ export function installNativeBridge(): () => void {
         ),
       ).then((results) => {
         postToNative({ type: 'registered', ok: results.filter(Boolean).length, of: machines.length });
+        // A token arriving means iOS finished registering, which is a fact only
+        // the shell can see (`isRegisteredForRemoteNotifications`). Ask again, or
+        // Settings → Push sits on "authorized, but no APNs token yet" for the
+        // whole session after a grant that actually worked.
+        readNativePushStatus();
       });
+    },
+
+    onPushStatus(status, registered) {
+      pushStatus = { status, registered };
+      for (const fn of pushWatchers) fn(pushStatus);
     },
 
     onDeepLink(path) {
@@ -89,10 +152,35 @@ export function installNativeBridge(): () => void {
     },
   };
 
+  // The shell also sets this at document start (WebViewController.swift) so the
+  // FIRST paint already has the right insets. Setting it again here costs nothing
+  // and means one lost user script does not silently switch the whole iOS layout
+  // back off.
+  if (isNativeShell()) document.documentElement.classList.add('native-shell');
+
   window.__hermitNative = api;
   // Tell the shell the page is live so it can replay a token or a tap that
   // arrived while the webview was still loading.
   postToNative({ type: 'ready' });
+
+  // Which dashboards this device holds a key for. The shell holds no keyring, so
+  // without this it treats a second deployment's uploads and links as off-site and
+  // hands them to Safari — a different storage jar, and out of the app entirely.
+  postToNative({
+    type: 'origins',
+    origins: getKeyring()
+      .map((e) => e.baseUrl)
+      .filter((b): b is string => !!b),
+  });
+
+  // Notification permission is asked for HERE, not at app launch. At launch there
+  // is no machine key yet, so a granted token has nothing to register against and
+  // a refusal is permanent — the prompt lands before the user knows what the app
+  // is. With at least one key in the ring there is finally something to subscribe,
+  // so ask; iOS shows the system prompt only the first time, and every later call
+  // just reports the standing answer.
+  if (getKeyring().some((e) => !e.scoped)) requestNativePush();
+  else readNativePushStatus();
 
   return () => {
     if (window.__hermitNative === api) delete window.__hermitNative;
