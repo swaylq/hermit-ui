@@ -233,6 +233,25 @@ model PushDevice {
 - **`xcodebuild` 没跑成**。Swift 编译层面是干净的（`swiftc -typecheck` 全过），但链接、资源打包、签名、Info.plist 合并这些只有真正 build 才会暴露的问题没被覆盖。第一次在 Xcode 里打开可能还要收拾一两处。补齐方式：`xcodebuild -downloadPlatform iOS`（几个 GB），CoreSimulator 的版本不一致一般重启解决。
 - **麦克风与推送必须真机**。模拟器没有 APNs 注册，麦克风行为也与真机不同。这两条正是本项目存在的理由，在 sway 拿设备验之前，整套东西只能算「设计正确、编译通过」。
 
+> ⚠️ **在 mac-local 上跑完模拟器，必须显式 `xcrun simctl shutdown all`。**
+>
+> `xcodebuild test` 退出**不会**带走模拟器。运行时进程（`SimRenderServer`、`SimMetalHost`、
+> `SimAudioProcessorService`、`launchd_sim`…）会变成 `ppid=1` 的孤儿继续空转，一个 booted
+> 的 iPhone 模拟器占约 4.8G 内存。关掉 Simulator.app 的窗口**不够**，那些进程还在。
+>
+> 这在这台机器上不是小事：16G 内存长期被 Figma 和十几个 claude 会话吃满，再多 4.8G 就会
+> 触发内存压力，macOS 开始往**系统盘**写 1G 一个的交换文件。2026-09-02 凌晨实测：一个空转
+> 十分钟的模拟器 → 285 个孤儿进程、空闲内存 249M、内存压力等级 2、交换区 10 个文件；
+> `simctl shutdown all` 之后 → 0 个进程、空闲 1425M、压力回到 1、macOS 自己删掉 3 个交换
+> 文件、**系统盘凭空回来 3.1G**（盘上一个文件都没删）。
+>
+> 当晚系统盘只剩 12.89G，而同一台机器在 2026-09-01 05:57 就因为系统盘撞零死过一次：pm2
+> 和它下面 18 个 app 全灭，网关黑了 3 小时 57 分，本机所有 dashboard 会话和所有 cron 一起停。
+> 跑一次 iOS 测试通过「内存不够 → 写交换文件」间接吃掉几个 G 系统盘——这条链没人会预料到，
+> 所以写在这里。
+>
+> 收尾一律：`xcrun simctl shutdown all`。验证：`xcrun simctl list devices booted` 应为空。
+
 ---
 
 ## 风险
