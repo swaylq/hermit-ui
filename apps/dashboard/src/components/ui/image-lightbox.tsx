@@ -49,6 +49,39 @@ type View = { scale: number; tx: number; ty: number };
  * driving another deployment. So the path is derived, then put back on the
  * origin it came from.
  */
+/**
+ * Did this image really finish, or did the transfer stop early?
+ *
+ * `load` is not the answer on its own: WebKit fires it for a PNG whose bytes
+ * were cut off mid-transfer, having decoded the rows it got and left the rest
+ * of the bitmap transparent. That is precisely the case the placeholder exists
+ * for, so dropping it on `load` would drop it exactly when it is needed.
+ *
+ * So the bottom row is sampled. Fully transparent there means the decode never
+ * reached the end. A cross-origin image cannot be sampled at all (the canvas
+ * taints), and an image whose last row is genuinely transparent reads the same
+ * way — both keep the placeholder, which costs a soft copy of the same picture
+ * behind the sharp one and nothing else.
+ */
+function decodedToTheBottom(img: HTMLImageElement): boolean {
+  const h = img.naturalHeight;
+  const w = img.naturalWidth;
+  if (!h || !w) return false;
+  try {
+    const c = document.createElement('canvas');
+    c.width = 8;
+    c.height = 1;
+    const ctx = c.getContext('2d');
+    if (!ctx) return true;
+    ctx.drawImage(img, 0, h - 1, w, 1, 0, 0, 8, 1);
+    const d = ctx.getImageData(0, 0, 8, 1).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] !== 0) return true;
+    return false;
+  } catch {
+    return true; // tainted canvas — assume the picture is fine
+  }
+}
+
 function placeholderFor(url: string): string | null {
   if (!url.startsWith('/') && !/^https?:/i.test(url)) return null; // data: and friends
   try {
@@ -514,8 +547,10 @@ export function ImageLightbox({
             src={currentUrl}
             alt={alt ?? 'image'}
             draggable={false}
-            onLoad={() => {
-              setPaintedUrl(currentUrl);
+            onLoad={(e) => {
+              // Only stop showing the thumbnail once the real bytes reached the
+              // bottom of the picture — see decodedToTheBottom.
+              if (decodedToTheBottom(e.currentTarget)) setPaintedUrl(currentUrl);
               set(view.current);
             }}
             style={{
