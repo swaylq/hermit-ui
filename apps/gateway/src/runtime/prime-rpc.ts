@@ -41,6 +41,7 @@ import { getCredential, credentialDefaultModel } from '../pi-config';
 import { JsonlTransport, type RpcEvent } from './jsonl-transport';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 import { HERMIT_TOOL_NAMES } from './pi-modes';
+import { CHAT_ONLY_MEMORY_TOOL } from './chat-only';
 
 /** The hermit tools extension, loaded into every child with --extension. */
 function hermitExtensionPath(): string {
@@ -303,7 +304,7 @@ export class PrimeRpcRuntime implements AgentRuntime {
     // talk and hand things to the user; it cannot even read a file. sway chose
     // this over pretending the backend supports the mode (2026-09-01), and the
     // new-chat UI says so before you pick the combination.
-    if (session.chatOnly) args.push('--tools', HERMIT_TOOL_NAMES.join(','));
+    if (session.chatOnly) args.push('--tools', [...HERMIT_TOOL_NAMES, CHAT_ONLY_MEMORY_TOOL].join(','));
 
     // Resolved into a local first so the child's credential and the fingerprint
     // recorded for it come from ONE read — two reads could straddle a rotation
@@ -326,6 +327,13 @@ export class PrimeRpcRuntime implements AgentRuntime {
           HERMIT_DASHBOARD_URL: DASHBOARD_URL,
           HERMIT_KEY: ASST_KEY,
           HERMIT_SESSION_ID: session.id,
+        } : {}),
+        // Pure chat: unlocks memory_write in the shared hermit extension, and
+        // tells it which directory it may write inside. Without the directory
+        // the tool refuses rather than guessing, so both travel together.
+        ...(session.chatOnly ? {
+          HERMIT_CHAT_ONLY: '1',
+          HERMIT_AGENT_DIR: session.agentDirectory,
         } : {}),
         // Tells the shared hermit extension which backend it is inside. Prime
         // takes pi.registerProvider, so unlike omp this one WANTS the

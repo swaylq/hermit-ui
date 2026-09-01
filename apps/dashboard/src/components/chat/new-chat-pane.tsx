@@ -73,9 +73,12 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
   // actually runs pi — which now depends on the backend the user composed, not
   // on the card's own name.
   const isPiBackend = backendById(backends.data, chosen)?.harness === 'pi-rpc';
-  // prime is the one backend that cannot serve pure chat by halves — see the
-  // warning below the checkbox.
-  const isPrimeBackend = backendById(backends.data, chosen)?.harness === 'prime-rpc';
+  // Two backends need saying-so before you tick the box; both warnings sit
+  // under it. prime cannot serve the mode by halves, and dsh/kimi have no
+  // hermit tool surface, so they lose the one write tool the mode grants back.
+  const chosenHarness = backendById(backends.data, chosen)?.harness;
+  const isPrimeBackend = chosenHarness === 'prime-rpc';
+  const hasNoHermitTools = chosenHarness === 'dsh-exec' || chosenHarness === 'kimi-code';
   const chosenMode: PiMode = mode ?? (isPiMode(agentMode) ? agentMode : DEFAULT_PI_MODE);
 
   const create = trpc.chat.createSession.useMutation({ onSuccess: (s) => onCreated(s.id) });
@@ -197,8 +200,16 @@ export function NewChatPane({ agents, preset, lockedAgent, onCreated, onCancel }
               <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
                 Read-only. It can look at files and search the web, but cannot write, edit, run
                 commands or spawn sub-agents — so replies come back faster and nothing on disk
-                changes.
+                changes. Memory is the one exception: it can still add to its own notes, and
+                nothing it writes there can overwrite what is already recorded.
               </span>
+              {chatOnly && hasNoHermitTools && (
+                <span className="mt-1.5 block text-[11px] leading-relaxed text-amber-600 dark:text-amber-500">
+                  This backend has no hermit tools, so pure chat also costs it the memory
+                  exception: it can read and search, but whatever you work out together is gone
+                  when the session ends.
+                </span>
+              )}
               {chatOnly && isPrimeBackend && (
                 <span className="mt-1.5 block text-[11px] leading-relaxed text-amber-600 dark:text-amber-500">
                   prime can&apos;t do this by halves: its entire tool surface is one Python session,

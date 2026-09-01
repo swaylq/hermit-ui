@@ -26,7 +26,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 // Pure helpers live in a sibling // @ts-check'd module (type-checked + unit-tested
 // in isolation; this stub is spawned by raw `node` so it stays outside the tsc gate).
-const { mimeForExt, textOf, buildCronPatch } = require('./mcp-stub-util.cjs');
+const { mimeForExt, textOf, buildCronPatch, writeMemory } = require('./mcp-stub-util.cjs');
 
 const SESSION_ID = process.env.HERMIT_SESSION_ID || '';
 const DASHBOARD_URL = process.env.HERMIT_DASHBOARD_URL || 'http://127.0.0.1:4101';
@@ -47,6 +47,34 @@ const BRAIN = process.env.HERMIT_BRAIN === '1';
 // tools live inside its own CLI. cron_list stays — reading a schedule is fine.
 const CHAT_ONLY = process.env.HERMIT_CHAT_ONLY === '1';
 const CHAT_ONLY_DENIED = new Set(['cron_create', 'cron_update', 'cron_delete']);
+// Where this agent lives, for memory_write. Only set on a pure-chat session,
+// which is the only one that has that tool.
+const AGENT_DIR = process.env.HERMIT_AGENT_DIR || '';
+
+// The other half of pure chat: an agent that cannot record what it just worked
+// out forgets the conversation the moment it ends, which would make the mode
+// useless for exactly the thinking-out-loud it is meant for. So the session
+// keeps ONE way to put bytes on disk, and it is deliberately narrow — memory
+// paths only, markdown only, and no mode that can delete what is already there
+// (append and prepend keep the old text; create refuses an existing file).
+// The path gate itself is resolveMemoryPath in mcp-stub-util.cjs, tested there.
+const CHAT_ONLY_TOOLS = [
+  {
+    name: 'memory_write',
+    description:
+      "Record something in THIS agent's own memory. In a pure-chat session this is the ONLY way to put anything on disk — there is no Write and no shell — so use it exactly as you would have used Write: the daily log (memory/YYYY-MM-DD.md), a topic note (memory/notes/<slug>.md), its one-line index entry (memory/notes/INDEX.md), MEMORY.md, or evolution/lessons.md. `path` is relative to the agent's directory and must be markdown under memory/ or evolution/, or MEMORY.md. `mode` is append (default, adds at the end), prepend (inserts at the top — this is how INDEX.md takes a new line), or create (new file; fails if it already exists). Nothing here can delete or overwrite existing text, so when in doubt append.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: "Relative to the agent directory, e.g. 'memory/2026-09-01.md'." },
+        content: { type: 'string', description: 'The markdown to write. Include your own blank lines and heading.' },
+        mode: { type: 'string', enum: ['append', 'prepend', 'create'], description: 'Default append.' },
+      },
+      required: ['path', 'content'],
+    },
+  },
+];
+const CHAT_ONLY_TOOL_NAMES = new Set(CHAT_ONLY_TOOLS.map((t) => t.name));
 
 function sendJson(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
@@ -910,6 +938,17 @@ async function dispatchBrainTool(name, args) {
   throw new Error(`unknown brain tool: ${name}`);
 }
 
+/**
+ * memory_write. The path gate (resolveMemoryPath) has already rejected anything
+ * outside memory/, anything non-markdown and every spelling of `..`; what is
+ * left for this function is the part that needs the filesystem — a symlink
+ * inside the agent directory pointing out of it — plus the write itself.
+ */
+async function dispatchChatOnlyTool(name, args) {
+  if (name !== 'memory_write') throw new Error(`unknown pure-chat tool: ${name}`);
+  return writeMemory(AGENT_DIR, args);
+}
+
 async function dispatchTool(name, args) {
   if (!SESSION_ID) throw new Error('HERMIT_SESSION_ID missing');
   // Belt and braces, exactly as the brain tools do below: not listing a tool
@@ -923,6 +962,10 @@ async function dispatchTool(name, args) {
   if (BRAIN_TOOL_NAMES.has(name)) {
     if (!BRAIN) throw new Error('brain tools are only available to the orchestrator (Brain) session');
     return dispatchBrainTool(name, args);
+  }
+  if (CHAT_ONLY_TOOL_NAMES.has(name)) {
+    if (!CHAT_ONLY) throw new Error(`${name} exists only in a pure-chat session; use Write or Edit instead`);
+    return dispatchChatOnlyTool(name, args);
   }
   if (name === 'set_session_title') {
     if (typeof args?.title !== 'string') throw new Error('title required');
@@ -1098,7 +1141,11 @@ rl.on('line', async (line) => {
     }
     if (method === 'tools/list') {
       const listed = BRAIN ? TOOLS.concat(BRAIN_TOOLS) : TOOLS;
-      sendResult(id, { tools: CHAT_ONLY ? listed.filter((t) => !CHAT_ONLY_DENIED.has(t.name)) : listed });
+      sendResult(id, {
+        tools: CHAT_ONLY
+          ? listed.filter((t) => !CHAT_ONLY_DENIED.has(t.name)).concat(CHAT_ONLY_TOOLS)
+          : listed,
+      });
       return;
     }
     if (method === 'tools/call') {

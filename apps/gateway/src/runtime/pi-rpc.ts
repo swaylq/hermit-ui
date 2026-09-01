@@ -20,7 +20,7 @@ import {
   fingerprintAuthEnv, currentAuthFingerprint,
 } from './pi-credentials';
 import { resolveMode, buildModeArgs, HERMIT_TOOL_NAMES } from './pi-modes';
-import { CHAT_ONLY_PI_TOOLS } from './chat-only';
+import { CHAT_ONLY_PI_TOOLS, CHAT_ONLY_MEMORY_TOOL } from './chat-only';
 import { readPiSession, rememberPiSession, resumablePiSession } from './pi-sessions';
 import { globalMemoryPrompt } from './context-files';
 import { getCredential, credentialDefaultModel } from '../pi-config';
@@ -506,7 +506,7 @@ export class PiRpcRuntime implements AgentRuntime {
         // pure-chat session silently loses `ask` / `attach_file` — the same trap
         // buildModeArgs documents for ordinary modes.
         ...(session.chatOnly
-          ? ['--tools', [...new Set([...CHAT_ONLY_PI_TOOLS, ...HERMIT_TOOL_NAMES])].join(',')]
+          ? ['--tools', [...new Set([...CHAT_ONLY_PI_TOOLS, ...HERMIT_TOOL_NAMES, CHAT_ONLY_MEMORY_TOOL])].join(',')]
           : []),
         // pi finds the agent's own AGENTS.md/CLAUDE.md by walking CWD's
         // ancestors, but the machine's global memory lives in ~/.claude/, which
@@ -531,6 +531,13 @@ export class PiRpcRuntime implements AgentRuntime {
           HERMIT_DASHBOARD_URL: DASHBOARD_URL,
           HERMIT_KEY: ASST_KEY,
           HERMIT_SESSION_ID: session.id,
+        } : {}),
+        // Pure chat: unlocks memory_write in the shared hermit extension, and
+        // tells it which directory it may write inside. Without the directory
+        // the tool refuses rather than guessing, so both travel together.
+        ...(session.chatOnly ? {
+          HERMIT_CHAT_ONLY: '1',
+          HERMIT_AGENT_DIR: session.agentDirectory,
         } : {}),
       } as Record<string, string>,
     });

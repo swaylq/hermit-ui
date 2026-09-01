@@ -17,6 +17,7 @@
 // If the dashboard's endpoints change, BOTH must move together.
 
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { runVision, formatVision, type VisionProvider } from './vision-call';
 
@@ -28,6 +29,19 @@ type InteractionRow = { status?: string; decision?: { answers?: unknown[] } } | 
 const DASHBOARD_URL = process.env.HERMIT_DASHBOARD_URL ?? '';
 const KEY = process.env.HERMIT_KEY ?? '';
 const SESSION_ID = process.env.HERMIT_SESSION_ID ?? '';
+const AGENT_DIR = process.env.HERMIT_AGENT_DIR ?? '';
+const CHAT_ONLY = process.env.HERMIT_CHAT_ONLY === '1';
+
+// Shared with the MCP stub, so the rule about what a pure-chat session may put
+// on disk has ONE implementation and one set of tests. Required defensively:
+// this extension throwing while it loads would cost a pi session EVERY hermit
+// tool, and losing memory_write is much cheaper than losing `ask`.
+let writeMemory: ((agentDir: string, args: unknown) => string) | null = null;
+try {
+  writeMemory = createRequire(import.meta.url)('../mcp-stub-util.cjs').writeMemory;
+} catch {
+  writeMemory = null;
+}
 
 /** How long `ask` waits for a human. Matches the MCP stub's 4h5m ceiling. */
 const ASK_TIMEOUT_MS = 4 * 60 * 60 * 1000 + 5 * 60 * 1000;
@@ -219,6 +233,30 @@ export function registerMachineProvider(pi: any): void {
 
 export default function hermitTools(pi: any): void {
   registerMachineProvider(pi);
+
+  // Pure chat only. An ordinary session has write tools of its own and does not
+  // need a narrower one; this exists so a session that has NO write tools can
+  // still record what it worked out, which is the difference between a mode
+  // worth using for thinking and one that forgets the moment it ends.
+  if (CHAT_ONLY && AGENT_DIR && writeMemory) {
+    pi.registerTool({
+      name: 'memory_write',
+      description:
+        "Record something in THIS agent's own memory. In a pure-chat session this is the ONLY way to put anything on disk, so use it where you would have written a file: the daily log (memory/YYYY-MM-DD.md), a topic note (memory/notes/<slug>.md), its index line (memory/notes/INDEX.md), MEMORY.md, or evolution/lessons.md. `path` is relative to the agent directory and must be markdown under memory/ or evolution/, or MEMORY.md. `mode` is append (default), prepend (inserts at the top — how INDEX.md takes a new line) or create (fails if the file exists). Nothing here can delete or overwrite existing text.",
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: "Relative to the agent directory, e.g. 'memory/2026-09-01.md'." },
+          content: { type: 'string', description: 'The markdown to write, including your own blank lines.' },
+          mode: { type: 'string', enum: ['append', 'prepend', 'create'], description: 'Default append.' },
+        },
+        required: ['path', 'content'],
+      },
+      async execute(_id: string, params: ToolContext['input']) {
+        return { content: [{ type: 'text', text: writeMemory!(AGENT_DIR, params) }] };
+      },
+    });
+  }
 
   pi.registerTool({
     name: 'set_session_title',

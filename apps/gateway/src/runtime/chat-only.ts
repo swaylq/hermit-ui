@@ -41,6 +41,17 @@ export const CHAT_ONLY_CLAUDE_TOOLS = ['Read', 'Grep', 'Glob', 'Skill', 'WebFetc
 export const CHAT_ONLY_PI_TOOLS = ['read', 'grep', 'find', 'ls'];
 
 /**
+ * The pure-chat write tool, registered by the shared hermit pi extension.
+ *
+ * It has to be NAMED in pi's and prime's allowlists because their `--tools`
+ * covers extension tools as well as built-ins — leave it out and the mode's
+ * only route to disk is filtered away. omp's `--tools` covers built-ins only,
+ * so naming it there would hard-error the spawn instead. Same asymmetry that
+ * governs HERMIT_TOOL_NAMES, and the same trap.
+ */
+export const CHAT_ONLY_MEMORY_TOOL = 'memory_write';
+
+/**
  * omp — a read-only subset of its 31 built-ins.
  *
  * Two traps, both different from pi:

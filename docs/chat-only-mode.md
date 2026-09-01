@@ -17,27 +17,68 @@ Not one backend's write tools are forwarded by the gateway. `bash`, `write`,
 "turn off writing" is eight different switches, listed in
 `apps/gateway/src/runtime/chat-only.ts` and applied by each runtime.
 
-| backend | how | verified |
-|---|---|---|
-| claude-sdk | SDK `tools: [...]` — narrows the built-in set | ✅ read the `init` event's tool list back |
-| claude-tmux | `--tools Read,Grep,…` | ✅ same, plus coexistence with `--dangerously-skip-permissions` |
-| codex | `sandboxMode: 'read-only'` — an **OS-level** sandbox (seatbelt / landlock), the hardest of the eight | ✅ flag exists in the SDK's own types + CLI help |
-| pi | `--tools read,grep,find,ls`, unioned with hermit's extension tools | ✅ pi's own docs give this exact recipe; the shipped `scout` mode already uses it |
-| omp | `--tools <read-only subset of its 31 built-ins>`, **not** unioned | ✅ union would hard-error the spawn; documented in `pi-modes.ts` |
-| dsh | write/exec plugins removed from the `--patch` composition, **plus** `DSH_PERMISSION_MODE=read-only` | ⚠️ plugin removal uses a mechanism this file already relies on; the `read-only` enum value is **unverified** — see below |
-| kimi | an agent profile in `KIMI_CODE_HOME`, bound with `--agent-file` on the first turn and restored automatically on resume | ⚠️ tool names read out of the installed CLI; the profile itself is unverified end to end |
-| prime | `--tools <hermit extension tools only>` — which removes its single built-in | ✅ trivially, and uselessly — see below |
+| backend | how the tools are cut | can it record? | verified |
+|---|---|---|---|
+| claude-sdk | SDK `tools: [...]` — narrows the built-in set | ✅ `memory_write` (MCP) | ✅ read the `init` event's tool list back |
+| claude-tmux | `--tools Read,Grep,…` | ✅ `memory_write` (MCP) | ✅ same, plus coexistence with `--dangerously-skip-permissions` |
+| codex | `sandboxMode: 'read-only'` — an **OS-level** sandbox (seatbelt / landlock), the hardest of the eight | ✅ `memory_write` (MCP) | ✅ flag exists in the SDK's own types + CLI help |
+| pi | `--tools read,grep,find,ls`, unioned with hermit's extension tools | ✅ `memory_write` (extension) | ✅ pi's own docs give this exact recipe; the shipped `scout` mode already uses it |
+| omp | `--tools <read-only subset of its 31 built-ins>`, **not** unioned | ✅ `memory_write` (extension) | ✅ union would hard-error the spawn; documented in `pi-modes.ts` |
+| dsh | write/exec plugins removed from the `--patch` composition, **plus** `DSH_PERMISSION_MODE=read-only` | ❌ no hermit tool surface at all | ⚠️ plugin removal uses a mechanism this file already relies on; the `read-only` enum value is **unverified** — see below |
+| kimi | an agent profile in `KIMI_CODE_HOME`, bound with `--agent-file` on the first turn and restored automatically on resume | ❌ no hermit tool surface at all | ⚠️ tool names read out of the installed CLI; the profile itself is unverified end to end |
+| prime | `--tools <hermit extension tools only>` — which removes its single built-in | ✅ `memory_write` (extension) | ✅ trivially, and uselessly — see below |
 
-### The one place a rule is enforced once for everyone
+### There are TWO hermit tool surfaces, not one
 
-`mcp-stub.cjs` drops `cron_create` / `cron_update` / `cron_delete` when
-`HERMIT_CHAT_ONLY=1`. They schedule work that fires **later** as a normal turn
-with a full tool surface, so leaving them on would route around the mode rather
-than respect it. `cron_list` stays; reading a schedule is fine.
+Easy to get wrong, and worth stating plainly because a first pass at this
+feature got it wrong:
 
-This is the only rule that covers claude-sdk, claude-tmux, codex, pi, omp and
-prime in one place, because it is the only tool surface the gateway itself
-serves. Everything else is per-backend by necessity.
+- **MCP stub** (`mcp-stub.cjs`) — claude-sdk, claude-tmux, codex. Nine tools,
+  including the four `cron_*`.
+- **pi extension** (`hermit-pi-extension.ts`) — pi, omp, prime. Six tools, and
+  **no cron tools at all**.
+- **dsh and kimi have neither.** The gateway injects nothing into them.
+
+So a change to the stub covers three backends, not six. Anything that must hold
+for the pi family has to be made twice, in both surfaces — which is why
+`writeMemory` lives in `mcp-stub-util.cjs`, required by the stub and by the
+extension, rather than being implemented in either.
+
+`HERMIT_CHAT_ONLY=1` makes the stub drop `cron_create` / `cron_update` /
+`cron_delete`: they schedule work that fires **later** as a normal turn with a
+full tool surface, so leaving them on would route around the mode rather than
+respect it. `cron_list` stays; reading a schedule is fine. The pi family needs
+no equivalent — it never had those tools.
+
+## Memory is the one exception, and it is a narrow one
+
+A session that cannot record what it just worked out forgets the conversation
+the moment it ends, which would make the mode useless for exactly the
+thinking-out-loud it exists for. So both tool surfaces gain **one** write tool
+when `HERMIT_CHAT_ONLY=1`: `memory_write`.
+
+It is deliberately narrow, and each limit is load-bearing:
+
+- **Only memory paths** — `memory/**`, `evolution/**`, `MEMORY.md`. Enforced by
+  `resolveMemoryPath` on the RESOLVED path, so every spelling of `../` is judged
+  by where it lands rather than by how it looks.
+- **Markdown only.** A pure-chat session cannot run what it writes — but a later
+  ordinary session in the same directory can, and "park a shell script in
+  memory/ now, have it run next week" must not be reachable from a mode that
+  promises nothing changes.
+- **Nothing can be destroyed.** `append` and `prepend` keep the existing text;
+  `create` refuses a file that already exists. There is no overwrite and no
+  delete. This is the property that makes a write tool acceptable here at all.
+- **Symlinks are resolved.** The string gate cannot see a symlinked `memory/`;
+  `writeMemory` realpaths the deepest existing ancestor and the target.
+
+27 tests in `mcp-stub-util.test.ts` cover it, including two symlink escapes that
+assert the outside file was left untouched. If you change that gate, change them
+first.
+
+`pi` and `prime` must NAME `memory_write` in their `--tools` allowlist (theirs
+covers extension tools); `omp` must NOT (its allowlist covers built-ins only and
+hard-errors on anything else). Same asymmetry as `HERMIT_TOOL_NAMES`.
 
 ### prime cannot serve this mode, and the UI says so
 
@@ -94,7 +135,8 @@ starts a new session.
 ## Adding a backend
 
 Add its switch to `chat-only.ts` (or its runtime, if the shape doesn't fit a
-list of tool names), read `session.chatOnly` in its `boot()`, and add a row to
-the table above — including an honest "verified" column. A backend that cannot
+list of tool names), read `session.chatOnly` in its `boot()`, decide which of
+the two tool surfaces it mounts (if either — that decides whether it can record
+anything), and add a row to the table above with an honest "verified" column. A backend that cannot
 enforce it must say so in the new-chat form, the way prime does. Silently
 accepting the tick and running with full tools is the one outcome to avoid.

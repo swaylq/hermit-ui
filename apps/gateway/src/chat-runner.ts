@@ -1134,7 +1134,11 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     claudeArgs.push('--dangerously-skip-permissions');
     claudeArgs.push(
       '--mcp-config',
-      buildMcpConfigArg(session.id, session.isOrchestrator ?? false, session.chatOnly ?? false),
+      buildMcpConfigArg(
+        session.id,
+        session.isOrchestrator ?? false,
+        session.chatOnly ? { agentDirectory: cwd } : null,
+      ),
     );
     // Default dashboard chat sessions to the highest reasoning effort. settings.json's
     // `effortLevel` only accepts low/medium/high, so `max` (top of low/medium/high/xhigh/

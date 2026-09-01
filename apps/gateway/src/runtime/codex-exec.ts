@@ -269,7 +269,10 @@ export function hermitMcpConfigFor(session: RuntimeSession): NonNullable<CodexOp
         args: [MCP_STUB_PATH],
         // Codex copies only these named variables from its own process into the
         // MCP child. Names are safe in `--config`; values stay out of argv.
-        env_vars: ['HERMIT_SESSION_ID', 'HERMIT_DASHBOARD_URL', 'HERMIT_KEY', 'HERMIT_CHAT_ONLY'],
+        env_vars: [
+          'HERMIT_SESSION_ID', 'HERMIT_DASHBOARD_URL', 'HERMIT_KEY',
+          'HERMIT_CHAT_ONLY', 'HERMIT_AGENT_DIR',
+        ],
         // Seconds. `ask` blocks until a human clicks a button in the dashboard,
         // for up to the stub's own 4h ceiling — a default tool timeout would
         // kill it long before, and the user's answer would land on a call that
@@ -298,7 +301,11 @@ export function codexChildEnv(session: RuntimeSession): Record<string, string> {
   // Pure chat: codex's own tools are already caged by the read-only sandbox in
   // threadOptions; this is what additionally drops the three cron tools from
   // the hermit MCP surface, via the env_vars list above.
-  if (session.chatOnly) env.HERMIT_CHAT_ONLY = '1';
+  if (session.chatOnly) {
+    env.HERMIT_CHAT_ONLY = '1';
+    // memory_write's root. Without it the tool refuses rather than guessing.
+    env.HERMIT_AGENT_DIR = session.agentDirectory;
+  }
   return env;
 }
 

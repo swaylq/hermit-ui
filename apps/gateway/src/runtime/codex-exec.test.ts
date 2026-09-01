@@ -385,7 +385,8 @@ test('the stub inherits identity by variable name, with no values in Codex argv 
   // crosses into the MCP child, so it should be read deliberately, not grown by
   // accident.
   assert.deepEqual(hermit.env_vars, [
-    'HERMIT_SESSION_ID', 'HERMIT_DASHBOARD_URL', 'HERMIT_KEY', 'HERMIT_CHAT_ONLY',
+    'HERMIT_SESSION_ID', 'HERMIT_DASHBOARD_URL', 'HERMIT_KEY',
+    'HERMIT_CHAT_ONLY', 'HERMIT_AGENT_DIR',
   ]);
   assert.equal(hermit.env, undefined);
   assert.doesNotMatch(JSON.stringify(cfg), /sess-42/);

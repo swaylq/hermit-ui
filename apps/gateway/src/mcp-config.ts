@@ -22,7 +22,15 @@ export const MCP_STUB_PATH = path.join(path.dirname(fileURLToPath(import.meta.ur
  * option takes the object itself. Building the object once and serialising at
  * the edge keeps the two spawn paths from drifting.
  */
-export function buildMcpServers(chatSessionId: string, isBrain = false, chatOnly = false) {
+export function buildMcpServers(
+  chatSessionId: string,
+  isBrain = false,
+  // Pure chat carries its agent directory rather than being a bare boolean: the
+  // mode's one write tool (memory_write) is useless without it, and bundling
+  // them makes "flag set, directory forgotten" unrepresentable instead of a
+  // runtime error a long way from here.
+  chatOnly: { agentDirectory: string } | null = null,
+) {
   return {
     hermit: {
       command: 'node',
@@ -43,13 +51,18 @@ export function buildMcpServers(chatSessionId: string, isBrain = false, chatOnly
         // registers the brain-only cross-agent tools (roster/dispatch/...).
         ...(isBrain ? { HERMIT_BRAIN: '1' } : {}),
         // Pure chat: the stub drops the three cron tools that would schedule
-        // full-tool work later. See mcp-stub.cjs CHAT_ONLY_DENIED.
-        ...(chatOnly ? { HERMIT_CHAT_ONLY: '1' } : {}),
+        // full-tool work later, and gains memory_write — the session's only
+        // route to disk. See mcp-stub.cjs CHAT_ONLY_DENIED / CHAT_ONLY_TOOLS.
+        ...(chatOnly ? { HERMIT_CHAT_ONLY: '1', HERMIT_AGENT_DIR: chatOnly.agentDirectory } : {}),
       },
     },
   };
 }
 
-export function buildMcpConfigArg(chatSessionId: string, isBrain = false, chatOnly = false): string {
+export function buildMcpConfigArg(
+  chatSessionId: string,
+  isBrain = false,
+  chatOnly: { agentDirectory: string } | null = null,
+): string {
   return JSON.stringify({ mcpServers: buildMcpServers(chatSessionId, isBrain, chatOnly) });
 }

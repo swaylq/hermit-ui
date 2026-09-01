@@ -890,7 +890,11 @@ export class ClaudeSdkRuntime implements AgentRuntime {
         // ordinary cron fire, whose session id has no ChatSession row for these
         // tools to act on) therefore drops BOTH. See RuntimeSession.hermitTools.
         mcpServers: hermitTools
-          ? buildMcpServers(session.id, session.isOrchestrator ?? false, session.chatOnly ?? false)
+          ? buildMcpServers(
+              session.id,
+              session.isOrchestrator ?? false,
+              session.chatOnly ? { agentDirectory: cwd } : null,
+            )
           : {},
         env: applyCredentialEnv({
           ...process.env,

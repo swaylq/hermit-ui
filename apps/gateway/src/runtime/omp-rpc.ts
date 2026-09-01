@@ -389,6 +389,13 @@ export class OmpRpcRuntime implements AgentRuntime {
           HERMIT_KEY: ASST_KEY,
           HERMIT_SESSION_ID: session.id,
         } : {}),
+        // Pure chat: unlocks memory_write in the shared hermit extension, and
+        // tells it which directory it may write inside. Without the directory
+        // the tool refuses rather than guessing, so both travel together.
+        ...(session.chatOnly ? {
+          HERMIT_CHAT_ONLY: '1',
+          HERMIT_AGENT_DIR: session.agentDirectory,
+        } : {}),
         // Tells the shared hermit extension which backend it is inside. It uses
         // this to skip pi's registerProvider call, which would otherwise
         // override omp's models.yml with a credential omp cannot expand.
