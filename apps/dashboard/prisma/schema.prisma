@@ -981,6 +981,27 @@ model Cron {
   // see apps/cli/template/.claude/skills/cron/SKILL.md.)
   doneAt DateTime?
 
+  // ── Same-day catch-up after a failed run ───────────────────────────────────
+  //
+  // OPT-IN, and it stays that way. A cron that sends mail, publishes or posts is
+  // doing something irreversible, and a catch-up run of one of those is a
+  // duplicate delivery to real people. finance-agent's scheduler deliberately
+  // left its 15:40 digest without a window for exactly this reason (sway's call,
+  // 2026-08-31); the shape here is copied from it.
+  //
+  // NULL on either field = no catch-up, and the row behaves exactly as before.
+  retryEverySec  Int? // wait this long after a failure, then run again
+  retryWindowSec Int? // ...but never later than firedAt + this. Bounds a real outage
+  //                     (a spent quota, a dead credential) to a few wasted runs
+  //                     instead of dozens a day.
+
+  // Internal state, not settings. `retryUntil` is stamped from the FIRST failure's
+  // fire and then reused, so a catch-up that also fails is still measured against
+  // the original schedule rather than sliding its own deadline forward. Both are
+  // cleared by any run that does not fail, and by a normal (non-catch-up) fire.
+  retryUntil DateTime?
+  retryCount Int       @default(0)
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   runs      CronRun[]

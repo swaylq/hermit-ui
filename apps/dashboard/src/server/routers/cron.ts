@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { router, gatewayProcedure, machineProcedure, agentProcedure } from '../trpc';
 import { prisma } from '../db';
 import { resolveRuntime, runtimeContextOf } from '../runtime-resolve';
+import { retryConfigProblem } from '@/lib/cron-recovery';
 
 // Unread finished runs per cron (status not 'running', readAt null) → the red
 // roll-up dot on the sidebar / agent-detail cron rows. One grouped query for the
@@ -32,7 +33,29 @@ const CronInput = z.object({
   enabled: z.boolean().default(true),
   // Where finished runs report. Null keeps a cron silent (visible only in /cron).
   reportSessionId: z.string().nullable().optional(),
+  // ── Same-day catch-up after a failed run. OPT-IN, both or neither. ──
+  // Deliberately has no default: a cron that sends mail, posts or publishes is
+  // doing something irreversible, and a catch-up run of one of those is a
+  // duplicate delivery to real people. Coherence is checked below, because the way
+  // this setting fails is silence — a window that can never fire looks identical
+  // to one that simply has not been needed yet.
+  retryEverySec: z.number().int().min(300).max(43_200).nullable().optional(),
+  retryWindowSec: z.number().int().min(300).max(86_400).nullable().optional(),
 });
+
+/** Refuse a catch-up window that can never fire, rather than storing it. */
+function assertRetrySane(a: {
+  retryEverySec?: number | null;
+  retryWindowSec?: number | null;
+  intervalSec: number;
+}): void {
+  const problem = retryConfigProblem({
+    retryEverySec: a.retryEverySec ?? null,
+    retryWindowSec: a.retryWindowSec ?? null,
+    intervalSec: a.intervalSec,
+  });
+  if (problem) throw new Error(problem);
+}
 
 export const cronRouter = router({
   // All crons for the machine — the /cron page sidebar. `unreadCount` = finished
@@ -142,6 +165,7 @@ export const cronRouter = router({
     }),
 
   create: agentProcedure.input(CronInput).mutation(async ({ ctx, input }) => {
+    assertRetrySane(input);
     // nextFire = now ⇒ first run on the next gateway tick.
     return prisma.cron.create({
       data: { machineId: ctx.machine.id, ...input, nextFire: new Date() },
@@ -167,6 +191,25 @@ export const cronRouter = router({
       // thing separating 已完成 from 已暂停 — left behind, a re-enabled cron would
       // fire while the page still called it done.
       if (patch.enabled === true) data.doneAt = null;
+      // Validate the MERGED row, not the patch: sending only retryWindowSec has to
+      // be judged against the interval already stored.
+      if (
+        patch.retryEverySec !== undefined ||
+        patch.retryWindowSec !== undefined ||
+        patch.intervalSec != null
+      ) {
+        assertRetrySane({
+          retryEverySec:
+            patch.retryEverySec !== undefined ? patch.retryEverySec : existing.retryEverySec,
+          retryWindowSec:
+            patch.retryWindowSec !== undefined ? patch.retryWindowSec : existing.retryWindowSec,
+          intervalSec: patch.intervalSec ?? existing.intervalSec,
+        });
+        // Turning the window off (or re-cutting the schedule) must not leave a
+        // half-finished catch-up pointing at a deadline nobody will honour.
+        data.retryUntil = null;
+        data.retryCount = 0;
+      }
       return prisma.cron.update({ where: { id }, data });
     }),
 

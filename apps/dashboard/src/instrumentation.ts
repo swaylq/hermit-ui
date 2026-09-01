@@ -15,4 +15,8 @@ export async function register() {
   startUnansweredSweep();
   const { startStuckMessageSweep } = await import('@/server/machine-alerts');
   startStuckMessageSweep();
+  // Same argument, third case: a gateway that dies mid-run is the reason a CronRun
+  // is stuck at 'running' forever, so the thing that notices cannot live on it.
+  const { startStaleCronRunSweep } = await import('@/server/cron-sweep');
+  startStaleCronRunSweep();
 }
