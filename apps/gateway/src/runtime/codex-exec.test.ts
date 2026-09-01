@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   CodexExecRuntime, readRolloutTokens, findRolloutFile, resolveCodexModel,
   clampEffort, codexChildEnv, codexShellIsolationConfig, hermitMcpConfigFor, httpsTransportConfig,
+  serviceTierConfig,
   client,
 } from './codex-exec';
 
@@ -453,6 +454,39 @@ test('HERMIT_CODEX_WEBSOCKETS=1 restores the default transport', () => {
   } finally {
     if (previous === undefined) delete process.env.HERMIT_CODEX_WEBSOCKETS;
     else process.env.HERMIT_CODEX_WEBSOCKETS = previous;
+  }
+});
+
+// ── service tier ─────────────────────────────────────────────────────────────
+//
+// "1.5x speed, increased usage" in codex's own catalog. Unlike effort, a model
+// that does not offer the tier is not a failure — codex warns and drops it — so
+// there is no per-model table here to go stale.
+
+test('the fleet asks codex for the fast queue', () => {
+  const previous = process.env.HERMIT_CODEX_SERVICE_TIER;
+  delete process.env.HERMIT_CODEX_SERVICE_TIER;
+  try {
+    assert.deepEqual(serviceTierConfig(), { service_tier: 'fast' });
+  } finally {
+    if (previous === undefined) delete process.env.HERMIT_CODEX_SERVICE_TIER;
+    else process.env.HERMIT_CODEX_SERVICE_TIER = previous;
+  }
+});
+
+// The ordinary queue has no name to send: you ask for it by sending no tier at
+// all. A machine that set the env to 'default' and still got 'default' on the
+// wire would have codex reject a tier it never heard of.
+test('a machine can take the ordinary queue back', () => {
+  const previous = process.env.HERMIT_CODEX_SERVICE_TIER;
+  try {
+    process.env.HERMIT_CODEX_SERVICE_TIER = 'default';
+    assert.deepEqual(serviceTierConfig(), {});
+    process.env.HERMIT_CODEX_SERVICE_TIER = '';
+    assert.deepEqual(serviceTierConfig(), {});
+  } finally {
+    if (previous === undefined) delete process.env.HERMIT_CODEX_SERVICE_TIER;
+    else process.env.HERMIT_CODEX_SERVICE_TIER = previous;
   }
 });
 

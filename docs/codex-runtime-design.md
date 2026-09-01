@@ -101,9 +101,10 @@ codex 不会：第三轮（换了个进程 resume 的）只发自己这轮的 it
 
 ### 模型与推理档位
 
-默认 `gpt-5.6-sol` + effort `ultra`，两者都可被覆盖（session 的 `runtimeModel` > `HERMIT_CODEX_MODEL` > 内置默认）。
+默认 `gpt-5.6-sol` + effort `max` + 服务档位 `fast`（sway 2026-09-01 拍板）。
+模型与档位都可被覆盖（session 的 `runtimeModel` > `HERMIT_CODEX_MODEL` > 内置默认）。
 
-数据来自 codex 自己的 `~/.codex/models_cache.json`（client_version 0.147.0）：
+数据来自 codex 自己的 `~/.codex/models_cache.json`（client_version 0.152.0）：
 
 | model | 有效上下文 | 档位阶梯 | 自带默认 |
 |---|---|---|---|
@@ -116,12 +117,31 @@ codex 不会：第三轮（换了个进程 resume 的）只发自己这轮的 it
 
 1. **模型自带默认是 `low`**，不是 medium。也就是说改之前每个 codex 会话都跑在阶梯最底下。
 2. **`max` / `ultra` 都不在 SDK 的 `ModelReasoningEffort` 联合类型里**（那个类型停在 `xhigh`，
-   比服务端目录旧）。所以那个 `as` 断言是**必需的**，不是图省事——实测 codex-cli 0.147.0
-   接受 `ultra`，rollout 的 turn_context 里记着 `"effort": "ultra"`。别"顺手修掉"改回 xhigh。
+   比服务端目录旧）。所以那个 `as` 断言是**必需的**，不是图省事——实测 codex-cli 0.152.0
+   接受 `max`，rollout 的 turn_context 里记着 `"effort": "max"`。别"顺手修掉"改回 xhigh。
 
-`ultra` 宣称 "automatic task delegation"，所以实测过它到底发什么事件：
-只有 `agent_message` / `command_execution` / `file_change` —— 全是翻译层已经认识的类型，
-没有会被静默丢掉的新 item type。
+**为什么是 `max` 不是阶梯顶端的 `ultra`**：`ultra` 的官方描述是 "maximum reasoning with
+automatic task delegation"——它会自己派生子 agent 干活，那是换了一种行为，不只是想得更久。
+`max` 是"仍然一个 agent 自己做"的最深一档。（`ultra` 发的事件类型早先实测过，只有
+`agent_message` / `command_execution` / `file_change`，翻译层都认识；所以哪天想换回去，
+不用担心事件被静默丢掉。）
+
+### 服务档位：fast
+
+codex 目录里这一档叫 `priority`，展示名 "Fast"，描述是 **"1.5x speed, increased usage"**——
+同一个模型同一个答案，插队走，代价是更快吃掉 ChatGPT 套餐额度。`gpt-5.6-sol/terra/luna`、
+`gpt-5.5`、`gpt-5.4` 有这一档，`gpt-5.4-mini` 和 `gpt-5.3-codex-spark` 没有。
+
+配置键是 `service_tier`，值写 `fast`（codex 自己的 `/fast` 命令往 config.toml 里写的也是这个
+词），codex 组请求时把它解析成 `priority`。
+
+**这里不需要按模型建表**，和 effort 相反：给一个没有这档的模型设了 tier 不是硬失败，codex 只
+打一行 `Configured service tier \`priority\` is not advertised as supported for model
+gpt-5.4-mini and will be omitted from requests` 然后照常发请求（实测 codex-cli 0.152.0）。
+所以钉在某个老模型上的会话不会因此挂掉。
+
+想让某台机器回到普通队列：`HERMIT_CODEX_SERVICE_TIER=default`（或设成空串）。普通队列没有名字
+可发——不发这个键**就是**普通队列，所以这两个值的实现都是"不带 `service_tier` 参数"。
 
 ### 档位钳制（不是防御性代码）
 

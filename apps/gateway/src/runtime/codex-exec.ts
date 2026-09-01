@@ -128,18 +128,21 @@ type Effort = (typeof EFFORT_LADDER)[number];
  * Reasoning effort when the machine names none.
  *
  * The model's OWN default is `low` — the bottom of that ladder — so a session
- * left alone was running as cheaply as codex offers. `ultra` is the top:
- * "maximum reasoning with automatic task delegation".
+ * left alone was running as cheaply as codex offers. `max` is the top of the
+ * plain depth dial: "maximum reasoning depth for the hardest problems".
+ *
+ * The one rung above it, `ultra`, is not simply more thinking — codex describes
+ * it as "maximum reasoning with automatic task delegation", so a turn there can
+ * fan out into sub-agents. sway chose `max` for the fleet on 2026-09-01: the
+ * deepest setting whose behaviour is still one agent doing the work.
  *
  * Neither `max` nor `ultra` is in the SDK's ModelReasoningEffort union, which
  * stops at 'xhigh' — the published types lag the server's catalog. Verified
- * against codex-cli 0.147.0: a turn spawned with 'ultra' is accepted, its
- * rollout records `"effort": "ultra"`, and it emits only item types the
- * translator already understands (agent_message, command_execution,
- * file_change) despite the delegation — so nothing is silently dropped from the
- * chat. The cast where this is applied is therefore load-bearing, not cosmetic.
+ * against codex-cli 0.152.0: a turn spawned with 'max' is accepted and its
+ * rollout records `"effort": "max"`. The cast where this is applied is
+ * therefore load-bearing, not cosmetic.
  */
-const DEFAULT_EFFORT: Effort = 'ultra';
+const DEFAULT_EFFORT: Effort = 'max';
 
 /**
  * The highest effort each model actually accepts — longest prefix wins.
@@ -325,6 +328,38 @@ function codexSdkVersion(): string | null {
 }
 
 /**
+ * The queue codex's requests join.
+ *
+ * codex's own catalog prices the `priority` tier as "1.5x speed, increased
+ * usage" — the same model and the same answer, served ahead of the ordinary
+ * queue and charged harder against the ChatGPT plan's limits. sway chose it for
+ * the whole fleet on 2026-09-01, alongside gpt-5.6-sol at `max`.
+ *
+ * `fast` is the spelling codex's own `/fast` command writes into config.toml;
+ * codex resolves it to the tier id `priority` when it builds the request.
+ *
+ * Unlike effort, this needs no per-model table. A model that does not offer the
+ * tier is not a failure: codex logs "Configured service tier `priority` is not
+ * advertised as supported for model gpt-5.4-mini and will be omitted from
+ * requests" and sends the request without it (measured, codex-cli 0.152.0). So
+ * a session pinned to gpt-5.4-mini or gpt-5.3-codex-spark keeps working, and
+ * this file does not acquire a second list to keep in sync with the catalog.
+ *
+ * A machine that wants the ordinary queue back sets
+ * HERMIT_CODEX_SERVICE_TIER to `default` or to the empty string; any other
+ * value is passed through for codex to validate.
+ */
+const DEFAULT_SERVICE_TIER = 'fast';
+
+export function serviceTierConfig(): NonNullable<CodexOptions['config']> {
+  const tier = process.env.HERMIT_CODEX_SERVICE_TIER?.trim() ?? DEFAULT_SERVICE_TIER;
+  // Omitting the key is how you ask for the ordinary queue: codex has no
+  // "standard" tier name to send, the plain request IS the standard tier.
+  if (!tier || tier === 'default') return {};
+  return { service_tier: tier };
+}
+
+/**
  * Force the Responses API onto HTTPS/SSE instead of codex's preferred
  * WebSockets transport.
  *
@@ -382,6 +417,7 @@ export function client(session: RuntimeSession): Codex {
       ...hermitMcpConfigFor(session),
       ...httpsTransportConfig(),
       ...codexShellIsolationConfig(),
+      ...serviceTierConfig(),
     },
     env: codexChildEnv(session),
   });
