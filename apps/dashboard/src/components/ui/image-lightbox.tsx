@@ -28,6 +28,7 @@ import { createPortal } from 'react-dom';
 import { X, ZoomIn, ZoomOut, ExternalLink, ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { saveFile } from '@/lib/save-file';
+import { thumbUrlFor } from '@/lib/thumb-url';
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 6;
@@ -39,6 +40,26 @@ const LONG_PRESS_MS = 500;  // touch-hold that summons the save menu
 const EXIT_MS = 150;
 
 type View = { scale: number; tx: number; ty: number };
+
+/**
+ * The 640px thumbnail behind this image, if it has one.
+ *
+ * `thumbUrlFor` only matches a bare `/uploads/...` path, and what reaches the
+ * lightbox has already been through `mediaUrl` — absolute when this tab is
+ * driving another deployment. So the path is derived, then put back on the
+ * origin it came from.
+ */
+function placeholderFor(url: string): string | null {
+  if (!url.startsWith('/') && !/^https?:/i.test(url)) return null; // data: and friends
+  try {
+    const base = typeof window === 'undefined' ? 'http://x' : window.location.origin;
+    const abs = new URL(url, base);
+    const path = thumbUrlFor(abs.pathname);
+    return path ? (url.startsWith('/') ? path : abs.origin + path) : null;
+  } catch {
+    return null;
+  }
+}
 
 export function ImageLightbox({
   open,
@@ -82,6 +103,10 @@ export function ImageLightbox({
   // the arrows at all). Both are no-ops without `siblingSelector`.
   const [currentUrl, setCurrentUrl] = useState(url);
   const [galleryCount, setGalleryCount] = useState(0);
+  // Which url has finished decoding. A url rather than a boolean so that
+  // stepping to the next image in the gallery needs no reset effect: the state
+  // stops matching `currentUrl` by itself, and the placeholder comes back.
+  const [paintedUrl, setPaintedUrl] = useState<string | null>(null);
 
   // Long-press (touch) → a small save menu at the press point. The PWA suppresses
   // the native "Save Image" callout (select-none), so this is the way to save there.
@@ -431,6 +456,7 @@ export function ImageLightbox({
   if (!mounted || typeof document === 'undefined') return null;
 
   const zoomed = scale > 1.01;
+  const placeholder = placeholderFor(currentUrl);
 
   return createPortal(
     <div
@@ -468,14 +494,36 @@ export function ImageLightbox({
           which ask imgRef, not these — keep working unchanged. */}
       <div className="lb-stage flex items-center justify-center">
         <div ref={slideRef} className="lb-slide flex items-center justify-center">
+          {/* THE HALF-PAINTED PICTURE. A non-interlaced PNG paints top-down as
+              its bytes arrive, so a 265KB screenshot opened on a phone shows its
+              top third over the black backdrop and reads as broken — which is
+              what sway reported on 2026-09-02. The element's box is right from
+              the first packet (the size is in the PNG header), so putting the
+              640px thumbnail BEHIND the image fills that box immediately: it is
+              already in the browser cache, having just been rendered in the chat
+              bubble, and it is a scaled copy, so it lines up and simply sharpens
+              when the real one lands.
+
+              A background on the image itself rather than a second element: same
+              box, same transform, same hit tests, so zoom and pan need no
+              knowledge of it. Dropped on load, so a TRANSPARENT image does not
+              show a thumbnail through its own holes. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             ref={imgRef}
             src={currentUrl}
             alt={alt ?? 'image'}
             draggable={false}
-            onLoad={() => set(view.current)}
-            style={{ transformOrigin: 'center' }}
+            onLoad={() => {
+              setPaintedUrl(currentUrl);
+              set(view.current);
+            }}
+            style={{
+              transformOrigin: 'center',
+              ...(placeholder && paintedUrl !== currentUrl
+                ? { backgroundImage: `url("${placeholder}")`, backgroundSize: '100% 100%', backgroundRepeat: 'no-repeat' }
+                : null),
+            }}
             className="max-h-[92dvh] max-w-[92vw] object-contain"
           />
         </div>
