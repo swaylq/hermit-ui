@@ -56,7 +56,7 @@ const PAGE_A = shell(
   `<h1 id="title">Page A</h1>
    <div class="wrap">
      <div class="card"><p>first card</p></div>
-     <div class="card"><p class="lead">second card</p><button class="btn" data-testid="save">Save</button></div>
+     <div class="card"><p class="lead">second card</p><button class="btn" data-testid="save" aria-label="Save changes">Save</button></div>
      <div class="card"><p>third card</p></div>
    </div>
    <ul><li>one</li><li>two</li><li id="li-three">three</li></ul>
@@ -156,7 +156,7 @@ const state = () => page.evaluate(() => JSON.parse(JSON.stringify((window as nev
   fwd: boolean;
   idx: number;
   max: number;
-  picks: Array<{ selector: string; text: string }>;
+  picks: Array<{ selector: string; selectorPath: string; tag: string; label: string; text: string }>;
 }>;
 const settle = () => page.waitForTimeout(SETTLE);
 
@@ -171,7 +171,9 @@ async function pickIt(locator: string) {
   await page.waitForTimeout(150);
   await frame.locator(locator).click();
   await page.waitForTimeout(300);
-  return (await state()).picks[0] ?? { selector: '<none>', text: '<none>' };
+  return (await state()).picks[0] ?? {
+    selector: '<none>', selectorPath: '<none>', tag: '<none>', label: '<none>', text: '<none>',
+  };
 }
 
 try {
@@ -223,9 +225,16 @@ try {
   console.log('picker');
   let p = await pickIt('#title');
   eq('an element with a usable id is named by it', p.selector, '#title');
+  eq('and its complete path keeps the tag and page context', p.selectorPath, 'body > h1#title');
 
   p = await pickIt('[data-testid="save"]');
   eq('a test attribute beats classes', p.selector, 'button[data-testid="save"]');
+  eq(
+    'the complete path reaches it from the page body',
+    p.selectorPath,
+    'body > div.wrap > div.card:nth-of-type(2) > button[data-testid="save"]',
+  );
+  eq('its accessible name is included for icon and labelled controls', p.label, 'Save changes');
   eq('the picked element is described too', p.text, 'Save');
 
   p = await pickIt('.wrap > div:nth-child(3) > p');
@@ -240,6 +249,16 @@ try {
       }
     }, p.selector);
   eq(`"${p.selector}" resolves to exactly one element`, hits, 1);
+  const pathHits = await frame
+    .locator('body')
+    .evaluate((b, sel) => {
+      try {
+        return b.ownerDocument.querySelectorAll(sel).length;
+      } catch {
+        return -1;
+      }
+    }, p.selectorPath);
+  eq(`its complete path also resolves to exactly one element`, pathHits, 1);
 
   p = await pickIt('#li-three');
   eq('a list item keeps its id', p.selector, '#li-three');

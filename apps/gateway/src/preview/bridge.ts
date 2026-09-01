@@ -12,7 +12,8 @@
 //   · reload              — location.reload(), which keeps history where
 //                           remounting the iframe would throw it away
 //   · the element picker  — hover-highlight anything on the page, click it, and
-//                           the parent gets a CSS selector for it
+//                           the parent gets a concise CSS selector plus its full
+//                           DOM path and human-readable context
 //
 // Trust: the page posts to '*'. Everything it says (its own URL, a selector it
 // was asked to produce) is already known to whoever holds the capability URL, so
@@ -127,9 +128,9 @@ function bridgeClient(): string {
     return 1;
   }
 
-  function seg(el) {
+  function seg(el, tagId) {
     var tag = el.tagName.toLowerCase();
-    if (el.id && okIdent(el.id) && uniq('#' + esc(el.id))) return '#' + esc(el.id);
+    if (el.id && okIdent(el.id) && uniq('#' + esc(el.id))) return (tagId ? tag : '') + '#' + esc(el.id);
     var s = tag + attrOf(el);
     if (s === tag) s = tag + classesOf(el);
     var p = el.parentElement;
@@ -159,7 +160,7 @@ function bridgeClient(): string {
     if (el === document.body) return 'body';
     var parts = [], cur = el, depth = 0;
     while (cur && cur.nodeType === 1 && cur !== document.documentElement && depth < MAX_DEPTH) {
-      var s = seg(cur);
+      var s = seg(cur, false);
       parts.unshift(s);
       var joined = parts.join(' > ');
       if (uniq(joined)) return joined;
@@ -168,6 +169,38 @@ function bridgeClient(): string {
       depth++;
     }
     return parts.join(' > ');
+  }
+
+  // The concise selector above is ideal for code, but a bare #id or utility
+  // class carries too little context in a chat prompt. Also send the complete
+  // chain from body to the element. Every segment is unique among its siblings
+  // (nth-of-type is added when needed), so the result remains a real selector,
+  // not a decorative breadcrumb.
+  function selectorPathFor(el) {
+    if (!el || el.nodeType !== 1) return '';
+    if (el === document.documentElement) return 'html';
+    if (el === document.body) return 'body';
+    var parts = [], cur = el;
+    while (cur && cur.nodeType === 1 && cur !== document.documentElement) {
+      if (cur === document.body) {
+        parts.unshift('body');
+        break;
+      }
+      parts.unshift(seg(cur, true));
+      cur = cur.parentElement;
+    }
+    return parts.join(' > ');
+  }
+
+  function labelFor(el) {
+    var label = el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title') ||
+      el.getAttribute('alt') || el.getAttribute('placeholder'));
+    if (!label && el.labels && el.labels.length) {
+      var parts = [];
+      for (var i = 0; i < el.labels.length; i++) parts.push(el.labels[i].textContent || '');
+      label = parts.join(' ');
+    }
+    return (label || '').replace(/\s+/g, ' ').trim().slice(0, 160);
   }
 
   // ── element picker ──────────────────────────────────────────────────────
@@ -231,8 +264,10 @@ function bridgeClient(): string {
     up({
       type: 'picked',
       selector: sel,
+      selectorPath: selectorPathFor(el),
       tag: el.tagName.toLowerCase(),
-      text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+      label: labelFor(el),
+      text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160)
     });
   }
 

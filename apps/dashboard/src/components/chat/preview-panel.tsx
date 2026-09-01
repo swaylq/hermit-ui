@@ -48,7 +48,7 @@
 // asks, and the page answers over postMessage:
 //
 //   panel → page   nav{delta} · reload · pick{on} · hello
-//   page  → panel  state{url,len,can} · picked{selector} · pick-cancel
+//   page  → panel  state{url,len,can} · picked{selector,selectorPath,tag,label,text} · pick-cancel
 //
 // The page posts to '*' (it does not know who embedded it), so THIS side does
 // the authenticating: origin must be the preview's, source must be our own
@@ -65,6 +65,7 @@ import type { PointerEvent as ReactPointerEvent, KeyboardEvent as ReactKeyboardE
 import { Check, ChevronLeft, ChevronRight, Copy, ExternalLink, RotateCw, SquareDashedMousePointer, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { LivePreviewInfo } from '@/lib/live-preview';
+import { readPreviewElementPick, type PreviewElementPick } from '@/components/chat/preview-element-pick';
 
 // ── divider width persistence ────────────────────────────────────────────────
 
@@ -162,14 +163,14 @@ export function LivePreviewPanel({
   preview,
   open,
   onClose,
-  onPickSelector,
+  onPickElement,
 }: {
   preview: LivePreviewInfo;
   /** Showing (true) or on its way out (false). The parent keeps it mounted for both. */
   open: boolean;
   onClose: () => void;
-  /** A picked element's CSS selector, on its way to the composer. */
-  onPickSelector?: (selector: string) => void;
+  /** A picked element's selector, full path and visible context, on their way to the composer. */
+  onPickElement?: (pick: PreviewElementPick) => void;
 }) {
   // See the note up top: mount closed, flip on the frame after, transition in.
   const [entered, setEntered] = useState(false);
@@ -230,7 +231,7 @@ export function LivePreviewPanel({
     const onMessage = (e: MessageEvent) => {
       if (!origin || e.origin !== origin) return;
       if (e.source !== frameRef.current?.contentWindow) return;
-      const d = e.data as { source?: unknown; type?: unknown; selector?: unknown } & PageState;
+      const d = e.data as Record<string, unknown> & { source?: unknown; type?: unknown } & PageState;
       if (!d || d.source !== MSG_UP) return;
 
       if (d.type === 'state') {
@@ -252,9 +253,10 @@ export function LivePreviewPanel({
         setHere(subPath(d.url, preview.url));
       } else if (d.type === 'picked') {
         setPicking(false);
-        if (typeof d.selector === 'string' && d.selector) {
-          onPickSelector?.(d.selector);
-          setPicked(d.selector);
+        const pick = readPreviewElementPick(d);
+        if (pick) {
+          onPickElement?.(pick);
+          setPicked(pick.selector);
         }
       } else if (d.type === 'pick-cancel') {
         setPicking(false);
@@ -262,7 +264,7 @@ export function LivePreviewPanel({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [origin, onPickSelector, preview.url]);
+  }, [origin, onPickElement, preview.url]);
 
   useEffect(() => {
     if (!picked) return;
@@ -500,7 +502,7 @@ export function LivePreviewPanel({
         )}
         <div className="flex shrink-0 items-center gap-0.5">
           <HeaderButton
-            title={!ready ? NO_BRIDGE : picking ? '取消选择 (Esc)' : '选择页面元素 —— 选中后把它的 CSS 选择器填进输入框'}
+            title={!ready ? NO_BRIDGE : picking ? '取消选择 (Esc)' : '选择页面元素 —— 选中后把选择器、完整路径和文本填进输入框'}
             disabled={!ready}
             className={picking ? 'bg-accent/60 text-foreground hover:bg-accent/60' : undefined}
             onClick={togglePick}
@@ -574,10 +576,10 @@ export function LivePreviewPanel({
           <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-3">
             <span className="max-w-full truncate rounded-full bg-foreground/90 px-3 py-1 text-[11px] font-medium text-background shadow-lg animate-in fade-in-0">
               {picking ? (
-                '点选一个元素，选择器会填进输入框 · Esc 取消'
+                '点选一个元素，选择器、完整路径和文本会填进输入框 · Esc 取消'
               ) : (
                 <>
-                  已填进输入框 <span className="font-mono">{picked}</span>
+                  已将元素信息填进输入框 <span className="font-mono">{picked}</span>
                 </>
               )}
             </span>

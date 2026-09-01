@@ -62,6 +62,7 @@ import { INITIAL_WINDOW, timelineQueryInput, timelineStreamParams } from '@/lib/
 import { readCachedSessions } from '@/lib/session-list-cache';
 import { ModelChip } from '@/components/chat/model-chip';
 import { runtimeShortLabel, runtimeDetail, hasTmuxPane, providerMark } from '@/lib/runtime-labels';
+import { formatPreviewElementPick, type PreviewElementPick } from '@/components/chat/preview-element-pick';
 
 // isTouchPrimary (phone/tablet vs desktop) lives in @/lib/save-file — the
 // soft-keyboard return key inserts a newline there (a dedicated send button
@@ -1847,11 +1848,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     composerRef.current?.setText(withDraft(text, taRef.current?.value ?? ''));
   }, []);
 
-  // An element picked in the live-preview panel → APPEND its selector to the
-  // draft, backticked. Appended, not set: picking one is a step in a sentence
-  // you were already typing ("把 `…` 的间距收紧"), not a fresh prompt.
-  const pickSelector = useCallback((selector: string) => {
-    composerRef.current?.appendText(`\`${selector}\``);
+  // An element picked in the live-preview panel → APPEND a concise selector,
+  // its full DOM path and visible context. Appended, not set: picking one is a
+  // step in a sentence you were already typing, not a fresh prompt.
+  const pickElement = useCallback((pick: PreviewElementPick) => {
+    composerRef.current?.appendText(formatPreviewElementPick(pick));
   }, []);
 
   // Voice transcript → APPEND to the current draft (never clobber typed text),
@@ -2662,7 +2663,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             preview={livePreview}
             open={previewSlidIn}
             onClose={closePreview}
-            onPickSelector={pickSelector}
+            onPickElement={pickElement}
           />
         </Suspense>
       )}
