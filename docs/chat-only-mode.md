@@ -94,12 +94,23 @@ letting the session start and disappoint.
 
 ### What is not verified yet
 
-- **dsh** — the box this was built on had a broken dsh install, so
-  `DSH_PERMISSION_MODE=read-only` was never run. It is applied as belt; the
-  braces are the plugin removal, whose mechanism (`disabled: true` in the
-  generated patch) this file already uses on every turn. If the enum value is
-  wrong, dsh ignores it and the plugin removal still holds. Worth one run on a
-  machine with dsh installed.
+- **dsh** — the box this was built on had a broken dsh install (every
+  `@deepseek-ai` package symlinked into a cleared npx cache), so
+  `DSH_PERMISSION_MODE=read-only` was never run.
+
+  Do not read it as a second line of defence: the plugin removal takes away the
+  shell, the editor, sub-agents and workflows, but `dsh-tool-fs` stays composed
+  so the session can still read — and its write half is stopped by that env
+  value alone. It is load-bearing.
+
+  What is known is the failure mode, and it is the good one: dsh resolves its
+  profile at boot and an unrecognised value fails there **loudly**, the same
+  path an invalid `api` field takes. So the first pure-chat dsh session either
+  works or refuses to start; it cannot come up looking read-only while quietly
+  being writable. If it refuses, find dsh's real third enum value rather than
+  dropping the line — without it, `dsh-tool-fs` can write.
+
+  One run on a machine with a working dsh settles it.
 - **kimi** — tool names came from the installed binary rather than a guess, and
   the profile writes both `tools` (allowlist) and `disallowedTools` (denylist)
   so a renamed key upstream costs a tool rather than the whole mode. Still

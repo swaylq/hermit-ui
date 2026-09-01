@@ -88,16 +88,28 @@ const DSH_ASSETS = fileURLToPath(new URL('../../dsh', import.meta.url));
 /**
  * The dsh tool plugins a pure-chat session must not be composed with.
  *
- * This is the primary lever for dsh, not DSH_PERMISSION_MODE=read-only, and the
- * reason is confidence: disabling a plugin is a mechanism this file already
- * uses on every single turn (headless-startup / headless-runner above), whereas
- * `read-only` is a value read from dsh's own enum that has NOT been verified on
- * a working install — the box this was written on had a broken dsh. Both are
- * applied; if the enum value turns out to be wrong, dsh ignores it and the
- * plugin removal still holds.
+ * Removing them is the half we are confident in: `disabled: true` is a
+ * mechanism this file already uses on every single turn (headless-startup /
+ * headless-runner above). It takes away the shell, the editor, sub-agents and
+ * workflows.
  *
- * Left composed on purpose: `dsh-tool-fs-search` and the read half of the file
- * tools, so a pure-chat dsh session can still look at things.
+ * It does NOT take away writing, and that is deliberate: `dsh-tool-fs` stays
+ * composed so the session can still read, and its write half is stopped by
+ * DSH_PERMISSION_MODE=read-only at the spawn site instead. Which makes that env
+ * value load-bearing for dsh rather than a second line of defence — do not read
+ * the two as belt and braces.
+ *
+ * `read-only` has NOT been verified on a working install: the box this was
+ * written on had a broken dsh (every @deepseek-ai package symlinked into a
+ * cleared npx cache). What IS known is the failure mode, and it is the good
+ * one: dsh resolves its profile at boot, and an unrecognised value fails there
+ * loudly — the same path an invalid `api` field takes. So the first pure-chat
+ * dsh session either works or refuses to start. It cannot come up looking
+ * read-only while quietly being writable, which is the outcome that would
+ * actually matter.
+ *
+ * If it does refuse to start, the fix is to find dsh's real third enum value
+ * rather than to drop this line: without it, `dsh-tool-fs` can write.
  */
 const DSH_WRITE_PLUGINS = [
   'dsh-tool-bash',
@@ -462,8 +474,9 @@ export class DshExecRuntime implements AgentRuntime {
           // posture as the claude path's --dangerously-skip-permissions and
           // codex's danger-full-access; overridable per machine.
           // Pure chat wins over the machine override, same reasoning as codex:
-          // an operator default must not be able to widen a user's choice. See
-          // DSH_WRITE_PLUGINS for why this is the belt and the patch is the braces.
+          // an operator default must not be able to widen a user's choice.
+          // Unverified value — see DSH_WRITE_PLUGINS for why it is load-bearing
+          // here and why an unrecognised one fails loudly rather than silently.
           DSH_PERMISSION_MODE: h.chatOnly
             ? 'read-only'
             : process.env.HERMIT_DSH_PERMISSION_MODE?.trim() || 'danger-full-access',
