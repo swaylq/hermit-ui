@@ -41,7 +41,7 @@ import { getCredential, credentialDefaultModel } from '../pi-config';
 import { JsonlTransport, type RpcEvent } from './jsonl-transport';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
 import { HERMIT_TOOL_NAMES } from './pi-modes';
-import { CHAT_ONLY_MEMORY_TOOL } from './chat-only';
+import { CHAT_ONLY_MEMORY_TOOL, chatOnlyPreamble } from './chat-only';
 
 /** The hermit tools extension, loaded into every child with --extension. */
 function hermitExtensionPath(): string {
@@ -304,7 +304,10 @@ export class PrimeRpcRuntime implements AgentRuntime {
     // talk and hand things to the user; it cannot even read a file. sway chose
     // this over pretending the backend supports the mode (2026-09-01), and the
     // new-chat UI says so before you pick the combination.
-    if (session.chatOnly) args.push('--tools', [...HERMIT_TOOL_NAMES, CHAT_ONLY_MEMORY_TOOL].join(','));
+    if (session.chatOnly) {
+      args.push('--tools', [...HERMIT_TOOL_NAMES, CHAT_ONLY_MEMORY_TOOL].join(','));
+      args.push('--append-system-prompt', chatOnlyPreamble(session.agentDirectory));
+    }
 
     // Resolved into a local first so the child's credential and the fingerprint
     // recorded for it come from ONE read — two reads could straddle a rotation

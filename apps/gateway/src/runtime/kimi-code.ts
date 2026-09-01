@@ -46,13 +46,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type {
   AgentRuntime, RuntimeHandle, RuntimeImage, RuntimeSession, RuntimeUsage, SyncItem,
 } from './types';
 import { KimiEventTranslator, parseKimiLine, resumeHintId } from './kimi-code-events';
 import { readLfLines } from './lf-lines';
+import { chatOnlyPreamble } from './chat-only';
 import { readSecret } from './pi-credentials';
 import { getCredential, credentialDefaultModel, type ModelCredential } from '../pi-config';
 import { modelLimitsFor } from '../pi-model-limits';
@@ -380,10 +381,19 @@ export function kimiArgs(
  * upstream, an unknown key is ignored silently and the session would come back
  * fully armed — the denylist means such a drift costs a tool, not the mode.
  *
- * Content is fixed, so one file in the shared home serves every session.
+ * The body carries the same preamble every other backend appends to its system
+ * prompt — kimi has no --append-system-prompt, and this profile is the only
+ * place a pure-chat kimi session can be told who it is. Without it the child
+ * falls back to reading its operating files one at a time, which is a round
+ * trip per file and, with no Bash, the only route it has left.
+ *
+ * The content therefore varies per agent (their CHAT.md differs), so the file
+ * is keyed by the agent directory rather than shared: one home serves every
+ * agent on the machine.
  */
-export function chatOnlyAgentFile(home: string = kimiHome()): string {
-  const file = path.join(home, 'hermit-chat-only.md');
+export function chatOnlyAgentFile(agentDirectory: string, home: string = kimiHome()): string {
+  const key = createHash('sha1').update(agentDirectory).digest('hex').slice(0, 10);
+  const file = path.join(home, `hermit-chat-only-${key}.md`);
   const body = [
     '---',
     'name: hermit-chat-only',
@@ -392,12 +402,7 @@ export function chatOnlyAgentFile(home: string = kimiHome()): string {
     'disallowedTools: ["Write", "Edit", "Bash", "Task"]',
     '---',
     '',
-    'This session is in pure-chat mode. You can read files and search the web;',
-    'you cannot write or edit files, run commands, or spawn sub-agents.',
-    '',
-    'Answer from what you already know wherever you can, and look something up',
-    'only when the answer actually turns on it. The user chose this mode to get',
-    'a fast, considered reply — not a thorough investigation.',
+    chatOnlyPreamble(agentDirectory),
     '',
   ].join('\n');
   fs.mkdirSync(home, { recursive: true });
@@ -889,7 +894,7 @@ export class KimiCodeRuntime implements AgentRuntime {
     childEnv.KIMI_CODE_HOME = home;
 
     const spawnedAt = Date.now();
-    const agentFile = h.chatOnly && !h.stampedSessionId ? chatOnlyAgentFile(home) : null;
+    const agentFile = h.chatOnly && !h.stampedSessionId ? chatOnlyAgentFile(h.agentDirectory, home) : null;
     const child = spawn(bin, kimiArgs(prompt, h.stampedSessionId, promptDir ? [promptDir] : [], agentFile), {
       cwd: h.agentDirectory,
       // stderr is NOT merged and NOT an error signal: the CLI writes its tools'

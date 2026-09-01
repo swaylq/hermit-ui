@@ -23,7 +23,7 @@ import type {
 import { translatePiEvent } from './pi-events';
 import { singleFlight } from './pi-rpc';
 import { resolveMode, buildModeArgs } from './pi-modes';
-import { CHAT_ONLY_OMP_TOOLS } from './chat-only';
+import { CHAT_ONLY_OMP_TOOLS, chatOnlyPreamble } from './chat-only';
 import {
   providerEnv, visionEnv, readSecret, machineProviderEnv,
   fingerprintAuthEnv, currentAuthFingerprint,
@@ -360,6 +360,9 @@ export class OmpRpcRuntime implements AgentRuntime {
       // hermit's tool names — omp's --tools covers built-ins only and hard-errors
       // on any other name, while leaving extension tools available regardless.
       ...(session.chatOnly ? ['--tools', CHAT_ONLY_OMP_TOOLS.join(',')] : []),
+      ...(session.chatOnly
+        ? ['--append-system-prompt', chatOnlyPreamble(session.agentDirectory)]
+        : []),
       ...(modelArg ? ['--model', modelArg] : []),
       ...(resume ? ['--resume', resume.piSessionId] : []),
     ];

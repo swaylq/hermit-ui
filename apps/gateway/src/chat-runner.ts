@@ -65,7 +65,7 @@ import { cronOwnedUuids } from './cron-uuids';
 // close an import cycle through ./runtime). Re-exported because cron-runner
 // imports it from here.
 import { buildMcpConfigArg } from './mcp-config';
-import { CHAT_ONLY_CLAUDE_TOOLS } from './runtime/chat-only';
+import { CHAT_ONLY_CLAUDE_TOOLS, chatOnlyPreamble } from './runtime/chat-only';
 export { buildMcpConfigArg };
 
 /**
@@ -1151,7 +1151,12 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
     // and coexists with --dangerously-skip-permissions above (--restricted
     // would not: it refuses bypassPermissions). MCP tools are unaffected, so
     // the hermit surface added just above survives. See runtime/chat-only.ts.
-    if (session.chatOnly) claudeArgs.push('--tools', CHAT_ONLY_CLAUDE_TOOLS.join(','));
+    if (session.chatOnly) {
+      claudeArgs.push('--tools', CHAT_ONLY_CLAUDE_TOOLS.join(','));
+      // Same preamble the SDK path appends — see chatOnlyPreamble for why a
+      // pure-chat child must be GIVEN its brief rather than left to fetch it.
+      claudeArgs.push('--append-system-prompt', chatOnlyPreamble(cwd));
+    }
   }
 
   const { created, preExistingUuids } = ensureSession({

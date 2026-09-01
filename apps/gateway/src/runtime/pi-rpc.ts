@@ -20,7 +20,7 @@ import {
   fingerprintAuthEnv, currentAuthFingerprint,
 } from './pi-credentials';
 import { resolveMode, buildModeArgs, HERMIT_TOOL_NAMES } from './pi-modes';
-import { CHAT_ONLY_PI_TOOLS, CHAT_ONLY_MEMORY_TOOL } from './chat-only';
+import { CHAT_ONLY_PI_TOOLS, CHAT_ONLY_MEMORY_TOOL, chatOnlyPreamble } from './chat-only';
 import { readPiSession, rememberPiSession, resumablePiSession } from './pi-sessions';
 import { globalMemoryPrompt } from './context-files';
 import { getCredential, credentialDefaultModel } from '../pi-config';
@@ -514,6 +514,9 @@ export class PiRpcRuntime implements AgentRuntime {
         // itself, in either auth mode. Appended (not --system-prompt) so pi's
         // own core prompt and the mode's text both survive.
         ...(globalMemoryArg ? ['--append-system-prompt', globalMemoryArg] : []),
+        ...(session.chatOnly
+          ? ['--append-system-prompt', chatOnlyPreamble(session.agentDirectory)]
+          : []),
         ...(resume ? ['--session', resume.file] : []),
       ],
       env: {

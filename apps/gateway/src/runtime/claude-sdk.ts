@@ -72,7 +72,7 @@ import { notifyTurnBoundary } from './turn-boundary';
 import { claudeSdkEnv, applyCredentialEnv } from './claude-credentials';
 import { currentAuthFingerprint } from './pi-credentials';
 import { buildMcpServers } from '../mcp-config';
-import { CHAT_ONLY_CLAUDE_TOOLS } from './chat-only';
+import { CHAT_ONLY_CLAUDE_TOOLS, chatOnlyPreamble } from './chat-only';
 import { api } from '../api';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from '../config';
 import { CcBlock } from '../claude-code';
@@ -884,6 +884,20 @@ export class ClaudeSdkRuntime implements AgentRuntime {
         // fast rather than merely safe. MCP tools are governed separately, by
         // `mcpServers` below. See runtime/chat-only.ts.
         ...(session.chatOnly ? { tools: CHAT_ONLY_CLAUDE_TOOLS } : {}),
+        // The SDK twin of `--append-system-prompt`. Keeps Claude Code's own
+        // prompt (preset) and adds the mode's rules plus the agent's CHAT.md —
+        // without this the child tries to bootstrap itself by reading its
+        // operating files one at a time, which is six round trips it cannot
+        // afford and, without a shell, cannot complete anyway.
+        ...(session.chatOnly
+          ? {
+              systemPrompt: {
+                type: 'preset' as const,
+                preset: 'claude_code' as const,
+                append: chatOnlyPreamble(cwd),
+              },
+            }
+          : {}),
         // The hermit tool surface, and the credential that authenticates it, go
         // together — a session that gets one and not the other has tools that
         // 401 instead of tools that are absent. `hermitTools: false` (an

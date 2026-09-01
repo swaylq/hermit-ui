@@ -116,6 +116,59 @@ letting the session start and disappoint.
   so a renamed key upstream costs a tool rather than the whole mode. Still
   worth one end-to-end run.
 
+## The startup context, and why this mode was briefly SLOWER
+
+The first version of pure chat cut the tools and stopped there. Measured on this
+fleet, a pure-chat claude session in an agent directory then answered a bare
+"hello" like this:
+
+```
+TOOL Read IDENTITY.md      TOOL Read evolution/soul.md   TOOL Read USER.md
+TOOL Read AGENTS.md        TOOL Read evolution/lessons.md TOOL Read MEMORY.md
+RESULT turns=7  cache_write=27,086
+```
+
+Six round trips before the first word. The cause is worth stating plainly
+because it is easy to design straight past: that 27KB is **not** injected by the
+gateway — the agent fetches it itself, because its own bootstrap instruction is
+a single `cat` of six files. Take away the shell and the instruction does not
+disappear; it degrades into one Read per file. The read-only mode had made that
+agent slower than not using it.
+
+The fix is not to hand the shell back. It is to stop making the child fetch what
+we could have given it:
+
+| | turns | tool calls | context |
+|---|---|---|---|
+| tools cut, nothing injected | 7 | 6 | 27,086 |
+| + "do not bootstrap" | 1 | 0 | 15,064 |
+| + the agent's CHAT.md | **1** | **0** | **11,244** |
+
+58% less context, six round trips gone, and the child still knows who it is and
+which language to answer in — that last part is why the brief is injected rather
+than simply suppressed. `chatOnlyPreamble()` builds it: the mode's rules, always,
+plus `<agentDir>/CHAT.md` when the agent wrote one.
+
+### CHAT.md
+
+An agent's compressed self — identity, language, reply style, how to search its
+memory — in a KB or two. It is paid on every turn of every pure-chat session, so
+anything that only matters when you can *act* does not belong in it.
+
+Absent, the session still works and still avoids the six-read mistake; it just
+answers as nobody in particular. A missing file must not break a session.
+
+### Which backends get it
+
+| backend | how |
+|---|---|
+| claude-sdk | `systemPrompt: { type: 'preset', preset: 'claude_code', append }` |
+| claude-tmux | `--append-system-prompt` |
+| pi / omp / prime | `--append-system-prompt` (all three already take it more than once) |
+| kimi | the `--agent-file` profile body — it has no system-prompt flag, and that profile is the only place to say this |
+| codex | **not injected, on purpose** — its read-only sandbox still permits `cat`, so the agent's own bootstrap runs normally and never degrades into per-file reads. It has no `--append-system-prompt` either; the only hooks are `base_instructions` (replaces the core prompt) and a prompt prefix (pollutes the transcript). Neither is worth it for a problem codex does not have |
+| dsh | **known gap** — the bash plugin is removed, so it *does* degrade, and it has no system-prompt hook at all |
+
 ## Where the flag travels
 
 The gateway has no database access — it polls tRPC — so every `select` on the
