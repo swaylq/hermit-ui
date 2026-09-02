@@ -66,6 +66,7 @@ function fakeRuntime(script: Script) {
     async interrupt() {},
     async compact() {},
     async usage() { return null; },
+    liveSessionIds() { return []; },
     async stop(_h, mode) { calls.stopped.push(mode); },
   };
   return { runtime, calls };

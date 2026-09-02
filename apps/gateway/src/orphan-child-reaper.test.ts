@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePs, isCodexOrphan, planKills } from './codex-orphan-reaper';
+import { parsePs, isCodexOrphan, isClaudeSdkOrphan, planKills } from './orphan-child-reaper';
 
 // Real argv shape, captured from ps on mac-local 2026-08-29 (trimmed).
 const ORPHAN = (pid: number, ppid: number) =>
@@ -55,7 +55,10 @@ test('the kill cap bounds the blast radius and the overflow is reported', () => 
 
 test('every planned kill is SIGTERM the first time', () => {
   const rows = [parsePs(ORPHAN(1000, 1))[0]];
-  assert.deepEqual(planKills(rows, new Set()).kills, [{ pid: 1000, signal: 'SIGTERM' }]);
+  const { kills } = planKills(rows, new Set());
+  assert.equal(kills.length, 1);
+  assert.deepEqual({ pid: kills[0]!.pid, signal: kills[0]!.signal, backend: kills[0]!.backend },
+    { pid: 1000, signal: 'SIGTERM', backend: 'codex' });
 });
 
 // A codex exec that ignores SIGTERM must not be re-TERMed forever while the
@@ -63,7 +66,8 @@ test('every planned kill is SIGTERM the first time', () => {
 test('a pid still in the ps table next tick is escalated to SIGKILL', () => {
   const rows = [parsePs(ORPHAN(1000, 1))[0]];
   const { kills } = planKills(rows, new Set([1000]));
-  assert.deepEqual(kills, [{ pid: 1000, signal: 'SIGKILL' }]);
+  assert.equal(kills.length, 1);
+  assert.equal(kills[0]!.signal, 'SIGKILL');
 });
 
 // The `/bin/` path segment is part of the signature too: a codex-shaped binary
@@ -72,4 +76,42 @@ test('a pid still in the ps table next tick is escalated to SIGKILL', () => {
 test('a codex exec outside any bin directory is NOT touched', () => {
   const r = row(43000, 1, '/x/build-out/codex exec --config mcp_servers.hermit.command="node"');
   assert.equal(isCodexOrphan(r), false);
+});
+
+// ── claude-sdk ───────────────────────────────────────────────────────────────
+// Live argv, captured from ps on mac-local 2026-09-02 (trimmed). The whole
+// `--mcp-config` blob is one argv word, which is why `mcp-stub.cjs` shows up on
+// the command line at all.
+const SDK_CHILD = (pid: number, ppid: number) =>
+  `${pid} ${ppid} /Users/mac/.local/bin/claude --output-format stream-json --verbose --input-format stream-json --effort max --mcp-config {"mcpServers":{"hermit":{"command":"node","args":["/Users/mac/claudeclaw/asst/hermit-ui/apps/gateway/src/mcp-stub.cjs"]}}} --permission-mode bypassPermissions --include-partial-messages --session-id=3c3bdd9c-e1ad-4779-b23a-7489846e67d6`;
+
+test('an orphaned claude-sdk child is selected', () => {
+  assert.equal(isClaudeSdkOrphan(parsePs(SDK_CHILD(3955, 1))[0]!), true);
+});
+
+test('a claude-sdk child whose gateway is alive is NOT touched', () => {
+  assert.equal(isClaudeSdkOrphan(parsePs(SDK_CHILD(3955, 52657))[0]!), false);
+});
+
+// The pane backend runs the SAME binary and is SUPPOSED to outlive a gateway —
+// that is the one thing it does better than the SDK. Reaping it would delete
+// the property it exists for.
+test('a tmux-pane claude is NOT touched even when orphaned', () => {
+  assert.equal(
+    isClaudeSdkOrphan(row(720, 1, '/Users/mac/.local/bin/claude --dangerously-skip-permissions')),
+    false,
+  );
+});
+
+test("a human's own headless claude, with no hermit MCP config, is NOT touched", () => {
+  assert.equal(
+    isClaudeSdkOrphan(row(41000, 1, '/opt/homebrew/bin/claude --output-format stream-json --input-format stream-json -p hi')),
+    false,
+  );
+});
+
+test('claude and codex orphans are both planned, each labelled with its backend', () => {
+  const rows = [...parsePs(ORPHAN(1000, 1)), ...parsePs(SDK_CHILD(1001, 1))];
+  const { kills } = planKills(rows, new Set());
+  assert.deepEqual(kills.map((k) => k.backend), ['codex', 'claude-sdk']);
 });

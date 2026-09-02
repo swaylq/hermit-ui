@@ -1261,6 +1261,23 @@ async function setupSession(session: PendingSession): Promise<SessionState> {
 const SYNC_BATCH_MAX = 25;
 const SYNC_DEBOUNCE_MS = 120;
 
+// Every sync POST currently in flight, so a shutdown can WAIT for them.
+//
+// Without this the debounce window is a data-loss window: `shutdown()` used to
+// exit the process synchronously, so up to SYNC_DEBOUNCE_MS of buffered rows
+// went with it — including, when the timing was unlucky, the first row of a
+// fresh session, which is the one carrying `claudeSessionId` back to the DB. A
+// session whose uuid never landed is not resumable (`resumableUuid` reads the
+// DB column), so the next `ensure()` starts a BRAND NEW conversation on top of
+// a transcript nobody points at any more.
+const inFlightSyncs = new Set<Promise<unknown>>();
+
+function trackSync<T>(p: Promise<T>): Promise<T> {
+  inFlightSyncs.add(p);
+  void p.catch(() => undefined).finally(() => inFlightSyncs.delete(p));
+  return p;
+}
+
 function flushSync(state: SessionState, attempt = 0) {
   if (state.syncTimer) {
     clearTimeout(state.syncTimer);
@@ -1270,7 +1287,7 @@ function flushSync(state: SessionState, attempt = 0) {
   const batch = state.syncBuf;
   state.syncBuf = [];
   const stamping = batch.some((b) => b.claudeSessionId != null);
-  api
+  const posted = api
     .syncChatMessages(batch)
     .then(() => {
       if (stamping) state.uuidStamped = true;
@@ -1295,6 +1312,37 @@ function flushSync(state: SessionState, attempt = 0) {
         console.error(`[chat] sync batch DROPPED after ${attempt} retries (${batch.length} rows) — re-syncs only on a fresh reattach`);
       }
     });
+  trackSync(posted);
+}
+
+/**
+ * Push every buffered row out and wait for it. Called on the way down.
+ *
+ * Loops rather than flushing once: a failed batch re-queues itself behind a
+ * backoff timer, and a tail that is still draining can add rows while we wait.
+ * Bounded, because a dashboard that is down must not hold the restart open —
+ * anything still buffered when the budget runs out is re-sent by the next
+ * attach's replay, which is what already covers a hard kill.
+ */
+export async function flushAllSyncBuffers(budgetMs = 5_000): Promise<void> {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    for (const s of sessionStates.values()) flushSync(s);
+    for (const s of piStates.values()) flushSync(s);
+    const waiting = [...inFlightSyncs];
+    if (waiting.length === 0) {
+      const buffered = [...sessionStates.values(), ...piStates.values()]
+        .some((s) => s.syncBuf.length > 0);
+      if (!buffered) return;
+    }
+    await Promise.race([
+      Promise.allSettled(waiting),
+      new Promise((r) => setTimeout(r, Math.max(0, Math.min(250, deadline - Date.now())))),
+    ]);
+  }
+  const left = [...sessionStates.values(), ...piStates.values()]
+    .reduce((n, s) => n + s.syncBuf.length, 0);
+  if (left > 0) console.warn(`[chat] ${left} row(s) still buffered at shutdown — the next attach replays them`);
 }
 
 // Sync-coalescing state for pi sessions.
@@ -1327,6 +1375,16 @@ function queueSync(state: SessionState, item: SyncItem) {
   noteOutboundSync(item);
   state.syncBuf.push(item);
   if (state.syncBuf.length >= SYNC_BATCH_MAX) {
+    flushSync(state);
+  } else if (item.claudeSessionId != null) {
+    // The uuid stamp does NOT wait out the debounce. It rides the first row a
+    // session ever emits, and it is the only field here whose loss cannot be
+    // repaired by a later replay: `resumableUuid` reads the DB column, so a
+    // session whose stamp never landed is resumed as a BRAND NEW conversation
+    // on top of a transcript nothing points at any more. Everything else in
+    // this buffer is re-sent by the next attach's replay; this is not, because
+    // the replay would go to the wrong session. One extra POST per session
+    // lifetime buys the whole conversation.
     flushSync(state);
   } else if (!state.syncTimer) {
     state.syncTimer = setTimeout(() => flushSync(state), SYNC_DEBOUNCE_MS);

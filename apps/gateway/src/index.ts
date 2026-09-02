@@ -32,8 +32,10 @@ import { collectCodexUsage } from './collect/codex-usage';
 import { collectKimiUsage } from './collect/kimi-usage';
 import { api } from './api';
 import { tick as cronTick } from './cron-runner';
-import { chatTick, chatCancelTick, chatRestartTick, chatHibernateTick, shutdownChatRunner } from './chat-runner';
+import { chatTick, chatCancelTick, chatRestartTick, chatHibernateTick, shutdownChatRunner, flushAllSyncBuffers } from './chat-runner';
 import { shutdownClaudeSdk } from './runtime/claude-sdk';
+import { allRuntimes } from './runtime';
+import { drainSessions } from './shutdown-drain';
 import { sdkBucketTick } from './collect/sdk-bucket';
 import { agentRequestTick } from './agent-lifecycle';
 import { machineRequestTick } from './machine-requests';
@@ -47,7 +49,7 @@ import { chromeReaperTick } from './chrome-reaper';
 import { cpuReaperTick } from './cpu-reaper';
 import { strayReaperTick } from './stray-reaper';
 import { orphanPaneReaperTick } from './orphan-pane-reaper';
-import { codexOrphanReaperTick } from './codex-orphan-reaper';
+import { orphanChildReaperTick } from './orphan-child-reaper';
 import { sessionPurgeTick } from './session-purge';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 import { startPreviewServers, previewSweepTick } from './preview';
@@ -282,8 +284,14 @@ async function pushTakeoverWatch() {
 // call, and firing them anyway is what produced 1732 log lines/minute for 28
 // hours on macmini003 (and a 911MB out.log). The breaker reopens on its own
 // schedule, so recovery still gets probed — see dashboard-http.ts.
+// Set the moment a stop signal arrives. Every periodic tick checks it, so the
+// drain below is not racing the chat tick to deliver one more user message into
+// a child that is about to be closed.
+let stopping = false;
+
 function loop(fn: () => Promise<void>, ms: number) {
   setInterval(() => {
+    if (stopping) return;
     if (dashboardBackedOff()) return;
     fn().catch(() => {});
   }, ms);
@@ -291,11 +299,13 @@ function loop(fn: () => Promise<void>, ms: number) {
 
 // Initial run kicks all uploaders ASAP so the dashboard isn't empty.
 (async () => {
-  // First, before anything resumes a thread: reap codex execs the PREVIOUS
-  // gateway orphaned — they hold their threads' writer locks and every resume
-  // would fail on "already has an active writer" until they die. Wait (briefly)
-  // for the SIGTERMs to take effect so the first resume can't hit a held lock.
-  await safe('codex-orphan', () => codexOrphanReaperTick(1500));
+  // First, before anything resumes anything: reap the agent children the
+  // PREVIOUS gateway orphaned. A codex exec holds its thread's writer lock, so
+  // every resume fails on "already has an active writer" until it dies; a
+  // claude child holds nothing at all, which is worse — the resume SUCCEEDS and
+  // two Claude Codes append to one transcript. Wait (briefly) for the SIGTERMs
+  // to land so the first resume can't race either one.
+  await safe('orphan-child', () => orphanChildReaperTick(1500));
   await pushAgents();
   await ensureBrainTick(); // after pushAgents: the brain's directory is fresh
   await pushGlobalSkillsTick();
@@ -364,7 +374,7 @@ loop(() => safe('cleanup-sweep', async () => {
 // different thresholds. No-op unless the machine has cleanupIdleDays set.
 loop(() => safe('session-purge', sessionPurgeTick), 10 * 60_000); // delete recycle-bin sessions past retention (confirmed released by every backend first)
 loop(() => safe('orphan-pane', orphanPaneReaperTick), 10 * 60_000); // kill hermit-* panes no DB row accounts for (deleted sessions leak ~500MB each)
-loop(() => safe('codex-orphan', codexOrphanReaperTick), 10 * 60_000); // kill codex execs a dead gateway left behind — they hold the thread's writer lock and the next resume dies on "active writer" (2026-08-29)
+loop(() => safe('orphan-child', orphanChildReaperTick), 10 * 60_000); // kill the agent children a dead gateway left behind: a codex exec holds its thread's writer lock (2026-08-29), a claude child would double-write its transcript (2026-09-02)
 loop(() => safe('agent-requests', agentRequestTick), 3_000);
 loop(() => safe('machine-requests', machineRequestTick), 3_000);
 loop(() => safe('file-transfers', fileTransferTick), 4_000);
@@ -384,15 +394,59 @@ loop(pushUsage, 30 * 60_000);
 loop(pushUsageWindows, 30 * 60_000);
 loop(() => safe('preview-sweep', previewSweepTick), 60 * 60_000); // retire live previews idle past their 24h TTL
 
-function shutdown(signal: string) {
-  console.log(`[gateway] ${signal}, exiting`);
+// How long a turn in flight may keep running once a stop signal has arrived.
+//
+// Must stay under pm2's `kill_timeout` (30s in ecosystem.config.cjs) with room
+// for the flush after it, or pm2 SIGKILLs us mid-drain and we are back to
+// exactly the behaviour this replaces. Raise BOTH or neither.
+const DRAIN_BUDGET_MS = Number(process.env.HERMIT_DRAIN_BUDGET_MS ?? 20_000);
+const FLUSH_BUDGET_MS = Number(process.env.HERMIT_FLUSH_BUDGET_MS ?? 5_000);
+
+let shuttingDown = false;
+
+async function shutdown(signal: string) {
+  if (shuttingDown) return; // pm2 sends SIGINT then SIGKILL; a second signal must not restart the drain
+  shuttingDown = true;
+  stopping = true;
+  console.log(`[gateway] ${signal}, draining`);
+
+  // The order matters and each step earns its place:
+  //
+  // 1. Stop the watchers first (they only read), so nothing re-attaches a tail
+  //    to a session we are about to close.
   try { shutdownChatRunner(); } catch {}
-  // Close the SDK children explicitly. They are our subprocesses and would die
-  // with us anyway, but ending each input stream lets the CLI finish its write
-  // and exit cleanly rather than losing the tail of a turn to a broken pipe.
+
+  // 2. Let the turns that are running finish, tell the ones that cannot, and
+  //    close every child — ALL backends, not just claude-sdk. Before this,
+  //    `shutdownClaudeSdk()` was the whole of it: codex/kimi/dsh children were
+  //    orphaned to keep writing session files the next gateway resumes from.
+  await drainSessions(
+    {
+      runtimes: allRuntimes(),
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      postNotice: async (sessionId, externalId, text) => {
+        await api.syncChatMessages([
+          { sessionId, role: 'system', content: [{ type: 'text', text }], externalId },
+        ]);
+      },
+      log: (line) => console.log(line),
+    },
+    { budgetMs: DRAIN_BUDGET_MS, stampMs: Date.now() },
+  ).catch((e) => console.error('[shutdown] drain failed:', e));
+
+  // 3. Belt and braces: any handle the drain could not name still gets closed.
   try { shutdownClaudeSdk(); } catch {}
+
+  // 4. Only now push the buffered rows. Everything above produces some — the
+  //    cut notices, each backend's own interrupt row, the last blocks of a turn
+  //    that finished during the wait — and the old synchronous exit dropped up
+  //    to a debounce window of them, uuid stamps included.
+  await flushAllSyncBuffers(FLUSH_BUDGET_MS).catch(() => undefined);
+
   try { shutdownControlChannel(); } catch {}
+  console.log('[gateway] exiting');
   process.exit(0);
 }
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => { void shutdown('SIGINT'); });
+process.on('SIGTERM', () => { void shutdown('SIGTERM'); });

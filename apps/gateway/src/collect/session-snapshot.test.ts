@@ -19,6 +19,7 @@ function fakeRuntime(live: RuntimeUsage | null, stored: RuntimeUsage | null): Ag
     async compact() {},
     async usage() { return live; },
     async storedUsage() { return stored; },
+    liveSessionIds() { return []; },
     async stop() {},
   };
 }

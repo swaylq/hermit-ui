@@ -56,6 +56,25 @@ module.exports = {
       // that state directly and restarts only when it is actually present.
       //
       // If you are tempted to add a scheduled restart back, fix the wedge instead.
+      // Signal the gateway, not its whole subtree — and then WAIT for it.
+      //
+      // pm2's default is the opposite of both, and together they made a graceful
+      // shutdown impossible to write. `killProcess` sends KILL_SIGNAL (SIGINT)
+      // via treekill (pm2/lib/God/Methods.js), so the first signal reached every
+      // `claude` child directly: nothing the gateway did on the way down could
+      // save a turn that had already been interrupted underneath it. And
+      // KILL_TIMEOUT is 1600ms (pm2/constants.js), which is not a drain window,
+      // it is a rounding error on one turn.
+      //
+      // The cost of `treekill: false` is that a gateway pm2 has to SIGKILL —
+      // wedged past kill_timeout — leaves its children behind. That is what the
+      // startup orphan reapers are for; a leaked child that gets reaped beats a
+      // live turn that gets guillotined every single restart.
+      //
+      // kill_timeout must stay above HERMIT_DRAIN_BUDGET_MS + HERMIT_FLUSH_BUDGET_MS
+      // in src/index.ts (20s + 5s today). Raise both or neither.
+      treekill: false,
+      kill_timeout: 30_000,
       autorestart: true,
       max_restarts: 50,
       // Exponential backoff instead of a fixed 5s loop: a gateway that exits on a

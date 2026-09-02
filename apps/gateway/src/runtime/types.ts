@@ -212,6 +212,19 @@ export interface AgentRuntime {
    */
   storedUsage?(handle: RuntimeHandle, transcriptPath?: string | null): Promise<RuntimeUsage | null>;
 
+  /**
+   * Session ids this backend is holding right now.
+   *
+   * Required, not optional. The gateway's shutdown path has no handles to act
+   * on — the three existing teardown sites are each given a session id by the
+   * caller — so without an inventory a graceful shutdown can only guess who is
+   * running. A backend that could decline to answer would be read as holding
+   * nothing and skipped, which is exactly the state six of the seven were in
+   * before this existed: `shutdown()` closed claude-sdk and left the rest to be
+   * orphaned or to notice their own stdin closing.
+   */
+  liveSessionIds(): string[];
+
   /** Stop the session; `hibernate` keeps durable state for later resume. */
   stop(handle: RuntimeHandle, mode: 'hibernate' | 'kill'): Promise<void>;
 }

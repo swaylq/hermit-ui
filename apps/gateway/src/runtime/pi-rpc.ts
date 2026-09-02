@@ -790,6 +790,20 @@ export class PiRpcRuntime implements AgentRuntime {
     };
   }
 
+  /**
+   * Session ids this backend is holding right now.
+   *
+   * The shutdown drain needs an inventory, and there is nowhere else to get one:
+   * every backend keeps its live children in a module-private map, and the
+   * teardown sites that already act on `allRuntimes()` are handed a session id
+   * from the DB. Without this, a graceful shutdown would have to guess who is
+   * running — which is how six of the seven backends came to have their `stop()`
+   * skipped entirely on SIGTERM.
+   */
+  liveSessionIds(): string[] {
+    return [...live.keys()];
+  }
+
   async stop(handle: RuntimeHandle, _mode: 'hibernate' | 'kill'): Promise<void> {
     const h = live.get(handle.sessionId);
     if (!h) return;
