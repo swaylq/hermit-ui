@@ -54,6 +54,15 @@ export interface DrainOptions {
   pollMs?: number;
   /** How long to let an interrupt land before closing the child under it. */
   interruptGraceMs?: number;
+  /**
+   * How long the "your turn was cut" notices may take before the shutdown moves
+   * on without them. The watchdog restarts a gateway exactly when its dashboard
+   * client has wedged, so this path's most likely caller is one whose POSTs all
+   * hang; the notice is the nice-to-have, the shutdown is not.
+   */
+  noticeBudgetMs?: number;
+  /** Cap on the interrupt phase and on the close-every-child phase, each. */
+  phaseBudgetMs?: number;
   /** Stamp for the notice's externalId, so a retry collapses onto one row. */
   stampMs: number;
 }
@@ -96,6 +105,21 @@ function handle(sessionId: string) {
   // all look the session up by id in their own live map — and at shutdown we do
   // not have it. Same shape the restart and hibernate paths already pass.
   return { sessionId, externalSessionId: '' };
+}
+
+/**
+ * Run `work`, but never let it hold the shutdown past `budgetMs`.
+ *
+ * Every phase below is an RPC to a child that may be the reason we are
+ * restarting in the first place — a wedged CLI does not answer `interrupt()`
+ * any faster than it answers anything else. Unbounded, the phases add up past
+ * pm2's kill_timeout and the process is SIGKILLed mid-drain, which is the exact
+ * behaviour this file replaces.
+ */
+async function withDeadline(deps: DrainDeps, budgetMs: number, what: string, work: Promise<unknown>): Promise<void> {
+  let done = false;
+  await Promise.race([work.then(() => { done = true; }), deps.sleep(budgetMs)]);
+  if (!done) deps.log(`[shutdown] ${what} did not finish in ${budgetMs}ms — moving on`);
 }
 
 /** Never let one backend's bug stop the others from being told. */
@@ -152,19 +176,30 @@ export async function drainSessions(deps: DrainDeps, opts: DrainOptions): Promis
   // turn and take the session's own "[turn interrupted]" row through the same
   // sync buffer, and the reason the user actually needs — that a restart did
   // this, not the model and not them — would arrive second or not at all.
-  for (const e of busy) {
-    await guarded(`${e.rt.kind} notice`, deps, () =>
-      deps.postNotice(e.sessionId, `shutdown-${e.sessionId}-${opts.stampMs}`, CUT_NOTICE));
+  //
+  // In parallel and under a deadline, because of WHEN this runs: the watchdog
+  // restarts a gateway precisely when its dashboard HTTP client has wedged, so
+  // the most likely caller is one whose POSTs all hang. Sequential awaits with
+  // no bound would spend N × the client timeout here and get SIGKILLed before
+  // closing a single child — the notice is the nice-to-have, and the shutdown
+  // is not.
+  if (busy.length > 0) {
+    await withDeadline(deps, opts.noticeBudgetMs ?? 4_000, 'cut notices (the dashboard is not answering)',
+      Promise.all(busy.map((e) =>
+        guarded(`${e.rt.kind} notice`, deps, () =>
+          deps.postNotice(e.sessionId, `shutdown-${e.sessionId}-${opts.stampMs}`, CUT_NOTICE)))));
+    await withDeadline(deps, opts.phaseBudgetMs ?? 3_000, 'interrupts',
+      Promise.all(busy.map((e) =>
+        guarded(`${e.rt.kind} interrupt`, deps, () => e.rt.interrupt(handle(e.sessionId))))));
+    await deps.sleep(graceMs);
   }
-  await Promise.all(busy.map((e) =>
-    guarded(`${e.rt.kind} interrupt`, deps, () => e.rt.interrupt(handle(e.sessionId)))));
-  if (busy.length > 0) await deps.sleep(graceMs);
 
   // Every held session, not just the busy ones: an idle child is still a child,
   // and `hibernate` is the mode that says "the transcript is the durable state,
   // come back to it" rather than "this session is over".
-  await Promise.all(entries.map((e) =>
-    guarded(`${e.rt.kind} stop`, deps, () => e.rt.stop(handle(e.sessionId), 'hibernate'))));
+  await withDeadline(deps, opts.phaseBudgetMs ?? 3_000, 'closing the children',
+    Promise.all(entries.map((e) =>
+      guarded(`${e.rt.kind} stop`, deps, () => e.rt.stop(handle(e.sessionId), 'hibernate')))));
 
   const report: DrainReport = {
     held: entries.length,

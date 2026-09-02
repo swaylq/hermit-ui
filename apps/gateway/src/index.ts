@@ -51,6 +51,7 @@ import { strayReaperTick } from './stray-reaper';
 import { orphanPaneReaperTick } from './orphan-pane-reaper';
 import { orphanChildReaperTick } from './orphan-child-reaper';
 import { startTrackingInFlightTurns, recoverInterruptedTurns, freezeInFlightTurns, recordInterruptedTurns } from './interrupted-turns';
+import { checkPm2Config } from './pm2-config-check';
 import { sessionPurgeTick } from './session-purge';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 import { startPreviewServers, previewSweepTick } from './preview';
@@ -307,6 +308,10 @@ function loop(fn: () => Promise<void>, ms: number) {
   // two Claude Codes append to one transcript. Wait (briefly) for the SIGTERMs
   // to land so the first resume can't race either one.
   await safe('orphan-child', () => orphanChildReaperTick(1500));
+  // Say so if pm2 is not running us the way the shutdown path needs. Costs one
+  // `pm2 jlist`; buys us not shipping a graceful shutdown that silently never
+  // gets to run.
+  await safe('pm2-config', () => checkPm2Config());
   // Then, before the first snapshot can report them dead: bring back the
   // sessions the last gateway was in the middle of. Tracking is armed FIRST so
   // the turns this pass itself starts are recorded too — a second restart while
@@ -403,11 +408,22 @@ loop(() => safe('preview-sweep', previewSweepTick), 60 * 60_000); // retire live
 
 // How long a turn in flight may keep running once a stop signal has arrived.
 //
-// Must stay under pm2's `kill_timeout` (30s in ecosystem.config.cjs) with room
-// for the flush after it, or pm2 SIGKILLs us mid-drain and we are back to
-// exactly the behaviour this replaces. Raise BOTH or neither.
-const DRAIN_BUDGET_MS = Number(process.env.HERMIT_DRAIN_BUDGET_MS ?? 20_000);
-const FLUSH_BUDGET_MS = Number(process.env.HERMIT_FLUSH_BUDGET_MS ?? 5_000);
+// The whole shutdown has to fit inside pm2's `kill_timeout` (30s in
+// ecosystem.config.cjs) or pm2 SIGKILLs us mid-drain and we are back to exactly
+// the behaviour this replaces. The budget adds up like this, worst case:
+//
+//   wait for turns        14s   ← this knob
+//   post the cut notices   4s   (shutdown-drain's noticeBudgetMs)
+//   interrupt what is left 3s   (phaseBudgetMs)
+//   let the interrupt land 1.5s (interruptGraceMs)
+//   close every child      3s   (phaseBudgetMs)
+//   flush the sync buffers 3s   ← this knob
+//   ────────────────────────────
+//                        28.5s  under 30s, with room for the ticks in between
+//
+// Raise any of them and raise kill_timeout with it.
+const DRAIN_BUDGET_MS = Number(process.env.HERMIT_DRAIN_BUDGET_MS ?? 14_000);
+const FLUSH_BUDGET_MS = Number(process.env.HERMIT_FLUSH_BUDGET_MS ?? 3_000);
 
 let shuttingDown = false;
 
