@@ -34,7 +34,7 @@ import { AGENTS_ROOT } from './config';
 import { api } from './api';
 import { onTurnBoundary } from './runtime/turn-boundary';
 import { ensureSessionBackend } from './chat-runner';
-import { sessionHostEnabled, hostSessions } from './runtime/session-host-client';
+import { sessionHostEnabled, hostSessions, hostHolds } from './runtime/session-host-client';
 
 /** Next to the machine's other hermit-local state, same as pi-sessions.json. */
 export function inFlightTurnsPath(): string {
@@ -217,6 +217,13 @@ export async function recoverInterruptedTurns(): Promise<void> {
   for (const id of targets.slice(0, MAX_RESUMES)) {
     const row = byId.get(id)!;
     try {
+      // A session the host is still running was never cut, whatever the tracker
+      // file says. It says something because the file is written on turn
+      // boundaries and a SIGKILLed gateway never got to correct it — reattach
+      // already picked this session up a moment ago. Nudging it here would tell
+      // a conversation it was interrupted when it was not, and spend a turn of
+      // quota saying so.
+      if (await hostHolds(id)) continue;
       const started = await ensureSessionBackend(row);
       if (!started) continue; // a pane; it never died in the first place
       // If it is somehow already busy, the record was stale and the child is
