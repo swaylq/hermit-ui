@@ -121,13 +121,22 @@ export function freezeInFlightTurns(): void {
  * an interruption that never happened), and a turn cut at the deadline is,
  * even though its interrupt announced it idle a moment later.
  */
-export function recordInterruptedTurns(sessionIds: string[], file = inFlightTurnsPath()): void {
-  if (sessionIds.length === 0) {
+export function recordInterruptedTurns(cut: string[], held: string[] = [], file = inFlightTurnsPath()): void {
+  // Union, not overwrite. The drain only sees sessions a backend still HOLDS,
+  // and a session whose child died before the shutdown — OOM, or a host restart
+  // taking the shim with it — is not one of them, while its turn was cut just
+  // as surely. `teardown()` does not announce a turn boundary, so the tracker
+  // still lists it; overwriting with the drain's list alone quietly dropped
+  // exactly the sessions with the worst reason to be dropped.
+  const seen = new Set(held);
+  const keep = [...working.keys()].filter((id) => !seen.has(id));
+  const all = [...new Set([...cut, ...keep])];
+  if (all.length === 0) {
     try { fs.rmSync(file, { force: true }); } catch { /* nothing to clear */ }
     return;
   }
   const at = new Date().toISOString();
-  writeStore(file, { sessions: Object.fromEntries(sessionIds.map((id) => [id, at])) });
+  writeStore(file, { sessions: Object.fromEntries(all.map((id) => [id, working.get(id) ?? at])) });
 }
 
 /**

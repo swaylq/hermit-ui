@@ -70,6 +70,7 @@ import {
 } from './claude-sdk-activity';
 import { notifyTurnBoundary } from './turn-boundary';
 import { sessionHostEnabled, hostSpawnOptions, hostKill, hostHolds } from './session-host-client';
+import { readTranscriptTail } from '../pane';
 import { claudeSdkEnv, applyCredentialEnv } from './claude-credentials';
 import { currentAuthFingerprint } from './pi-credentials';
 import { buildMcpServers } from '../mcp-config';
@@ -228,6 +229,19 @@ type SdkHandle = RuntimeHandle & {
   stopWatchdog: () => void;
   /** tool_use_ids the watchdog has already moved, so it acts once each. */
   rescued: Set<string>;
+  /**
+   * True when this handle was created by ADOPTING a child the session host was
+   * already running, and no live signal has told us its state yet.
+   *
+   * It exists because of something measured, not assumed: a CLI blocked in a
+   * foreground tool call emits nothing at all, so a freshly attached handle —
+   * pending 0, statusBusy false, sessionState null, all three set only by
+   * inbound frames — reads a busy session as idle for as long as the tool runs
+   * (>20s in the integration test, and a build can be ten minutes). The
+   * message-queue gate would then deliver into a turn that is still running.
+   * Cleared the moment any real signal or the transcript says otherwise.
+   */
+  adopted: boolean;
 };
 
 const live = new Map<string, SdkHandle>();
@@ -872,6 +886,10 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     // shim forwards the SDK's own argv, so there is no second copy of it here
     // to drift. See runtime/session-host-client.ts.
     const hostOpts = sessionHostEnabled() ? hostSpawnOptions(session.id) : null;
+    // Asked BEFORE the spawn: after it, the host holds this session either way
+    // and the answer no longer distinguishes "we adopted a running child" from
+    // "we just started one".
+    const adoptedLiveChild = hostOpts ? await hostHolds(session.id) : false;
     const q = query({
       prompt: input.stream,
       options: {
@@ -1008,6 +1026,7 @@ export class ClaudeSdkRuntime implements AgentRuntime {
       activity: newActivityState(),
       stopWatchdog: () => {},
       rescued: new Set<string>(),
+      adopted: adoptedLiveChild,
     };
     live.set(session.id, h);
     retail(h);
@@ -1133,8 +1152,12 @@ export class ClaudeSdkRuntime implements AgentRuntime {
   async isWorking(handle: RuntimeHandle): Promise<boolean> {
     const h = handleOf(handle);
     if (!h) return false;
-    if (sessionBusy(h.activity) === true) return true;
-    return h.pending > 0 || h.statusBusy;
+    if (sessionBusy(h.activity) === true) { h.adopted = false; return true; }
+    if (h.pending > 0 || h.statusBusy) { h.adopted = false; return true; }
+    if (!h.adopted) return false;
+    const running = replyIsOwed(transcriptPathFor(h.cwd, h.claudeUuid));
+    if (!running) h.adopted = false;
+    return running;
   }
 
   /**
@@ -1323,6 +1346,44 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     // process rather than the same wedged one the pane path used to leave behind.
     teardown(h, mode);
   }
+}
+
+/**
+ * Does the model still owe a reply on this transcript?
+ *
+ * The signal for a session ADOPTED from the host mid-turn, where none of the
+ * live signals can help: a CLI blocked in a foreground tool call sends nothing,
+ * so a fresh handle reads idle for as long as the tool runs.
+ *
+ * Not `transcriptToolRunning` from pane.ts, which was the obvious candidate and
+ * does not work here: measured against 2.1.251, an assistant `tool_use` record
+ * is NOT in the transcript while the tool is running — at that moment the file
+ * ends with the user's prompt and its attachments, and the tool-bearing records
+ * appear later. So the question has to be asked one level up.
+ *
+ * A transcript alternates user → assistant → (tool_result as a `user` record) →
+ * assistant. Scanning newest-first, the first record carrying a message decides:
+ * a `user` one — a prompt, or a tool result the model has not answered yet —
+ * means a reply is owed and the turn is still running; an `assistant` one means
+ * it is not.
+ *
+ * Capped the same way and for the same reason as pane.ts's version: a turn
+ * abandoned by a killed CLI would otherwise pin the session busy forever.
+ */
+const REPLY_OWED_CAP_MS = 20 * 60_000;
+export function replyIsOwed(transcriptPath: string): boolean {
+  const lines = readTranscriptTail(transcriptPath);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let ev: any;
+    try { ev = JSON.parse(lines[i]!); } catch { continue; }
+    if (ev?.isSidechain) continue;
+    const role = ev?.message?.role;
+    if (role !== 'user' && role !== 'assistant') continue;
+    if (role === 'assistant') return false;
+    const t = Date.parse(ev.timestamp || '') || 0;
+    return t > 0 && Date.now() - t < REPLY_OWED_CAP_MS;
+  }
+  return false;
 }
 
 // ── Transcript fallbacks (no live handle) ────────────────────────────────────

@@ -92,6 +92,32 @@ neither that nor a timeout, which is.
   shim adopts the child, and the transcript tail replays what landed while
   nobody was attached.
 
+## Adopting a child that is already mid-turn
+
+A CLI blocked in a foreground tool call emits nothing at all. A gateway that
+attaches at that moment has a handle whose three busy signals — `pending`,
+`statusBusy`, `sessionState` — are all set only by inbound frames, so it reads a
+running session as idle. Measured, not reasoned about: >20s in the integration
+test, and a build is minutes. The message-queue gate would then deliver a queued
+message into a turn that is still running.
+
+`transcriptToolRunning` (pane.ts) was the obvious fix and does not work here:
+against 2.1.251 the assistant `tool_use` record is NOT in the transcript while
+the tool runs — at that moment the file ends with the user's prompt and its
+attachments.
+
+So the question is asked one level up. A transcript alternates user → assistant
+→ tool_result-as-user → assistant; scanning newest-first, if the first record
+carrying a message is a `user` one, the model owes a reply and the turn is still
+running (`replyIsOwed`). It applies only to an adopted handle, clears the first
+time it says no, and is capped at 20 minutes so an abandoned turn cannot pin a
+session busy forever.
+
+Residual, accepted: a live child that is genuinely idle with an unanswered user
+record — interrupted from outside, say — reads busy until it replies or the cap
+expires, holding that session's queue. The queue retries every 2s, so nothing is
+lost; delivery is delayed.
+
 ## The gap the transcript covers
 
 The host keeps no replay log. Frames produced while no client is attached are
@@ -139,12 +165,40 @@ everything behaves exactly as before.
 - A host that is SIGKILLed does orphan its children (ppid 1). That is what the
   claude signature in `orphan-child-reaper.ts` is for.
 
+## What a fresh reviewer found
+
+An independent pass over the branch surfaced eleven issues, of which these
+mattered most and are fixed here:
+
+- `isWorking` in the drain's first step had no timeout, while pi/omp/prime
+  answer it over an RPC with a 60s one — a single wedged child, which is the
+  state a watchdog restart is FOR, would have held the drain past kill_timeout
+  and got the gateway SIGKILLed mid-shutdown. Now capped per backend.
+- The host deleted the socket file before listening, with a comment claiming a
+  connect probe that did not exist. A second host would have taken the socket,
+  spawned its own claude for a session the first was already running, and then
+  had its socket deleted underneath it when the first shut down. There is a
+  probe now, and a live host makes the second refuse to start.
+- The claude orphan signature keyed on `mcp-stub.cjs`, which only appears when
+  `hermitTools` is on — so ordinary cron turns, the ones nobody is watching,
+  were exactly the orphans never reaped.
+- Framing split on a decoded string, so a read ending mid-character corrupted
+  the first chunk's bytes. On bytes now.
+- `HERMIT_DRAIN_BUDGET_MS=14s` (a typo) parsed to NaN and silently skipped the
+  whole wait; the required kill_timeout was hardcoded at 30s and so stayed quiet
+  in the one case it existed for.
+- A connection that said nothing kept `server.close()` from ever resolving.
+- `recordInterruptedTurns` overwrote rather than merged, dropping the sessions
+  the drain could not see — the ones whose child had already died.
+
 ## Not done
 
 - **Host generations.** Upgrading the host still ends every session. The
   intended shape is a versioned socket path with the old host draining while a
   new one takes new sessions; it is not built, because the host changes rarely
   enough that the complexity has not earned its place yet.
+- **A second host taking over from a first.** Refused rather than handled: see
+  above. Host generations would need a versioned socket path.
 - **Other backends.** codex, kimi and dsh spawn one short-lived child per turn
   and resume from disk, so a restart costs them the turn in flight, not the
   conversation. Routing them through the host would work — it is deliberately

@@ -115,3 +115,27 @@ test('claude and codex orphans are both planned, each labelled with its backend'
   const { kills } = planKills(rows, new Set());
   assert.deepEqual(kills.map((k) => k.backend), ['codex', 'claude-sdk']);
 });
+
+// The shape a scheduled turn spawns with: hermitTools off, so no mcp-stub.cjs
+// anywhere on the command line. This is the row the first version of the
+// signature silently ignored.
+test('an orphaned cron turn, which carries no mcp-stub.cjs, is selected', () => {
+  const r = row(44000, 1,
+    '/Users/mac/.local/bin/claude --output-format stream-json --verbose --input-format stream-json ' +
+    '--effort max --permission-mode bypassPermissions --allow-dangerously-skip-permissions ' +
+    '--include-partial-messages --session-id=1dce2f87-9c74-48cc-bab2-983adc5eac41');
+  assert.equal(isClaudeSdkOrphan(r), true);
+});
+
+test('a resumed session is selected too, not only a freshly minted one', () => {
+  const r = row(44001, 1,
+    '/Users/mac/.local/bin/claude --output-format stream-json --verbose --input-format stream-json ' +
+    '--permission-mode bypassPermissions --include-partial-messages --resume=1dce2f87-9c74-48cc-bab2-983adc5eac41');
+  assert.equal(isClaudeSdkOrphan(r), true);
+});
+
+// Widening the signature must not widen it onto a person.
+test('a headless claude with no bypassPermissions and no session id is NOT touched', () => {
+  const r = row(44002, 1, '/opt/homebrew/bin/claude --output-format stream-json --input-format stream-json --include-partial-messages');
+  assert.equal(isClaudeSdkOrphan(r), false);
+});

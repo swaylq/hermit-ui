@@ -35,7 +35,7 @@ import { tick as cronTick } from './cron-runner';
 import { chatTick, chatCancelTick, chatRestartTick, chatHibernateTick, shutdownChatRunner, flushAllSyncBuffers } from './chat-runner';
 import { shutdownClaudeSdk } from './runtime/claude-sdk';
 import { allRuntimes } from './runtime';
-import { drainSessions } from './shutdown-drain';
+import { drainSessions, shutdownBudgetMs } from './shutdown-drain';
 import { sdkBucketTick } from './collect/sdk-bucket';
 import { agentRequestTick } from './agent-lifecycle';
 import { machineRequestTick } from './machine-requests';
@@ -311,7 +311,7 @@ function loop(fn: () => Promise<void>, ms: number) {
   // Say so if pm2 is not running us the way the shutdown path needs. Costs one
   // `pm2 jlist`; buys us not shipping a graceful shutdown that silently never
   // gets to run.
-  await safe('pm2-config', () => checkPm2Config());
+  await safe('pm2-config', () => checkPm2Config('hermit-ui-gateway', SHUTDOWN_BUDGET_MS));
   // Then, before the first snapshot can report them dead: bring back the
   // sessions the last gateway was in the middle of. Tracking is armed FIRST so
   // the turns this pass itself starts are recorded too — a second restart while
@@ -412,22 +412,27 @@ loop(() => safe('preview-sweep', previewSweepTick), 60 * 60_000); // retire live
 
 // How long a turn in flight may keep running once a stop signal has arrived.
 //
-// The whole shutdown has to fit inside pm2's `kill_timeout` (30s in
-// ecosystem.config.cjs) or pm2 SIGKILLs us mid-drain and we are back to exactly
-// the behaviour this replaces. The budget adds up like this, worst case:
-//
-//   wait for turns        14s   ← this knob
-//   post the cut notices   4s   (shutdown-drain's noticeBudgetMs)
-//   interrupt what is left 3s   (phaseBudgetMs)
-//   let the interrupt land 1.5s (interruptGraceMs)
-//   close every child      3s   (phaseBudgetMs)
-//   flush the sync buffers 3s   ← this knob
-//   ────────────────────────────
-//                        28.5s  under 30s, with room for the ticks in between
-//
-// Raise any of them and raise kill_timeout with it.
-const DRAIN_BUDGET_MS = Number(process.env.HERMIT_DRAIN_BUDGET_MS ?? 14_000);
-const FLUSH_BUDGET_MS = Number(process.env.HERMIT_FLUSH_BUDGET_MS ?? 3_000);
+// The whole shutdown has to fit inside pm2's `kill_timeout` or pm2 SIGKILLs us
+// mid-drain and we are back to exactly the behaviour this replaces. The wait is
+// only ONE of six phases — see shutdownBudgetMs(), which is the single place
+// that adds them up, because this arithmetic was previously written out by hand
+// in three files and was wrong in two of them.
+function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  // A typo (`14s`) yields NaN, and NaN silently disables the phase it bounds:
+  // `now() < NaN` is false, so the wait would be skipped without a word.
+  if (!Number.isFinite(n) || n <= 0) {
+    console.warn(`[gateway] ${name}=${JSON.stringify(raw)} is not a number of milliseconds; using ${fallback}`);
+    return fallback;
+  }
+  return n;
+}
+
+const DRAIN_BUDGET_MS = envMs('HERMIT_DRAIN_BUDGET_MS', 14_000);
+const FLUSH_BUDGET_MS = envMs('HERMIT_FLUSH_BUDGET_MS', 3_000);
+const SHUTDOWN_BUDGET_MS = shutdownBudgetMs({ budgetMs: DRAIN_BUDGET_MS, flushMs: FLUSH_BUDGET_MS });
 
 let shuttingDown = false;
 
@@ -473,7 +478,7 @@ async function shutdown(signal: string) {
   // back up instead of leaving a session that was mid-job silently stopped.
   // A drain that threw records nothing rather than a wrong list: the tracker's
   // own file is then the fallback, and it is at worst one boundary stale.
-  if (report) recordInterruptedTurns(report.cutSessionIds);
+  if (report) recordInterruptedTurns(report.cutSessionIds, report.heldSessionIds);
 
   // 3. Belt and braces: any handle the drain could not name still gets closed.
   try { shutdownClaudeSdk(); } catch {}

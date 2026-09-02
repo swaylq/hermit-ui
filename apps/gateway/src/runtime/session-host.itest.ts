@@ -148,20 +148,30 @@ test('a turn in flight keeps running while no gateway is attached', async () => 
   await new Promise((r) => setTimeout(r, 1_000));
   assert.ok((await hostSessions())!.some((h) => h.sessionId === id), 'the mid-turn child died with the gateway');
 
-  // …and the thing it was waiting for happens while nobody is listening.
-  fs.writeFileSync(sentinel, '');
-  await new Promise((r) => setTimeout(r, 10_000));
-
-  // The next gateway attaches and must be able to see how it ended. The live
-  // stream cannot carry what it missed; the transcript tail is what does, and
-  // the runtime replays it from line 1 on every attach.
+  // Reattach WHILE the turn is still blocked. This is the question the message
+  // queue depends on: a fresh handle has pending=0, statusBusy=false and no
+  // session state, and all three are only ever set by an inbound frame — so if
+  // the CLI says nothing until the turn ends, the gateway reads a busy session
+  // as idle and `deliverMessages` will push a queued message straight into it.
   const next = await open(id, s.handle.externalSessionId);
+  const tw = Date.now();
+  let becameBusy = false;
+  while (Date.now() - tw < 20_000) {
+    if (await next.rt.isWorking(next.handle)) { becameBusy = true; break; }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  console.log(`      ↳ reattached mid-turn: isWorking became true after ${becameBusy ? Date.now() - tw : '>20000'}ms`);
+  assert.equal(becameBusy, true,
+    'a reattached session mid-tool-call never reads as working — the one-message-per-turn gate stays open');
+
+  // …and now the thing it was waiting for happens.
+  fs.writeFileSync(sentinel, '');
   const t1 = Date.now();
-  while (Date.now() - t1 < 30_000 && !JSON.stringify(next.items).includes('SURVIVED-31415')) {
+  while (Date.now() - t1 < 60_000 && !JSON.stringify(next.items).includes('SURVIVED-31415')) {
     await new Promise((r) => setTimeout(r, 250));
   }
   assert.match(JSON.stringify(next.items), /SURVIVED-31415/,
-    'the turn that ran while nobody was attached never reached the conversation');
+    'the turn that ran across the gap never reached the conversation');
 
   await hostKill(id);
   shutdownClaudeSdk();

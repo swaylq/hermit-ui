@@ -19,8 +19,13 @@
 
 import { execFile } from 'node:child_process';
 
-/** What the shutdown path needs pm2 to be doing. See src/index.ts's budget. */
-export const REQUIRED_KILL_TIMEOUT_MS = 30_000;
+/**
+ * Fallback only. The real number is computed from the live budgets and passed
+ * in: a hardcoded 30s passed this check happily while HERMIT_DRAIN_BUDGET_MS
+ * was set to 60s, which is the one configuration where the check most needed to
+ * complain.
+ */
+export const DEFAULT_REQUIRED_KILL_TIMEOUT_MS = 30_000;
 
 export interface Pm2Settings {
   treekill: boolean | null;
@@ -56,7 +61,7 @@ export function findOwnSettings(jlist: string, appName: string, pmId: number | n
  * Separate from the shelling-out so the wording is assertable — a warning that
  * does not name the fix is a warning people learn to scroll past.
  */
-export function complaintsAbout(s: Pm2Settings): string[] {
+export function complaintsAbout(s: Pm2Settings, requiredMs = DEFAULT_REQUIRED_KILL_TIMEOUT_MS): string[] {
   const out: string[] = [];
   if (s.treekill !== false) {
     out.push(
@@ -64,10 +69,10 @@ export function complaintsAbout(s: Pm2Settings): string[] {
       'the drain cannot save a turn that was already interrupted underneath it',
     );
   }
-  if (s.killTimeoutMs == null || s.killTimeoutMs < REQUIRED_KILL_TIMEOUT_MS) {
+  if (s.killTimeoutMs == null || s.killTimeoutMs < requiredMs) {
     out.push(
       `kill_timeout is ${s.killTimeoutMs == null ? "pm2's 1600ms default" : `${s.killTimeoutMs}ms`}, ` +
-      `under the ${REQUIRED_KILL_TIMEOUT_MS}ms the drain needs — we get SIGKILLed part-way through it`,
+      `under the ${requiredMs}ms this gateway's shutdown budget needs — we get SIGKILLed part-way through it`,
     );
   }
   return out;
@@ -87,13 +92,13 @@ function jlist(): Promise<string | null> {
 /**
  * Check once, at startup. Never throws, never blocks anything important.
  */
-export async function checkPm2Config(appName = 'hermit-ui-gateway'): Promise<void> {
+export async function checkPm2Config(appName = 'hermit-ui-gateway', requiredMs = DEFAULT_REQUIRED_KILL_TIMEOUT_MS): Promise<void> {
   if (!process.env.pm_id) return; // not under pm2; nothing to be wrong
   const out = await jlist();
   if (out == null) return;
   const settings = findOwnSettings(out, appName, Number(process.env.pm_id));
   if (!settings) return;
-  const complaints = complaintsAbout(settings);
+  const complaints = complaintsAbout(settings, requiredMs);
   if (complaints.length === 0) return;
   console.warn('[pm2-config] this gateway cannot shut down gracefully:');
   for (const c of complaints) console.warn(`[pm2-config]   · ${c}`);

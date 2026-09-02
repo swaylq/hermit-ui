@@ -51,9 +51,41 @@ export interface DrainDeps {
   log(line: string): void;
 }
 
+/**
+ * Every phase's default budget, in one place, so the total can be computed
+ * rather than kept in step by hand. `ecosystem.config.cjs` and
+ * `pm2-config-check.ts` both need the total, and both had a different wrong
+ * number for it before this existed.
+ */
+export const DRAIN_PHASE_DEFAULTS = {
+  pollMs: 250,
+  probeBudgetMs: 1_000,
+  noticeBudgetMs: 4_000,
+  phaseBudgetMs: 3_000,
+  interruptGraceMs: 1_500,
+} as const;
+
+/**
+ * The worst case for the whole shutdown, which is what pm2's kill_timeout has
+ * to exceed. NOT just `budgetMs`: the wait is one phase of six.
+ */
+export function shutdownBudgetMs(o: { budgetMs: number; flushMs: number }): number {
+  const d = DRAIN_PHASE_DEFAULTS;
+  return o.budgetMs + d.noticeBudgetMs + d.phaseBudgetMs * 2 + d.interruptGraceMs + o.flushMs;
+}
+
 export interface DrainOptions {
   /** How long turns may keep running before they are cut. */
   budgetMs: number;
+  /**
+   * Cap on ONE backend's `isWorking`. Not optional in spirit: pi, omp and prime
+   * answer it over an RPC whose own timeout is 60s (jsonl-transport's
+   * REQUEST_TIMEOUT_MS), so a single wedged child — the exact state the watchdog
+   * restarts a gateway for — would hold the very first step of the drain past
+   * pm2's kill_timeout and get us SIGKILLed mid-shutdown. That is the state this
+   * whole file exists to prevent, reached through the file itself.
+   */
+  probeBudgetMs?: number;
   /** How often to re-ask "is anyone still working?". */
   pollMs?: number;
   /** How long to let an interrupt land before closing the child under it. */
@@ -74,6 +106,8 @@ export interface DrainOptions {
 export interface DrainReport {
   /** Sessions held by any backend when the drain started. */
   held: number;
+  /** Which ones. The caller needs it to tell "not cut" from "not seen". */
+  heldSessionIds: string[];
   /** Of those, how many had a turn in flight. */
   busy: number;
   /** Turns that finished inside the budget. */
@@ -128,6 +162,23 @@ async function withDeadline(deps: DrainDeps, budgetMs: number, what: string, wor
   if (!done) deps.log(`[shutdown] ${what} did not finish in ${budgetMs}ms — moving on`);
 }
 
+/**
+ * `work`, or `fallback` if it takes longer than `ms`. Real timers, not the
+ * injected clock: this one has to behave the same in a test as it does at 3am,
+ * and the injected sleep is virtual.
+ */
+async function orAfter<T>(ms: number, work: Promise<T>, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback), ms); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Never let one backend's bug stop the others from being told. */
 async function guarded<T>(what: string, deps: DrainDeps, fn: () => Promise<T>): Promise<T | null> {
   try {
@@ -139,8 +190,8 @@ async function guarded<T>(what: string, deps: DrainDeps, fn: () => Promise<T>): 
 }
 
 export async function drainSessions(deps: DrainDeps, opts: DrainOptions): Promise<DrainReport> {
-  const pollMs = opts.pollMs ?? 250;
-  const graceMs = opts.interruptGraceMs ?? 1_500;
+  const pollMs = opts.pollMs ?? DRAIN_PHASE_DEFAULTS.pollMs;
+  const graceMs = opts.interruptGraceMs ?? DRAIN_PHASE_DEFAULTS.interruptGraceMs;
   const startedAt = deps.now();
 
   const entries: Entry[] = [];
@@ -155,7 +206,7 @@ export async function drainSessions(deps: DrainDeps, opts: DrainOptions): Promis
   }
 
   if (entries.length === 0) {
-    return { held: 0, busy: 0, finished: 0, detached: 0, cut: 0, cutSessionIds: [], waitedMs: 0 };
+    return { held: 0, heldSessionIds: [], busy: 0, finished: 0, detached: 0, cut: 0, cutSessionIds: [], waitedMs: 0 };
   }
 
   // Sessions whose backend outlives us are not drained at all: their turn keeps
@@ -172,9 +223,10 @@ export async function drainSessions(deps: DrainDeps, opts: DrainOptions): Promis
   // A backend that cannot answer is treated as idle. The alternative — assuming
   // it is busy — would hold the whole restart open for the full budget on one
   // broken backend, which is the failure mode nobody would debug at 3am.
+  const probeMs = opts.probeBudgetMs ?? DRAIN_PHASE_DEFAULTS.probeBudgetMs;
   const stillWorking = async (): Promise<Entry[]> => {
     const flags = await Promise.all(mortal.map((e) =>
-      guarded(`${e.rt.kind} isWorking`, deps, () => e.rt.isWorking(handle(e.sessionId)))));
+      orAfter(probeMs, guarded(`${e.rt.kind} isWorking`, deps, () => e.rt.isWorking(handle(e.sessionId))), null)));
     return mortal.filter((_, i) => flags[i] === true);
   };
 
@@ -201,11 +253,11 @@ export async function drainSessions(deps: DrainDeps, opts: DrainOptions): Promis
   // closing a single child — the notice is the nice-to-have, and the shutdown
   // is not.
   if (busy.length > 0) {
-    await withDeadline(deps, opts.noticeBudgetMs ?? 4_000, 'cut notices (the dashboard is not answering)',
+    await withDeadline(deps, opts.noticeBudgetMs ?? DRAIN_PHASE_DEFAULTS.noticeBudgetMs, 'cut notices (the dashboard is not answering)',
       Promise.all(busy.map((e) =>
         guarded(`${e.rt.kind} notice`, deps, () =>
           deps.postNotice(e.sessionId, `shutdown-${e.sessionId}-${opts.stampMs}`, CUT_NOTICE)))));
-    await withDeadline(deps, opts.phaseBudgetMs ?? 3_000, 'interrupts',
+    await withDeadline(deps, opts.phaseBudgetMs ?? DRAIN_PHASE_DEFAULTS.phaseBudgetMs, 'interrupts',
       Promise.all(busy.map((e) =>
         guarded(`${e.rt.kind} interrupt`, deps, () => e.rt.interrupt(handle(e.sessionId))))));
     await deps.sleep(graceMs);
@@ -214,7 +266,7 @@ export async function drainSessions(deps: DrainDeps, opts: DrainOptions): Promis
   // Every held session, not just the busy ones: an idle child is still a child,
   // and `hibernate` is the mode that says "the transcript is the durable state,
   // come back to it" rather than "this session is over".
-  await withDeadline(deps, opts.phaseBudgetMs ?? 3_000, 'letting go of the children',
+  await withDeadline(deps, opts.phaseBudgetMs ?? DRAIN_PHASE_DEFAULTS.phaseBudgetMs, 'letting go of the children',
     Promise.all([
       // Detached, not stopped: the child stays up and the next gateway attaches
       // to the same warm process rather than resuming a transcript.
@@ -224,6 +276,7 @@ export async function drainSessions(deps: DrainDeps, opts: DrainOptions): Promis
 
   const report: DrainReport = {
     held: entries.length,
+    heldSessionIds: entries.map((e) => e.sessionId),
     busy: busyAtStart,
     finished: busyAtStart - busy.length,
     detached: survivors.length,

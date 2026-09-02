@@ -54,6 +54,8 @@ export function hostSpawnOptions(sessionId: string): {
       // The shim never guesses where claude is; the gateway already resolved it
       // and the two must not be able to disagree.
       HERMIT_CLAUDE_BIN: resolveClaudeBin(),
+      // The shim speaks the version this build speaks; see protocol.ts.
+      HERMIT_HOST_PROTOCOL: String(HOST_PROTOCOL_VERSION),
     },
   };
 }

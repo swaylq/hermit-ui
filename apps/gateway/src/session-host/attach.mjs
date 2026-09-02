@@ -20,6 +20,12 @@ import process from 'node:process';
 const sock = process.env.HERMIT_HOST_SOCK;
 const sessionId = process.env.HERMIT_SESSION_ID;
 const bin = process.env.HERMIT_CLAUDE_BIN;
+// Not a hardcoded 1: protocol.ts exists to let a host refuse a client it cannot
+// serve, and the only client that ever sends an attach is this file. A literal
+// here would keep saying 1 after the version moved, and be refused by the host
+// it ships with. .mjs cannot import the .ts constant, so the gateway passes it
+// the same way it passes the claude path.
+const protocolVersion = Number(process.env.HERMIT_HOST_PROTOCOL ?? '1');
 
 function die(msg) {
   // stderr, not stdout: stdout is the SDK's stream-json channel and anything
@@ -50,13 +56,20 @@ function connect() {
     }
     die(`cannot reach the session host at ${sock}: ${e.message}`);
   });
-  // The child outliving us is the point; us outliving the child is not.
-  conn.on('close', () => { if (opened) process.exit(0); });
+  conn.on('close', () => {
+    // The child outliving us is the point; us outliving the child is not.
+    if (opened) process.exit(0);
+    // A clean FIN before the handshake fires 'close' and not 'error', so
+    // without this the process would simply run out of work and exit 0 — and
+    // the SDK would see "claude produced no output and exited successfully",
+    // which is the least diagnosable shape there is.
+    die('the session host closed the connection before answering');
+  });
 }
 
 function onConnect() {
   conn.write(JSON.stringify({
-    v: 1,
+    v: protocolVersion,
     op: 'attach',
     sessionId,
     bin,

@@ -140,7 +140,7 @@ export function startSessionHost(opts: HostOptions): Promise<SessionHost> {
     return s;
   }
 
-  function onAttach(conn: net.Socket, req: AttachRequest, rest: string): void {
+  function onAttach(conn: net.Socket, req: AttachRequest, rest: Buffer): void {
     let s = sessions.get(req.sessionId);
     const spawned = !s;
     if (!s) s = spawnChild(req);
@@ -165,7 +165,7 @@ export function startSessionHost(opts: HostOptions): Promise<SessionHost> {
     const toChild = (d: Buffer) => {
       try { s!.child.stdin?.write(d); } catch { /* child gone; its exit handler ends the socket */ }
     };
-    if (rest) toChild(Buffer.from(rest, 'utf8'));
+    if (rest.length > 0) toChild(rest);
 
     conn.on('data', toChild);
     // THE POINT: a client going away does not touch the child. Not its stdin,
@@ -182,19 +182,35 @@ export function startSessionHost(opts: HostOptions): Promise<SessionHost> {
     conn.on('error', detach);
   }
 
+  // Connections that have not yet become a session's client. Tracked only so
+  // close() can drop them; an attached one is reachable through its session.
+  const unattached = new Set<net.Socket>();
+
   const server = net.createServer((conn) => {
     conn.setNoDelay(true);
-    let head = '';
+    unattached.add(conn);
+    conn.on('close', () => unattached.delete(conn));
+    let head: Buffer = Buffer.alloc(0);
     let opened = false;
+    // A client that connects and then says nothing holds the process open:
+    // server.close() waits for every connection, so `close()` would never
+    // resolve and pm2 would have to SIGKILL the one process on the machine that
+    // is holding every session. `nc -U <sock>` and walk away is the whole repro.
+    const handshake = setTimeout(() => {
+      if (!opened) { log('[host] a client connected and never spoke; dropping it'); conn.destroy(); }
+    }, 5_000);
+    handshake.unref();
+    conn.on('close', () => clearTimeout(handshake));
     const onHead = (d: Buffer) => {
       if (opened) return;
-      head += d.toString('utf8');
+      head = head.length === 0 ? d : Buffer.concat([head, d]);
       const split = splitFirstLine(head);
       if (!split) {
         if (head.length > 1024 * 1024) { conn.destroy(); } // no opening line is ever this long
         return;
       }
       opened = true;
+      clearTimeout(handshake);
       conn.off('data', onHead);
       const req = parseRequest(split.line);
       if (!req) {
@@ -223,6 +239,7 @@ export function startSessionHost(opts: HostOptions): Promise<SessionHost> {
         conn.end();
         return;
       }
+      unattached.delete(conn);
       onAttach(conn, req, split.rest);
     };
     conn.on('data', onHead);
@@ -239,15 +256,41 @@ export function startSessionHost(opts: HostOptions): Promise<SessionHost> {
   }, opts.sweepMs ?? 60_000);
   sweep.unref();
 
-  return new Promise((resolve, reject) => {
-    fs.mkdirSync(path.dirname(opts.socketPath), { recursive: true });
-    // A stale socket file from a host that was SIGKILLed would make listen()
-    // fail with EADDRINUSE forever. Removing it is safe: if a live host were
-    // listening, the connect probe below would have reached it.
+  return new Promise(async (resolve, reject) => {
+    // 0700 at creation, not chmod-after: a directory that is briefly 0755 is a
+    // window in which another user can watch the socket appear.
+    fs.mkdirSync(path.dirname(opts.socketPath), { recursive: true, mode: 0o700 });
+
+    // Probe before unlinking. A stale socket file from a host that was SIGKILLed
+    // makes listen() fail with EADDRINUSE forever, so it has to go — but
+    // removing one a LIVE host is listening on is far worse than not starting:
+    // the second host serves every new attach, spawns its own claude for a
+    // session the first one is already running, and two Claude Codes append to
+    // one transcript. The first host also deletes the socket out from under the
+    // second when it eventually closes. Refuse loudly instead.
+    //
+    // (An earlier version of this file claimed "the connect probe below" in a
+    // comment and did not have one. That is the bug this paragraph replaces.)
+    const occupied = await new Promise<boolean>((done) => {
+      const probe = net.connect(opts.socketPath);
+      const settle = (v: boolean) => { try { probe.destroy(); } catch { /* gone */ } done(v); };
+      probe.on('connect', () => settle(true));
+      probe.on('error', () => settle(false)); // ENOENT (no file) or ECONNREFUSED (stale)
+      setTimeout(() => settle(false), 1_000).unref();
+    });
+    if (occupied) {
+      reject(new Error(`another session host is already listening on ${opts.socketPath} — refusing to take it over`));
+      return;
+    }
     try { fs.rmSync(opts.socketPath, { force: true }); } catch { /* nothing there */ }
-    server.on('error', reject);
+
+    // Same-user only, and the mask is set BEFORE listen() so the socket is never
+    // world-anything even briefly. An attach request carries the child's
+    // credentials in its env.
+    const prevMask = process.umask(0o077);
+    server.on('error', (e) => { process.umask(prevMask); reject(e); });
     server.listen(opts.socketPath, () => {
-      // Same-user only. The env in an attach request carries credentials.
+      process.umask(prevMask);
       try { fs.chmodSync(opts.socketPath, 0o600); } catch { /* best effort */ }
       log(`[host] listening on ${opts.socketPath} (protocol v${HOST_PROTOCOL_VERSION}, pid ${process.pid})`);
       resolve({
@@ -270,6 +313,10 @@ export function startSessionHost(opts: HostOptions): Promise<SessionHost> {
             // the entire reason the socket protocol is one message wide. When
             // it does have to restart, Layer 1 resumes the sessions it ended.
             for (const s of [...sessions.values()]) endChild(s, 'host shutting down');
+            // server.close() waits for every open connection, including one
+            // that connected and never spoke — which would make this promise
+            // never resolve and leave pm2 to SIGKILL us.
+            for (const c of unattached) { try { c.destroy(); } catch { /* gone */ } }
             server.close(() => done());
             try { fs.rmSync(opts.socketPath, { force: true }); } catch { /* gone */ }
           }),

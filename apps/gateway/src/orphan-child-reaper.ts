@@ -77,23 +77,40 @@ export function isCodexOrphan(r: PsRow): boolean {
 /**
  * The claude-sdk signature.
  *
- * `mcp-stub.cjs` is the discriminator that matters: it appears inside the
- * `--mcp-config` JSON the gateway builds, and nothing else on this machine
- * writes that path onto a claude command line. The stream-json pair is there to
- * exclude the tmux-pane backend, which runs the same binary interactively and
- * is SUPPOSED to outlive a gateway — reaping a pane would take a session the
- * pane path deliberately kept alive.
+ * NOT `mcp-stub.cjs` alone, which is what this matched first and was wrong in a
+ * way that mattered: that path only appears in the `--mcp-config` blob when
+ * `hermitTools` is on, and an ordinary (non-orchestrator) cron turn is spawned
+ * with `hermitTools: false` and no mcpServers at all (runtime/cron-turn.ts). So
+ * exactly the turns nobody is watching — the scheduled ones — were the turns
+ * whose orphans were never reaped.
+ *
+ * What every claude-sdk spawn does have, unconditionally, is the SDK's
+ * stream-json pair plus this gateway's own three options: bypassPermissions,
+ * partial messages, and a session id it either minted or is resuming. Together
+ * they exclude the two things that must never be touched:
+ *   • a human's terminal claude, which has none of them;
+ *   • the tmux-pane backend, which runs the same binary interactively and is
+ *     SUPPOSED to outlive a gateway — reaping a pane would delete the one
+ *     property it exists for.
  *
  * Not matched on the binary path: `resolveClaudeBin()` returns whatever this
- * machine has (~/.local/bin/claude here, a homebrew or npm path elsewhere), and
- * pinning a path is how the codex signature acquired its one known gap.
+ * machine has, and pinning a path is how the codex signature got its known gap.
+ *
+ * Known imprecision, accepted: another Agent SDK application on this machine,
+ * running with bypassPermissions and orphaned, would match. Weighed against
+ * missing every scheduled turn's orphan — which is the incident this file was
+ * written for, one backend along — that is the better error to make.
  */
 export function isClaudeSdkOrphan(r: PsRow): boolean {
+  if (r.ppid !== 1) return false;
+  const c = r.command;
+  if (!c.includes('--input-format stream-json') || !c.includes('--output-format stream-json')) return false;
+  // The strongest marker when it is there, but it is not always there.
+  if (c.includes('mcp-stub.cjs')) return true;
   return (
-    r.ppid === 1 &&
-    r.command.includes('--input-format stream-json') &&
-    r.command.includes('--output-format stream-json') &&
-    r.command.includes('mcp-stub.cjs')
+    c.includes('--permission-mode bypassPermissions') &&
+    c.includes('--include-partial-messages') &&
+    (/--session-id[= ]/.test(c) || /--resume[= ]/.test(c))
   );
 }
 

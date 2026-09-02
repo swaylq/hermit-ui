@@ -83,18 +83,25 @@ export interface ErrorResponse {
 export type HostResponse = AttachResponse | ListResponse | KillResponse | ErrorResponse;
 
 /**
- * Split a buffer at the first newline.
+ * Split at the first newline. On BYTES, deliberately.
  *
  * Both sides need this and both need it to be exact: whatever follows the
  * opening line is already protocol payload — the SDK writes its first control
  * request the moment it spawns, and it can land in the same TCP read as the
- * attach line. Dropping the remainder here is a hang that reproduces once in
- * fifty starts.
+ * attach line. Dropping the remainder is a hang that reproduces once in fifty
+ * starts.
+ *
+ * Doing it on a decoded string is worse than that, and was the first version of
+ * this function. `chunk.toString('utf8')` on a read that ends mid-character
+ * replaces the truncated bytes with U+FFFD; re-encoding the remainder then
+ * hands the child different bytes than the SDK sent. Only the first chunk is
+ * ever decoded that way, so the corruption is rare, silent, and lands in the
+ * middle of a conversation in Chinese — which is most of them here.
  */
-export function splitFirstLine(buf: string): { line: string; rest: string } | null {
-  const nl = buf.indexOf('\n');
+export function splitFirstLine(buf: Buffer): { line: string; rest: Buffer } | null {
+  const nl = buf.indexOf(0x0a);
   if (nl < 0) return null;
-  return { line: buf.slice(0, nl), rest: buf.slice(nl + 1) };
+  return { line: buf.subarray(0, nl).toString('utf8'), rest: buf.subarray(nl + 1) };
 }
 
 /** Parse an opening line, returning null rather than throwing on anything odd. */

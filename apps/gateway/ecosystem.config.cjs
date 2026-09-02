@@ -71,8 +71,12 @@ module.exports = {
       // startup orphan reapers are for; a leaked child that gets reaped beats a
       // live turn that gets guillotined every single restart.
       //
-      // kill_timeout must stay above HERMIT_DRAIN_BUDGET_MS + HERMIT_FLUSH_BUDGET_MS
-      // in src/index.ts (20s + 5s today). Raise both or neither.
+      // kill_timeout must stay above the gateway's whole shutdown budget, which
+      // is NOT just the drain's wait — see shutdownBudgetMs() in
+      // src/shutdown-drain.ts, the one place that adds the six phases up (28.5s
+      // with today's defaults). The gateway computes the same number at startup
+      // and complains here if this value is under it, so raising a budget
+      // without raising this is loud rather than silent.
       treekill: false,
       kill_timeout: 30_000,
       autorestart: true,
