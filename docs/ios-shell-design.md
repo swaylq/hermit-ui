@@ -317,6 +317,22 @@ model PushDevice {
 > 用 `HERMIT_KEEP_DERIVED=1` 保留），以及 `.xcresult` 结果包——**后者记着 test runner 的
 > 环境变量，机器密钥会躺在里面**，那不只是占空间。
 >
+> ⚠️ **`$TMPDIR` 和 `/tmp` 都不是「盘外」。** macOS 上 `$TMPDIR` 解析到
+> `/private/var/folders/…`、`/tmp` 是 `/private/tmp`，两个都在系统盘（`/System/Volumes/Data`）
+> 上。把 `HERMIT_DERIVED_DATA` 指到它们等于原地打转。真要搬走只能指到外接卷；在那之前，
+> **删干净才有用，改路径没用**。
+>
+> ⚠️ **构建产物不是唯一在涨的东西，设备本身才是大头。** 2026-09-02 实测：一小时四轮冒烟
+> 测试之后，`~/Library/Developer/CoreSimulator` 从约 192M 涨到 **2.1G**，而同一时刻
+> `$TMPDIR/hermit-ios-dd` 只有 100M、`~/Library/Developer/Xcode` 只有 18M。涨的是模拟器
+> **设备的数据**（装进去的 App、容器、快照），trap 里删 DerivedData 和 `.xcresult` 一个字节
+> 都碰不到它。冒烟测试本来就该从干净设备开始，所以构建之间顺手：
+>
+> ```
+> xcrun simctl erase <device>          # 擦掉这台设备的数据
+> xcrun simctl delete unavailable      # 清掉运行时已卸载后残留的设备
+> ```
+>
 > 验证：`xcrun simctl list devices booted` 应为空。
 >
 > 另：看这台机器的余量要用 `df -h /System/Volumes/Data`。`df -h /` 看的是只读系统卷，会
