@@ -225,6 +225,28 @@ export interface AgentRuntime {
    */
   liveSessionIds(): string[];
 
+  /**
+   * Does a session on this backend survive THIS process ending, right now?
+   *
+   * A capability question with a runtime answer, not a static one: claude-sdk
+   * says yes only while the session host is running its children, and no on a
+   * machine that has not opted in. The shutdown drain uses it to decide whether
+   * a turn in flight has to be cut or can simply be left alone, so a wrong
+   * answer in either direction is expensive — a false yes abandons a turn
+   * nobody will finish, a false no cuts one that did not need cutting.
+   */
+  outlivesGateway?(): boolean;
+
+  /**
+   * Let go of the session without ending it — what a gateway shutdown means.
+   *
+   * Optional, and its absence is a real answer rather than a gap: a backend
+   * whose child is a subprocess of this process cannot detach from it, so the
+   * shutdown drain stops it instead. Only claude-sdk-with-a-session-host can do
+   * better, and only because something else is holding the pipe.
+   */
+  detach?(handle: RuntimeHandle): Promise<void>;
+
   /** Stop the session; `hibernate` keeps durable state for later resume. */
   stop(handle: RuntimeHandle, mode: 'hibernate' | 'kill'): Promise<void>;
 }

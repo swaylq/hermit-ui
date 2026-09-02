@@ -34,6 +34,7 @@ import { AGENTS_ROOT } from './config';
 import { api } from './api';
 import { onTurnBoundary } from './runtime/turn-boundary';
 import { ensureSessionBackend } from './chat-runner';
+import { sessionHostEnabled, hostSessions } from './runtime/session-host-client';
 
 /** Next to the machine's other hermit-local state, same as pi-sessions.json. */
 export function inFlightTurnsPath(): string {
@@ -228,4 +229,44 @@ export async function recoverInterruptedTurns(): Promise<void> {
     }
   }
   console.log(`[interrupted-turns] resumed ${resumed}/${targets.length} session(s) cut by the last restart`);
+}
+
+/**
+ * Reattach to the sessions a session host kept running through the restart.
+ *
+ * Without this, the session host makes things WORSE for exactly the case it was
+ * built for. A long autonomous turn now survives the restart — but the new
+ * gateway is not attached to it, so its output goes only to the transcript and
+ * the conversation on screen stays frozen until somebody happens to send a
+ * message. A turn that runs unwatched is not much better than one that stopped.
+ *
+ * Cheap, unlike the resume in recoverInterruptedTurns: nothing is spawned. The
+ * shim adopts the child the host already holds, and the runtime's transcript
+ * tail replays whatever landed while nobody was listening.
+ */
+export async function reattachHostSessions(): Promise<void> {
+  if (!sessionHostEnabled()) return;
+  const held = await hostSessions();
+  if (held === null) {
+    console.warn(
+      '[session-host] HERMIT_SESSION_HOST=1 but no host is answering. Sessions will not survive a restart. ' +
+      'Start it with: pm2 startOrRestart apps/gateway/ecosystem-session-host.config.cjs && pm2 save',
+    );
+    return;
+  }
+  if (held.length === 0) return;
+
+  const { sessions } = await api.pollChatPending();
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  let back = 0;
+  for (const h of held) {
+    const row = byId.get(h.sessionId);
+    if (!row) continue; // closed or moved while we were away; the host's idle sweep gets the child
+    try {
+      if (await ensureSessionBackend(row)) back++;
+    } catch (e) {
+      console.error(`[session-host] could not reattach ${h.sessionId.slice(0, 8)}:`, (e as Error)?.message ?? e);
+    }
+  }
+  console.log(`[session-host] reattached ${back}/${held.length} session(s) that ran straight through the restart`);
 }

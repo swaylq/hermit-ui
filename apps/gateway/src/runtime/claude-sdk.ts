@@ -69,6 +69,7 @@ import {
   type ActivityState, type RuntimeActivity,
 } from './claude-sdk-activity';
 import { notifyTurnBoundary } from './turn-boundary';
+import { sessionHostEnabled, hostSpawnOptions, hostKill } from './session-host-client';
 import { claudeSdkEnv, applyCredentialEnv } from './claude-credentials';
 import { currentAuthFingerprint } from './pi-credentials';
 import { buildMcpServers } from '../mcp-config';
@@ -865,11 +866,19 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     // fire passes false.
     const hermitTools = session.hermitTools !== false;
     const input = makeInput();
+    // When the session host is on, the SDK spawns a shim that pipes to a child
+    // the host owns — so a gateway restart ends the shim and the CLI keeps
+    // running. Everything else about the spawn is unchanged, deliberately: the
+    // shim forwards the SDK's own argv, so there is no second copy of it here
+    // to drift. See runtime/session-host-client.ts.
+    const hostOpts = sessionHostEnabled() ? hostSpawnOptions(session.id) : null;
     const q = query({
       prompt: input.stream,
       options: {
         cwd,
-        pathToClaudeCodeExecutable: resolveClaudeBin(),
+        ...(hostOpts
+          ? { pathToClaudeCodeExecutable: hostOpts.pathToClaudeCodeExecutable, executable: hostOpts.executable }
+          : { pathToClaudeCodeExecutable: resolveClaudeBin() }),
         ...(resume ? { resume } : { sessionId: freshUuid! }),
         // Matches the pane's `--dangerously-skip-permissions`: dashboard chat
         // sessions run gate-free, the same as the agents' own main sessions.
@@ -912,6 +921,7 @@ export class ClaudeSdkRuntime implements AgentRuntime {
           : {},
         env: applyCredentialEnv({
           ...process.env,
+          ...(hostOpts ? hostOpts.hostEnv : {}),
           ...(hermitTools ? {
             HERMIT_DASHBOARD_URL: DASHBOARD_URL,
             HERMIT_KEY: ASST_KEY,
@@ -1271,8 +1281,33 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     return [...live.keys()];
   }
 
+  /** True only while a session host is holding the children. See detach(). */
+  outlivesGateway(): boolean {
+    return sessionHostEnabled();
+  }
+
+  /**
+   * Let go of the session without ending it — what a gateway shutdown means.
+   *
+   * The difference from `stop()` only exists because of the session host. There,
+   * tearing down the SDK handle kills the SHIM and leaves the CLI running, which
+   * is precisely the behaviour a restart wants and precisely the wrong one for a
+   * hibernate. Without a host the two are the same thing, because there is
+   * nothing that can outlive us to detach from.
+   */
+  async detach(handle: RuntimeHandle): Promise<void> {
+    const h = live.get(handle.sessionId);
+    if (!h) return;
+    teardown(h, sessionHostEnabled() ? 'detached, child left running' : 'gateway shutdown');
+  }
+
   async stop(handle: RuntimeHandle, mode: 'hibernate' | 'kill'): Promise<void> {
     const h = live.get(handle.sessionId);
+    // The host outlives us, so a session it holds must be ended THERE — by id,
+    // whether or not this process still has a handle for it. Closing the SDK
+    // handle alone would only kill the shim and leave a 300 MB child that
+    // nothing is driving until the host's idle sweep notices half an hour later.
+    if (sessionHostEnabled()) await hostKill(handle.sessionId).catch(() => false);
     if (!h) return;
     // Both modes end the child; the difference is only what the caller does
     // next. Durable state is the transcript, which survives either way — so a

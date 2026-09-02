@@ -50,7 +50,7 @@ import { cpuReaperTick } from './cpu-reaper';
 import { strayReaperTick } from './stray-reaper';
 import { orphanPaneReaperTick } from './orphan-pane-reaper';
 import { orphanChildReaperTick } from './orphan-child-reaper';
-import { startTrackingInFlightTurns, recoverInterruptedTurns, freezeInFlightTurns, recordInterruptedTurns } from './interrupted-turns';
+import { startTrackingInFlightTurns, recoverInterruptedTurns, freezeInFlightTurns, recordInterruptedTurns, reattachHostSessions } from './interrupted-turns';
 import { checkPm2Config } from './pm2-config-check';
 import { sessionPurgeTick } from './session-purge';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
@@ -317,6 +317,10 @@ function loop(fn: () => Promise<void>, ms: number) {
   // the turns this pass itself starts are recorded too — a second restart while
   // a resumed turn is running has to resume it again.
   startTrackingInFlightTurns();
+  // Sessions the host kept running come FIRST, and they cost nothing — nothing
+  // is spawned, we just start listening to children that never stopped. Only
+  // then the ones that were genuinely cut, which do cost a process each.
+  await safe('session-host', reattachHostSessions);
   await safe('interrupted-turns', recoverInterruptedTurns);
   await pushAgents();
   await ensureBrainTick(); // after pushAgents: the brain's directory is fresh

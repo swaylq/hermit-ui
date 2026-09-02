@@ -62,6 +62,11 @@ An SDK child is a gateway subprocess, so a gateway restart ends it, while a tmux
 pane outlives one. A turn that completes in that gap would reach the transcript
 with nobody listening.
 
+(Since 2026-09-02 a session host can hold the child instead, so the child itself
+survives — see `session-host-design.md`. The funnel below did not become
+redundant: it is what fills the gap while no gateway is attached, and it is the
+only thing that covers a host restart, a crash or a machine reboot.)
+
 So the runtime reads **both**: the SDK message stream (live, typed, immediate)
 and a `tail -F` of the session's JSONL (the backstop that covers the gap). They
 carry the same records under the same uuids — the SDK's `uuid` *is* the

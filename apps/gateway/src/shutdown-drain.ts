@@ -33,6 +33,10 @@
 export interface DrainRuntime {
   readonly kind: string;
   liveSessionIds(): string[];
+  /** See AgentRuntime.outlivesGateway. Absent means no. */
+  outlivesGateway?(): boolean;
+  /** See AgentRuntime.detach. Only called for a backend that outlives us. */
+  detach?(handle: { sessionId: string; externalSessionId: string }): Promise<void>;
   isWorking(handle: { sessionId: string; externalSessionId: string }): Promise<boolean>;
   interrupt(handle: { sessionId: string; externalSessionId: string }): Promise<void>;
   stop(handle: { sessionId: string; externalSessionId: string }, mode: 'hibernate' | 'kill'): Promise<void>;
@@ -74,6 +78,8 @@ export interface DrainReport {
   busy: number;
   /** Turns that finished inside the budget. */
   finished: number;
+  /** Sessions left running because their backend outlives this process. */
+  detached: number;
   /** Turns still running when the budget expired. */
   cut: number;
   /**
@@ -149,16 +155,27 @@ export async function drainSessions(deps: DrainDeps, opts: DrainOptions): Promis
   }
 
   if (entries.length === 0) {
-    return { held: 0, busy: 0, finished: 0, cut: 0, cutSessionIds: [], waitedMs: 0 };
+    return { held: 0, busy: 0, finished: 0, detached: 0, cut: 0, cutSessionIds: [], waitedMs: 0 };
+  }
+
+  // Sessions whose backend outlives us are not drained at all: their turn keeps
+  // running, so waiting for it would be waiting for work that does not need us,
+  // and cutting it would throw away the one thing the session host exists to
+  // protect. They are let go at the end and that is all.
+  const survivors = entries.filter((e) => e.rt.outlivesGateway?.() === true && typeof e.rt.detach === 'function');
+  const survivorSet = new Set(survivors);
+  const mortal = entries.filter((e) => !survivorSet.has(e));
+  if (survivors.length > 0) {
+    deps.log(`[shutdown] ${survivors.length} session(s) keep running without us; ${mortal.length} to drain`);
   }
 
   // A backend that cannot answer is treated as idle. The alternative — assuming
   // it is busy — would hold the whole restart open for the full budget on one
   // broken backend, which is the failure mode nobody would debug at 3am.
   const stillWorking = async (): Promise<Entry[]> => {
-    const flags = await Promise.all(entries.map((e) =>
+    const flags = await Promise.all(mortal.map((e) =>
       guarded(`${e.rt.kind} isWorking`, deps, () => e.rt.isWorking(handle(e.sessionId)))));
-    return entries.filter((_, i) => flags[i] === true);
+    return mortal.filter((_, i) => flags[i] === true);
   };
 
   let busy = await stillWorking();
@@ -197,20 +214,25 @@ export async function drainSessions(deps: DrainDeps, opts: DrainOptions): Promis
   // Every held session, not just the busy ones: an idle child is still a child,
   // and `hibernate` is the mode that says "the transcript is the durable state,
   // come back to it" rather than "this session is over".
-  await withDeadline(deps, opts.phaseBudgetMs ?? 3_000, 'closing the children',
-    Promise.all(entries.map((e) =>
-      guarded(`${e.rt.kind} stop`, deps, () => e.rt.stop(handle(e.sessionId), 'hibernate')))));
+  await withDeadline(deps, opts.phaseBudgetMs ?? 3_000, 'letting go of the children',
+    Promise.all([
+      // Detached, not stopped: the child stays up and the next gateway attaches
+      // to the same warm process rather than resuming a transcript.
+      ...survivors.map((e) => guarded(`${e.rt.kind} detach`, deps, () => e.rt.detach!(handle(e.sessionId)))),
+      ...mortal.map((e) => guarded(`${e.rt.kind} stop`, deps, () => e.rt.stop(handle(e.sessionId), 'hibernate'))),
+    ]));
 
   const report: DrainReport = {
     held: entries.length,
     busy: busyAtStart,
     finished: busyAtStart - busy.length,
+    detached: survivors.length,
     cut: busy.length,
     cutSessionIds: busy.map((e) => e.sessionId),
     waitedMs,
   };
   deps.log(
-    `[shutdown] ${report.held} session(s) held · ${report.busy} mid-turn · ` +
+    `[shutdown] ${report.held} session(s) held · ${report.detached} left running · ${report.busy} mid-turn · ` +
     `${report.finished} finished in ${(report.waitedMs / 1000).toFixed(1)}s · ${report.cut} cut`,
   );
   return report;

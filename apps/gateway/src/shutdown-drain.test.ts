@@ -105,3 +105,42 @@ test('a backend that cannot answer is treated as idle, not as a reason to hold t
   assert.equal(report.waitedMs, 0, 'a throwing isWorking must not burn the whole budget');
   assert.deepEqual(rec.stopped, [{ sessionId: 's1', mode: 'hibernate' }]);
 });
+
+test('a session whose backend outlives us is left running, not waited on and not cut', async () => {
+  let rec!: Recorder;
+  const detached: string[] = [];
+  const survivor: DrainRuntime = {
+    ...fakeRuntime('claude-sdk', ['kept'], () => true, () => rec),
+    outlivesGateway: () => true,
+    async detach(h) { detached.push(h.sessionId); },
+  };
+  const mortal = fakeRuntime('kimi-code', ['cut'], () => true, () => rec);
+  const h = harness([survivor, mortal]);
+  rec = h.rec;
+
+  const report = await drainSessions(h.deps, { budgetMs: 1_000, pollMs: 250, interruptGraceMs: 10, stampMs: 1 });
+
+  assert.equal(report.detached, 1);
+  assert.deepEqual(detached, ['kept'], 'the surviving session was not let go cleanly');
+  // The one that cannot survive is still drained the old way…
+  assert.deepEqual(report.cutSessionIds, ['cut']);
+  // …and the one that can is neither told it was interrupted nor interrupted.
+  assert.deepEqual(rec.notices.map((n) => n.sessionId), ['cut']);
+  assert.deepEqual(rec.interrupted, ['cut']);
+  assert.deepEqual(rec.stopped, [{ sessionId: 'cut', mode: 'hibernate' }], 'a surviving child was stopped');
+});
+
+test('a backend that claims to outlive us but cannot detach is drained anyway', async () => {
+  let rec!: Recorder;
+  // Half a capability is not a capability: without detach() there is no way to
+  // let go, so the honest thing is to fall back to the old behaviour rather
+  // than walk away from a turn nobody will finish.
+  const halfway: DrainRuntime = { ...fakeRuntime('claude-sdk', ['s1'], () => true, () => rec), outlivesGateway: () => true };
+  const h = harness([halfway]);
+  rec = h.rec;
+
+  const report = await drainSessions(h.deps, { budgetMs: 500, pollMs: 250, interruptGraceMs: 10, stampMs: 1 });
+
+  assert.equal(report.detached, 0);
+  assert.equal(report.cut, 1);
+});
