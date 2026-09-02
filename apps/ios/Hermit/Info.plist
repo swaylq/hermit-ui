@@ -23,6 +23,12 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 
+	<!-- Export compliance, answered once here instead of in a web form on every
+	     single upload. The app's only cryptography is HTTPS to the dashboard,
+	     which is exempt; it ships no encryption of its own. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
 	<!-- THE reason this app exists: with a usage string present and the
 	     WKUIDelegate granting capture, the web layer's getUserMedia stops
 	     prompting on every single recording. Omitting this key does not degrade

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Required by App Store Connect since May 2024. Without it an upload is accepted
+  and then bounced by email (ITMS-91053, "Missing API declaration"), which is a
+  slow way to find out.
+
+  This app collects nothing and tracks nobody: it is a window onto the user's own
+  server, and the only credential involved (the machine key) lives in the web
+  layer's storage and is never read by native code. The one entry below is
+  UserDefaults, which AppConfig reads to pick up the `-hermitOrigin` launch
+  argument used by apps/ios/smoke.sh.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!-- CA92.1: read/write only this app's own defaults. -->
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

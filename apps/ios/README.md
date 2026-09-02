@@ -122,6 +122,78 @@ Needs a real device — the simulator has no APNs.
 4. Then the real thing: have an agent ask for a permission decision and confirm
    the notification arrives and opens the right session.
 
+## TestFlight
+
+The short version: **internal testing needs no App Review**, so the whole path is
+archive → upload → add yourself as a tester → install. External testing is a
+different thing with a real review attached — see the bottom of this section.
+
+**Once, before the first build**
+
+1. A paid Apple Developer Program membership. The free tier cannot get the
+   `aps-environment` entitlement, so it cannot build this app at all.
+2. Xcode → Settings → Accounts → sign in with that Apple ID.
+3. Register the bundle id `ai.swaylab.hermit` on the developer portal, with the
+   Push Notifications capability enabled.
+4. App Store Connect → My Apps → **+** → New App, same bundle id. TestFlight
+   builds go to this record; you never have to submit it for sale.
+
+**Every build**
+
+The build number has to be unique and increasing — App Store Connect rejects a
+repeat. `CURRENT_PROJECT_VERSION` lives in `project.yml`; the commit count is a
+reasonable source for it:
+
+```sh
+cd apps/ios
+xcodegen generate
+xcodebuild archive \
+  -project Hermit.xcodeproj -scheme Hermit \
+  -destination 'generic/platform=iOS' \
+  -archivePath build/Hermit.xcarchive \
+  CURRENT_PROJECT_VERSION=$(git rev-list --count HEAD) \
+  DEVELOPMENT_TEAM=<your team id>
+xcodebuild -exportArchive \
+  -archivePath build/Hermit.xcarchive \
+  -exportOptionsPlist ExportOptions.plist \
+  -exportPath build/export
+```
+
+`ExportOptions.plist` is a four-line file (`method: app-store-connect`,
+`teamID`, `uploadSymbols: true`, `signingStyle: automatic`); it is not committed
+because it carries a team id.
+
+Upload with an App Store Connect API key (Users and Access → Integrations → keys;
+the `.p8` downloads once). Keep the key in the encrypted store, never on the
+command line:
+
+```sh
+secret exec ASC_KEY_P8 -- sh -c 'printf %s "$ASC_KEY_P8" > "$TMPDIR/AuthKey.p8" &&
+  xcrun altool --upload-app -f build/export/Hermit.ipa -t ios \
+    --apiKey <key id> --apiIssuer <issuer id>; rm -f "$TMPDIR/AuthKey.p8"'
+```
+
+Processing takes a few minutes, then the build shows up under TestFlight. Add
+yourself under **Internal Testing** (up to 100 people from your own team, no
+review), and it installs through the TestFlight app.
+
+**Things that bite, in the order they bite**
+
+| | |
+|---|---|
+| Missing privacy manifest | Upload is accepted, then bounced by email (`ITMS-91053`). `Hermit/PrivacyInfo.xcprivacy` handles it — one entry, `UserDefaults`, because `AppConfig` reads the `-hermitOrigin` launch argument. |
+| Export compliance | Otherwise every upload waits on a web form. Answered in `Info.plist` (`ITSAppUsesNonExemptEncryption` = false: the only cryptography here is HTTPS, which is exempt). |
+| `aps-environment` | The entitlements file says `development`; Xcode's distribution flow substitutes `production`. Do not hand-edit it — `ProvisioningProfile.swift` reads the value back at runtime and reports it, so the first TestFlight build tells you which APNs host to send to. If push is silent and the server logs `BadDeviceToken`, that is this. |
+| Push does not work in the simulator | There is no APNs there at all. TestFlight on a real phone is the first time the push half of this app can be tested — which, with the microphone, is the entire reason it exists. |
+
+**External testing is not the same errand.** It goes through Beta App Review,
+and two things about this app are exactly what that review pushes back on:
+guideline 4.2 treats a wrapper around a website as thin, and a reviewer with no
+machine key sees a sign-in screen and nothing else. If it ever needs to go that
+way, it needs a demo key and a case for what the native layer adds — the
+microphone behaviour and APNs, neither of which the web can do. For a handful of
+people on your own team, internal testing avoids the question entirely.
+
 ## Verify it end to end (`smoke.sh`)
 
 One command builds the app, installs it on a simulated iPhone, signs in and
