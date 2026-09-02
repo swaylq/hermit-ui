@@ -31,10 +31,30 @@ if (!sock) die('HERMIT_HOST_SOCK is not set');
 if (!sessionId) die('HERMIT_SESSION_ID is not set');
 if (!bin) die('HERMIT_CLAUDE_BIN is not set');
 
-const conn = net.connect(sock);
-conn.setNoDelay(true);
+// Connecting is retried, briefly. On a machine that just rebooted, pm2 brings
+// the gateway and the host up together and the order is not guaranteed — a
+// session spawned in that window would otherwise fail outright, which reads to
+// the user as a broken chat rather than as a few seconds of waiting.
+const CONNECT_DEADLINE = Date.now() + Number(process.env.HERMIT_HOST_CONNECT_MS ?? 10_000);
+let conn;
 
-conn.on('connect', () => {
+function connect() {
+  conn = net.connect(sock);
+  conn.setNoDelay(true);
+  conn.on('connect', onConnect);
+  conn.on('data', onData);
+  conn.on('error', (e) => {
+    if (Date.now() < CONNECT_DEADLINE && !opened) {
+      setTimeout(connect, 250);
+      return;
+    }
+    die(`cannot reach the session host at ${sock}: ${e.message}`);
+  });
+  // The child outliving us is the point; us outliving the child is not.
+  conn.on('close', () => { if (opened) process.exit(0); });
+}
+
+function onConnect() {
   conn.write(JSON.stringify({
     v: 1,
     op: 'attach',
@@ -47,14 +67,14 @@ conn.on('connect', () => {
     // Credentials live in here. Never logged, on either side.
     env: { ...process.env },
   }) + '\n');
-});
+}
 
 // The host answers with one JSON line and then the socket is raw. That line is
 // for us, not for the SDK — forwarding it to stdout would be a frame the SDK
 // cannot parse.
 let head = '';
 let opened = false;
-conn.on('data', (d) => {
+function onData(d) {
   if (opened) { process.stdout.write(d); return; }
   head += d.toString('utf8');
   const nl = head.indexOf('\n');
@@ -68,8 +88,6 @@ conn.on('data', (d) => {
   process.stderr.write(`[attach] ${res.spawned ? 'spawned' : `adopted a child ${Math.round(res.ageMs / 1000)}s old`}, pid ${res.pid}\n`);
   process.stdin.pipe(conn);
   if (rest) process.stdout.write(rest);
-});
+}
 
-conn.on('error', (e) => die(`cannot reach the session host at ${sock}: ${e.message}`));
-// The child outliving us is the point; us outliving the child is not.
-conn.on('close', () => process.exit(0));
+connect();

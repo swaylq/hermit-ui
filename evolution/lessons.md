@@ -124,3 +124,32 @@ just a write-up — preferably an automated one.
 **Why:** rsync's unanchored `--exclude='dir/'` matches `dir/` at any depth. The cure is a **leading slash** (`/dir/`) which pins the pattern to the source root. And `.env` files are per-host secrets — rsyncing them in is wrong by default.
 
 **How to avoid:** When sending a repo with embedded `node_modules`/`agents`/`docs` etc. dirs that share names with source paths, write `--exclude='/dir/'` not `--exclude='dir/'`. Always pair with `--exclude='apps/*/.env'`. After any rsync to a host that has its own runtime config, **manually sanity-check `.env`/`settings.local.json` before restarting services**.
+
+---
+
+## L10 — a setting the supervisor keeps its own copy of does not deploy with the file
+
+**What failed:** the graceful shutdown (2026-09-02) depends on two pm2 settings,
+`treekill: false` and `kill_timeout: 30000`, both written into
+`apps/gateway/ecosystem.config.cjs`. Committing them changes nothing. pm2 stores
+an app's settings in its own `pm2_env` when the app is first started, and
+`pm2 restart <name>` restarts from that copy without re-reading the file.
+
+**Why it is worse than a normal config bug:** every visible signal says it
+worked. The file is right, the code runs the drain, the review passed — and each
+restart still sends SIGINT to every `claude` child and SIGKILLs 1.6s later,
+because pm2 is running the app the old way. Nothing errors. Nobody would look at
+pm2's saved state to find out why a feature that is clearly present does nothing.
+
+**How to avoid:** for anything a supervisor caches (pm2 `pm2_env`, systemd's
+loaded unit, launchd's loaded plist, a container's created-with flags), the
+deploy step is the *file*, not the name — `pm2 startOrRestart <file> && pm2 save`
+— and the program should CHECK ITS OWN supervision at startup and say so when it
+is wrong. `src/pm2-config-check.ts` does that with one `pm2 jlist`, printing the
+exact command that fixes it. A check the program runs on itself is the only kind
+that survives someone restarting it the convenient way.
+
+**Corollary:** `pm2 startOrRestart <file>` restarts EVERY app in that file, so
+two processes with different lifecycles need two files. The session host lives in
+`ecosystem-session-host.config.cjs` precisely so that deploying a gateway change
+cannot end every session the host is holding.

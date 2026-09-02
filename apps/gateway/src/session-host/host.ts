@@ -106,8 +106,16 @@ export function startSessionHost(opts: HostOptions): Promise<SessionHost> {
 
     child.stdout.on('data', (d: Buffer) => {
       // Straight through, unparsed. The host does not know what a frame is.
-      if (s.client && !s.client.destroyed) s.client.write(d);
+      if (!s.client || s.client.destroyed) return;
+      // Guarded even after the destroyed check: the client can go away between
+      // the check and the write, and an unhandled throw here would take down
+      // the process that is holding every session on the machine.
+      try { s.client.write(d); } catch { /* the gateway left mid-frame */ }
     });
+    // A write to a dead child's stdin raises EPIPE on the stream, and an
+    // unhandled 'error' event throws. The child exiting is ordinary — the CLI
+    // ends a session by exiting — so this must never be able to kill the host.
+    child.stdin.on('error', (e) => log(`[host] ${s.sessionId.slice(0, 8)} stdin: ${e.message}`));
     // The SDK's own stderr tail belongs to the shim, not to the CLI, so a
     // child's stderr would otherwise go nowhere. Labelled and sent to this
     // process's log, which pm2 keeps — better for diagnosis than a per-turn
@@ -145,13 +153,21 @@ export function startSessionHost(opts: HostOptions): Promise<SessionHost> {
       log(`[host] ${req.sessionId.slice(0, 8)} superseding the previous client`);
       try { s.client.destroy(); } catch { /* already gone */ }
     }
+    // The handshake line goes out BEFORE this connection can receive child
+    // output. Today both statements are in one synchronous block so nothing
+    // could interleave anyway; ordering them this way means a future edit that
+    // puts an await between them cannot silently corrupt the stream by letting
+    // a frame arrive where the client expects its reply.
+    reply(conn, { ok: true, spawned, pid: s.child.pid ?? 0, ageMs: Date.now() - s.startedAt });
     s.client = conn;
     s.detachedAt = 0;
 
-    reply(conn, { ok: true, spawned, pid: s.child.pid ?? 0, ageMs: Date.now() - s.startedAt });
-    if (rest) s.child.stdin?.write(rest);
+    const toChild = (d: Buffer) => {
+      try { s!.child.stdin?.write(d); } catch { /* child gone; its exit handler ends the socket */ }
+    };
+    if (rest) toChild(Buffer.from(rest, 'utf8'));
 
-    conn.on('data', (d: Buffer) => { s!.child.stdin?.write(d); });
+    conn.on('data', toChild);
     // THE POINT: a client going away does not touch the child. Not its stdin,
     // not a signal, nothing. That is the difference between a gateway restart a
     // session survives and the one it does not.
