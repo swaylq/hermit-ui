@@ -67,13 +67,24 @@ export interface DrainReport {
   finished: number;
   /** Turns still running when the budget expired. */
   cut: number;
+  /**
+   * Which sessions those were.
+   *
+   * The caller records them so the NEXT gateway can pick them back up. It has
+   * to come from here rather than from the turn-boundary tracker, because
+   * `interrupt()` below announces the session as idle — truthfully, but that
+   * would erase the very list we need — and because a turn that finished during
+   * the wait must not be resumed as if it had been cut.
+   */
+  cutSessionIds: string[];
   /** How long the wait actually took. */
   waitedMs: number;
 }
 
 /** The text a cut session gets. Exported so the test asserts on the real string. */
 export const CUT_NOTICE =
-  '[gateway] ⚠️ 网关重启，这一轮被打断了。对话历史已保存，再发一条消息就能接着聊。';
+  '[gateway] ⚠️ 网关重启，这一轮被打断了。对话历史已保存，网关起来后会自动接回来继续；' +
+  '如果没有自动继续，再发一条消息就能接着聊。';
 
 interface Entry {
   rt: DrainRuntime;
@@ -114,7 +125,7 @@ export async function drainSessions(deps: DrainDeps, opts: DrainOptions): Promis
   }
 
   if (entries.length === 0) {
-    return { held: 0, busy: 0, finished: 0, cut: 0, waitedMs: 0 };
+    return { held: 0, busy: 0, finished: 0, cut: 0, cutSessionIds: [], waitedMs: 0 };
   }
 
   // A backend that cannot answer is treated as idle. The alternative — assuming
@@ -160,6 +171,7 @@ export async function drainSessions(deps: DrainDeps, opts: DrainOptions): Promis
     busy: busyAtStart,
     finished: busyAtStart - busy.length,
     cut: busy.length,
+    cutSessionIds: busy.map((e) => e.sessionId),
     waitedMs,
   };
   deps.log(

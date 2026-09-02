@@ -50,6 +50,7 @@ import { cpuReaperTick } from './cpu-reaper';
 import { strayReaperTick } from './stray-reaper';
 import { orphanPaneReaperTick } from './orphan-pane-reaper';
 import { orphanChildReaperTick } from './orphan-child-reaper';
+import { startTrackingInFlightTurns, recoverInterruptedTurns, freezeInFlightTurns, recordInterruptedTurns } from './interrupted-turns';
 import { sessionPurgeTick } from './session-purge';
 import { startControlChannel, shutdownControlChannel } from './control-channel';
 import { startPreviewServers, previewSweepTick } from './preview';
@@ -306,6 +307,12 @@ function loop(fn: () => Promise<void>, ms: number) {
   // two Claude Codes append to one transcript. Wait (briefly) for the SIGTERMs
   // to land so the first resume can't race either one.
   await safe('orphan-child', () => orphanChildReaperTick(1500));
+  // Then, before the first snapshot can report them dead: bring back the
+  // sessions the last gateway was in the middle of. Tracking is armed FIRST so
+  // the turns this pass itself starts are recorded too — a second restart while
+  // a resumed turn is running has to resume it again.
+  startTrackingInFlightTurns();
+  await safe('interrupted-turns', recoverInterruptedTurns);
   await pushAgents();
   await ensureBrainTick(); // after pushAgents: the brain's directory is fresh
   await pushGlobalSkillsTick();
@@ -408,6 +415,10 @@ async function shutdown(signal: string) {
   if (shuttingDown) return; // pm2 sends SIGINT then SIGKILL; a second signal must not restart the drain
   shuttingDown = true;
   stopping = true;
+  // Before the drain interrupts anything: stop mirroring turn boundaries. Each
+  // interrupt announces its session as idle, and left running the tracker would
+  // erase the list of cut turns one entry at a time, right as we assemble it.
+  freezeInFlightTurns();
   console.log(`[gateway] ${signal}, draining`);
 
   // The order matters and each step earns its place:
@@ -420,7 +431,7 @@ async function shutdown(signal: string) {
   //    close every child — ALL backends, not just claude-sdk. Before this,
   //    `shutdownClaudeSdk()` was the whole of it: codex/kimi/dsh children were
   //    orphaned to keep writing session files the next gateway resumes from.
-  await drainSessions(
+  const report = await drainSessions(
     {
       runtimes: allRuntimes(),
       now: () => Date.now(),
@@ -433,7 +444,16 @@ async function shutdown(signal: string) {
       log: (line) => console.log(line),
     },
     { budgetMs: DRAIN_BUDGET_MS, stampMs: Date.now() },
-  ).catch((e) => console.error('[shutdown] drain failed:', e));
+  ).catch((e) => {
+    console.error('[shutdown] drain failed:', e);
+    return null;
+  });
+
+  // Hand the next gateway the list of turns this one cut, so it can pick them
+  // back up instead of leaving a session that was mid-job silently stopped.
+  // A drain that threw records nothing rather than a wrong list: the tracker's
+  // own file is then the fallback, and it is at worst one boundary stale.
+  if (report) recordInterruptedTurns(report.cutSessionIds);
 
   // 3. Belt and braces: any handle the drain could not name still gets closed.
   try { shutdownClaudeSdk(); } catch {}

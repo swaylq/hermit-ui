@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { encodedProjectDir } from '@hermit-ui/tmux-driver';
 import { ClaudeSdkRuntime, shutdownClaudeSdk } from './claude-sdk';
+import { drainSessions, CUT_NOTICE } from '../shutdown-drain';
 import type { RuntimeHandle, SyncItem } from './types';
 
 const CODEWORD = 'ORCHID-9';
@@ -619,4 +620,95 @@ test('a placeholder never reaches the transcript, so the backstop cannot duplica
     assert.ok(uuids.has(item.externalId), `row ${item.externalId} is not in the transcript`);
   }
   await s.rt.stop(s.handle, 'kill');
+});
+
+// ── surviving a gateway restart ─────────────────────────────────────────────
+// The drain only runs while the process is dying, so nothing about it can be
+// observed in production. These two are the real-environment half of it: a real
+// CLI, a real turn, the real module state a restart leaves behind.
+
+test('the drain waits for a turn that is about to finish, instead of cutting it', async () => {
+  const s = await open();
+  assert.deepEqual(s.rt.liveSessionIds(), [s.handle.sessionId], 'the inventory the drain reads is wrong');
+
+  assert.equal(await s.rt.submit(s.handle, 'Say READY and nothing else.', []), true);
+  const t0 = Date.now();
+  while (Date.now() - t0 < 15_000 && !(await s.rt.isWorking(s.handle))) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  const notices: string[] = [];
+  const report = await drainSessions(
+    {
+      runtimes: [s.rt],
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      postNotice: async (_id, _ext, text) => { notices.push(text); },
+      log: () => {},
+    },
+    { budgetMs: 120_000, pollMs: 250, stampMs: Date.now() },
+  );
+
+  assert.equal(report.cut, 0, 'a turn that finished inside the budget was reported as cut');
+  assert.equal(report.finished, 1);
+  assert.deepEqual(notices, [], 'a turn that finished was told it had been interrupted');
+  assert.deepEqual(s.rt.liveSessionIds(), [], 'the child was left running after the drain');
+});
+
+test('a turn the drain has to cut is recorded, and the next gateway picks it up', async () => {
+  const s = await open();
+  await s.turn('Remember this number: 76241. Reply "stored".');
+  const uuid = s.handle.externalSessionId;
+  const sessionId = s.handle.sessionId;
+
+  // Slow for a reason the model cannot shortcut, and slow in the FOREGROUND.
+  // A bare `sleep` does not work here: this harness blocks standalone sleeps
+  // and tells the model to use an until-loop instead, so the model reran it
+  // with run_in_background — and a background task does not count as a turn in
+  // flight, which is exactly what the drain is asking about. Measured, not
+  // assumed: the first version of this test failed because the turn had already
+  // ended by the time the drain looked.
+  const sentinel = path.join(os.tmpdir(), `hermit-drain-probe-${Date.now()}`);
+  const prompt =
+    `Run exactly this with the Bash tool, in the foreground (do NOT pass run_in_background): ` +
+    `until [ -f ${sentinel} ]; do sleep 2; done. Then say DONE.`;
+  assert.equal(await s.rt.submit(s.handle, prompt, []), true);
+  const t0 = Date.now();
+  while (Date.now() - t0 < 15_000 && !(await s.rt.isWorking(s.handle))) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.equal(await s.rt.isWorking(s.handle), true, 'the turn never started');
+  await new Promise((r) => setTimeout(r, 3_000)); // let it get into the tool call
+
+  const notices: string[] = [];
+  const report = await drainSessions(
+    {
+      runtimes: [s.rt],
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      postNotice: async (_id, _ext, text) => { notices.push(text); },
+      log: () => {},
+    },
+    { budgetMs: 3_000, pollMs: 250, stampMs: Date.now() },
+  );
+
+  assert.equal(report.cut, 1, 'a turn still running at the deadline was not reported as cut');
+  assert.deepEqual(report.cutSessionIds, [sessionId], 'the next gateway would resume the wrong session');
+  assert.deepEqual(notices, [CUT_NOTICE], 'the conversation was not told why it stopped');
+  assert.ok(report.waitedMs >= 3_000, `the drain did not wait its budget out (${report.waitedMs}ms)`);
+  assert.deepEqual(s.rt.liveSessionIds(), [], 'the child survived the drain');
+  assert.doesNotMatch(JSON.stringify(s.items), /DONE/, 'the turn ran to completion — it was never cut');
+
+  // Release anything that outlived the child, so the loop cannot idle for the
+  // rest of the suite.
+  fs.writeFileSync(sentinel, '');
+
+  // The shape of the next gateway: fresh runtime, empty module state, resuming
+  // the same conversation the way recoverInterruptedTurns() does.
+  const woken = await open(uuid, sessionId);
+  assert.equal(woken.handle.externalSessionId, uuid, 'the resumed session landed on a different transcript');
+  const recalled = await woken.turn('What number did I ask you to remember? Digits only.');
+  assert.match(recalled, /76241/, 'a cut turn cost the conversation its history');
+  await woken.rt.stop(woken.handle, 'kill');
+  fs.rmSync(sentinel, { force: true });
 });

@@ -49,7 +49,7 @@ import { paneIsWorking, WORK_MARKER_RE, sessionTranscriptPath } from './pane';
 import { removeBySession as removePreviewBySession } from './preview/registry';
 import { extractText, hasToolResult, CcEvent, CcBlock } from './claude-code';
 
-import { runtimeFor, allRuntimes } from './runtime';
+import { runtimeFor, allRuntimes, type AgentRuntime, type RuntimeHandle } from './runtime';
 import type { RuntimeImage } from './runtime/types';
 import { AGENTS_ROOT, DASHBOARD_URL, ASST_KEY } from './config';
 import { api } from './api';
@@ -622,6 +622,40 @@ async function streamSlashOutput({
     .catch(() => {});
 }
 
+/**
+ * Bring a session's backend up (or find it already up) and wire its output into
+ * the outbound sync buffer. Delivers nothing.
+ *
+ * Extracted so the restart-recovery pass in interrupted-turns.ts starts a
+ * session the SAME way a user message does. The mapping below is not obvious —
+ * `mode` picks the engine, `model` carries the [1m] variant a resume would
+ * otherwise drop, `agentDirectory` falls back to a path convention — and a
+ * second hand-written copy of it would drift on the first field anyone adds.
+ */
+export async function ensureSessionBackend(
+  session: PendingSession,
+): Promise<{ runtime: AgentRuntime; handle: RuntimeHandle } | null> {
+  const runtime = runtimeFor(session.runtime, session.runtimeMode);
+  if (runtime === null) return null; // a pane, which outlived the gateway on its own
+  const state = piState(session.id);
+  const handle = await runtime.ensure(
+    {
+      id: session.id,
+      agentName: session.agentName,
+      agentDirectory: session.agentDirectory ?? path.join(AGENTS_ROOT, session.agentName),
+      externalSessionId: session.claudeSessionId,
+      provider: session.runtimeProvider,
+      model: session.runtimeModel,
+      mode: session.runtimeMode,
+      credentialId: session.runtimeCredentialId,
+      isOrchestrator: session.isOrchestrator ?? false,
+      chatOnly: session.chatOnly ?? false,
+    },
+    (item) => queueSync(state, item),
+  );
+  return { runtime, handle };
+}
+
 async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // ── Non-tmux backends ──────────────────────────────────────────────────────
   // Everything below this block is Claude-Code-in-a-pane. A session on another
@@ -629,23 +663,8 @@ async function deliverMessages(session: PendingSession, msgs: PendingMsg[]) {
   // sync coalescing. See docs/pi-runtime-design.md.
   const runtime = runtimeFor(session.runtime, session.runtimeMode);
   if (runtime) {
-    const state = piState(session.id);
     try {
-      const handle = await runtime.ensure(
-        {
-          id: session.id,
-          agentName: session.agentName,
-          agentDirectory: session.agentDirectory ?? path.join(AGENTS_ROOT, session.agentName),
-          externalSessionId: session.claudeSessionId,
-          provider: session.runtimeProvider,
-          model: session.runtimeModel,
-          mode: session.runtimeMode,
-          credentialId: session.runtimeCredentialId,
-          isOrchestrator: session.isOrchestrator ?? false,
-          chatOnly: session.chatOnly ?? false,
-        },
-        (item) => queueSync(state, item),
-      );
+      const handle = (await ensureSessionBackend(session))!.handle;
 
       // Same one-per-turn drain as the tmux path: if a turn is in flight, hold
       // the whole batch and let the next chatTick re-evaluate.
