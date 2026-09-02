@@ -87,6 +87,35 @@ async function ask<T>(body: unknown, timeoutMs = 3_000): Promise<T | null> {
   });
 }
 
+// A 2s memo of the host's inventory. `isLive` is asked on every purge sweep and
+// every busy check, and each miss is a socket round trip; the answer cannot
+// change meaningfully faster than this, and it is only ever consulted when the
+// gateway has no handle of its own.
+let inventory: { at: number; ids: Set<string> } | null = null;
+const INVENTORY_TTL_MS = 2_000;
+
+/**
+ * Is the host holding a child for this session?
+ *
+ * The question `isLive` is really asking. Without it, "live" means "this gateway
+ * process has a handle", which is the same class of mistake as judging a
+ * session by its tmux pane: right until the substrate changes, then silently
+ * wrong. It matters because the callers are destructive — `session-purge`
+ * deletes a trashed session's row once every backend says it is not held, and a
+ * session the host is still running would be one of them if a reattach had
+ * failed.
+ */
+export async function hostHolds(sessionId: string): Promise<boolean> {
+  if (!sessionHostEnabled()) return false;
+  if (!inventory || Date.now() - inventory.at > INVENTORY_TTL_MS) {
+    const list = await hostSessions();
+    // A host that does not answer holds nothing we can prove. Erring the other
+    // way would make every session unpurgeable the moment the host goes down.
+    inventory = { at: Date.now(), ids: new Set((list ?? []).map((s) => s.sessionId)) };
+  }
+  return inventory.ids.has(sessionId);
+}
+
 /** What the host is holding, or null when there is no host to ask. */
 export async function hostSessions(): Promise<ListResponse['sessions'] | null> {
   const res = await ask<ListResponse | ErrorResponse>({ v: HOST_PROTOCOL_VERSION, op: 'list' });
@@ -103,5 +132,6 @@ export async function hostSessions(): Promise<ListResponse['sessions'] | null> {
  */
 export async function hostKill(sessionId: string): Promise<boolean> {
   const res = await ask<KillResponse | ErrorResponse>({ v: HOST_PROTOCOL_VERSION, op: 'kill', sessionId });
+  inventory = null; // a session just ended must not read as live for another 2s
   return !!(res && res.ok && (res as KillResponse).killed);
 }

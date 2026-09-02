@@ -69,7 +69,7 @@ import {
   type ActivityState, type RuntimeActivity,
 } from './claude-sdk-activity';
 import { notifyTurnBoundary } from './turn-boundary';
-import { sessionHostEnabled, hostSpawnOptions, hostKill } from './session-host-client';
+import { sessionHostEnabled, hostSpawnOptions, hostKill, hostHolds } from './session-host-client';
 import { claudeSdkEnv, applyCredentialEnv } from './claude-credentials';
 import { currentAuthFingerprint } from './pi-credentials';
 import { buildMcpServers } from '../mcp-config';
@@ -1151,9 +1151,17 @@ export class ClaudeSdkRuntime implements AgentRuntime {
     return describeActivity(h.activity, Date.now());
   }
 
-  /** A live, unclosed CLI child for this session. handleOf already excludes a torn-down one. */
+  /**
+   * A live, unclosed CLI child for this session.
+   *
+   * Not just "do WE have a handle": with a session host the child outlives this
+   * process, so a gateway that has not attached (yet, or at all — a reattach can
+   * fail) would report a running session as gone. The callers are destructive,
+   * so the question has to be about the child, not about us.
+   */
   async isLive(handle: RuntimeHandle): Promise<boolean> {
-    return handleOf(handle) !== null;
+    if (handleOf(handle) !== null) return true;
+    return hostHolds(handle.sessionId);
   }
 
   async interrupt(handle: RuntimeHandle): Promise<void> {
