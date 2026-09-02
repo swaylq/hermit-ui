@@ -286,6 +286,18 @@ model PushDevice {
 - **`xcodebuild` 没跑成**。Swift 编译层面是干净的（`swiftc -typecheck` 全过），但链接、资源打包、签名、Info.plist 合并这些只有真正 build 才会暴露的问题没被覆盖。第一次在 Xcode 里打开可能还要收拾一两处。补齐方式：`xcodebuild -downloadPlatform iOS`（几个 GB），CoreSimulator 的版本不一致一般重启解决。
 - **麦克风与推送必须真机**。模拟器没有 APNs 注册，麦克风行为也与真机不同。这两条正是本项目存在的理由，在 sway 拿设备验之前，整套东西只能算「设计正确、编译通过」。
 
+> ⚠️ **第一次连真机会在系统盘上创建几个 G，而且和上面那套模拟器的收尾毫无关系。**
+>
+> `~/Library/Developer/Xcode/iOS DeviceSupport/<版本>` —— 每个 iOS 版本一份符号文件，
+> **单份几个 G**，连一次新版本就多一份，不会自己清。`~/Library/Developer/Xcode/Archives`
+> 每归档一次多一份。这两个目录在只跑模拟器的机器上**根本不存在**（2026-09-02 实测本机没有），
+> 所以照着上面模拟器那节做收尾的人，不会知道自己漏了什么。
+>
+> 这正是同一个盲区高一层的样子：模拟器那节教你清 DerivedData、结果包、设备容器，
+> 而这一条是**换一条路径之后全新的一组东西**。真机验证之前先看一眼这台机器还剩多少
+> （`df -h /System/Volumes/Data`，注意不是 `df -h /`）；验完不再用的旧 iOS 版本符号
+> 直接删 `iOS DeviceSupport` 下对应目录，下次连设备会重新生成。
+
 > ⚠️ **在 mac-local 上跑完模拟器，必须显式 `xcrun simctl shutdown all`。**
 >
 > `xcodebuild test` 退出**不会**带走模拟器。运行时进程（`SimRenderServer`、`SimMetalHost`、
