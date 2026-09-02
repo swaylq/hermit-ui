@@ -375,7 +375,21 @@ DISK_WARN_COOLDOWN="${GW_DISK_WARN_COOLDOWN:-43200}"   # 12h — warn is a drift
 DISK_CRIT_COOLDOWN="${GW_DISK_CRIT_COOLDOWN:-3600}"    # 1h  — critical repeats every run
 DISK_STAMP="$STATE_DIR/disk-alert-last"
 DISK_SAMPLES="$STATE_DIR/disk-samples"
-DISK_SAMPLE_KEEP=48            # ~2 days of hourly runs
+DISK_SAMPLE_KEEP=96            # ~4 days of hourly runs
+# Shortest history that may produce an ETA. SIX HOURS, not thirty minutes, and
+# this is the whole lesson of 2026-09-02: the same machine's short-term rate
+# flips sign depending on which window you pick —
+#   full 6.6h +1.61 G/h · last 4h +1.28 · last 2h +0.06 · last 1h -1.32 · last 30m -3.26
+# Four windows, two signs, a 4.9 G/h spread. A 30-minute slope would have this
+# alert announcing "4 hours to empty" and "disk is growing +3G/h" on consecutive
+# runs, and an ETA that contradicts itself hourly costs you the rest of the
+# message too. The true six-day average on that machine was -0.17 G/h — an order
+# of magnitude smaller than the -2.0 a busy window suggested, and that busy
+# window was busy partly because of the very agents measuring it.
+DISK_MIN_WINDOW_SEC="${GW_DISK_MIN_WINDOW_SEC:-21600}"
+# Below this the trend is flat enough that dividing by it yields a meaningless
+# number of hours (0.01 G/h on 9G is "five weeks").
+DISK_FLAT_TENTHS=1
 
 # Burn rate, from this machine's own history rather than a guess.
 #
@@ -393,35 +407,46 @@ disk_rate() {
   local now availk oldest_t oldest_a dt da rate hours
   now="$1"; availk="$2"
   [ -f "${DISK_SAMPLES}" ] || return 1
-  # oldest sample at least 30min back; below that the slope is mostly noise
-  read -r oldest_t oldest_a <<<"$(awk -v cut="$((now - 1800))" '$1 <= cut {print $1, $2; exit}' "${DISK_SAMPLES}")"
+  # The OLDEST sample we have — longest window, least noise. Not "oldest beyond
+  # some small floor": a floor picks a short window whenever the file is young,
+  # which is exactly when the slope is least trustworthy.
+  read -r oldest_t oldest_a <<<"$(head -1 "${DISK_SAMPLES}" 2>/dev/null)"
   case "${oldest_t:-}" in ''|*[!0-9]*) return 1 ;; esac
-  dt=$((now - oldest_t)); [ "${dt}" -ge 1800 ] || return 1
-  da=$((availk - oldest_a))          # negative = losing space
-  # GB per hour, one decimal, integer math (no bc on a stock Linux box)
-  rate=$(( (da * 36000) / (dt * 1048576) ))   # tenths of a GB/hour
-  if [ "${da}" -lt 0 ]; then
-    # hours = avail / loss-per-hour, where loss-per-hour = (-da)*3600/dt.
-    # Written as one expression so no intermediate is rounded to zero first.
+  dt=$((now - oldest_t))
+  [ "${dt}" -ge "${DISK_MIN_WINDOW_SEC}" ] || return 1
+  da=$((availk - oldest_a))                    # negative = losing space
+  rate=$(( (da * 36000) / (dt * 1048576) ))    # tenths of a GB/hour
+  if [ "${da}" -lt 0 ] && [ "${rate}" -le "-${DISK_FLAT_TENTHS}" ]; then
     hours=$(( availk * dt / ((0 - da) * 3600) ))
   else
     hours=-1
   fi
-  printf '%s %s\n' "${rate}" "${hours}"
+  printf '%s %s %s\n' "${rate}" "${hours}" "$((dt / 3600))"
 }
 
 # Human phrase for the alert. Empty when we cannot say anything honest yet.
 disk_trend() {
-  local r rate_t hours whole frac sign
+  local r rate_t hours win whole frac sign days
   r="$(disk_rate "$1" "$2")" || return 0
-  read -r rate_t hours <<<"${r}"
+  read -r rate_t hours win <<<"${r}"
   [ -n "${rate_t:-}" ] || return 0
-  sign=""; [ "${rate_t}" -ge 0 ] && sign="+"
-  whole=$((rate_t / 10)); frac=$((rate_t % 10)); [ "${frac}" -lt 0 ] && frac=$((0 - frac))
+  # Take the sign FIRST and format the magnitude, never the signed value:
+  # integer division loses it below 1.0 (-1/10 == 0), so "-0.1G/小时" printed as
+  # "0.1G/小时" and a shrinking disk read as a growing one.
+  local mag
+  if [ "${rate_t}" -lt 0 ]; then sign="-"; mag=$((0 - rate_t)); else sign="+"; mag="${rate_t}"; fi
+  whole=$((mag / 10)); frac=$((mag % 10))
+  # ALWAYS name the window the number came from. A rate with no window attached
+  # is what let a six-hour busy patch be read as this machine's normal.
   if [ "${hours}" -gt 0 ]; then
-    printf '，近期 %s%s.%sG/小时，按此速度约 %s 小时后见底' "${sign}" "${whole}" "${frac}" "${hours}"
+    if [ "${hours}" -ge 48 ]; then
+      days=$((hours / 24))
+      printf '，过去 %s 小时平均 %s%s.%sG/小时，按此约 %s 天见底' "${win}" "${sign}" "${whole}" "${frac}" "${days}"
+    else
+      printf '，过去 %s 小时平均 %s%s.%sG/小时，按此约 %s 小时见底' "${win}" "${sign}" "${whole}" "${frac}" "${hours}"
+    fi
   else
-    printf '，近期 %s%s.%sG/小时' "${sign}" "${whole}" "${frac}"
+    printf '，过去 %s 小时平均 %s%s.%sG/小时' "${win}" "${sign}" "${whole}" "${frac}"
   fi
 }
 
