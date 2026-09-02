@@ -374,15 +374,74 @@ DISK_CRIT_GB="${GW_DISK_CRIT_GB:-15}"
 DISK_WARN_COOLDOWN="${GW_DISK_WARN_COOLDOWN:-43200}"   # 12h — warn is a drift signal
 DISK_CRIT_COOLDOWN="${GW_DISK_CRIT_COOLDOWN:-3600}"    # 1h  — critical repeats every run
 DISK_STAMP="$STATE_DIR/disk-alert-last"
+DISK_SAMPLES="$STATE_DIR/disk-samples"
+DISK_SAMPLE_KEEP=48            # ~2 days of hourly runs
+
+# Burn rate, from this machine's own history rather than a guess.
+#
+# WHY the message carries this at all: on 2026-09-02 the crit alert fired eight
+# times in a row with a byte-identical message. A number that never moves is a
+# number people stop reading, and nobody acted on any of the eight. "9.4G left"
+# does not say whether that is Tuesday-normal or four hours from an outage;
+# "-2.0G/h, about 4.7h to zero" does. Thresholds are NOT changed here — what
+# counts as alarming is a human's call — only what the alert TELLS you.
+#
+# Prints "<GB/h signed> <hours-to-zero or -1>", or nothing if there is not yet a
+# sample old enough to divide by. Needs no state beyond its own sample file, so a
+# machine that has never run this simply reports the plain message for an hour.
+disk_rate() {
+  local now availk oldest_t oldest_a dt da rate hours
+  now="$1"; availk="$2"
+  [ -f "${DISK_SAMPLES}" ] || return 1
+  # oldest sample at least 30min back; below that the slope is mostly noise
+  read -r oldest_t oldest_a <<<"$(awk -v cut="$((now - 1800))" '$1 <= cut {print $1, $2; exit}' "${DISK_SAMPLES}")"
+  case "${oldest_t:-}" in ''|*[!0-9]*) return 1 ;; esac
+  dt=$((now - oldest_t)); [ "${dt}" -ge 1800 ] || return 1
+  da=$((availk - oldest_a))          # negative = losing space
+  # GB per hour, one decimal, integer math (no bc on a stock Linux box)
+  rate=$(( (da * 36000) / (dt * 1048576) ))   # tenths of a GB/hour
+  if [ "${da}" -lt 0 ]; then
+    # hours = avail / loss-per-hour, where loss-per-hour = (-da)*3600/dt.
+    # Written as one expression so no intermediate is rounded to zero first.
+    hours=$(( availk * dt / ((0 - da) * 3600) ))
+  else
+    hours=-1
+  fi
+  printf '%s %s\n' "${rate}" "${hours}"
+}
+
+# Human phrase for the alert. Empty when we cannot say anything honest yet.
+disk_trend() {
+  local r rate_t hours whole frac sign
+  r="$(disk_rate "$1" "$2")" || return 0
+  read -r rate_t hours <<<"${r}"
+  [ -n "${rate_t:-}" ] || return 0
+  sign=""; [ "${rate_t}" -ge 0 ] && sign="+"
+  whole=$((rate_t / 10)); frac=$((rate_t % 10)); [ "${frac}" -lt 0 ] && frac=$((0 - frac))
+  if [ "${hours}" -gt 0 ]; then
+    printf '，近期 %s%s.%sG/小时，按此速度约 %s 小时后见底' "${sign}" "${whole}" "${frac}" "${hours}"
+  else
+    printf '，近期 %s%s.%sG/小时' "${sign}" "${whole}" "${frac}"
+  fi
+}
 
 disk_check() {
-  local line availk avail_g pct level cooldown now last
+  local line availk avail_g pct level cooldown now last TREND
   line="$(df -k "$DISK_VOL" 2>/dev/null | tail -1)"
   availk="$(printf '%s' "$line" | awk '{print $4}')"
   pct="$(printf '%s' "$line" | awk '{print $5}')"
   case "$availk" in ''|*[!0-9]*) say "[disk] cannot read df for $DISK_VOL — skipped"; return 0 ;; esac
 
   avail_g=$(( availk / 1048576 ))
+  now="$(date +%s)"
+  TREND="$(disk_trend "${now}" "${availk}")"
+  # append AFTER reading the trend, so the oldest-sample window is not polluted
+  # by the sample we are taking right now
+  printf '%s %s\n' "${now}" "${availk}" >>"${DISK_SAMPLES}" 2>/dev/null || true
+  if [ -f "${DISK_SAMPLES}" ]; then
+    tail -n "${DISK_SAMPLE_KEEP}" "${DISK_SAMPLES}" >"${DISK_SAMPLES}.tmp" 2>/dev/null \
+      && mv "${DISK_SAMPLES}.tmp" "${DISK_SAMPLES}" 2>/dev/null || true
+  fi
   if   [ "$avail_g" -lt "$DISK_CRIT_GB" ]; then level=crit; cooldown="$DISK_CRIT_COOLDOWN"
   elif [ "$avail_g" -lt "$DISK_WARN_GB" ]; then level=warn; cooldown="$DISK_WARN_COOLDOWN"
   else
@@ -391,7 +450,6 @@ disk_check() {
     return 0
   fi
 
-  now="$(date +%s)"
   last=0
   if [ -f "$DISK_STAMP" ]; then
     last="$(cut -d' ' -f1 "$DISK_STAMP" 2>/dev/null || echo 0)"
@@ -407,9 +465,9 @@ disk_check() {
   printf '%s %s\n' "$now" "$level" >"$DISK_STAMP"
   say "[disk] $level: ${avail_g}G free on $DISK_VOL (used $pct)"
   if [ "$level" = crit ]; then
-    post_alert "disk-critical" "系统盘只剩 ${avail_g}G（已用 ${pct}），写满会打死 pm2 和网关，需要立刻清理" 130
+    post_alert "disk-critical" "系统盘只剩 ${avail_g}G（已用 ${pct}）${TREND}。写满会打死 pm2 和网关" 130
   else
-    post_alert "disk-low" "系统盘余量降到 ${avail_g}G（已用 ${pct}），低于 ${DISK_WARN_GB}G 警戒线，建议清理" 800
+    post_alert "disk-low" "系统盘余量降到 ${avail_g}G（已用 ${pct}）${TREND}。低于 ${DISK_WARN_GB}G 警戒线" 800
   fi
 }
 disk_check
