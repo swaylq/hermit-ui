@@ -37,6 +37,21 @@ In Xcode: select the **Hermit** target → *Signing & Capabilities* → set your
 Automatic signing handles the rest. `Push Notifications` is already declared via
 `Hermit/Hermit.entitlements`.
 
+**Before you plug in a phone, know what that costs.** The microphone and push are
+the two things only a device can prove, so real-device runs are expected — but
+they create storage `smoke.sh` cannot reach, because it is not the simulator's
+and not the build's:
+
+| Path | Grows by | Cleaned by |
+|---|---|---|
+| `~/Library/Developer/Xcode/iOS DeviceSupport/<ios version>` | a few GB, one copy per iOS version the device ever runs | nobody — delete old versions by hand |
+| `~/Library/Developer/Xcode/Archives` | one per archive | nobody |
+
+`smoke.sh`'s cleanup covers the simulator path completely (DerivedData, the
+result bundle, and `simctl erase` on the device it booted). None of it touches
+the two above. On a machine whose system disk lives near 90% — this one — that
+difference has been the margin twice.
+
 To check the sources compile without a full device build:
 
 ```sh
