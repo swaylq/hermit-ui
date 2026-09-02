@@ -25,9 +25,14 @@ cd "$(dirname "$0")"
 
 DEVICE="${HERMIT_SIM_DEVICE:-iPhone 17}"
 SHOT_DIR="${HERMIT_SHOT_DIR:-$PWD/shots}"
-# Build products, a few hundred MB, on the system disk. Removed on the way out —
-# but ONLY when this script chose the path. A caller who points this at their own
-# DerivedData is asking to reuse a cache, not to have it deleted.
+# Build products, ~170MB, removed on the way out — but ONLY when this script chose
+# the path. A caller who points this at their own DerivedData is asking to reuse a
+# cache, not to have it deleted.
+#
+# Note that the default is NOT somewhere else: on macOS `$TMPDIR` is
+# /private/var/folders/... and /tmp is /private/tmp, both on the system disk.
+# Pointing HERMIT_DERIVED_DATA at another path only helps if that path is on
+# another VOLUME.
 DERIVED="${HERMIT_DERIVED_DATA:-${TMPDIR:-/tmp}/hermit-ios-dd}"
 OWNS_DERIVED=$([ -n "${HERMIT_DERIVED_DATA:-}" ] && echo 0 || echo 1)
 # Both scrubbed by the trap. The result bundle records the test runner's launch
@@ -82,6 +87,12 @@ cleanup() {
   xcrun simctl uninstall "$UDID" ai.swaylab.hermit 2>/dev/null || true
   if [ "$WE_BOOTED" = "1" ]; then
     xcrun simctl shutdown "$UDID" 2>/dev/null || true
+    # And erase it. The device's own container — the installed app, its web
+    # storage, the snapshots — is neither DerivedData nor a result bundle, so
+    # nothing else here touches it: six runs took ~/Library/Developer/
+    # CoreSimulator from 192MB to 2.1GB. Only a device this run booted, so a
+    # device someone else was using keeps its state.
+    xcrun simctl erase "$UDID" 2>/dev/null || true
   fi
   [ "$OWNS_DERIVED" = "1" ] && rm -rf "$DERIVED"
   rm -rf "$RESULTS"
