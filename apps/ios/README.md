@@ -132,7 +132,10 @@ different thing with a real review attached — see the bottom of this section.
 
 1. A paid Apple Developer Program membership. The free tier cannot get the
    `aps-environment` entitlement, so it cannot build this app at all.
-2. Xcode → Settings → Accounts → sign in with that Apple ID.
+2. A signing identity on the build machine. Signing in to Xcode
+   (Settings → Accounts) is the easy way; if the machine has no GUI session, or
+   the Apple ID's 2FA is not at hand, see *Signing without an Xcode account*
+   below — an API key is enough for the whole path.
 3. Register the bundle id `ai.swaylab.hermit` on the developer portal, with the
    Push Notifications capability enabled.
 4. App Store Connect → My Apps → **+** → New App, same bundle id. TestFlight
@@ -176,6 +179,53 @@ secret exec ASC_KEY_P8 -- sh -c 'printf %s "$ASC_KEY_P8" > "$TMPDIR/AuthKey.p8" 
 Processing takes a few minutes, then the build shows up under TestFlight. Add
 yourself under **Internal Testing** (up to 100 people from your own team, no
 review), and it installs through the TestFlight app.
+
+**Signing without an Xcode account**
+
+A machine with zero signing identities (`security find-identity -v -p codesigning`
+prints `0 valid identities found`) can still produce a distribution build. Everything
+below runs from an App Store Connect API key with the **App Manager** role; no Apple ID
+is typed anywhere.
+
+1. **Archive.** Pass the key to `xcodebuild` and it registers a development
+   certificate and a team profile for you:
+
+   ```sh
+   xcodebuild archive ... -allowProvisioningUpdates \
+     -authenticationKeyPath /abs/AuthKey_<id>.p8 \
+     -authenticationKeyID <id> -authenticationKeyIssuerID <issuer>
+   ```
+
+2. **Distribution certificate.** `-exportArchive` will try to make one the same way and
+   fail with `Cloud signing permission error` — Xcode's cloud signing needs an *Admin*
+   key. The plain certificates endpoint does not: generate the key pair and CSR locally,
+   then `POST /v1/certificates` with `certificateType: DISTRIBUTION` and the CSR. The
+   private key stays on the machine, which is the point — the team's existing
+   certificates are useless here, since their private keys live on whoever created them.
+
+3. **Provisioning profile.** `POST /v1/profiles` with `profileType: IOS_APP_STORE`, the
+   bundle id resource (`GET /v1/bundleIds?filter[identifier]=...`) and the certificate
+   from step 2. Write the returned `profileContent` (base64) to
+   `~/Library/Developer/Xcode/UserData/Provisioning Profiles/<uuid>.mobileprovision`.
+
+4. **Keychain.** Wrap key + certificate into a `.p12` and import it into a keychain
+   created for this, so the password is one you chose rather than the login one:
+
+   ```sh
+   security create-keychain -p "$PW" "$KC"
+   security unlock-keychain -p "$PW" "$KC"
+   security import dist.p12 -k "$KC" -P "$P12PW" -T /usr/bin/codesign -A
+   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PW" "$KC"
+   security list-keychains -d user -s <existing list> "$KC"
+   ```
+
+   Give the `.p12` a real password — with an empty one, `security import` fails with
+   `MAC verification failed`. Keep it: this is the only copy of that private key, and a
+   team is limited to two distribution certificates, so losing it means revoking
+   somebody else's.
+
+5. **Export** with `signingStyle: manual`, `signingCertificate: Apple Distribution` and
+   a `provisioningProfiles` entry mapping the bundle id to the profile name from step 3.
 
 **Things that bite, in the order they bite**
 

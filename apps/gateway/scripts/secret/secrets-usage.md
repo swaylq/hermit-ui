@@ -13,6 +13,19 @@
 ## 写
 - `printf %s '<值>' | secret set KEY` — 值从 **stdin**（**绝不**把值放命令行）
 
+### 多行的值（`.p8`、PEM 私钥、证书、配置文件）必须先编码
+
+store 是一行一个 `KEY=VALUE`，**带换行的值会被存坏**：只有第一行读得回来，其余几行留在文件里成为
+读不到的孤行。2026-09-04 一把 App Store Connect 上传密钥就是这么丢的——`secret set` 报了成功、
+`secret list` 里也在，取出来只剩 `-----BEGIN PRIVATE KEY-----` 一行。现在 `set` 会直接拒绝并提示，
+但**约定要记住**：多行一律 base64 存成 `<KEY>_B64`。
+
+```sh
+base64 <AuthKey_XXXX.p8 | tr -d '\n' | secret set ASC_KEY_P8_B64      # 存
+secret exec ASC_KEY_P8_B64 -- sh -c \
+  'printf %s "$ASC_KEY_P8_B64" | base64 -d >"$TMPDIR/k.p8" && some-tool "$TMPDIR/k.p8"'   # 用
+```
+
 ## 安全铁律
 - **绝不** `echo $KEY` / 把值写进 reply、memory、日志、commit。要证明凭据有效，就用它跑命令、报 HTTP 状态，不报值本身。
 - `secret get` / `secret load` 会打印明文值 —— 只给 sway 手动用，**agent 不用**。
