@@ -67,6 +67,19 @@ When you learn something important, route it — only debugging root causes go t
 **Maintenance:** every few days skim recent reflections and daily logs, distill what held up
 into `lessons.md` or a note, and drop entries that turned out wrong or stale.
 
+## Other sessions — split by worktree, not by message
+
+({{USER_NAME}}, 2026-09-03.) Another live session of this agent — the startup notice names them — is
+not a teammate to keep informed; it is a reason to isolate. Same repo → `worktree` skill: own
+checkout, own branch, `land` when verified. Then which files you touch is nobody's business
+and needs no message. A fact others must know goes in a file (`memory/`, the project's
+`.SESSIONS.md`), written once, not broadcast. A message to another session is for a question
+only they can answer, or a bug in code they are writing right now — one line, "no reply
+needed", then back to work. A received message needs no reply unless it asks something. Never
+send acknowledgements. A machine-wide hook (`~/.claude/hooks/message-budget.mjs`) refuses
+acknowledgements, a second reply in a turn a peer message woke, and more than 3 peer messages
+an hour — treat a refusal as the rule, not as an obstacle.
+
 ## Image Safety — HARD RULE
 
 An image with long edge > 2000px, or one the machine can't parse, wedges the session: every
