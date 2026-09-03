@@ -69,6 +69,7 @@ const prisma = new PrismaClient({
 interface AuthHit { machineId: string; cachedAt: number }
 const authCache = new Map<string, AuthHit>();
 const AUTH_TTL_MS = 5 * 60_000;
+const LAST_SEEN_BUMP_MS = 30_000;
 
 async function resolveMachineByKey(key: string): Promise<string | null> {
   if (!key) return null;
@@ -127,7 +128,7 @@ function sendBrowser(sock: WSWebSocket, payload: unknown) {
 const TERM_PATH_RE = /^\/api\/term\/([^\/?#]+)$/;
 const GATEWAY_PATH = '/api/gateway/ws';
 
-// ── Cross-origin API access ──────────────────────────────────────────────────
+// ── Cross-origin API access ──────────────────────────────────────────
 // One installed PWA is bound to ONE origin, but the browser keyring can hold
 // entries pointing at other deployments (KeyringEntry.baseUrl), so a tab served
 // by dash.swaylab.ai may call THIS server's API. That works because the
@@ -135,18 +136,28 @@ const GATEWAY_PATH = '/api/gateway/ws';
 // custom header makes every request non-simple, so the browser sends an OPTIONS
 // preflight first and refuses the real request unless we answer it.
 //
-// Empty allowlist (the default) = no cross-origin access at all, i.e. exactly
-// today's behaviour. Set CORS_ALLOW_ORIGINS to a comma-separated list of the
-// origins that may drive this deployment, e.g.
-//   CORS_ALLOW_ORIGINS=https://dash.swaylab.ai
+// Empty allowlist (the default) = no cross-origin access at all. Set
+// CORS_ALLOW_ORIGINS to a comma-separated list of origins that may drive this
+// deployment, e.g. CORS_ALLOW_ORIGINS=https://dash.swaylab.ai
 // Credentials are never allowed: there is no cookie or session to protect, and
 // leaving them off means a hostile page still cannot ride an existing login.
-const CORS_ORIGINS = new Set(
-  (process.env.CORS_ALLOW_ORIGINS || '')
-    .split(',')
-    .map((o) => o.trim().replace(/\/+$/, ''))
-    .filter(Boolean),
-);
+//
+// The allowlist is read on the FIRST REQUEST, not at module load: `.env` is
+// merged into process.env by Next inside app.prepare(), which runs after this
+// module is evaluated, so a module-level const would always see an empty list
+// on a deployment that configures itself through .env.
+let corsOrigins: Set<string> | null = null;
+function corsAllowlist(): Set<string> {
+  if (!corsOrigins) {
+    corsOrigins = new Set(
+      (process.env.CORS_ALLOW_ORIGINS || '')
+        .split(',')
+        .map((o) => o.trim().replace(/\/+$/, ''))
+        .filter(Boolean),
+    );
+  }
+  return corsOrigins;
+}
 const CORS_PATH_RE = /^\/(api|uploads)\//;
 const CORS_FALLBACK_HEADERS = 'content-type, x-asst-key, x-file-name, x-file-path, x-file-unzip';
 
@@ -163,7 +174,7 @@ function applyCors(req: IncomingMessage, res: import('node:http').ServerResponse
   // Vary regardless of the outcome: the response for one Origin must never be
   // served from a shared cache to another.
   res.setHeader('Vary', 'Origin');
-  if (!CORS_ORIGINS.has(origin)) return false;
+  if (!corsAllowlist().has(origin)) return false;
   res.setHeader('Access-Control-Allow-Origin', origin);
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
@@ -197,6 +208,18 @@ app.prepare().then(() => {
   const gatewayWss = new WebSocketServer({ noServer: true });
   gatewayWss.on('connection', (sock: WSWebSocket, req: IncomingMessage, ctx: { machineId: string }) => {
     const { machineId } = ctx;
+    let lastSeenBumpedAt = 0;
+    const bumpLastSeen = () => {
+      const now = Date.now();
+      if (now - lastSeenBumpedAt < LAST_SEEN_BUMP_MS) return;
+      lastSeenBumpedAt = now;
+      void prisma.machine
+        .update({ where: { id: machineId }, data: { lastSeen: new Date(now) } })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[gateway-ws] lastSeen update failed machineId=${machineId.slice(-6)}: ${message}`);
+        });
+    };
     // Auth already happened during upgrade — we only get here on success.
     // Supersede any prior connection from the SAME machineId; other machines'
     // gateways stay routed normally.
@@ -209,6 +232,7 @@ app.prepare().then(() => {
     // file-manager fs.req frames over this same socket (see gateway-bridge.ts).
     setGatewaySocket(machineId, sock);
     console.log(`[gateway-ws] connected machineId=${machineId.slice(-6)} from ${req.socket.remoteAddress}`);
+    bumpLastSeen();
 
     // Heartbeat — Caddy/Xray idle proxies drop quiet conns after ~1m.
     const heartbeat = setInterval(() => {
@@ -217,6 +241,7 @@ app.prepare().then(() => {
     }, 15_000);
 
     sock.on('message', (raw: RawData) => {
+      bumpLastSeen();
       let msg: any;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (!msg || typeof msg !== 'object') return;
@@ -244,6 +269,13 @@ app.prepare().then(() => {
         }
       }
     });
+
+    // `ws` automatically answers protocol pings. Bump only when traffic proves
+    // the authenticated peer is alive; merely writing our own ping could keep a
+    // half-dead TCP connection falsely online. The 30s debounce stays well
+    // inside the UI's 90s online window without writing on every 15s heartbeat.
+    sock.on('ping', bumpLastSeen);
+    sock.on('pong', bumpLastSeen);
 
     sock.on('close', () => {
       clearInterval(heartbeat);
