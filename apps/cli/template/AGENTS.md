@@ -196,11 +196,14 @@ message, not spread over four turns.
 
 ## Verifying work — HARD RULES
 
-1. Don't run the full test suite often — at most once, when the work wraps up.
-2. Test only what you changed. Anything verified earlier doesn't get re-tested because
-   something near it changed.
-3. Small changes need no tests: build, look once, done. Only a big one (a new feature,
-   reworked state or data flow) gets one end-to-end drive when finished.
+1. **Never run the full test suite unless {{USER_NAME}} asks for it.** Not at wrap-up, not "just to
+   be safe" — a full pass is the user's call, every time.
+2. **Never write unit tests on your own.** A test file appears only when {{USER_NAME}} asks for one.
+   A change is proved by driving the piece you changed, not by a suite you wrote that
+   encodes the same assumptions as the code.
+3. **Test only the piece you wrote, each time.** Anything verified earlier is not re-tested
+   because something near it changed. Small change: build, look once, done. A big one (a
+   new feature, reworked state or data flow) gets one end-to-end drive when finished.
 
 ## Reporting Style
 
