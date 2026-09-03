@@ -15,6 +15,12 @@ module.exports = {
       // — keep ecosystem.env minimal so VPS deploys can override via .env.
       env: {
         NODE_ENV: 'production',
+        // The harness never backgrounds a Bash on its own (sway, 2026-09-03):
+        // 0 turns off both the 3-minute long-Bash watchdog and the pre-emptive
+        // "npm install / docker build → background" rewrite in claude-sdk.ts.
+        // Only the model's own run_in_background decides. Override per machine
+        // in .env if a box really needs the old behaviour back.
+        HERMIT_BASH_BACKGROUND_AFTER_MS: '0',
         // pm2's daemon PATH often lacks ~/.local/bin (where the native `claude`
         // symlink lives). The gateway spawns each chat pane as bare `claude …`,
         // and tmux execs it with the CLIENT's PATH — so without ~/.local/bin

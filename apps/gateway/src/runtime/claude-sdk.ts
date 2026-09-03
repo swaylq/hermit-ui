@@ -112,6 +112,8 @@ function bashBackgroundAfterMs(): number {
   // Read per call, not once at import: it makes the threshold testable without a
   // module-loading dance, and it means an operator can retune a wedging machine
   // by restarting the gateway rather than shipping a build.
+  // 0 = off, for the watchdog AND the pre-emptive backgrounding in
+  // preToolUseHooks. The fleet default is 0 since 2026-09-03 (ecosystem.config.cjs).
   const raw = Number(process.env.HERMIT_BASH_BACKGROUND_AFTER_MS);
   return Number.isFinite(raw) && raw >= 0 ? raw : 180_000;
 }
@@ -713,6 +715,13 @@ function startWatchdog(h: SdkHandle) {
  * decision, and overriding it would be the harness second-guessing the agent.
  */
 function preToolUseHooks() {
+  // sway, 2026-09-03: the harness never moves a command to the background on
+  // its own — only the model decides. `HERMIT_BASH_BACKGROUND_AFTER_MS=0` is the
+  // one switch for both halves of that: the watchdog (startWatchdog) and this
+  // pre-emptive rewrite. Measured before the change: 16% of turns ended with a
+  // task still running, and the strip/hook that handle those can only work on
+  // tasks the model chose to background.
+  if (bashBackgroundAfterMs() === 0) return {};
   return {
     PreToolUse: [{
       matcher: 'Bash',
