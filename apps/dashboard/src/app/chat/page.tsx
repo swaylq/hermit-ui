@@ -2549,6 +2549,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             flex item, and unwrapping it would respace the whole control column. */}
         <div>
           <MicHintBar hint={micHint} />
+          {/* One quiet line: what is still running after the reply. Above the
+              suggestion chips, not in a box — sway wants it small. */}
+          <BackgroundBar activity={rawActivity} />
           <ScheduleBar
             chatOnly={!!session?.chatOnly}
             onStartIterate={startIterate}
@@ -2587,9 +2590,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               />
             )}
           </Collapse>
-          {/* What is still running after the reply — named here, where the
-              person is looking, rather than only counted on the status chip. */}
-          <BackgroundBar activity={rawActivity} />
           <QueueBar
             items={displayQueue}
             onCancel={(id) => {

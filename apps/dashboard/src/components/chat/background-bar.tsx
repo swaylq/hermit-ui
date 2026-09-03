@@ -1,59 +1,40 @@
 'use client';
 
-// The strip above the composer that says what a session's background tasks are
-// DOING while the reply is already over.
+// One quiet line above the suggestion chips: what is still running in the
+// background after the reply ended.
 //
-// Before this, "background" was a word on the status chip and a list two taps
-// away in the detail sheet. sway, 2026-09-03: "让用户可以看到 background 在做什么"
-// — so each task is named where the eyes already are, with its age and the last
-// line it wrote (the gateway tails the task's output file; a subagent has no
-// tail, its output is a transcript).
+// sway, 2026-09-03, on the first version (a bordered box with a header and a
+// row per task): "ui 只走一行，在 suggestion 的上方，尽量小和隐蔽". So: one
+// truncated line, muted, no box — the oldest task's description, its last
+// output line when the gateway has one, its age, and "×N" when there are more.
+// The full list stays in the session detail sheet; hover shows it here.
 //
 // Reads the same `activity` blob as the header chip, so the two cannot disagree
-// about whether anything is running. Shows nothing at all when nothing is.
+// about whether anything is running. Renders nothing at all when nothing is.
 
 import { Collapse } from '@/components/chat/collapse';
 import { backgroundOutstanding, backgroundTaskList, shortDuration } from '@/lib/session-status';
 
-const SHOW_MAX = 4;
-
 export function BackgroundBar({ activity }: { activity: unknown }) {
   const open = backgroundOutstanding(activity);
   const tasks = open ? backgroundTaskList(activity) : [];
-  const shown = tasks.slice(0, SHOW_MAX);
+  const first = tasks[0];
+  const count = tasks.length;
+  const text = first
+    ? `${first.kind === 'subagent' ? '子 agent：' : ''}${first.description}` +
+      (first.outputTail ? ` — ${first.outputTail}` : '') +
+      (first.elapsedSec ? ` · ${shortDuration(first.elapsedSec)}` : '')
+    : '网关还没报是哪些任务';
+  const title = tasks.length
+    ? tasks.map((t) => `${t.elapsedSec ? shortDuration(t.elapsedSec) : '—'}  ${t.description}${t.command ? `\n    ${t.command}` : ''}`).join('\n')
+    : undefined;
   return (
     <Collapse open={open} className="mx-auto w-full max-w-3xl px-3">
-      <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs">
-        <div className="mb-1 flex items-center justify-between text-muted-foreground">
-          <span>
-            回复已结束，{tasks.length ? `${tasks.length} 个` : ''}后台任务还在跑 · 跑完 agent 会再回一条
-          </span>
-        </div>
-        {shown.length > 0 ? (
-          <ul className="flex flex-col gap-1">
-            {shown.map((t) => (
-              <li key={t.id} className="flex items-start gap-2 min-w-0" title={t.command ?? t.description}>
-                <span className="w-14 shrink-0 pt-px font-mono text-[11px] tabular-nums text-muted-foreground">
-                  {t.elapsedSec ? shortDuration(t.elapsedSec) : '—'}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="text-foreground/90">
-                    {t.kind === 'subagent' ? '子 agent · ' : ''}
-                    {t.description}
-                  </span>
-                  {t.outputTail && (
-                    <span className="block truncate font-mono text-[11px] text-muted-foreground">{t.outputTail}</span>
-                  )}
-                </span>
-              </li>
-            ))}
-            {tasks.length > SHOW_MAX && (
-              <li className="text-muted-foreground">…还有 {tasks.length - SHOW_MAX} 个</li>
-            )}
-          </ul>
-        ) : (
-          <div className="text-muted-foreground">这台机器的网关还没报是哪些任务</div>
-        )}
+      <div className="flex items-center gap-1.5 px-1 pb-1 text-[11px] leading-4 text-muted-foreground/70 min-w-0" title={title}>
+        <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400/50" aria-hidden />
+        <span className="truncate">
+          后台{count > 1 ? ` ×${count}` : ''} · {text}
+        </span>
       </div>
     </Collapse>
   );
