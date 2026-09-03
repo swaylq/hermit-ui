@@ -143,6 +143,16 @@ different thing with a real review attached — see the bottom of this section.
 
 **Every build**
 
+```sh
+secret exec ASC_KEY_P8_HERMIT_B64 -- apps/ios/release.sh <build-number>
+```
+
+`release.sh` is the whole sequence below in one command — archive, export, check
+what the ipa actually says, validate, upload. Identifiers live beside it in
+`.release.env` (gitignored); the key arrives base64-encoded in the environment and
+is written to a temp dir that goes away on the way out. `--no-upload` stops after
+the ipa. The rest of this section is what it does, for when it breaks.
+
 The build number has to be unique and increasing — App Store Connect rejects a
 repeat. `CURRENT_PROJECT_VERSION` lives in `project.yml`; the commit count is a
 reasonable source for it:

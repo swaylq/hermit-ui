@@ -4,3 +4,6 @@ Hermit.xcodeproj/
 DerivedData/
 build/
 shots/
+
+# Team id, key id, issuer id — identifiers, not ours to publish.
+.release.env
