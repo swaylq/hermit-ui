@@ -194,6 +194,12 @@ themselves (a measured session: 27 of 37 minutes). Batch the work: one script th
 everything you need beats five exploratory calls, and independent calls belong in a single
 message, not spread over four turns.
 
+## Subagents
+
+Only for a wide sweep whose middle output you throw away — many files searched, one
+conclusion back. Not for what fits in a couple of tool calls, not when you need the full
+output, never one inside another.
+
 ## Verifying work — HARD RULES
 
 1. **Never run the full test suite unless {{USER_NAME}} asks for it.** Not at wrap-up, not "just to
