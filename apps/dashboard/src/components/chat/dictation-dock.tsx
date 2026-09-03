@@ -44,6 +44,7 @@ import {
 import { authedFetch } from '@/lib/asst-fetch';
 import { openAsrSocket, type AsrSocket } from '@/lib/asr-socket';
 import { startStreaming, releaseWarmMic, type VoiceStream } from '@/lib/voice-capture';
+import { publishMicLevel, resetMicLevel } from '@/lib/mic-level';
 import { joinSegments, worthRefining } from '@/lib/dictation-text';
 import { typeFrame, TYPE_TICK_MS } from '@/lib/typewriter';
 import type { ComposerHandle } from '@/components/chat/composer';
@@ -184,6 +185,7 @@ export const DictationDock = forwardRef<DictationHandle, {
     composerRef.current?.endDictation(discard);
     setActiveBoth(false, null);
     setPhase('connecting');
+    resetMicLevel();
     releaseWarmMic();
   }, [composerRef, setActiveBoth, stopTyping, setPhase]);
 
@@ -352,6 +354,9 @@ export const DictationDock = forwardRef<DictationHandle, {
 
     startStreaming({
       onChunk: (pcm) => sockRef.current?.send(pcm),
+      // Loudness for the hold overlay's blob. Published outside React — see
+      // lib/mic-level.ts for why this is not state.
+      onLevel: publishMicLevel,
       onSilence: armSilenceStop,
       maxMs: RUN_MAX_MS,
       onAutoStop: () => { onNotice?.('听写时长到上限，已结束'); stop(); },
