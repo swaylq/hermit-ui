@@ -72,10 +72,16 @@ pm2 restart hermit-ui-dashboard --update-env
 
 echo "==> health check"
 sleep 3
-code="$(curl -fsS -o /dev/null -w '%{http_code}' http://localhost:4101/ || echo FAIL)"
+# Ask THIS deployment which port it listens on. It is 4101 on one VPS and 4110 on
+# another, and a hard-coded 4101 reported FAIL on a perfectly healthy deploy three
+# times — a health check that cries wolf is worse than none, because the next real
+# failure reads exactly the same.
+port="$(sed -n 's/^PORT=["'"'"']\{0,1\}\([0-9]\{1,\}\).*/\1/p' .env 2>/dev/null | tail -1 || true)"
+port="${port:-4101}"
+code="$(curl -fsS -o /dev/null -w '%{http_code}' "http://localhost:$port/" || echo FAIL)"
 if [ "$code" = "200" ]; then
-  echo "OK — dashboard HTTP 200 — deployed $after"
+  echo "OK — dashboard HTTP 200 on :$port — deployed $after"
 else
-  echo "WARN — dashboard health check returned '$code'. Check: pm2 logs hermit-ui-dashboard"
+  echo "WARN — dashboard health check on :$port returned '$code'. Check: pm2 logs hermit-ui-dashboard"
   exit 1
 fi
