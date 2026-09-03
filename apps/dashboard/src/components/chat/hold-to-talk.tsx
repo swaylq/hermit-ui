@@ -49,6 +49,22 @@
 // 松开发送 while it is lit. It is the only thing telling a first-time user that
 // lifting is a choice rather than just letting go.
 //
+// ── COMING AND GOING ───────────────────────────────────────────────────────
+//
+// Both directions are animated, which means this cannot simply be mounted and
+// unmounted by the composer: a React unmount takes the node out of the DOM on
+// the spot, and there is nothing left to fade. So the composer renders this
+// ALWAYS and passes `open`; the leave window is owned here. Same controlled-
+// `show` + plain-CSS-transition pattern as overlay.tsx and collapse.tsx —
+// deliberately not the `animate-in` keyframe classes, which get stuck at
+// opacity:0 in this app (see the note in overlay.tsx).
+//
+// One consequence worth knowing: on release the composer clears the draft in
+// the same commit that sets `open` false, so the live `text` prop is already
+// empty while the fade-out is still playing. The overlay therefore keeps a
+// snapshot of what was last on screen and fades THAT away — otherwise the
+// bubble would empty itself halfway through its own exit, which reads as a bug.
+//
 // This file DRAWS ONLY. The gesture, the dictation run and the draft all live
 // in composer.tsx — which already owns the text these words are being written
 // into, so putting the zone arithmetic anywhere else would mean two components
@@ -90,16 +106,33 @@ const ZONE_H = 224;
 /** Where each label sits along its arc, measured from the midline. */
 const LABEL_D = 114;
 
+/** Enter is a shade slower than leave: arriving should feel like it lands,
+  * leaving should get out of the way. Both must match the timeout below. */
+const ENTER_MS = 180;
+const LEAVE_MS = 140;
+
 /** The one accent this app already uses for "the mic is open". */
 const ROSE = '#fb7185';
 
 export function HoldToTalkOverlay({
+  open,
+  exit,
   zone,
   phase,
   text,
   cancelRef,
   editRef,
 }: {
+  /** Is the gesture live? False starts the leave animation, it does not unmount. */
+  open: boolean;
+  /**
+   * What was on screen when the gesture ended — drawn for the length of the
+   * leave, because by then the live props have moved on: sending clears the
+   * draft in the same commit that closes this, and `zone` has gone back to its
+   * resting value. The composer captures it, since the composer is where every
+   * one of the three exits is decided.
+   */
+  exit: { zone: HoldZone; phase: HoldPhase; text: string } | null;
   zone: HoldZone;
   phase: HoldPhase;
   /** The transcript so far — what will be sent. */
@@ -114,15 +147,32 @@ export function HoldToTalkOverlay({
   // eslint-disable-next-line react-hooks/set-state-in-effect -- mount gate; there is no document on the server
   useEffect(() => setMounted(true), []);
 
-  // Counts from the moment this mounted, which is the moment the run began.
-  // Frozen once the finger lifts — the recording has stopped, and a clock still
-  // running through the send would be timing the wrong thing.
-  const [secs, setSecs] = useState(0);
+  // ── coming and going ──────────────────────────────────────────────────────
+  // `entered` is false for one painted frame after opening, so the transition
+  // has a starting position to run from; `leaving` keeps the subtree alive
+  // while it fades back out.
+  const [entered, setEntered] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    // Adjusting state during the render that noticed the change — React's own
+    // pattern for it, and the reason there is no flicker: an effect would paint
+    // one frame of the previous state first.
+    setWasOpen(open);
+    setEntered(false);
+    setLeaving(!open);
+  }
   useEffect(() => {
-    if (phase !== 'listening') return;
-    const id = setInterval(() => setSecs((n) => n + 1), 1000);
-    return () => clearInterval(id);
-  }, [phase]);
+    if (!open) return;
+    const r = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(r);
+  }, [open]);
+  useEffect(() => {
+    if (!leaving) return;
+    const t = window.setTimeout(() => setLeaving(false), LEAVE_MS);
+    return () => window.clearTimeout(t);
+  }, [leaving]);
+  const show = open && entered;
 
   // Loudness → `--lv` on the root, straight to the DOM. Everything that reacts
   // to the voice reads that one variable, so this is the only subscriber and it
@@ -130,27 +180,28 @@ export function HoldToTalkOverlay({
   // still bouncing over the words you are about to throw away reports on
   // nothing. 编辑 is still recording, so it keeps moving.
   const rootRef = useRef<HTMLDivElement>(null);
-  const liveRef = useRef(true);
+  const movingRef = useRef(true);
   useEffect(() => subscribeMicLevel((lv) => {
-    rootRef.current?.style.setProperty('--lv', liveRef.current ? lv.toFixed(3) : '0');
+    rootRef.current?.style.setProperty('--lv', movingRef.current ? lv.toFixed(3) : '0');
   }), []);
   // Which states the blob is allowed to move in. From an effect, not from the
   // render (a ref must not be written during one) — and applied to the node
   // straight away, since the gate above would otherwise only bite on the next
   // audio block and 取消 has to still the blob on the frame you reach it.
   useEffect(() => {
-    liveRef.current = phase === 'listening' && zone !== 'cancel';
-    if (!liveRef.current) rootRef.current?.style.setProperty('--lv', '0');
-  }, [zone, phase]);
+    movingRef.current = open && phase === 'listening' && zone !== 'cancel';
+    if (!movingRef.current) rootRef.current?.style.setProperty('--lv', '0');
+  }, [open, zone, phase]);
 
-  if (!mounted) return null;
+  // While open, draw the live props; on the way out, what the composer handed
+  // us at release. Nothing at all once the leave window has closed — which is
+  // also what resets <Meter>, since it unmounts along with everything else.
+  const view = open ? { zone, phase, text } : leaving ? exit : null;
+  if (!mounted || !view) return null;
 
-  const mmss = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
-  const cancelling = zone === 'cancel' && phase === 'listening';
-  // 授权 is the one state no bottom surface can express — there is no choice to
-  // make, so there is nothing to light. Everything else is written on whichever
-  // surface is lit.
-  const aside = phase === 'auth' ? '松手 · 允许使用麦克风' : null;
+  const { phase: vPhase, zone: vZone, text: vText } = view;
+  const cancelling = vZone === 'cancel' && vPhase === 'listening';
+  const ms = `${show ? ENTER_MS : LEAVE_MS}ms`;
 
   return createPortal(
     // pointer-events-none throughout: the press layer over the textarea holds
@@ -158,36 +209,25 @@ export function HoldToTalkOverlay({
     // events would only be able to steal them from it.
     <div
       ref={rootRef}
-      style={{ '--lv': '0' } as React.CSSProperties}
-      className="pointer-events-none fixed inset-0 z-[120] flex flex-col overflow-hidden bg-black/65 backdrop-blur-[6px]"
+      style={{ '--lv': '0', opacity: show ? 1 : 0, transitionDuration: ms } as React.CSSProperties}
+      className="pointer-events-none fixed inset-0 z-[120] flex flex-col overflow-hidden bg-black/65 backdrop-blur-[6px] transition-opacity ease-out"
     >
       {/* The words, where you can read them — up around the middle of the
           screen, nowhere near the thumb. */}
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-end gap-3 px-6 pb-[20vh]">
-        {phase !== 'auth' && (
-          <div className="flex items-center gap-2 text-[11px] font-medium tabular-nums text-white/60">
-            <span
-              // Scales with the voice, like the blob, so the row stays alive
-              // once the transcript has replaced the blob itself.
-              style={{
-                background: cancelling ? 'rgba(255,255,255,0.35)' : ROSE,
-                transform: 'scale(calc(1 + var(--lv) * 0.9))',
-                boxShadow: cancelling ? 'none' : `0 0 8px ${ROSE}`,
-              }}
-              className="h-1.5 w-1.5 rounded-full transition-transform duration-100 ease-out"
-            />
-            {mmss}
-          </div>
-        )}
+      <div
+        style={{ transform: show ? 'none' : 'translateY(10px) scale(0.97)', transitionDuration: ms }}
+        className="flex min-h-0 flex-1 flex-col items-center justify-end gap-3 px-6 pb-[20vh] transition-transform ease-out"
+      >
+        {vPhase !== 'auth' && <Meter running={open && vPhase === 'listening'} dimmed={cancelling} />}
 
-        {phase === 'auth' ? (
+        {vPhase === 'auth' ? (
           <Bubble tint="rgba(255,255,255,0.12)">
             <span className="flex items-center gap-2 text-white/70">
               <Mic className="h-4 w-4" />
               需要麦克风权限才能说话
             </span>
           </Bubble>
-        ) : text ? (
+        ) : vText ? (
           <Bubble tint={cancelling ? 'rgba(255,255,255,0.14)' : '#ffffff'}>
             {/* The tail is what just arrived, so the box shows its END. */}
             <span
@@ -197,20 +237,27 @@ export function HoldToTalkOverlay({
                 cancelling ? 'text-white/45 line-through decoration-white/35' : 'text-neutral-900',
               )}
             >
-              {text}
+              {vText}
             </span>
           </Bubble>
         ) : (
           <VoiceBlob dimmed={cancelling} />
         )}
 
-        {aside && <div className="text-[13px] font-medium text-white/75">{aside}</div>}
+        {vPhase === 'auth' && (
+          <div className="text-[13px] font-medium text-white/75">松手 · 允许使用麦克风</div>
+        )}
       </div>
 
       {/* The three targets. During 授权 there is no choice to make — releasing
-          anywhere opens the system alert — so drawing targets would be a lie. */}
-      {phase !== 'auth' && (
-        <div className="relative shrink-0" style={{ height: ZONE_H }}>
+          anywhere opens the system alert — so drawing targets would be a lie.
+          They rise out of the bottom edge, which is where they belong: the
+          assembly is a circle whose centre is below the screen. */}
+      {vPhase !== 'auth' && (
+        <div
+          className="relative shrink-0 transition-transform ease-out"
+          style={{ height: ZONE_H, transform: show ? 'none' : `translateY(${ZONE_H * 0.16}px)`, transitionDuration: ms }}
+        >
           {/* ── the send disc ────────────────────────────────────────────── */}
           <div
             style={{
@@ -221,31 +268,70 @@ export function HoldToTalkOverlay({
             }}
             className={cn(
               'absolute left-1/2 rounded-full transition-colors duration-150',
-              zone === 'send' ? 'bg-white/85' : 'bg-white/[0.13]',
+              vZone === 'send' ? 'bg-white/85' : 'bg-white/[0.13]',
             )}
           />
           <div
             style={{ bottom: R_DOME - DROP - 47 }}
             className={cn(
               'absolute inset-x-0 flex items-center justify-center gap-1.5 text-[15px] font-medium transition-colors duration-150',
-              zone === 'send' ? 'text-neutral-800' : 'text-transparent',
+              vZone === 'send' ? 'text-neutral-800' : 'text-transparent',
             )}
           >
-            {phase === 'finishing' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {phase === 'finishing' ? '正在发送' : '松开发送'}
+            {vPhase === 'finishing' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {vPhase === 'finishing' ? '正在发送' : '松开发送'}
           </div>
 
           {/* ── the two arcs ─────────────────────────────────────────────── */}
           <Arc side="left" active={cancelling} label="取消" />
-          <Arc side="right" active={zone === 'edit' && phase === 'listening'} label="编辑" />
+          <Arc side="right" active={vZone === 'edit' && vPhase === 'listening'} label="编辑" />
+        </div>
+      )}
 
-          {/* Hit boxes, invisible. See the header. */}
+      {/* Hit boxes, invisible, and OUTSIDE the sliding container on purpose:
+          the composer measures them mid-gesture, and a rect that is still
+          drifting up would answer for where the arc is going to be rather than
+          where it is. Only while the gesture is live — during the leave there
+          is nothing left to aim at. */}
+      {open && vPhase !== 'auth' && (
+        <>
           <div ref={cancelRef} className="absolute bottom-[100px] left-0 right-[calc(50%+15px)] h-[105px]" />
           <div ref={editRef} className="absolute bottom-[100px] left-[calc(50%+15px)] right-0 h-[105px]" />
-        </div>
+        </>
       )}
     </div>,
     document.body,
+  );
+}
+
+/**
+ * The elapsed clock, and the dot that breathes with the voice.
+ *
+ * Its own component for two reasons: one tick a second re-renders this row
+ * instead of the whole overlay, and `secs` resets by being a fresh mount each
+ * run — the overlay draws nothing between runs, so this unmounts with it.
+ * Frozen once the finger lifts: the recording has stopped, and a clock still
+ * running through the send would be timing the wrong thing.
+ */
+function Meter({ running, dimmed }: { running: boolean; dimmed: boolean }) {
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => setSecs((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [running]);
+  return (
+    <div className="flex items-center gap-2 text-[11px] font-medium tabular-nums text-white/60">
+      <span
+        style={{
+          background: dimmed ? 'rgba(255,255,255,0.35)' : ROSE,
+          transform: 'scale(calc(1 + var(--lv) * 0.9))',
+          boxShadow: dimmed ? 'none' : `0 0 8px ${ROSE}`,
+        }}
+        className="h-1.5 w-1.5 rounded-full transition-transform duration-100 ease-out"
+      />
+      {`${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`}
+    </div>
   );
 }
 

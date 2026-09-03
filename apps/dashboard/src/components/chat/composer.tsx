@@ -648,6 +648,11 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   // Released over "send": the run is closing and the words are still settling
   // (the last sentence, then the whole-passage correction). We send when they stop.
   const [holdSending, setHoldSending] = useState(false);
+  // What the overlay should keep drawing while it fades out. Captured here
+  // rather than in the overlay because this is where every exit is decided —
+  // and because by the time the overlay sees `open` go false, the send has
+  // already emptied the draft it was showing.
+  const [holdExit, setHoldExit] = useState<{ zone: HoldZone; phase: HoldPhase; text: string } | null>(null);
   const [micArming, setMicArming] = useState(false);
   // A ref so authorizeMic (a useCallback with real deps) does not have to be
   // rebuilt every time the page re-renders and hands us a new arrow.
@@ -709,13 +714,15 @@ export const ComposeBar = forwardRef<ComposerHandle, {
 
   const endHold = useCallback(() => {
     const h = holdRef.current;
+    // Only a press that actually became a run had an overlay to fade out.
+    if (h.live) setHoldExit({ zone: h.zone, phase: h.auth ? 'auth' : 'listening', text: taRef.current?.value ?? '' });
     clearTimeout(h.timer);
     h.id = -1;
     h.live = false;
     h.auth = false;
     h.zone = 'send';
     setHoldZone(null);
-  }, []);
+  }, [taRef]);
 
   const onHoldDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.pointerType === 'mouse') return;
@@ -837,9 +844,13 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   useEffect(() => {
     if (!holdSending) return;
     const fire = () => {
+      // Re-captured here: endHold() ran at release, before the last sentence and
+      // the whole-passage correction landed, so its text is already out of date.
+      const finalText = taRef.current?.value ?? '';
+      setHoldExit({ zone: 'send', phase: 'finishing', text: finalText });
       setHoldSending(false);
       setHoldZone(null);
-      submitRef.current(taRef.current?.value ?? '');
+      submitRef.current(finalText);
     };
     if (!dictating) { fire(); return; }
     // A run that never tears down would otherwise hold the overlay forever (a
@@ -1165,15 +1176,19 @@ export const ComposeBar = forwardRef<ComposerHandle, {
           messages go to the agent&apos;s terminal · ↵ send · ⇧↵ newline · paste or drop images
         </p>
       </div>
-      {holdZone && (
-        <HoldToTalkOverlay
-          zone={holdZone}
-          phase={holdPhase}
-          text={draft}
-          cancelRef={cancelPillRef}
-          editRef={editPillRef}
-        />
-      )}
+      {/* Always rendered, never conditionally mounted: it animates on the way
+          OUT as well as in, and an unmount takes the node away before anything
+          can fade. `open` is the whole gesture's lifetime; the leave window
+          belongs to the overlay. */}
+      <HoldToTalkOverlay
+        open={holdZone !== null}
+        exit={holdExit}
+        zone={holdZone ?? 'send'}
+        phase={holdPhase}
+        text={draft}
+        cancelRef={cancelPillRef}
+        editRef={editPillRef}
+      />
     </form>
   );
 });
