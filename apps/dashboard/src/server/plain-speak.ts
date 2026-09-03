@@ -27,8 +27,8 @@
 
 import { openrouterChat, type ORMessage } from './openrouter';
 
-/** Gemini 3.7 Flash: $0.75/M in, $3.75/M out — a long reply costs ~¥0.02. */
-export const PLAIN_MODEL = process.env.OPENROUTER_PLAIN_MODEL || 'google/gemini-3.7-flash';
+/** Gemini 3.1 Flash Lite: the cheapest Gemini tier — a long reply costs well under ¥0.01. */
+export const PLAIN_MODEL = process.env.OPENROUTER_PLAIN_MODEL || 'google/gemini-3.1-flash-lite';
 
 /**
  * Longest reply we rewrite whole. Well under the model's context — the limit is
