@@ -135,6 +135,12 @@ export interface ApnsResult {
   status: number;
   /** APNs `reason` string on failure, e.g. BadDeviceToken / Unregistered. */
   reason?: string;
+  /**
+   * Set only when the token turned out to belong to the OTHER environment and the
+   * retry there worked. The caller persists it so the next send goes straight to
+   * the right host.
+   */
+  envUsed?: ApnsEnv;
 }
 
 /**
@@ -160,12 +166,26 @@ export async function sendApns(
     path: payload.path,
   });
 
-  const result = await request(cfg, deviceToken, env, payload.collapseKey, body);
+  let result = await request(cfg, deviceToken, env, payload.collapseKey, body);
   // A JWT that aged out mid-flight: refresh once and retry, otherwise every push
   // for the next 50 minutes would fail the same way.
   if (result.reason === 'ExpiredProviderToken') {
     invalidateJwt();
-    return request(cfg, deviceToken, env, payload.collapseKey, body);
+    result = await request(cfg, deviceToken, env, payload.collapseKey, body);
+  }
+  // BadDeviceToken means one of two things: the token is genuinely dead, or it is
+  // alive and belongs to the other host. They are indistinguishable from here, so
+  // try the other one before writing the device off — reaping a live device is the
+  // more expensive mistake, since the app only re-registers when it next launches.
+  //
+  // This is not hypothetical: an App Store or TestFlight install has no
+  // `embedded.mobileprovision` (Apple re-signs it away), so a shell that reads the
+  // environment out of that profile reports `sandbox` for a production build.
+  if (result.reason === 'BadDeviceToken') {
+    const other: ApnsEnv = env === 'production' ? 'sandbox' : 'production';
+    const retry = await request(cfg, deviceToken, other, payload.collapseKey, body);
+    if (retry.status === 200) return { ...retry, envUsed: other };
+    return result;
   }
   return result;
 }

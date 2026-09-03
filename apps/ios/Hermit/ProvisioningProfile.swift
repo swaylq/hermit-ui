@@ -14,9 +14,14 @@ enum ApnsEnvironment: String {
     case sandbox
     case production
 
-    /// Resolved once from `embedded.mobileprovision`. Defaults to `.sandbox`,
-    /// which is the safe guess: profile-less builds are simulator builds, where
-    /// remote push doesn't work at all.
+    /// Resolved once from `embedded.mobileprovision`. Defaults to `.production`
+    /// when there is no profile at all, because that is what a profile-less build
+    /// actually is: Apple re-signs App Store and TestFlight installs and strips
+    /// the profile out. The other profile-less case is the simulator, where remote
+    /// push does not work either way, so it costs nothing to be wrong there.
+    ///
+    /// The first TestFlight build got this backwards — it reported `sandbox`, the
+    /// server sent to the sandbox host, and APNs answered `BadDeviceToken`.
     static let current: ApnsEnvironment = resolve()
 
     private static func resolve() -> ApnsEnvironment {
@@ -24,7 +29,7 @@ enum ApnsEnvironment: String {
               let data = try? Data(contentsOf: url),
               let plist = extractPlist(from: data),
               let value = plist["aps-environment"] as? String
-        else { return .sandbox }
+        else { return .production }
         return value == "production" ? .production : .sandbox
     }
 

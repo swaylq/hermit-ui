@@ -217,6 +217,8 @@ export interface DeliveryResult {
   /** The row was removed because the transport says this device is gone. */
   reaped: boolean;
   detail?: string;
+  /** `ios`: the stored APNs environment was wrong and has been corrected to this. */
+  apnsEnv?: string;
 }
 
 /**
@@ -288,7 +290,7 @@ async function deliver(event: PushEvent, known?: SessionState | null): Promise<D
 
       const r = await transport.send(d, payload);
       if (!r.ok) console.warn(`[push] ${event.kind} → ${d.platform}: ${r.detail ?? 'failed'}${r.dead ? ' (reaping)' : ''}`);
-      return { deviceId: d.id, platform: d.platform, ok: r.ok, reaped: r.dead, detail: r.detail };
+      return { deviceId: d.id, platform: d.platform, ok: r.ok, reaped: r.dead, detail: r.detail, apnsEnv: r.apnsEnv };
     }),
   );
 
@@ -302,6 +304,17 @@ async function deliver(event: PushEvent, known?: SessionState | null): Promise<D
   if (dead.length > 0) {
     await prisma.pushDevice.deleteMany({ where: { id: { in: dead } } });
     console.warn(`[push] reaped ${dead.length} dead device(s) on machine ${event.machineId}`);
+  }
+
+  // A device that answered on the other APNs host: write the correction back, or
+  // every future push pays the same failed request first. The app re-asserts its
+  // own value on the next registration, so this is a repair, not a fight.
+  for (const r of results) {
+    if (!r.apnsEnv || r.reaped) continue;
+    await prisma.pushDevice
+      .update({ where: { id: r.deviceId }, data: { apnsEnv: r.apnsEnv } })
+      .catch(() => {});
+    console.warn(`[push] device ${r.deviceId} was on ${r.apnsEnv}, corrected`);
   }
 
   return results;

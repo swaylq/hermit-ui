@@ -81,6 +81,12 @@ export interface TransportResult {
   dead: boolean;
   /** One-line diagnostic, logged when `ok` is false. */
   detail?: string;
+  /**
+   * `ios` only: the device turned out to be on the other APNs host and the send
+   * succeeded there. The caller writes it back to the row so the next push does
+   * not pay for the discovery again.
+   */
+  apnsEnv?: string;
 }
 
 export interface Transport {
@@ -109,6 +115,7 @@ const apnsTransport: Transport = {
       ok: r.status === 200,
       dead: isDeadToken(r),
       detail: r.status === 200 ? undefined : `${r.status} ${r.reason ?? ''}`.trim(),
+      ...(r.envUsed && r.envUsed !== device.apnsEnv ? { apnsEnv: r.envUsed } : {}),
     };
   },
 };
