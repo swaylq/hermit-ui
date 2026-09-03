@@ -46,6 +46,7 @@
 //
 // See docs/claude-sdk-runtime-design.md.
 
+import { backgroundOutputPath, readOutputTail } from './background-output';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -1171,7 +1172,19 @@ export class ClaudeSdkRuntime implements AgentRuntime {
   async activity(handle: RuntimeHandle): Promise<RuntimeActivity | null> {
     const h = handleOf(handle);
     if (!h) return null;
-    return describeActivity(h.activity, Date.now());
+    const a = describeActivity(h.activity, Date.now());
+    // What each background task is DOING, not just that it exists: the last
+    // line it wrote. The activity module is pure and cannot know the file; the
+    // runtime knows the cwd and the CLI session uuid the path is keyed on.
+    // Subagents are skipped — their .output is a symlink to a transcript.
+    if (a?.backgroundTasks?.length) {
+      for (const t of a.backgroundTasks) {
+        if (t.kind === 'subagent') continue;
+        const tail = readOutputTail(backgroundOutputPath(h.cwd, h.claudeUuid, t.id));
+        if (tail) t.outputTail = tail;
+      }
+    }
+    return a;
   }
 
   /**

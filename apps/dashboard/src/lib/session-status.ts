@@ -48,7 +48,7 @@ export interface SessionActivity {
    * older than that sends only the count, which is why every reader here treats
    * an absent list as "cannot say" and falls back to the count.
    */
-  backgroundTasks?: { id?: string | null; description?: string | null; elapsedSec?: number | null }[] | null;
+  backgroundTasks?: { id?: string | null; description?: string | null; elapsedSec?: number | null; kind?: string | null; command?: string | null; outputTail?: string | null }[] | null;
 }
 
 /** One background task, after the defensive read. */
@@ -56,6 +56,12 @@ export interface BackgroundTaskView {
   id: string;
   description: string;
   elapsedSec: number;
+  /** `shell` / `subagent` when the gateway said. */
+  kind?: string;
+  /** The shell command, when the gateway had it. */
+  command?: string;
+  /** The last line the task wrote — what it is doing, not just that it exists. */
+  outputTail?: string;
 }
 
 export interface SessionRuntimeLike {
@@ -195,7 +201,15 @@ export function backgroundTaskList(raw: unknown): BackgroundTaskView[] {
       ? t.description.trim()
       : 'background task';
     const elapsedSec = typeof t.elapsedSec === 'number' && t.elapsedSec > 0 ? Math.floor(t.elapsedSec) : 0;
-    return [{ id: typeof t.id === 'string' && t.id ? t.id : `bg-${i}`, description, elapsedSec }];
+    const opt = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+    return [{
+      id: typeof t.id === 'string' && t.id ? t.id : `bg-${i}`,
+      description,
+      elapsedSec,
+      ...(opt(t.kind) ? { kind: opt(t.kind) } : {}),
+      ...(opt(t.command) ? { command: opt(t.command) } : {}),
+      ...(opt(t.outputTail) ? { outputTail: opt(t.outputTail) } : {}),
+    }];
   });
 }
 

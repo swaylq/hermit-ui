@@ -71,6 +71,10 @@ export type BackgroundTask = {
   description: string;
   /** First frame this id appeared in. Survives every later REPLACE. */
   startedAtMs: number;
+  /** `shell` / `subagent` / … when the CLI said; carried over like the description. */
+  kind?: string;
+  /** The shell command itself, when the CLI included it. */
+  command?: string;
 };
 
 /**
@@ -120,7 +124,15 @@ export type RuntimeActivity = {
    * session that fires twenty of them does not put twenty descriptions in a
    * column every snapshot rewrites.
    */
-  backgroundTasks?: { id: string; description: string; elapsedSec: number }[];
+  backgroundTasks?: {
+    id: string;
+    description: string;
+    elapsedSec: number;
+    kind?: string;
+    command?: string;
+    /** The last line the task wrote — filled in by the runtime, which knows where the file is. */
+    outputTail?: string;
+  }[];
 };
 
 /** The first line of whatever identifies this tool call, capped for a chip. */
@@ -240,10 +252,14 @@ export function applyActivityMessage(st: ActivityState, msg: unknown, nowMs: num
         if (!id) continue;
         const prev = st.background.get(id);
         const desc = String((t as any)?.description ?? '').trim();
+        const kind = typeof (t as any)?.type === 'string' ? String((t as any).type) : prev?.kind;
+        const command = typeof (t as any)?.command === 'string' ? String((t as any).command) : prev?.command;
         next.set(id, {
           taskId: id,
           description: desc || prev?.description || '',
           startedAtMs: prev?.startedAtMs ?? nowMs,
+          ...(kind ? { kind } : {}),
+          ...(command ? { command } : {}),
         });
       }
       st.background = next;
@@ -290,6 +306,8 @@ export function describeActivity(st: ActivityState, nowMs: number): RuntimeActiv
         id: t.taskId,
         description: t.description || 'background task',
         elapsedSec: Math.max(0, Math.floor((nowMs - t.startedAtMs) / 1000)),
+        ...(t.kind ? { kind: t.kind } : {}),
+        ...(t.command ? { command: t.command } : {}),
       }))
     : undefined;
 

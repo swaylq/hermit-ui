@@ -37,6 +37,7 @@ import { SidebarMobileToggle } from '@/components/app-sidebar';
 import { useScope } from '@/lib/use-scope';
 import { ScheduleBar } from '@/components/chat/schedule-bar';
 import { TakeoverBar } from '@/components/chat/takeover-bar';
+import { BackgroundBar } from '@/components/chat/background-bar';
 import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
 import { Collapse } from '@/components/chat/collapse';
@@ -2586,6 +2587,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               />
             )}
           </Collapse>
+          {/* What is still running after the reply — named here, where the
+              person is looking, rather than only counted on the status chip. */}
+          <BackgroundBar activity={rawActivity} />
           <QueueBar
             items={displayQueue}
             onCancel={(id) => {
