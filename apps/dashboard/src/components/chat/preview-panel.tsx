@@ -165,6 +165,7 @@ export function LivePreviewPanel({
   open,
   onClose,
   onPickElement,
+  rootRef,
 }: {
   preview: LivePreviewInfo;
   /** Showing (true) or on its way out (false). The parent keeps it mounted for both. */
@@ -172,6 +173,11 @@ export function LivePreviewPanel({
   onClose: () => void;
   /** A picked element's selector, full path and visible context, on their way to the composer. */
   onPickElement?: (pick: PreviewElementPick) => void;
+  /** The edge swipe's handle on this element (use-preview-swipe.ts). It drives the
+   *  phone layer's transform straight from the finger, so it needs the node the
+   *  moment there is one — which is why this is a ref the parent already holds
+   *  rather than something handed up in an effect. */
+  rootRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   // See the note up top: mount closed, flip on the frame after, transition in.
   const [entered, setEntered] = useState(false);
@@ -415,7 +421,10 @@ export function LivePreviewPanel({
 
   return (
     <div
-      ref={panelRef}
+      ref={(el) => {
+        panelRef.current = el;
+        if (rootRef) rootRef.current = el;
+      }}
       data-esc-layer=""
       style={{ '--pv-w': `${targetW}px`, '--pv-ms': `${SLIDE_MS}ms` } as React.CSSProperties}
       className={cn(

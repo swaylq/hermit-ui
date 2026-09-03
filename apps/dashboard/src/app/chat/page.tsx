@@ -59,6 +59,7 @@ import { isMachineryBlock } from '@/components/chat/fold-runs';
 import { ComposeBar, MicHintBar, QueueBar, type ComposerHandle } from '@/components/chat/composer';
 import type { DictationHandle, DictationSource } from '@/components/chat/dictation-dock';
 import { parseLivePreview } from '@/lib/live-preview';
+import { usePreviewSwipe } from '@/components/chat/use-preview-swipe';
 import { INITIAL_WINDOW, timelineQueryInput, timelineStreamParams } from '@/lib/chat-window';
 import { readCachedSessions } from '@/lib/session-list-cache';
 import { ModelChip } from '@/components/chat/model-chip';
@@ -1945,14 +1946,21 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // no-op unless the session has a registered preview (the FAB's condition).
   const livePreviewUrl = hasLivePreview ? (livePreview?.url ?? null) : null;
 
-  const openPreview = useCallback((url: string) => {
+  // Mount the panel WITHOUT showing it. Only the edge swipe needs this: a drag
+  // has to have something on screen to drag, and this panel does not exist until
+  // someone asks for it. A tap goes straight through openPreview below.
+  const primePreview = useCallback((url: string) => {
     if (previewExit.current) { clearTimeout(previewExit.current); previewExit.current = null; }
     setPreviewOpenUrl(url);
+  }, []);
+
+  const openPreview = useCallback((url: string) => {
+    primePreview(url);
     // No frame-juggling here: the panel times its own enter (it is lazy-loaded,
     // so this side cannot know when it exists). This flag only says "should be
     // showing" — it keeps the panel mounted and tucks the tab away.
     setPreviewShown(true);
-  }, []);
+  }, [primePreview]);
 
   const closePreview = useCallback(() => {
     setPreviewShown(false);
@@ -1961,6 +1969,25 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   }, []);
 
   useEffect(() => () => { if (previewExit.current) clearTimeout(previewExit.current); }, []);
+
+  // The other way in, on a phone: drag the panel out of the right edge instead of
+  // tapping the tab welded to it. The gesture needs the panel's node, because it
+  // moves the layer with the finger rather than through React.
+  const previewPanelRef = useRef<HTMLDivElement | null>(null);
+  const settlePreview = useCallback(
+    (open: boolean) => {
+      if (open && livePreviewUrl) openPreview(livePreviewUrl);
+      else closePreview();
+    },
+    [livePreviewUrl, openPreview, closePreview],
+  );
+  usePreviewSwipe({
+    url: livePreviewUrl,
+    open: previewSlidIn,
+    panelRef: previewPanelRef,
+    onPrime: primePreview,
+    onSettle: settlePreview,
+  });
 
   useEffect(() => {
     if (!livePreviewUrl) return;
@@ -2737,6 +2764,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             open={previewSlidIn}
             onClose={closePreview}
             onPickElement={pickElement}
+            rootRef={previewPanelRef}
           />
         </Suspense>
       )}
