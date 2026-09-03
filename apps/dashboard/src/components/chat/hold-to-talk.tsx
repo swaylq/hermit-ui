@@ -1,6 +1,6 @@
 'use client';
 
-// The press-and-hold voice overlay — WeChat's, followed closely.
+// The press-and-hold voice overlay — WeChat's, measured off a screenshot.
 //
 // Hold the "Ask anything" box and this takes the screen: the words appear in a
 // bubble as they are recognised, and where the finger is when it lifts decides
@@ -10,33 +10,54 @@
 //   slid LEFT  (取消)    → throw it away
 //   slid RIGHT (编辑)    → drop it into the composer to fix before sending
 //
-// WHAT IS COPIED FROM WECHAT, and why each piece is there:
+// ── THE BOTTOM OF THE SCREEN IS ONE CIRCLE ─────────────────────────────────
 //
-// · THREE surfaces at the bottom, not two. WeChat draws the send target as a
-//   pale dome filling the bottom of the screen, with 取消 and 编辑 as panels
-//   riding its shoulders. Two pills and an unmarked middle made "just lift"
-//   look like the absence of a choice rather than one of three; the dome is
-//   the third choice, drawn, and it lights while the finger is on it.
-// · The state lives ON the surfaces. Exactly one of them is lit at any moment,
-//   and the lit one says what lifting does. There is no separate hint line to
-//   read (it is back only for 授权 and 收尾, which no surface can express).
-// · Green, and it moves with your voice. WeChat's blob is the whole reason
-//   holding your phone and talking feels alive rather than modal. The level
-//   arrives through lib/mic-level.ts and is written to `--lv` on the root here;
-//   the blob and the timer dot scale off it in CSS. No React state is involved,
-//   because that signal updates ~12×/second.
-// · The transcript sits in a WeChat-green bubble with a tail pointing down at
-//   the finger. Sliding onto 取消 greys it and strikes it through, the way
-//   WeChat greys the blob you are about to throw away.
+// Everything down there is concentric, and it is worth knowing that before
+// reading a single number: there is ONE circle, centred on the screen's
+// vertical midline, 419px BELOW the bottom edge. The send target is that
+// circle filled in. 取消 and 编辑 are a band around it, split at the top into
+// two round-ended arcs. So the three targets never touch and never overlap,
+// and each one curves the way a thumb does when it swings across the bottom of
+// a phone — which is the whole reason WeChat draws it this way.
 //
-// This file DRAWS ONLY. The gesture, the dictation run and the draft all live in
-// composer.tsx — which already owns the text these words are being written into,
-// so putting the zone arithmetic anywhere else would mean two components
+// The radii below were read off a WeChat screenshot on a 393pt-wide screen
+// (sample pixel columns, find the luminance steps, fit circles to them). They
+// reproduce it to within a pixel, so treat them as measurements rather than
+// taste — re-measure rather than nudge:
+//
+//   dome radius        540   → apex sits 121px above the bottom edge
+//   band inner radius  558   → 18px of dark between the band and the dome
+//   band outer radius  620   → so the band is 62px thick
+//   cap offset        46.5   → each arc's round end, from the midline; the two
+//                              ends therefore leave a 31px gap at the top
+//
+// They are absolute px on purpose. The assembly is anchored to the bottom edge,
+// where the thumb is; on a wider phone the arcs simply run further off the
+// sides, which is what should happen and what WeChat does.
+//
+// ── WHAT IS NOT COPIED ─────────────────────────────────────────────────────
+//
+// The colours. WeChat is green because WeChat is green; this app is greyscale
+// (every token in globals.css is `oklch(… 0 0)`) and its one accent for "the
+// mic is open" is the rose already on the composer's mic button. So: white
+// bubble, rose blob, grey surfaces. Only the geometry is borrowed.
+//
+// ── AND ONE THING THAT IS NOT WECHAT AT ALL ────────────────────────────────
+//
+// The lit surface is labelled. WeChat's dome is blank — its users have held
+// that button for a decade. Ours have not, so the surface under the thumb says
+// 松开发送 while it is lit. It is the only thing telling a first-time user that
+// lifting is a choice rather than just letting go.
+//
+// This file DRAWS ONLY. The gesture, the dictation run and the draft all live
+// in composer.tsx — which already owns the text these words are being written
+// into, so putting the zone arithmetic anywhere else would mean two components
 // agreeing about one string. Nothing here is interactive: the finger is still
 // captured by the press layer over the textarea, so a button here could never
-// receive its own click. The three surfaces are targets for HIT-TESTING (the
-// composer reads the two pills' rects through the refs it passes in), not
-// controls.
+// receive its own click. `cancelRef` / `editRef` are HIT BOXES the composer
+// measures — deliberately plain rectangles over the two arcs, because a rect is
+// what getBoundingClientRect can report and a slide that overshoots into the
+// corner above one should land on it anyway.
 
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -55,9 +76,22 @@ export type HoldZone = 'send' | 'cancel' | 'edit';
  */
 export type HoldPhase = 'auth' | 'listening' | 'finishing';
 
-/** WeChat's green, and the paler green it fills a sent bubble with. */
-const WX_GREEN = '#07C160';
-const WX_BUBBLE = '#95EC69';
+// The circle everything at the bottom is cut from. See the header.
+const DROP = 419;        // how far below the bottom edge its centre sits
+const R_DOME = 540;      // the filled disc — "lift here and it sends"
+const R_OUT = 620;       // outer edge of the 取消 / 编辑 band
+const BAND = 62;         // band thickness, so its inner edge is 558
+const CAP = 46.5;        // each arc's round end, either side of the midline
+const R_MID = R_OUT - BAND / 2;
+/** Height above the bottom edge of the band's centreline, `d` px off the midline. */
+const midAt = (d: number) => Math.sqrt(R_MID * R_MID - d * d) - DROP;
+/** Tall enough to contain the band's highest point (~201px). */
+const ZONE_H = 224;
+/** Where each label sits along its arc, measured from the midline. */
+const LABEL_D = 114;
+
+/** The one accent this app already uses for "the mic is open". */
+const ROSE = '#fb7185';
 
 export function HoldToTalkOverlay({
   zone,
@@ -82,7 +116,7 @@ export function HoldToTalkOverlay({
 
   // Counts from the moment this mounted, which is the moment the run began.
   // Frozen once the finger lifts — the recording has stopped, and a clock still
-  // running through "收尾中…" would be timing the wrong thing.
+  // running through the send would be timing the wrong thing.
   const [secs, setSecs] = useState(0);
   useEffect(() => {
     if (phase !== 'listening') return;
@@ -127,17 +161,18 @@ export function HoldToTalkOverlay({
       style={{ '--lv': '0' } as React.CSSProperties}
       className="pointer-events-none fixed inset-0 z-[120] flex flex-col overflow-hidden bg-black/65 backdrop-blur-[6px]"
     >
-      {/* The words, where you can read them — above the finger, not under it. */}
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-end gap-3 px-6 pb-[12vh]">
+      {/* The words, where you can read them — up around the middle of the
+          screen, nowhere near the thumb. */}
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-end gap-3 px-6 pb-[20vh]">
         {phase !== 'auth' && (
           <div className="flex items-center gap-2 text-[11px] font-medium tabular-nums text-white/60">
             <span
               // Scales with the voice, like the blob, so the row stays alive
               // once the transcript has replaced the blob itself.
               style={{
-                background: cancelling ? 'rgba(255,255,255,0.35)' : WX_GREEN,
+                background: cancelling ? 'rgba(255,255,255,0.35)' : ROSE,
                 transform: 'scale(calc(1 + var(--lv) * 0.9))',
-                boxShadow: cancelling ? 'none' : `0 0 8px ${WX_GREEN}`,
+                boxShadow: cancelling ? 'none' : `0 0 8px ${ROSE}`,
               }}
               className="h-1.5 w-1.5 rounded-full transition-transform duration-100 ease-out"
             />
@@ -153,7 +188,7 @@ export function HoldToTalkOverlay({
             </span>
           </Bubble>
         ) : text ? (
-          <Bubble tint={cancelling ? 'rgba(255,255,255,0.14)' : WX_BUBBLE} glow={!cancelling}>
+          <Bubble tint={cancelling ? 'rgba(255,255,255,0.14)' : '#ffffff'}>
             {/* The tail is what just arrived, so the box shows its END. */}
             <span
               className={cn(
@@ -175,39 +210,38 @@ export function HoldToTalkOverlay({
       {/* The three targets. During 授权 there is no choice to make — releasing
           anywhere opens the system alert — so drawing targets would be a lie. */}
       {phase !== 'auth' && (
-        <div className="relative h-[196px] shrink-0">
-          {/* The send dome, behind the pills and bleeding off three edges, so
-              the whole bottom of the screen is "just lift". */}
+        <div className="relative shrink-0" style={{ height: ZONE_H }}>
+          {/* ── the send disc ────────────────────────────────────────────── */}
           <div
-            style={{ borderRadius: '50% 50% 0 0 / 100% 100% 0 0' }}
+            style={{
+              width: R_DOME * 2,
+              height: R_DOME * 2,
+              marginLeft: -R_DOME,
+              bottom: -(DROP + R_DOME),
+            }}
             className={cn(
-              'absolute inset-x-[-14%] bottom-[-56px] h-[152px] transition-colors duration-150',
+              'absolute left-1/2 rounded-full transition-colors duration-150',
               zone === 'send' ? 'bg-white/85' : 'bg-white/[0.13]',
             )}
+          />
+          <div
+            style={{ bottom: R_DOME - DROP - 47 }}
+            className={cn(
+              'absolute inset-x-0 flex items-center justify-center gap-1.5 text-[15px] font-medium transition-colors duration-150',
+              zone === 'send' ? 'text-neutral-800' : 'text-transparent',
+            )}
           >
-            <div
-              className={cn(
-                'flex items-center justify-center gap-1.5 pt-7 text-[15px] font-medium transition-colors duration-150',
-                zone === 'send' ? 'text-neutral-800' : 'text-transparent',
-              )}
-            >
-              {phase === 'finishing' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {phase === 'finishing' ? '正在发送' : '松开发送'}
-            </div>
+            {phase === 'finishing' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {phase === 'finishing' ? '正在发送' : '松开发送'}
           </div>
 
-          <Pill
-            pillRef={cancelRef}
-            side="left"
-            active={cancelling}
-            label="取消"
-          />
-          <Pill
-            pillRef={editRef}
-            side="right"
-            active={zone === 'edit' && phase === 'listening'}
-            label="编辑"
-          />
+          {/* ── the two arcs ─────────────────────────────────────────────── */}
+          <Arc side="left" active={cancelling} label="取消" />
+          <Arc side="right" active={zone === 'edit' && phase === 'listening'} label="编辑" />
+
+          {/* Hit boxes, invisible. See the header. */}
+          <div ref={cancelRef} className="absolute bottom-[100px] left-0 right-[calc(50%+15px)] h-[105px]" />
+          <div ref={editRef} className="absolute bottom-[100px] left-[calc(50%+15px)] right-0 h-[105px]" />
         </div>
       )}
     </div>,
@@ -215,25 +249,70 @@ export function HoldToTalkOverlay({
   );
 }
 
-/** A WeChat bubble: rounded, with a tail pointing down at the finger. */
-function Bubble({
-  tint,
-  glow = false,
-  children,
-}: {
-  tint: string;
-  glow?: boolean;
-  children: React.ReactNode;
-}) {
+/**
+ * One half of the band: a ring clipped to this side of the gap, plus a disc
+ * closing the cut off with a round end. The union is a curved bar with one
+ * rounded tip, which is not a shape CSS has a name for.
+ *
+ * The clip sits on a FULL-WIDTH wrapper so its `50%` means the middle of the
+ * screen; the ring is a child of that and is still centred on the screen.
+ */
+function Arc({ side, active, label }: { side: 'left' | 'right'; active: boolean; label: string }) {
+  const left = side === 'left';
+  return (
+    <>
+      {/* Ring and cap are both solid white and share ONE opacity. Tinting them
+          separately looks right until they meet: two 14% whites overlapping
+          composite to 26%, and the join shows up as a bright disc sitting on
+          the band. Fading the pair as a group composites once. */}
+      <div
+        className="absolute inset-0 transition-opacity duration-150"
+        style={{ opacity: active ? 1 : 0.14 }}
+      >
+        <div
+          className="absolute inset-0"
+          style={{ clipPath: left ? `inset(0 calc(50% + ${CAP}px) 0 0)` : `inset(0 0 0 calc(50% + ${CAP}px))` }}
+        >
+          <div
+            style={{
+              width: R_OUT * 2,
+              height: R_OUT * 2,
+              marginLeft: -R_OUT,
+              bottom: -(DROP + R_OUT),
+              borderWidth: BAND,
+            }}
+            className="absolute left-1/2 rounded-full border-solid border-white"
+          />
+        </div>
+        <div
+          style={{
+            width: BAND,
+            height: BAND,
+            marginLeft: left ? -(CAP + BAND / 2) : CAP - BAND / 2,
+            bottom: midAt(CAP) - BAND / 2,
+          }}
+          className="absolute left-1/2 rounded-full bg-white"
+        />
+      </div>
+      <div
+        style={{ marginLeft: left ? -LABEL_D - 60 : LABEL_D - 60, bottom: midAt(LABEL_D) - 10 }}
+        className={cn(
+          'absolute left-1/2 h-5 w-[120px] text-center text-[16px] font-medium leading-5 transition-colors duration-150',
+          active ? 'text-neutral-900' : 'text-white/70',
+        )}
+      >
+        {label}
+      </div>
+    </>
+  );
+}
+
+/** A bubble with a tail pointing down at the finger. */
+function Bubble({ tint, children }: { tint: string; children: React.ReactNode }) {
   return (
     <div className="relative max-w-[min(30rem,84vw)]">
       <div
-        style={{
-          background: tint,
-          boxShadow: glow
-            ? '0 18px 50px -12px rgba(0,0,0,0.7), 0 0 calc(14px + var(--lv) * 30px) rgba(7,193,96,0.55)'
-            : '0 18px 50px -12px rgba(0,0,0,0.6)',
-        }}
+        style={{ background: tint, boxShadow: '0 18px 50px -12px rgba(0,0,0,0.7)' }}
         className="max-h-[42vh] overflow-hidden rounded-[20px] px-4 py-3"
       >
         {children}
@@ -254,38 +333,12 @@ function VoiceBlob({ dimmed }: { dimmed: boolean }) {
       <span
         aria-hidden="true"
         style={{
-          background: dimmed ? 'rgba(255,255,255,0.18)' : WX_GREEN,
-          transform: 'scale(calc(1 + var(--lv) * 0.85))',
-          boxShadow: dimmed ? 'none' : `0 0 34px 6px rgba(7,193,96,0.55)`,
+          background: dimmed ? 'rgba(255,255,255,0.18)' : ROSE,
+          transform: 'scale(calc(1 + var(--lv)))',
+          boxShadow: dimmed ? 'none' : '0 0 34px 6px rgba(251,113,133,0.45)',
         }}
-        className="h-[52px] w-[52px] rounded-full transition-transform duration-100 ease-out"
+        className="h-[42px] w-[42px] rounded-full transition-transform duration-100 ease-out"
       />
-    </div>
-  );
-}
-
-function Pill({
-  pillRef,
-  side,
-  active,
-  label,
-}: {
-  pillRef: React.RefObject<HTMLDivElement | null>;
-  side: 'left' | 'right';
-  active: boolean;
-  label: string;
-}) {
-  return (
-    <div
-      ref={pillRef}
-      className={cn(
-        'absolute bottom-[66px] flex h-[104px] w-[50%] items-center justify-center',
-        'rounded-[30px] text-[16px] font-medium transition-colors duration-150',
-        side === 'left' ? 'left-[-4%] pr-[6%]' : 'right-[-4%] pl-[6%]',
-        active ? 'bg-white text-neutral-900' : 'bg-white/[0.14] text-white/70',
-      )}
-    >
-      {label}
     </div>
   );
 }
