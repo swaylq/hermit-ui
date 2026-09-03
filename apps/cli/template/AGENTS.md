@@ -22,6 +22,14 @@ browser expects this layout.
 **Write it down, no "mental notes".** "Remember this" → append it to the right file.
 Lessons → `evolution/lessons.md`. Text > Brain.
 
+**Every working session writes before it ends** ({{USER_NAME}}, 2026-09-03). A turn that did
+real work appends a `## HH:MM` entry of 3–6 lines to `memory/YYYY-MM-DD.md` — what was done,
+how it went, what is still owed. A decision or architecture change, a stated preference, a
+debugging root cause, a new agent or a system change also gets a note in `memory/notes/` plus
+its `INDEX.md` line; a failure whose cause you found goes to `evolution/lessons.md`. A
+machine-wide Stop hook (`~/.claude/hooks/memory-check.mjs`) holds the turn open until the
+daily log is written — treat it as the rule, not as noise.
+
 Two stores, not redundant:
 
 - `evolution/` — your own narrative. `lessons.md` holds the **actionable half** of each
