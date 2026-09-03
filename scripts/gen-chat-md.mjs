@@ -39,6 +39,8 @@ if (!root || !fs.existsSync(root)) {
 // only matters when you can act does not belong here.
 const COMMON = `## How to answer
 
+- Please remove all mannered prose — the most important rule here, it outranks
+  the rest of this list.
 - Conclusion first. A decision the user has to make opens the reply, never closes it.
 - Three to six lines is the default, not a length to fill.
 - Cut: process narration, anything the user just told you repeated back, caveats
