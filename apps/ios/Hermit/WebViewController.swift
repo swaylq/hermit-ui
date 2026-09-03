@@ -44,11 +44,33 @@ final class WebViewController: UIViewController {
         bridge.onMicActive = { [weak self] active in
             if active { self?.activateRecordingSession() } else { self?.releaseAudioSession() }
         }
+        // WebKit has no haptics API on iOS, so the page cannot buzz on its own.
+        bridge.onHaptic = { style in Haptics.play(style) }
+        // Whether our edge swipe may run. See `allowsBackForwardNavigationGestures` below.
+        bridge.onEdgeSwipe = { [weak self] enabled in
+            self?.webView.allowsBackForwardNavigationGestures = enabled
+        }
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.uiDelegate = self
         webView.navigationDelegate = self
-        webView.allowsBackForwardNavigationGestures = true
+        // Off until the page asks for it, and the page only asks where it has no
+        // horizontal gesture of its own.
+        //
+        // The dashboard's mobile sidebar is a drawer you pull from the left ~28px
+        // (app-sidebar.tsx), which is exactly where WebKit puts its own back
+        // swipe. That one is a UIKit gesture recogniser living outside the web
+        // content, so it claims the touch before any JS runs: the drawer's
+        // `preventDefault()` cannot reach it, and on a phone the pull read as
+        // "go back" instead of opening the sidebar. The page cannot win this from
+        // its side, so the shell yields from ours.
+        //
+        // Default off rather than on because the two failures are not
+        // symmetrical: on costs the drawer, which is a navigation surface with no
+        // other gesture; off costs a swipe-back that every screen also offers as a
+        // button. A dashboard too old to send `edgeSwipe` therefore lands on the
+        // harmless side.
+        webView.allowsBackForwardNavigationGestures = false
         webView.isOpaque = false
         webView.backgroundColor = .appBackground
         webView.scrollView.backgroundColor = .appBackground
@@ -317,6 +339,10 @@ extension WebViewController: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         bridge.pageWillReload()
+        // The outgoing document's answer does not carry: a deep link into /chat
+        // and a reload back to a wide iPad layout want opposite things. Back to
+        // the safe default; the new page re-asserts on mount.
+        webView.allowsBackForwardNavigationGestures = false
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

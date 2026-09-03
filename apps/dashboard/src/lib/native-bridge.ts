@@ -73,6 +73,44 @@ export function setNativeMicActive(active: boolean): void {
   postToNative({ type: 'mic', active });
 }
 
+/** The taps the shell knows how to play. Mirrors apps/ios/Hermit/Haptics.swift. */
+export type HapticStyle = 'prepare' | 'light' | 'medium' | 'selection' | 'success' | 'warning';
+
+/**
+ * Ask the shell for one haptic tap.
+ *
+ * There is no web fallback to fall back to. WebKit on iOS ships no
+ * `navigator.vibrate` in any of its forms — not Safari, not an installed PWA,
+ * not this shell — so outside the app every call here is a no-op and the
+ * interaction is simply silent. That is also why the styles are named for what
+ * they mean rather than for a waveform: the only implementation is UIKit's.
+ *
+ * Send `'prepare'` a beat before the tap that matters. The Taptic Engine spins
+ * up on first use, so an unprepared tap arrives tens of milliseconds late, and
+ * the tap that says "recording started" is worth nothing late.
+ */
+export function nativeHaptic(style: HapticStyle): void {
+  postToNative({ type: 'haptic', style });
+}
+
+/**
+ * Tell the shell whether its own back/forward edge swipe may run.
+ *
+ * WKWebView's swipe is a UIKit gesture recogniser sitting outside the web
+ * content, so it takes the touch before any listener here sees it — a
+ * `preventDefault()` in a `touchmove` handler cannot stop it. Any horizontal
+ * gesture this app draws for itself has to be handed the edge explicitly, and
+ * the only side that can do the handing is the native one.
+ *
+ * The shell defaults to off, so this is how the swipe gets turned back ON for
+ * the layouts that have no gesture of their own (a wide iPad, where the sidebar
+ * is static). Callers own a scope: turn it off while your gesture is armed, back
+ * on when it unmounts.
+ */
+export function setNativeEdgeSwipe(enabled: boolean): void {
+  postToNative({ type: 'edgeSwipe', enabled });
+}
+
 /** Ask the shell to read the permission answer. Never prompts. */
 export function readNativePushStatus(): void {
   postToNative({ type: 'pushStatus' });

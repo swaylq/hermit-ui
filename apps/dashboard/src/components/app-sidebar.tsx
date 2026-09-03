@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
@@ -9,6 +9,7 @@ import {
   Search as SearchIcon, type LucideIcon,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
+import { isNativeShell, setNativeEdgeSwipe } from '@/lib/native-bridge';
 import { cn } from '@/lib/utils';
 import { SETTINGS_HREFS, SETTINGS_TABS } from '@/lib/settings-nav';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
@@ -48,6 +49,34 @@ const BRAIN_NAV: Array<{ href: string; label: string; icon: LucideIcon }> = [
   { href: '/brain/files', label: 'Files', icon: Folder },
   { href: '/brain/dispatch', label: 'Dispatches', icon: Send },
 ];
+
+/**
+ * Hand the iOS shell's back/forward edge swipe to whoever needs it.
+ *
+ * WKWebView's swipe is a UIKit gesture recogniser sitting outside the web
+ * content, so it claims a touch before any listener here runs — a
+ * `preventDefault()` in `touchmove` cannot stop it. The mobile drawer opens from
+ * the left ~28px, which is precisely where that recogniser lives, so on a phone
+ * the pull went back a page instead of opening the sidebar, and nothing on this
+ * side could fix it.
+ *
+ * Pass `true` while this screen owns horizontal drags. The shell defaults to OFF,
+ * so a screen that owns nothing still has to say so — otherwise the swipe is lost
+ * on layouts that never had a conflict (the scoped share sidebar, a wide iPad).
+ * That is why this is a hook every sidebar calls rather than a one-sided
+ * disable: "nobody claimed it" and "nobody said anything" have to look different.
+ *
+ * No-op outside the shell.
+ */
+export function useNativeEdgeSwipe(ownsHorizontalDrag: boolean) {
+  useEffect(() => {
+    if (!isNativeShell()) return;
+    setNativeEdgeSwipe(!ownsHorizontalDrag);
+    // Released on unmount as well as on change: whatever renders next re-asserts
+    // for itself, and the value must not outlive the component that meant it.
+    return () => setNativeEdgeSwipe(true);
+  }, [ownsHorizontalDrag]);
+}
 
 export function AppSidebar() {
   const pathname = usePathname();
@@ -202,6 +231,19 @@ export function AppSidebar() {
       document.removeEventListener('touchcancel', onEnd);
     };
   }, [setMobileOpen]);
+
+  // The drawer above owns horizontal drags exactly while the layout is narrow —
+  // which is the same condition its own `isMobile()` gate uses. Watched rather
+  // than sampled, so a rotated iPad switches with the layout.
+  const [narrowLayout, setNarrowLayout] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1023px)');
+    const apply = () => setNarrowLayout(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
+  useNativeEdgeSwipe(narrowLayout);
 
   return (
     <>

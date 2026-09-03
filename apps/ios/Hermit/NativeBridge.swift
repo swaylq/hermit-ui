@@ -23,6 +23,11 @@ final class NativeBridge: NSObject {
     var onReadPushStatus: ((@escaping (String, Bool) -> Void) -> Void)?
     /// A live microphone stream opened (true) or was torn down (false).
     var onMicActive: ((Bool) -> Void)?
+    /// Play one haptic, by name. See Haptics.swift.
+    var onHaptic: ((String) -> Void)?
+    /// May the shell's own back/forward edge swipe run right now? The page owns
+    /// horizontal gestures it has drawn something for; see WebViewController.
+    var onEdgeSwipe: ((Bool) -> Void)?
 
     private weak var webView: WKWebView?
     private var pageReady = false
@@ -130,6 +135,15 @@ extension NativeBridge: WKScriptMessageHandler {
             NSLog("[hermit] push registered for \(ok)/\(of) machines")
         case "mic":
             onMicActive?(body["active"] as? Bool ?? false)
+        case "haptic":
+            // No default style: a message that lost its `style` should do
+            // nothing, not pick one. Haptics.play ignores what it does not know.
+            onHaptic?(body["style"] as? String ?? "")
+        case "edgeSwipe":
+            // Absent/garbled `enabled` falls back to false — the failure this
+            // exists to fix (the shell eating the drawer's swipe) is the one
+            // that happens when it is on, so the safe default is off.
+            onEdgeSwipe?(body["enabled"] as? Bool ?? false)
         case "origins":
             // The deployments this device holds a key for. See AppConfig.knownHosts.
             AppConfig.setKnownHosts(body["origins"] as? [String] ?? [])

@@ -19,6 +19,7 @@ import { msgText, type Attachment } from '@/components/chat/lib';
 import { Collapse } from '@/components/chat/collapse';
 import { originalFor } from '@/lib/translate-outbound';
 import { canOpenMicSilently, refreshMicPermission, requestMicAccess } from '@/lib/voice-capture';
+import { nativeHaptic } from '@/lib/native-bridge';
 import { HoldToTalkOverlay, type HoldPhase, type HoldZone } from '@/components/chat/hold-to-talk';
 import type { DictationSource } from '@/components/chat/dictation-dock';
 
@@ -732,9 +733,17 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     // has already been released (or was never a real one) makes this throw, and
     // an exception here would abandon the gesture half-armed.
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* no live pointer */ }
+    // Warm the Taptic Engine now, not when the hold fires. It spins up on first
+    // use, and the buzz below is the only signal that recording started — a late
+    // one reads as a press that did not take. Free if the gesture is abandoned.
+    nativeHaptic('prepare');
     h.timer = setTimeout(() => {
       if (h.id === -1 || h.bailed) return;
       h.live = true;
+      // The hold took. This fires before the branch below on purpose: the press
+      // registered either way, and on the unauthorized path the buzz is the only
+      // thing that says so before the permission sheet appears.
+      nativeHaptic('medium');
       setHoldZone('send');
       // Not authorized yet? Show the ask instead of recording — opening the mic
       // here would raise the alert under the finger. The release does it.
@@ -774,7 +783,14 @@ export const ComposeBar = forwardRef<ComposerHandle, {
       dx <= -SLIDE_PX || onPill(cancelPillRef.current) ? 'cancel'
       : dx >= SLIDE_PX || onPill(editPillRef.current) ? 'edit'
       : 'send';
-    if (zone !== h.zone) { h.zone = zone; setHoldZone(zone); }
+    if (zone !== h.zone) {
+      h.zone = zone;
+      setHoldZone(zone);
+      // Crossing into another exit. `selection` is the click UIKit uses for a
+      // picker moving a notch, which is exactly what this is — and it is quiet
+      // enough to fire repeatedly while a finger wanders between the arcs.
+      nativeHaptic('selection');
+    }
   }, []);
 
   const onHoldUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -790,8 +806,12 @@ export const ComposeBar = forwardRef<ComposerHandle, {
       return;
     }
     if (auth) { authorizeMic(); return; }
-    if (zone === 'cancel') { onDictateCancel?.(); return; }
+    // Landing taps, one per outcome. Cancel and edit are both "put it down", so
+    // they get the light one; only a send earns the success pattern, which is the
+    // distinction a finger can feel without looking at the screen.
+    if (zone === 'cancel') { nativeHaptic('light'); onDictateCancel?.(); return; }
     if (zone === 'edit') {
+      nativeHaptic('light');
       onDictateStop?.();
       taRef.current?.focus({ preventScroll: true });
       return;
@@ -799,6 +819,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     // Send. Close the run and hold the overlay up on 'finishing' — the last
     // sentence and the whole-passage correction are still landing, and sending
     // the half of the sentence that had arrived is not what was said.
+    nativeHaptic('success');
     setHoldPhase('finishing');
     setHoldZone('send');
     setHoldSending(true);

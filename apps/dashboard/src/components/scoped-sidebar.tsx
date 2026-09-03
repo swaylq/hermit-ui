@@ -13,7 +13,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
 import { sessionRecencyAt } from '@/lib/session-recency';
-import { useSidebar } from '@/components/app-sidebar';
+import { useSidebar, useNativeEdgeSwipe } from '@/components/app-sidebar';
 import { getKeyring, getActiveEntry, removeMachine } from '@/lib/keyring';
 import { AddMachine } from './add-machine';
 
@@ -27,6 +27,11 @@ export function ScopedSidebar({ agentName }: { agentName: string }) {
   const sessions = trpc.chat.listSessions.useQuery({ agentName }, { refetchInterval: 5_000 });
   const rows = (sessions.data ?? []).filter((s) => !s.hiddenAt);
   const close = () => setMobileOpen(false);
+  // This drawer opens from the hamburger only — no swipe of its own — so the
+  // shell keeps its edge gesture here. Said explicitly because the shell defaults
+  // to off: staying silent would cost share-link users the back swipe for no
+  // reason.
+  useNativeEdgeSwipe(false);
 
   // An owner who opened a share link (they have OTHER workspaces) can leave the
   // scoped view; a pure recipient (this key is all they have) has nowhere to go.
