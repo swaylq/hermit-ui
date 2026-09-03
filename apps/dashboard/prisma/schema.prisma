@@ -125,6 +125,7 @@ model Machine {
   hostStat            HostStat?
   knowledgeBases      KnowledgeBase[]
   pushDevices         PushDevice[]
+  liveActivities      LiveActivity[]
   sessionGroups       SessionGroup[]
   machineAlerts       MachineAlert[]
 }
@@ -723,6 +724,7 @@ model ChatSession {
 
   messages     ChatMessage[]
   interactions Interaction[]
+  liveActivities LiveActivity[]
   cronReports  Cron[]       @relation("CronReports")
   // Which sidebar drawer this session lives in. NULL = ungrouped, i.e. it stays in
   // the flat recency list. SET NULL on delete: removing a drawer must not remove the
@@ -1138,6 +1140,47 @@ model AgentSkillInstall {
 // the web layer, which registers it once per keyring entry through the normal
 // authenticated tRPC client — so a phone holding three machine keys gets three
 // rows and receives pushes from all three. See docs/ios-shell-design.md.
+/// One running Lock Screen / Dynamic Island activity.
+///
+/// Separate from PushDevice because the token is per-ACTIVITY, not per-device: a
+/// phone showing two sessions has two rows and two tokens, each valid only while
+/// its activity is alive, and iOS reissues them on its own schedule. The row is
+/// created when the app reports the token and deleted when the activity ends or
+/// APNs says the token is dead.
+model LiveActivity {
+  id        String      @id @default(cuid())
+  /// APNs activity push token, lowercase hex. Globally unique — the same
+  /// activity cannot exist twice.
+  token     String      @unique
+  sessionId String
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  /// Denormalised from the session so a push can be authorised and addressed
+  /// without a join, on a path that runs on every gateway snapshot.
+  machineId String
+  machine   Machine     @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  /// Same sandbox/production split as PushDevice.apnsEnv, and self-healed the
+  /// same way (apns.ts retries the other host on BadDeviceToken).
+  apnsEnv   String      @default("sandbox")
+  /// The last content signature actually pushed. An unchanged tick sends
+  /// nothing: Apple budgets high-frequency activity updates and starts dropping
+  /// them, and the gateway reports a snapshot every 8 seconds.
+  lastSig   String?
+  /// The phase the widget is currently showing, and when it began.
+  ///
+  /// The widget draws its elapsed time from a single start stamp and the system
+  /// ticks it — so that stamp must NOT move between updates, or the timer jumps
+  /// backwards on screen every time a tool changes. It moves only when the phase
+  /// itself does. Seeded from the app's own stamp at registration so the number
+  /// does not step when the server takes over.
+  phase       String?
+  phaseSince  DateTime?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([sessionId])
+  @@index([machineId])
+}
+
 model PushDevice {
   id String @id @default(cuid())
   // Transport-specific device identity, and the unique key alongside machineId:
@@ -1165,6 +1208,12 @@ model PushDevice {
   // sit on different servers, and the key is only valid against the one that
   // issued it.
   barkServer String?
+  // ios only — the app-wide Live Activity push-to-start token (iOS 17.2+).
+  // Distinct from `token`: that one addresses the device for a notification,
+  // this one lets the server RAISE a Live Activity on a phone whose app is not
+  // running. Null on a device that has never reported one (an older iOS, or a
+  // build without the widget extension).
+  liveActivityStartToken String?
 
   createdAt  DateTime @default(now())
   lastSeenAt DateTime @updatedAt

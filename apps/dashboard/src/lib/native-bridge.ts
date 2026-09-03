@@ -14,7 +14,7 @@
 //
 // See docs/ios-shell-design.md.
 
-import { getKeyring } from './keyring';
+import { getKeyring, getActiveEntry } from './keyring';
 
 export type ApnsEnv = 'sandbox' | 'production';
 
@@ -29,6 +29,8 @@ interface NativeApi {
   onPushToken(token: string, apnsEnv: ApnsEnv): void;
   onDeepLink(path: string): void;
   onPushStatus(status: NativePushStatus['status'], registered: boolean): void;
+  onLiveActivityStatus(supported: boolean, enabled: boolean): void;
+  onLiveActivityToken(kind: 'update' | 'start', token: string, sessionId: string, sinceMs: number): void;
 }
 
 declare global {
@@ -46,6 +48,18 @@ export function isNativeShell(): boolean {
 // Last status the shell reported, plus whoever is watching. Module-level so the
 // Settings → Push card can mount after the answer arrived and still see it.
 let pushStatus: NativePushStatus | null = null;
+/**
+ * Which APNs host this build's tokens belong to, as the shell read it out of the
+ * embedded provisioning profile. An Xcode install and a TestFlight one produce
+ * tokens that look identical and are accepted by different hosts, so the server
+ * cannot infer it — and a Live Activity token belongs to the same host as the
+ * device token that arrived beside it.
+ *
+ * Defaults to sandbox because that is what a build installed for development
+ * gets, and because the server retries the other host on `BadDeviceToken` and
+ * writes back what worked — a wrong guess here costs one round trip, once.
+ */
+let lastApnsEnv: ApnsEnv = 'sandbox';
 const pushWatchers = new Set<(s: NativePushStatus) => void>();
 
 /** The shell's standing answer, or null if it hasn't said yet. */
@@ -111,6 +125,110 @@ export function setNativeEdgeSwipe(enabled: boolean): void {
   postToNative({ type: 'edgeSwipe', enabled });
 }
 
+// ── Live Activity (Lock Screen + Dynamic Island) ────────────────────────────
+//
+// The shell raises it, the SERVER keeps it moving. That split is the whole
+// point: an activity only its own app can update freezes the moment the phone
+// is put down, which is the only time a lock-screen widget matters. So the app
+// starts one with a push token, hands the token here, and this side registers it
+// with the machine key — the same arrangement as the APNs device token, and for
+// the same reason: the native layer never holds a credential.
+//
+// What this side owes the shell is the lifecycle, because only the page knows
+// when a turn began. See components/chat/use-live-activity.ts.
+
+export type LiveActivityPhase = 'working' | 'blocked' | 'done' | 'failed';
+
+export interface LiveActivityState {
+  phase: LiveActivityPhase;
+  /** The session's title. */
+  title: string;
+  /** The one line worth reading: what it is doing, what it is asking, or what
+   *  it said. Truncated by the shell to fit the APNs payload cap. */
+  line: string;
+  /** When THIS phase began, in JS milliseconds. The widget renders it as a
+   *  system timer, which is the only part that stays live without a push. */
+  sinceMs: number;
+  /** Messages waiting behind the running one. */
+  queued?: number;
+}
+
+/** Raise one for a session. A second call for a session that already has one
+ *  updates it instead — the shell will not stack duplicates. */
+export function liveActivityStart(a: {
+  sessionId: string;
+  agentName: string;
+  machineName?: string;
+  state: LiveActivityState;
+}): void {
+  postToNative({ type: 'liveActivity', action: 'start', ...a });
+}
+
+export function liveActivityUpdate(sessionId: string, state: LiveActivityState): void {
+  postToNative({ type: 'liveActivity', action: 'update', sessionId, state });
+}
+
+/** End it. The shell leaves it on screen a few minutes so a finished turn can
+ *  still be noticed, then clears it. */
+export function liveActivityEnd(sessionId: string, state?: LiveActivityState): void {
+  postToNative({ type: 'liveActivity', action: 'end', sessionId, state });
+}
+
+/** Every activity, gone now. For a sign-out or a workspace switch: what is on
+ *  that Lock Screen belongs to a machine this device no longer answers for. */
+export function liveActivityEndAll(): void {
+  postToNative({ type: 'liveActivity', action: 'endAll' });
+}
+
+type LiveActivitySupport = { supported: boolean; enabled: boolean };
+let liveActivitySupport: LiveActivitySupport | null = null;
+const liveActivityWatchers = new Set<(s: LiveActivitySupport) => void>();
+
+/** What the shell last said. Null before it has answered, and outside the shell
+ *  forever — callers treat both as "do not send". */
+export function getLiveActivitySupport(): LiveActivitySupport | null {
+  return liveActivitySupport;
+}
+
+export function onLiveActivitySupport(fn: (s: LiveActivitySupport) => void): () => void {
+  liveActivityWatchers.add(fn);
+  return () => liveActivityWatchers.delete(fn);
+}
+
+/** Ask. Cheap, never prompts — Live Activities have no permission dialog, only
+ *  a switch in Settings the user may have turned off. */
+export function requestLiveActivitySupport(): void {
+  postToNative({ type: 'liveActivityStatus' });
+}
+
+/**
+ * Register an activity's push token so the server can address updates to it.
+ *
+ * Uses the ACTIVE keyring entry only, unlike the device token which is
+ * registered against every machine: a device token addresses a phone, but an
+ * activity token addresses one running turn, which belongs to exactly one
+ * machine. Registering it anywhere else would let another deployment write to a
+ * Lock Screen showing this one's session.
+ */
+async function registerLiveActivityToken(
+  kind: 'update' | 'start',
+  token: string,
+  sessionId: string,
+  sinceMs: number,
+): Promise<void> {
+  const entry = getActiveEntry();
+  if (!entry || entry.scoped) return; // a share link has no business doing this
+  const input =
+    kind === 'update'
+      ? { json: { kind, token, sessionId, apnsEnv: lastApnsEnv, sinceMs: sinceMs || undefined } }
+      : { json: { kind, token, apnsEnv: lastApnsEnv } };
+  await fetch((entry.baseUrl || '') + '/api/trpc/push.registerLiveActivity?batch=1', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-asst-key': entry.key },
+    body: JSON.stringify({ '0': input }),
+  }).catch(() => undefined);
+}
+
 /** Ask the shell to read the permission answer. Never prompts. */
 export function readNativePushStatus(): void {
   postToNative({ type: 'pushStatus' });
@@ -158,6 +276,7 @@ export function installNativeBridge(): () => void {
 
   const api: NativeApi = {
     onPushToken(token, apnsEnv) {
+      lastApnsEnv = apnsEnv;
       // Scoped agent-share entries are skipped: push.register is machineProcedure
       // and would 403 them anyway, and a share link has no business subscribing a
       // device to a whole machine's notification stream.
@@ -179,6 +298,15 @@ export function installNativeBridge(): () => void {
     onPushStatus(status, registered) {
       pushStatus = { status, registered };
       for (const fn of pushWatchers) fn(pushStatus);
+    },
+
+    onLiveActivityStatus(supported, enabled) {
+      liveActivitySupport = { supported, enabled };
+      for (const fn of liveActivityWatchers) fn(liveActivitySupport);
+    },
+
+    onLiveActivityToken(kind, token, sessionId, sinceMs) {
+      void registerLiveActivityToken(kind, token, sessionId, sinceMs);
     },
 
     onDeepLink(path) {
@@ -219,6 +347,10 @@ export function installNativeBridge(): () => void {
   // just reports the standing answer.
   if (getKeyring().some((e) => !e.scoped)) requestNativePush();
   else readNativePushStatus();
+
+  // No prompt behind this one — Live Activities are a Settings switch, not a
+  // permission — so it is asked unconditionally and answered immediately.
+  requestLiveActivitySupport();
 
   return () => {
     if (window.__hermitNative === api) delete window.__hermitNative;

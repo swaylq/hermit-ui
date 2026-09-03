@@ -28,6 +28,11 @@ final class NativeBridge: NSObject {
     /// May the shell's own back/forward edge swipe run right now? The page owns
     /// horizontal gestures it has drawn something for; see WebViewController.
     var onEdgeSwipe: ((Bool) -> Void)?
+    /// Start / update / end the Lock Screen + Dynamic Island activity for one
+    /// session. See LiveActivityManager.
+    var onLiveActivity: ((LiveActivityCommand) -> Void)?
+    /// The page is asking whether this device can show one at all.
+    var onLiveActivityStatus: (() -> Void)?
 
     private weak var webView: WKWebView?
     private var pageReady = false
@@ -74,6 +79,23 @@ final class NativeBridge: NSObject {
     func sendPushStatus(_ status: String, registered: Bool) {
         guard let webView else { return }
         call(webView, "onPushStatus", [status, registered])
+    }
+
+    /// What the device can do about Live Activities. Sent unprompted after
+    /// `liveActivityStatus`, so the page can stop sending updates to a phone
+    /// that has them switched off rather than throwing them into a void.
+    func sendLiveActivityStatus(supported: Bool, enabled: Bool) {
+        guard let webView else { return }
+        call(webView, "onLiveActivityStatus", [supported, enabled])
+    }
+
+    /// A push token for the activity system. `kind` is "update" (addresses one
+    /// running activity, so it carries the session it belongs to) or "start"
+    /// (app-wide, no session — the empty string). The page registers it with the
+    /// machine key; native never sees one.
+    func sendLiveActivityToken(kind: String, token: String, sessionId: String, sinceMs: Double) {
+        guard let webView else { return }
+        call(webView, "onLiveActivityToken", [kind, token, sessionId, sinceMs])
     }
 
     /// Invoke `window.__hermitNative.<fn>(...)`. Arguments go through JSON so a
@@ -139,6 +161,10 @@ extension NativeBridge: WKScriptMessageHandler {
             // No default style: a message that lost its `style` should do
             // nothing, not pick one. Haptics.play ignores what it does not know.
             onHaptic?(body["style"] as? String ?? "")
+        case "liveActivity":
+            if let cmd = LiveActivityCommand(body) { onLiveActivity?(cmd) }
+        case "liveActivityStatus":
+            onLiveActivityStatus?()
         case "edgeSwipe":
             // Absent/garbled `enabled` falls back to false — the failure this
             // exists to fix (the shell eating the drawer's swipe) is the one
@@ -160,6 +186,60 @@ extension NativeBridge: WKScriptMessageHandler {
             }
         default:
             break
+        }
+    }
+}
+
+// MARK: - The page's Live Activity commands
+
+/// One `{type:'liveActivity', …}` message, parsed.
+///
+/// Parsed here rather than in the view controller so a malformed message dies at
+/// the boundary: the page and this app ship on different clocks, and a missing
+/// field should mean "ignore this one", never a half-applied activity.
+struct LiveActivityCommand {
+    enum Action: String { case start, update, end, endAll }
+
+    let action: Action
+    let sessionId: String
+    let agentName: String
+    let machineName: String?
+    /// Absent on `end` (the activity keeps whatever it last showed) and on
+    /// `endAll`.
+    let state: SessionActivityAttributes.ContentState?
+
+    init?(_ body: [String: Any]) {
+        guard let raw = body["action"] as? String, let action = Action(rawValue: raw) else { return nil }
+        self.action = action
+        let sid = body["sessionId"] as? String ?? ""
+        // Every action except endAll is about one session; without an id there is
+        // nothing to address.
+        guard action == .endAll || !sid.isEmpty else { return nil }
+        self.sessionId = sid
+        self.agentName = body["agentName"] as? String ?? ""
+        let machine = body["machineName"] as? String
+        self.machineName = (machine?.isEmpty ?? true) ? nil : machine
+
+        if let s = body["state"] as? [String: Any] {
+            // A line longer than the budget is truncated rather than rejected:
+            // the payload cap is a hard limit with no error, and half a sentence
+            // beats a silently dropped update.
+            let line = (s["line"] as? String ?? "")
+            let title = (s["title"] as? String ?? "")
+            self.state = SessionActivityAttributes.ContentState(
+                phase: s["phase"] as? String ?? SessionPhase.working.rawValue,
+                title: String(title.prefix(SessionActivityAttributes.ContentState.maxLine)),
+                line: String(line.prefix(SessionActivityAttributes.ContentState.maxLine)),
+                // The page sends JavaScript milliseconds; this struct stores
+                // seconds, because that is what the SERVER will put in an APNs
+                // content-state. One conversion, at the edge, in one place.
+                sinceEpoch: (s["sinceMs"] as? Double ?? Date().timeIntervalSince1970 * 1000) / 1000,
+                queued: s["queued"] as? Int
+            )
+        } else {
+            self.state = nil
+            // start with no state would raise an empty activity.
+            if action == .start { return nil }
         }
     }
 }

@@ -38,6 +38,7 @@ import { useScope } from '@/lib/use-scope';
 import { ScheduleBar } from '@/components/chat/schedule-bar';
 import { TakeoverBar } from '@/components/chat/takeover-bar';
 import { BackgroundBar } from '@/components/chat/background-bar';
+import { useLiveActivity } from '@/components/chat/use-live-activity';
 import { msgText, isHarnessTerminator, type Attachment } from '@/components/chat/lib';
 import { ChatFind } from '@/components/chat/chat-find';
 import { Collapse } from '@/components/chat/collapse';
@@ -1721,6 +1722,21 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // this cleanup runs on unmount with the OUTGOING id — which is exactly the one
   // that must fall silent.
   useEffect(() => () => clearSessionStatus(sessionId), [sessionId]);
+
+  // The same state, on the Lock Screen and in the Dynamic Island, for whoever is
+  // reading this on a phone that is face-down on a table. Reads `status.key` and
+  // the elapsed-free activity primitives rather than `status.label`, because the
+  // label folds a duration in and the island keeps its own clock — see
+  // components/chat/use-live-activity.ts. No-op outside the iOS shell.
+  useLiveActivity({
+    sessionId,
+    agentName: session?.agentName,
+    title: session?.title,
+    statusKey: status.key,
+    activityLabel: runActivity.label,
+    activityDetail: runActivity.detail,
+    queued: queueLen,
+  });
 
   // Which backend runs this session, resolved server-side (a session's own
   // runtime may be null = inherit the agent's). Shown next to ctx because both

@@ -50,6 +50,20 @@ final class WebViewController: UIViewController {
         bridge.onEdgeSwipe = { [weak self] enabled in
             self?.webView.allowsBackForwardNavigationGestures = enabled
         }
+        // Lock Screen / Dynamic Island. The page drives the lifecycle because
+        // only it knows when a turn starts; the SERVER drives the updates after
+        // that, through the token handed back here. See LiveActivityManager.
+        bridge.onLiveActivity = { [weak self] cmd in self?.applyLiveActivity(cmd) }
+        bridge.onLiveActivityStatus = { [weak self] in
+            let s = LiveActivityManager.status()
+            self?.bridge.sendLiveActivityStatus(supported: s.supported, enabled: s.enabled)
+        }
+        // The app-wide token, watched from launch. It is reissued on the
+        // system's own schedule, so starting to listen only once something wants
+        // it would mean waiting an unknown time for the next one.
+        LiveActivityManager.observePushToStartToken { [weak self] token in
+            self?.bridge.sendLiveActivityToken(kind: "start", token: token, sessionId: "", sinceMs: 0)
+        }
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.uiDelegate = self
@@ -140,6 +154,32 @@ final class WebViewController: UIViewController {
         // instead would duck whatever the user is listening to for the rest of
         // the launch, after a single voice message.
         bridge.notifyForeground()
+    }
+
+    // MARK: - Live Activity
+
+    private func applyLiveActivity(_ cmd: LiveActivityCommand) {
+        switch cmd.action {
+        case .start:
+            guard let state = cmd.state else { return }
+            LiveActivityManager.start(
+                sessionId: cmd.sessionId,
+                agentName: cmd.agentName,
+                machineName: cmd.machineName,
+                state: state
+            ) { [weak self] token, sessionId, sinceEpoch in
+                self?.bridge.sendLiveActivityToken(
+                    kind: "update", token: token, sessionId: sessionId, sinceMs: sinceEpoch * 1000
+                )
+            }
+        case .update:
+            guard let state = cmd.state else { return }
+            LiveActivityManager.update(sessionId: cmd.sessionId, state: state)
+        case .end:
+            LiveActivityManager.end(sessionId: cmd.sessionId, state: cmd.state)
+        case .endAll:
+            LiveActivityManager.endAll()
+        }
     }
 
     // MARK: - Push plumbing (called by AppDelegate)

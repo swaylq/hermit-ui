@@ -42,6 +42,30 @@
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Hermit uses your photo library when you attach an image to a chat.</string>
 
+	<!-- Lock Screen + Dynamic Island. Without this key ActivityKit reports
+	     activities as unavailable and every request throws — with a message that
+	     names the entitlement, not this. -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+
+	<!-- Tapping the Live Activity opens hermit://session/<id>. A custom scheme
+	     rather than a universal link because this one never leaves the device:
+	     the widget builds it, the app consumes it, and no web server should be
+	     able to claim it. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>ai.swaylab.hermit.deeplink</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>hermit</string>
+			</array>
+		</dict>
+	</array>
+
 	<!-- Scene lifecycle. Required for apps built against the iOS 26 SDK; the
 	     legacy app-lifecycle path is deprecated. -->
 	<key>UIApplicationSceneManifest</key>

@@ -19,6 +19,7 @@ import { resolveMachine } from '../route';
 import { stripNulDeep } from '@/server/sanitize';
 import { enqueuePush } from '@/server/push';
 import { blockedEvent } from '@/server/push/events';
+import { syncSessionActivity } from '@/server/push/live-activity';
 
 const CreateBody = z.object({
   sessionId: z.string().optional(),
@@ -92,6 +93,13 @@ export async function POST(req: NextRequest) {
       kind: body.kind,
       payload,
     }),
+  );
+
+  // And the Lock Screen, immediately. The 8s snapshot would carry this too, but
+  // "the agent is waiting on you" is the one state where eight seconds of a
+  // stale island is the difference between noticing and not.
+  void syncSessionActivity(session.id).catch((e) =>
+    console.warn('[live-activity] blocked sync failed', session.id, e),
   );
 
   return NextResponse.json({ id: interaction.id });

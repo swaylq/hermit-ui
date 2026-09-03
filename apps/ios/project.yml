@@ -28,6 +28,13 @@ targets:
     platform: iOS
     sources:
       - path: Hermit
+      # Shared with the widget extension: the Live Activity's attributes have to
+      # be the same type on both sides or ActivityKit cannot match them up.
+      - path: Shared
+    dependencies:
+      # Embeds the extension into the .app. Without this the target builds and
+      # the Live Activity simply never appears — there is no error anywhere.
+      - target: HermitLiveActivity
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.swaylab.hermit
@@ -47,6 +54,25 @@ targets:
       testTargets:
         - HermitTests
         - HermitUITests
+
+  # The Lock Screen / Dynamic Island activity. A widget extension is the only
+  # place iOS will run this code — an app cannot draw its own Live Activity.
+  # It holds no credentials and makes no network calls: everything it shows was
+  # pushed into it (LiveActivityManager.swift).
+  HermitLiveActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: LiveActivity
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.swaylab.hermit.LiveActivity
+        INFOPLIST_FILE: LiveActivity/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SKIP_INSTALL: YES
+        SWIFT_EMIT_LOC_STRINGS: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
 
   # Plain unit tests. Only for logic that can be wrong in a way a screenshot would
   # not show — right now that is AppConfig.isInternal, which decides whether a URL

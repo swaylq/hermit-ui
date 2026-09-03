@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { prisma } from '@/server/db';
 import { fireStatus, hasStatusSubscriber } from '@/server/chat-bus';
+import { syncSessionActivity } from '@/server/push/live-activity';
 import { resolveMachine } from '../route';
 
 const Item = z.object({
@@ -134,6 +135,22 @@ export async function POST(req: NextRequest) {
   // status actually CHANGED; this only says "worth a look".
   for (const it of body.items) {
     if (hasStatusSubscriber(it.sessionId)) fireStatus(it.sessionId);
+  }
+
+  // Same moment, different audience: whoever is looking at a locked phone.
+  //
+  // Deliberately NOT through enqueuePush — that pipeline's 20s debounce and
+  // turn gate exist to avoid interrupting someone mid-turn, and a Live Activity
+  // is nothing but mid-turn states. `syncSessionActivity` returns on its first
+  // query when the session has no activity, which is almost all of them, and it
+  // sends nothing at all unless the content actually changed.
+  //
+  // Fire-and-forget: this runs on the gateway's 8s tick and on every turn
+  // boundary. An APNs round trip must never be in front of that response.
+  for (const it of body.items) {
+    void syncSessionActivity(it.sessionId).catch((e) =>
+      console.warn('[live-activity] sync failed', it.sessionId, e),
+    );
   }
   return NextResponse.json({ ok: true, updated });
 }

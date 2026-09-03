@@ -106,6 +106,75 @@ export const pushRouter = router({
       return { ok: true, configured: configuredPlatforms().includes('ios') };
     }),
 
+  /**
+   * Register a Live Activity push token, so the server can keep the Lock Screen
+   * moving while the app is closed.
+   *
+   * Two kinds, and they are not interchangeable:
+   *   'update' — a per-ACTIVITY token, valid only while that one activity is
+   *              alive. Carries the session it belongs to.
+   *   'start'  — the app-wide push-to-start token (iOS 17.2+), which lets the
+   *              server RAISE an activity on a phone whose app is not running.
+   *              Stored on the device row; there is one per install.
+   *
+   * `machineProcedure`, so a share link cannot register one: an activity token
+   * is a write handle onto somebody's Lock Screen and the scoped scope has no
+   * business holding one.
+   */
+  registerLiveActivity: machineProcedure
+    .input(
+      z.discriminatedUnion('kind', [
+        z.object({
+          kind: z.literal('update'),
+          token: DeviceToken,
+          sessionId: z.string().min(1),
+          apnsEnv: z.enum(['sandbox', 'production']).default('sandbox'),
+          /** The start stamp the app is already showing, in JS milliseconds.
+           *  Adopted rather than re-stamped so the widget's timer does not jump
+           *  when the server takes over a second later. */
+          sinceMs: z.number().int().positive().optional(),
+        }),
+        z.object({
+          kind: z.literal('start'),
+          token: DeviceToken,
+          apnsEnv: z.enum(['sandbox', 'production']).default('sandbox'),
+        }),
+      ]),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.kind === 'start') {
+        // Attach to every ios row this machine has: the app cannot tell us which
+        // device token it sits beside, and a phone has exactly one of these.
+        await prisma.pushDevice.updateMany({
+          where: { machineId: ctx.machine.id, platform: 'ios', apnsEnv: input.apnsEnv },
+          data: { liveActivityStartToken: input.token },
+        });
+        return { ok: true };
+      }
+      // The session must belong to the caller's machine — the id came from a
+      // client and addresses a row this token will then be allowed to write to.
+      const session = await prisma.chatSession.findFirst({
+        where: { id: input.sessionId, machineId: ctx.machine.id },
+        select: { id: true },
+      });
+      if (!session) return { ok: false as const };
+      const since = input.sinceMs ? new Date(input.sinceMs) : new Date();
+      await prisma.liveActivity.upsert({
+        where: { token: input.token },
+        create: {
+          token: input.token,
+          sessionId: session.id,
+          machineId: ctx.machine.id,
+          apnsEnv: input.apnsEnv,
+          phaseSince: since,
+        },
+        // iOS reissues an activity's token while the activity keeps running, so
+        // a repeat is an update, never a second row.
+        update: { sessionId: session.id, apnsEnv: input.apnsEnv },
+      });
+      return { ok: true as const };
+    }),
+
   // Subscribe the installed PWA. The endpoint doubles as the row's `token` because
   // it is precisely what identifies a subscription — re-subscribing after the
   // browser rotates keys yields a new endpoint, hence a new row, and the old one is

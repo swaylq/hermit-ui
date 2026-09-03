@@ -165,13 +165,37 @@ export async function sendApns(
     },
     path: payload.path,
   });
+  const headers: Record<string, string> = {
+    'apns-topic': cfg.bundleId,
+    'apns-push-type': 'alert',
+    'apns-priority': '10',
+    // Max 64 bytes; keys are cuids/machine ids so this is comfortable.
+    'apns-collapse-id': payload.collapseKey.slice(0, 64),
+  };
 
-  let result = await request(cfg, deviceToken, env, payload.collapseKey, body);
+  return deliver(cfg, deviceToken, env, headers, body);
+}
+
+/**
+ * One request, plus the two retries every push type needs.
+ *
+ * Factored out of `sendApns` when Live Activities arrived: an activity update
+ * hits the same expired-JWT and wrong-host cases, and a second copy of this
+ * logic is a second place for them to be fixed in only one of.
+ */
+async function deliver(
+  cfg: ApnsConfig,
+  deviceToken: string,
+  env: ApnsEnv,
+  headers: Record<string, string>,
+  body: string,
+): Promise<ApnsResult> {
+  let result = await request(cfg, deviceToken, env, headers, body);
   // A JWT that aged out mid-flight: refresh once and retry, otherwise every push
   // for the next 50 minutes would fail the same way.
   if (result.reason === 'ExpiredProviderToken') {
     invalidateJwt();
-    result = await request(cfg, deviceToken, env, payload.collapseKey, body);
+    result = await request(cfg, deviceToken, env, headers, body);
   }
   // BadDeviceToken means one of two things: the token is genuinely dead, or it is
   // alive and belongs to the other host. They are indistinguishable from here, so
@@ -183,7 +207,7 @@ export async function sendApns(
   // environment out of that profile reports `sandbox` for a production build.
   if (result.reason === 'BadDeviceToken') {
     const other: ApnsEnv = env === 'production' ? 'sandbox' : 'production';
-    const retry = await request(cfg, deviceToken, other, payload.collapseKey, body);
+    const retry = await request(cfg, deviceToken, other, headers, body);
     if (retry.status === 200) return { ...retry, envUsed: other };
     return result;
   }
@@ -194,7 +218,7 @@ function request(
   cfg: ApnsConfig,
   deviceToken: string,
   env: ApnsEnv,
-  collapseKey: string,
+  extraHeaders: Record<string, string>,
   body: string,
 ): Promise<ApnsResult> {
   return new Promise((resolve) => {
@@ -212,12 +236,12 @@ function request(
         ':method': 'POST',
         ':path': `/3/device/${deviceToken}`,
         authorization: `bearer ${authToken(cfg)}`,
-        'apns-topic': cfg.bundleId,
-        'apns-push-type': 'alert',
-        'apns-priority': '10',
-        // Max 64 bytes; keys are cuids/machine ids so this is comfortable.
-        'apns-collapse-id': collapseKey.slice(0, 64),
         'content-type': 'application/json',
+        // Topic, push-type, priority, expiration and collapse-id all differ
+        // between an alert and a Live Activity update, so the caller supplies
+        // them. Sending an alert's topic on a liveactivity push is rejected with
+        // `TopicDisallowed`, which reads like a provisioning problem.
+        ...extraHeaders,
       });
     } catch (e) {
       return done({ status: 0, reason: `connect: ${String(e)}` });
@@ -251,6 +275,81 @@ function request(
     });
     req.end(body);
   });
+}
+
+// ── Live Activities ─────────────────────────────────────────────────────────
+
+/**
+ * What one Live Activity update carries.
+ *
+ * `contentState` must match the widget's `ContentState` field for field. There
+ * is no schema check anywhere: a field the app cannot decode makes the whole
+ * update vanish, with a 200 from APNs and nothing in any log. The shared shape
+ * is apps/ios/Shared/SessionActivityAttributes.swift, and dates in it are Unix
+ * SECONDS — see the comment on `sinceEpoch` there for why that is spelled out
+ * rather than left to a Date encoder.
+ */
+export interface LiveActivityPush {
+  event: 'update' | 'end';
+  contentState: Record<string, unknown>;
+  /** After this the system dims the activity as possibly out of date. */
+  staleDate?: Date;
+  /** `end` only: when to take it off the Lock Screen. */
+  dismissalDate?: Date;
+  /** Orders several activities in the Dynamic Island. */
+  relevanceScore?: number;
+  /** 10 delivers immediately; 5 lets the system batch it and spend less budget.
+   *  Apple throttles high-frequency activity updates, so anything a person is
+   *  not actively waiting on should go at 5. */
+  priority?: 5 | 10;
+  /** Shown as a banner AND spoken on a watch. Only for a transition worth
+   *  interrupting someone — a block, not a tool change. */
+  alert?: { title: string; body: string };
+}
+
+/**
+ * Update (or end) one Live Activity.
+ *
+ * Addressed to the ACTIVITY's push token, not the device's — they are different
+ * tokens with different lifetimes, and the activity's is reissued whenever iOS
+ * feels like it. Never throws, same contract as `sendApns`.
+ */
+export async function sendLiveActivity(
+  activityToken: string,
+  env: ApnsEnv,
+  push: LiveActivityPush,
+): Promise<ApnsResult> {
+  const cfg = readConfig();
+  if (!cfg) return { status: 0, reason: 'NotConfigured' };
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const body = JSON.stringify({
+    aps: {
+      // APNs discards an update older than one it already delivered, which is
+      // what keeps a slow retry from overwriting a newer state.
+      timestamp: nowSec,
+      event: push.event,
+      'content-state': push.contentState,
+      ...(push.staleDate ? { 'stale-date': Math.floor(push.staleDate.getTime() / 1000) } : {}),
+      ...(push.dismissalDate ? { 'dismissal-date': Math.floor(push.dismissalDate.getTime() / 1000) } : {}),
+      ...(push.relevanceScore !== undefined ? { 'relevance-score': push.relevanceScore } : {}),
+      ...(push.alert ? { alert: push.alert } : {}),
+    },
+  });
+
+  const headers: Record<string, string> = {
+    // NOT cfg.bundleId. A Live Activity has its own topic suffix; the plain
+    // bundle id is rejected with TopicDisallowed.
+    'apns-topic': `${cfg.bundleId}.push-type.liveactivity`,
+    'apns-push-type': 'liveactivity',
+    'apns-priority': String(push.priority ?? 10),
+    // Required for this push type. Without it APNs may hold an update for a
+    // locked phone and deliver a stale state minutes later — worse than not
+    // delivering it, because the widget has no way to know it is old.
+    'apns-expiration': String(nowSec + 60 * 60),
+  };
+
+  return deliver(cfg, activityToken, env, headers, body);
 }
 
 /** Token-level failures that mean "this device is gone" — prune the row. */
