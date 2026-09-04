@@ -8,8 +8,10 @@
   This app collects nothing and tracks nobody: it is a window onto the user's own
   server, and the only credential involved (the machine key) lives in the web
   layer's storage and is never read by native code. The one entry below is
-  UserDefaults, which AppConfig reads to pick up the `-hermitOrigin` launch
-  argument used by apps/ios/smoke.sh.
+  UserDefaults, which AppConfig uses for the address of the server to load: it
+  reads the `-hermitOrigin` launch argument used by apps/ios/smoke.sh, and it
+  stores the one the user typed. Both are this app's own defaults, which is what
+  CA92.1 below declares.
 -->
 <plist version="1.0">
 <dict>

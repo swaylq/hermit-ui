@@ -1,27 +1,156 @@
 import Foundation
 
-/// Everything environment-specific in one place. Point `origin` at a local dev
-/// server (e.g. http://192.168.2.x:4101) to test against a laptop build — note
-/// that plain HTTP needs an ATS exception in Info.plist, and getUserMedia itself
-/// requires a secure context, so voice input only works over HTTPS or localhost.
+/// Everything environment-specific in one place.
 enum AppConfig {
+    /// The origin this build ships pointing at, and the fallback whenever nothing
+    /// else resolves.
     static let defaultOrigin = URL(string: "https://dash.swaylab.ai")!
 
-    /// Where the shell points. Overridable at launch with
-    /// `-hermitOrigin http://localhost:4102` (UserDefaults reads the argument
-    /// domain for free), which is how smoke.sh drives a local dashboard build —
-    /// the shipping app never passes it, so this is the production URL in every
-    /// real launch. `http://localhost` needs the NSAllowsLocalNetworking exception
-    /// in Info.plist; it is still a secure context, so getUserMedia keeps working.
-    static let origin: URL = {
-        if let raw = UserDefaults.standard.string(forKey: "hermitOrigin"),
-           let url = URL(string: raw), url.host != nil {
-            return url
-        }
-        return defaultOrigin
-    }()
+    // MARK: - Where the shell points
+
+    /// The origin the USER chose, persisted. Written only by `setOrigin`, and only
+    /// with a value `normalizeOrigin` has already accepted.
+    ///
+    /// This exists because `dash.swaylab.ai` is folding into `hermit`, and until
+    /// today the address was a compile-time constant: an installed build could not
+    /// follow the move, and the microphone check below is an EXACT host match, so
+    /// the one feature this app was built for would have started denying silently
+    /// (docs/ios-native-progress.md, M0).
+    static let userOriginKey = "hermitOriginOverride"
+
+    /// The developer override, passed as `-hermitOrigin https://…` — UserDefaults
+    /// exposes the process arguments as a domain, so no parsing is needed. This is
+    /// how `smoke.sh` drives a dashboard build running on the Mac.
+    static let launchArgumentKey = "hermitOrigin"
+
+    /// Where the shell points, highest precedence first:
+    ///
+    ///   1. `-hermitOrigin <url>` on the command line — developer only, and NOT
+    ///      validated (see `launchArgumentOrigin`)
+    ///   2. the address the user typed, under `userOriginKey`
+    ///   3. `defaultOrigin`
+    ///
+    /// A stored value: read once at launch and again after `setOrigin` /
+    /// `clearOrigin`, never on every access — `host` is read from WebKit callbacks
+    /// on the hot path. Main-thread only, like `knownHosts`.
+    private(set) static var origin: URL = resolveOrigin()
 
     static var host: String { origin.host ?? "" }
+
+    /// The address the user set, or nil if they never did. Not the effective one —
+    /// that is `origin`, which a launch argument can still outrank.
+    static var userOrigin: URL? {
+        guard let raw = UserDefaults.standard.string(forKey: userOriginKey) else { return nil }
+        return try? normalizeOrigin(raw)
+    }
+
+    /// Point the shell at another deployment. Throws `OriginError` — whose message
+    /// is meant to be shown as-is — when the address is not a bare http(s) origin.
+    ///
+    /// Everything the old origin loaded has to go: the page's tRPC client, its SSE
+    /// reader and its WebSockets are all built once per document against one
+    /// backend (apps/dashboard/src/lib/api-base.ts, "safe to read once per page
+    /// load"). So the caller reloads the web view from scratch rather than
+    /// navigating; a stored origin that only half took effect would be worse than
+    /// none. `origin` is re-resolved rather than assigned, because a launch
+    /// argument still outranks what was just stored.
+    static func setOrigin(_ raw: String) throws {
+        let url = try normalizeOrigin(raw)
+        UserDefaults.standard.set(url.absoluteString, forKey: userOriginKey)
+        origin = resolveOrigin()
+    }
+
+    /// Back to `defaultOrigin` (or to the launch argument, if there is one).
+    static func clearOrigin() {
+        UserDefaults.standard.removeObject(forKey: userOriginKey)
+        origin = resolveOrigin()
+    }
+
+    /// Why an address was refused. The message is the user-facing one, worded
+    /// exactly like the web layer's so the two can never disagree about the same
+    /// typo.
+    struct OriginError: LocalizedError, Equatable {
+        let message: String
+        init(_ message: String) { self.message = message }
+        var errorDescription: String? { message }
+    }
+
+    /// Normalize a typed backend address into `https://host[:port]`.
+    ///
+    /// Ported from `normalizeBase()` — apps/dashboard/src/lib/api-base.ts:28-44 —
+    /// down to the error strings. A typo that quietly became a relative path, or
+    /// plain http on a public host, would put the machine key on the wire to
+    /// somewhere else.
+    ///
+    /// One deliberate difference: `''` is refused here. On the web it means "this
+    /// origin", which a shell has no equivalent of; `clearOrigin()` is that.
+    static func normalizeOrigin(_ raw: String) throws -> URL {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { throw OriginError("backend address is empty") }
+
+        // Same order as the web: assume https for a bare host, and only THEN parse.
+        // Parsing first would read `dash.swaylab.ai:8080` as scheme + path.
+        let hasScheme = s.range(of: "^https?://", options: [.regularExpression, .caseInsensitive]) != nil
+        let withScheme = hasScheme ? s : "https://" + s
+
+        guard let c = URLComponents(string: withScheme),
+              let rawHost = c.host, !rawHost.isEmpty else {
+            throw OriginError("backend address is not a URL")
+        }
+        let scheme = (c.scheme ?? "").lowercased()
+        guard scheme == "https" || scheme == "http" else {
+            throw OriginError("backend address must be http(s)")
+        }
+
+        // Foundation hands back an IPv6 literal without its brackets; both the
+        // loopback test and the rebuilt URL need them.
+        let bare = rawHost.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if scheme == "http", !["localhost", "127.0.0.1", "::1"].contains(bare) {
+            throw OriginError("backend address must be https (http is only allowed for localhost)")
+        }
+        guard c.path.isEmpty || c.path == "/", c.query == nil, c.fragment == nil else {
+            throw OriginError("backend address must be a bare origin, no path")
+        }
+        if let port = c.port, !(1...65535).contains(port) {
+            throw OriginError("backend address is not a URL")
+        }
+
+        // Rebuilt rather than returned: this drops any `user:pass@` (the classic
+        // `https://dash.swaylab.ai@evil.example` disguise) and the redundant
+        // default port, so two spellings of one deployment cannot produce two
+        // different `host` values.
+        let host = bare.contains(":") ? "[\(bare)]" : bare
+        var out = "\(scheme)://\(host)"
+        if let port = c.port, port != (scheme == "https" ? 443 : 80) { out += ":\(port)" }
+        guard let url = URL(string: out) else { throw OriginError("backend address is not a URL") }
+        return url
+    }
+
+    private static func resolveOrigin() -> URL {
+        if let url = launchArgumentOrigin() { return url }
+        if let url = userOrigin { return url }
+        return defaultOrigin
+    }
+
+    /// `-hermitOrigin http://192.168.2.10:4101`, read from the ARGUMENT domain and
+    /// nowhere else.
+    ///
+    /// Deliberately not run through `normalizeOrigin`, on two counts, and the
+    /// argument domain is read explicitly so that neither relaxation can ever apply
+    /// to a value a user typed:
+    ///
+    ///   - plain http to a LAN address is the documented way to test against a
+    ///     laptop build (README.md, "Pointing the shell at a dev server");
+    ///   - `SmokeTests.launch(path:)` appends a ROUTE to it (`…:4102/push`) to open
+    ///     a screen directly, which `normalizeOrigin` refuses by design.
+    private static func launchArgumentOrigin() -> URL? {
+        let domain = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        guard let raw = domain[launchArgumentKey] as? String,
+              let url = URL(string: raw), url.host != nil else { return nil }
+        return url
+    }
+
+    // MARK: - Other deployments this device holds a key for
 
     /// Hosts of the OTHER dashboard deployments this device holds a key for.
     ///

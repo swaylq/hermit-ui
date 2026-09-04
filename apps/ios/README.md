@@ -249,7 +249,7 @@ several minutes in.
 
 | | |
 |---|---|
-| Missing privacy manifest | Upload is accepted, then bounced by email (`ITMS-91053`). `Hermit/PrivacyInfo.xcprivacy` handles it — one entry, `UserDefaults`, because `AppConfig` reads the `-hermitOrigin` launch argument. |
+| Missing privacy manifest | Upload is accepted, then bounced by email (`ITMS-91053`). `Hermit/PrivacyInfo.xcprivacy` handles it — one entry, `UserDefaults`, because `AppConfig` keeps the server address there (the `-hermitOrigin` launch argument, and the one the user set). |
 | Export compliance | Otherwise every upload waits on a web form. Answered in `Info.plist` (`ITSAppUsesNonExemptEncryption` = false: the only cryptography here is HTTPS, which is exempt). |
 | `aps-environment` | The entitlements file says `development`; Xcode's distribution flow substitutes `production`. Do not hand-edit it — `ProvisioningProfile.swift` reads the value back at runtime and reports it, so the first TestFlight build tells you which APNs host to send to. If push is silent and the server logs `BadDeviceToken`, that is this. |
 | Push does not work in the simulator | There is no APNs there at all. TestFlight on a real phone is the first time the push half of this app can be tested — which, with the microphone, is the entire reason it exists. |
@@ -289,15 +289,21 @@ secret exec MAC001_KEY -- env HERMIT_ORIGIN=http://localhost:4102 apps/ios/smoke
 (Still through `secret exec` — typing the key on the command line puts it in shell
 history, which is the one place this whole arrangement is trying to keep it out of.)
 
-`-hermitOrigin` is a launch argument the app reads out of `UserDefaults`
-(`AppConfig.swift`); plain HTTP to `localhost` works because of the
+`-hermitOrigin` is a launch argument the app reads out of `UserDefaults`'
+argument domain (`AppConfig.swift`); plain HTTP to `localhost` works because of the
 `NSAllowsLocalNetworking` exception in `Info.plist`, which permits nothing on the
-public internet. Screenshots land in `$HERMIT_SHOT_DIR` (default `apps/ios/shots`,
+public internet. It is deliberately the only unvalidated way in — it may point at
+a LAN address over plain HTTP, and `smoke.sh` even appends a route to it. An
+address the *user* types goes through `AppConfig.normalizeOrigin`, which insists
+on a bare `https://host[:port]` (http only for loopback), and outranks nothing:
+a launch argument still wins. Screenshots land in `$HERMIT_SHOT_DIR` (default `apps/ios/shots`,
 gitignored).
 
-There are unit tests too — `HermitTests/AppConfigTests.swift`, covering
-`AppConfig.isInternal`, which decides whether a URL stays in the app or is handed
-to Safari. Both targets run under the same `Hermit` scheme, so `smoke.sh` covers
+There are unit tests too — `HermitTests/AppConfigTests.swift`, covering the two
+things here that can be wrong in a way no screenshot would show: `AppConfig.isInternal`,
+which decides whether a URL stays in the app or is handed to Safari, and
+`AppConfig.normalizeOrigin`, which decides what the shell will accept as its own
+backend. Both targets run under the same `Hermit` scheme, so `smoke.sh` covers
 them; on their own: `xcodebuild test -only-testing:HermitTests …`.
 
 The end-to-end test is `HermitUITests/SmokeTests.swift`. It asserts the things that

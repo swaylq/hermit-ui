@@ -20,6 +20,10 @@
 3. 收尾必须过构建：`cd apps/ios && xcodegen generate` +
    `swiftc -typecheck -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" -target arm64-apple-ios17.0 Hermit/*.swift Shared/*.swift`；
    动了 dashboard 再跑 `pnpm --filter @hermit-ui/dashboard typecheck`。不过就回滚并如实记下。
+   **`swiftc -typecheck` 看不到 `HermitTests/`**，动了单测要另外真跑一遍：
+   `xcodebuild test -project Hermit.xcodeproj -scheme Hermit -only-testing:HermitTests \
+   -destination 'platform=iOS Simulator,id=<udid>' -derivedDataPath "$TMPDIR/hermit-ios-dd" \
+   CODE_SIGNING_ALLOWED=NO`（约 50 秒，首轮含全量构建约 2 分钟），跑完 `xcrun simctl shutdown all`。
 4. 改了看得见的界面才出截图（`tools/render-cards.sh`，或 `smoke.sh` 上模拟器）；
    跑完确认 `xcrun simctl list devices booted` 为空。
 5. 回来更新这个文件：勾掉做完的、重写「下一项」、把踩到的坑写进最下面那节。
@@ -28,20 +32,26 @@
 
 ## M0 — 迁移保险（最高优先，不做会出事）
 
-`dash.swaylab.ai` 后续并入 `hermit`。`AppConfig.origin` 是编译期常量，而麦克风授权是
+`dash.swaylab.ai` 后续并入 `hermit`。`AppConfig.origin` 原本是编译期常量，而麦克风授权是
 `guard origin.host == AppConfig.host`（`WebViewController.swift:252`，**精确比对，不走
 `isInternal`**）。迁移之后旧包麦克风直接 deny，网页侧 `canOpenMicSilently()` 在壳里返回
 true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由。
 
-- [ ] `AppConfig.origin` 改成 UserDefaults 里的值，默认仍是编译期常量；
+- [x] `AppConfig.origin` 改成 UserDefaults 里的值，默认仍是编译期常量；
       校验照抄 `apps/dashboard/src/lib/api-base.ts:28-44` 的 `normalizeBase()`
       （必须是裸 origin、非 localhost 必须 https）
+      —— 第 1 轮。**两个键**，不是一个：`hermitOrigin` 只从 argument 域读、不校验
+      （smoke.sh 要往它后面接路由，README 记着 LAN 上的 http 开发服务器）；
+      `hermitOriginOverride` 存用户输入、过 `normalizeOrigin`。优先级
+      launch argument > 用户设的 > `defaultOrigin`
 - [ ] 一个改 origin 的入口（先做最简单的：设置里一个输入框；不要为它建一整页）
 - [ ] 改完 origin 要整个重来：tRPC / SSE / WS 三条连接全拆重建，等同冷启动
       （`docs/multi-deployment-design.md:42-51`）
-- [ ] `AppConfigTests.swift` 补对应用例
-- [ ] **不要顺手**把麦克风判定放宽到 `isInternal` —— `knownHosts` 是页面报上来的，
+- [x] `AppConfigTests.swift` 补对应用例 —— 第 1 轮，35 个用例真跑过（见「一轮怎么做」第 3 条）
+- [x] **不要顺手**把麦克风判定放宽到 `isInternal` —— `knownHosts` 是页面报上来的，
       放宽等于把麦克风授权范围交给页面决定。要改的话判据是「用户自己配过的那个 origin」
+      —— 第 1 轮复核：`WebViewController.swift:252` 原样没动，而 `AppConfig.host` 现在
+      跟着用户设的 origin 走，正好就是「用户自己配过的那个 origin」这条判据
 
 ## M1 — 能力交接（页面不改）
 
@@ -152,13 +162,39 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**M0 第 1 条**：`AppConfig.origin` 改成 UserDefaults 里的值。
+**M0 第 2、3 条合起来做**：一个改 origin 的入口，加上「改完整个重来」。
+
+配置层已经就位（`AppConfig.setOrigin(_:) throws` / `clearOrigin()` / `userOrigin`），
+但现在没有任何调用方 —— 用户还是改不了地址，M0 的目的没达成。两件事一起做：
+
+- 入口：`OfflineView`（`Hermit/OfflineView.swift`，已经有一个居中的 title/detail/Retry
+  竖栈）加第二个按钮 "Change server"，弹 `UIAlertController(style: .alert)` 带一个
+  `addTextField`，预填 `AppConfig.origin.absoluteString`。**这块屏正是地址错了以后人
+  唯一看得见的东西**，所以它必须能改。设了 `userOrigin` 再多一个 "Use default"。
+  校验失败就把 `OriginError.message` 原样显示（措辞已经和网页对齐了）。
+  从正常页面里也要够得着 —— 最省事的是 A0 桥加一条消息，但那是 M1，这轮先只做离线屏。
+- 重来：`WebViewController` 加 `func switchOrigin()`，**别用 `webView.reload()`**
+  —— 那只会重发旧 URL。要 `webView.load(URLRequest(url: AppConfig.origin))`，
+  并且先 `bridge.pageWillReload()`。新旧 origin 是两个 localStorage 罐子，
+  换过去等于没登录，这是对的，不要试图搬密钥（那是 M1 的 Keychain）。
 
 ---
 
 ## 踩过的坑
 
-- （还没有。每轮把坑写在这里，别只写进提交说明 —— 下一轮的人只读这个文件。）
+- **`normalizeBase` 不能整份套到 `-hermitOrigin` 那个键上。** 它要求裸 origin、
+  非 localhost 必须 https，而 `SmokeTests.launch(path:)` 恰恰往后面接路由
+  （`http://localhost:4102/push`），README 又把「http 连 LAN 上的笔记本」写成正规用法。
+  两条都会被挡掉，而且挡掉的表现是**静默回落到生产地址**——smoke 跑得下去，只是全跑错了
+  服务器。所以拆成两个键，严格校验只作用在用户输入上。
+- **移植纯函数，先拿同一组输入把两边跑一遍，再写断言。** 我按想当然写了
+  「`ftp://x` 应该报 must be http(s)」，跑出来是「must be a bare origin, no path」——
+  因为不以 `http(s)://` 开头的串会**先**被拼上 `https://`，于是 `ftp://x` 解析成
+  host=`ftp` + path=`//x`。`normalizeBase` 里那句 `must be http(s)` 从字符串入口根本
+  走不到。把真的 `normalizeBase` 抠出来在 node 里跑了同一组 11 个输入，Swift 和 JS 逐条
+  一致，才敢写死断言。
+- **`swiftc -typecheck Hermit/*.swift Shared/*.swift` 编不到 `HermitTests/`。**
+  只跑它，改坏的单测一声不吭。真跑单测的命令见上面「一轮怎么做」第 3 条。
 
 ---
 
@@ -167,3 +203,4 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 1 | 2026-09-04 | M0 第 1、4、5 条：`AppConfig.origin` 成了 UserDefaults 里的值（两个键 + `normalizeOrigin`），单测从 22 条加到 35 条 | typecheck 过；`xcodebuild test -only-testing:HermitTests` 35/35 过；无界面改动，未截图 |
