@@ -18,6 +18,7 @@ import { openGlobalSearch } from '@/lib/chat-cache/search-bus';
 import { NotificationsFilters } from '@/components/sidebar/notifications-nav';
 import { BrainSidebar, RecentDispatchSessions } from '@/components/sidebar/brain-sidebar';
 import { KnowledgeSidebarList } from '@/components/sidebar/knowledge-sidebar-list';
+import { useDrawerSwipe } from '@/components/sidebar/use-drawer-swipe';
 import { useSidebar, SidebarProvider, SidebarMobileToggle } from '@/components/sidebar/context';
 import { RecentCrons, RecentAgents, RecentSessions } from '@/components/sidebar/recent-lists';
 
@@ -139,101 +140,14 @@ export function AppSidebar() {
   }, [mobileOpen, setMobileOpen]);
 
   // ── Interactive swipe to open / close the mobile drawer ──────────────────────
-  // Edge-swipe right (from the left ~28px) opens; swipe left (anywhere) closes.
-  // The drawer tracks the finger and snaps open/closed past the halfway point or
-  // on a flick. Desktop (lg+) is untouched — isMobile() gates the whole thing,
-  // and the sidebar is static there. On release we restore styling to the
-  // className so a later button/backdrop toggle still animates normally.
+  // The gesture itself is in components/sidebar/use-drawer-swipe.ts; these two
+  // refs are the only part of it that has to live in the markup.
   const asideRef = useRef<HTMLElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
-  const mobileOpenRef = useRef(mobileOpen);
-  mobileOpenRef.current = mobileOpen;
-  useEffect(() => {
-    const aside = asideRef.current;
-    if (!aside) return;
-    const backdrop = backdropRef.current;
-    const W = 280;     // drawer width (matches w-[280px])
-    const EDGE = 28;   // left-edge zone that can start an OPEN gesture
-    const SLOP = 10;   // px of travel before we commit to horizontal vs vertical
-
-    let mode: 'open' | 'close' | null = null;
-    let startX = 0, startY = 0, lastX = 0, lastT = 0, vx = 0, curTx = 0;
-    let decided = false, engaged = false, clearTimer = 0;
-
-    const isMobile = () => window.matchMedia('(max-width: 1023px)').matches;
-
-    const paint = (tx: number) => {
-      curTx = tx;
-      aside.style.transition = 'none';
-      aside.style.transform = `translateX(${tx}px)`;
-      if (backdrop) {
-        const p = Math.max(0, Math.min(1, (tx + W) / W));
-        backdrop.style.transition = 'none';
-        backdrop.style.opacity = String(p);
-        backdrop.style.pointerEvents = p > 0.01 ? 'auto' : 'none';
-      }
-    };
-    const restore = () => {
-      aside.style.transition = '';
-      aside.style.transform = '';
-      if (backdrop) { backdrop.style.transition = ''; backdrop.style.opacity = ''; backdrop.style.pointerEvents = ''; }
-    };
-
-    const onStart = (e: TouchEvent) => {
-      if (clearTimer) { window.clearTimeout(clearTimer); clearTimer = 0; }
-      if (!isMobile() || e.touches.length !== 1) { mode = null; return; }
-      const t = e.touches[0];
-      if (mobileOpenRef.current) mode = 'close';
-      else if (t.clientX <= EDGE) mode = 'open';
-      else { mode = null; return; }
-      startX = lastX = t.clientX; startY = t.clientY; lastT = e.timeStamp;
-      decided = false; engaged = false; vx = 0;
-    };
-    const onMove = (e: TouchEvent) => {
-      if (mode === null) return;
-      const t = e.touches[0];
-      const dx = t.clientX - startX, dy = t.clientY - startY;
-      if (!decided) {
-        if (Math.abs(dx) < SLOP && Math.abs(dy) < SLOP) return;
-        decided = true;
-        const rightDir = mode === 'open' ? dx > 0 : dx < 0;
-        engaged = Math.abs(dx) > Math.abs(dy) && rightDir;
-        if (!engaged) { mode = null; return; } // a vertical scroll — let it through
-      }
-      e.preventDefault(); // we own this horizontal gesture; block page scroll
-      const now = e.timeStamp;
-      if (now > lastT) vx = (t.clientX - lastX) / (now - lastT);
-      lastX = t.clientX; lastT = now;
-      const base = mode === 'open' ? -W : 0;
-      paint(Math.max(-W, Math.min(0, base + dx)));
-    };
-    const onEnd = () => {
-      if (mode === null || !engaged) { mode = null; return; }
-      const p = (curTx + W) / W;                       // 0 closed → 1 open
-      const open = Math.abs(vx) > 0.3 ? vx > 0 : p > 0.5; // flick wins, else halfway
-      aside.style.transition = '';                     // re-enable the CSS transition
-      aside.style.transform = open ? 'translateX(0)' : `translateX(-${W}px)`;
-      if (backdrop) { backdrop.style.transition = ''; backdrop.style.opacity = open ? '1' : '0'; backdrop.style.pointerEvents = open ? 'auto' : 'none'; }
-      setMobileOpen(open);
-      clearTimer = window.setTimeout(restore, 240); // hand control back to className
-      mode = null; engaged = false;
-    };
-
-    document.addEventListener('touchstart', onStart, { passive: true });
-    document.addEventListener('touchmove', onMove, { passive: false });
-    document.addEventListener('touchend', onEnd, { passive: true });
-    document.addEventListener('touchcancel', onEnd, { passive: true });
-    return () => {
-      if (clearTimer) window.clearTimeout(clearTimer);
-      document.removeEventListener('touchstart', onStart);
-      document.removeEventListener('touchmove', onMove);
-      document.removeEventListener('touchend', onEnd);
-      document.removeEventListener('touchcancel', onEnd);
-    };
-  }, [setMobileOpen]);
+  useDrawerSwipe({ open: mobileOpen, setOpen: setMobileOpen, asideRef, backdropRef });
 
   // The drawer above owns horizontal drags exactly while the layout is narrow —
-  // which is the same condition its own `isMobile()` gate uses. Watched rather
+  // the same condition the gesture's own `isMobile()` gate uses. Watched rather
   // than sampled, so a rotated iPad switches with the layout.
   const [narrowLayout, setNarrowLayout] = useState(false);
   useEffect(() => {
