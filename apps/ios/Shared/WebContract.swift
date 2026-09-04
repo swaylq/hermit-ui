@@ -50,6 +50,23 @@ enum WebContract {
     static let ctxDangerPct = 90
     static let ctxWarnPct = 70
 
+    // MARK: - Search over the cached prose (apps/dashboard/src/lib/chat-cache/search-core.ts)
+    //
+    // A hit rendered on the phone and the same hit rendered in the browser
+    // have to be the same excerpt. These are the three numbers that decide
+    // that: how much text surrounds the match, how many hits one page
+    // carries, and where counting matches inside one message stops.
+
+    /// SNIPPET_PAD — characters of context kept on each side of the first
+    /// match. Offsets are UTF-16 code units on both sides, because the web
+    /// slices a JavaScript string with them.
+    static let snippetPad = 70
+    /// DEFAULT_PAGE — hits per page for the global search overlay. The
+    /// in-session find asks for all of them instead.
+    static let searchPageSize = 100
+    /// MAX_MATCHES_PER_ROW — matches counted within one message.
+    static let maxMatchesPerRow = 200
+
     // MARK: - Palette
     //
     // Exactly the Tailwind classes the two files above name, resolved through

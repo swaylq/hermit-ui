@@ -43,6 +43,7 @@ export const SOURCES = {
   liveActivity: 'apps/dashboard/src/server/push/live-activity.ts',
   statusDots: 'apps/dashboard/src/lib/session-status.ts',
   ctxBar: 'apps/dashboard/src/components/ctx-bar.tsx',
+  search: 'apps/dashboard/src/lib/chat-cache/search-core.ts',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -206,6 +207,9 @@ export interface Contract {
   lingerSec: number;
   ctxDangerPct: number;
   ctxWarnPct: number;
+  snippetPad: number;
+  searchPageSize: number;
+  maxMatchesPerRow: number;
   palette: PaletteEntry[];
 }
 
@@ -248,6 +252,9 @@ export function readContract(): Contract {
     lingerSec: readNumberConst(SOURCES.liveActivity, 'LINGER_MS') / 1000,
     ctxDangerPct: bands[0],
     ctxWarnPct: bands[1],
+    snippetPad: readNumberConst(SOURCES.search, 'SNIPPET_PAD'),
+    searchPageSize: readNumberConst(SOURCES.search, 'DEFAULT_PAGE'),
+    maxMatchesPerRow: readNumberConst(SOURCES.search, 'MAX_MATCHES_PER_ROW'),
     palette,
   };
 }
@@ -314,6 +321,23 @@ export function renderWebContractSwift(c: Contract): string {
   L.push('');
   L.push(`    static let ctxDangerPct = ${c.ctxDangerPct}`);
   L.push(`    static let ctxWarnPct = ${c.ctxWarnPct}`);
+  L.push('');
+  L.push(`    // MARK: - Search over the cached prose (${SOURCES.search})`);
+  L.push('    //');
+  L.push('    // A hit rendered on the phone and the same hit rendered in the browser');
+  L.push('    // have to be the same excerpt. These are the three numbers that decide');
+  L.push('    // that: how much text surrounds the match, how many hits one page');
+  L.push('    // carries, and where counting matches inside one message stops.');
+  L.push('');
+  L.push('    /// SNIPPET_PAD — characters of context kept on each side of the first');
+  L.push('    /// match. Offsets are UTF-16 code units on both sides, because the web');
+  L.push('    /// slices a JavaScript string with them.');
+  L.push(`    static let snippetPad = ${c.snippetPad}`);
+  L.push('    /// DEFAULT_PAGE — hits per page for the global search overlay. The');
+  L.push('    /// in-session find asks for all of them instead.');
+  L.push(`    static let searchPageSize = ${c.searchPageSize}`);
+  L.push('    /// MAX_MATCHES_PER_ROW — matches counted within one message.');
+  L.push(`    static let maxMatchesPerRow = ${c.maxMatchesPerRow}`);
   L.push('');
   L.push('    // MARK: - Palette');
   L.push('    //');

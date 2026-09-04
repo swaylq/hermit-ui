@@ -34,8 +34,9 @@
    `-hermitOrigin` 指过去，跑一个 UI 用例，约 30 秒 + 一次全量构建。
    模拟器进程就跑在这台 Mac 上，模拟器里的 127.0.0.1 就是这台 Mac 的 loopback，
    不需要任何端口转发。要验证桥、验证壳对页面的反应都从这里加，别去连真 dashboard。
-   **只想驱动原生网络层**（不要模拟器、不要 key、不要网络）：tRPC 那半用
-   `tools/api-fixture.sh`（8 秒），SSE 那半用 `tools/stream-fixture.sh`（15 秒）。
+   **只想驱动原生网络层或数据层**（不要模拟器、不要 key、不要网络）：tRPC 那半用
+   `tools/api-fixture.sh`（8 秒），SSE 那半用 `tools/stream-fixture.sh`（15 秒），
+   本地库和搜索用 `tools/cache-fixture.sh`（4 秒）。
    两个都是假 dashboard + 一个 `swiftc` 直接编出来的驱动程序，会把「Swift 解出了什么」
    和「服务器真收到的请求行」两边都打出来。**它们不在任何 target 里，
    `swiftc -typecheck Hermit/*.swift` 看不见 `tools/`** —— 编不过只有跑一次才知道。
@@ -208,8 +209,28 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       `s_silent`（开了就不说话，驱动看门狗）、`s_unauth`（401，证明它不重连）、
       `s_notstream`（200 但是 HTML，门户劫持）。服务端必须是 `ThreadingHTTPServer`：
       一条 SSE 连接会占住整个线程
-- [ ] 本地存储：SQLite + FTS5（中文语料上严格优于现在的线性 `indexOf`）。
-      `lib/chat-cache/sync-plan.ts` 的 `planSync` 55 行纯函数**原样照抄**，连测试一起
+- [x] **本地存储：SQLite + FTS5** —— 第 10 轮，M2 收尾。两个文件：
+      `Hermit/SyncPlan.swift`（153 行，`planSync` 的移植）和 `Hermit/ChatCache.swift`
+      （约 780 行，`libsqlite3` 直调，无第三方依赖）。
+      **分词器选 `trigram`，不是 `unicode61`** —— 这不是查来的是跑出来的：同一份
+      20,000 行中文语料上，`unicode61` 对**每一个**中文查询都返回 0 行
+      （它把整句汉字当成一个词），`trigram` 与线性 `indexOf` 返回的行**完全相同**，
+      检索耗时 0.0–0.3ms 对 1.8–2.5ms。
+      **但 trigram 有一个洞，而且正好是常见情况：少于 3 个字符的查询它答不了，
+      并且是静默地答 0 行**（「义脑」就是两个字）。所以 `canUseIndex` 一票否决，
+      走和网页同一条线性扫描 —— 不是退步，只是没赚到。
+      索引只负责**缩小范围**：它返回的每一行都在 Swift 里用网页那套 `indexOf` 规则重新
+      核对一遍，片段和高亮偏移都来自这次核对，所以分词器折叠得比 JS 激进只会更慢、
+      不会更错。片段偏移是 **UTF-16 码元**（网页切的是 JS 字符串，iOS 这边正好是
+      `NSRange` 要的单位）。`SNIPPET_PAD` / `DEFAULT_PAGE` / `MAX_MATCHES_PER_ROW`
+      三个数走上面那条防漂移的生成器，Swift 里没有手抄
+- [x] **两张共享对照表 + 一个不用模拟器的驱动** —— 第 10 轮。
+      `apps/ios/tools/fixtures/sync-plan-cases.json`（22 例）和 `search-cases.json`
+      （22 例 + 10 行语料）都是**跑真的 TypeScript 生成的**
+      （`scripts/gen-sync-plan-fixture.ts` / `gen-search-fixture.ts`），
+      `src/lib/chat-cache/sync-plan-fixture.test.ts` 4 条断言保证它们不过期。
+      `tools/cache-fixture.sh`（约 4 秒，不用模拟器/key/网络）把两张表跑一遍、
+      量一次分词器、再验一次索引与表是否一致，共 502 条检查
 - [x] **防漂移** —— 第 9 轮。`apps/ios/Shared/WebContract.swift` 现在是**生成的**
       （`apps/dashboard/scripts/gen-ios-contract.ts`，`pnpm --filter @hermit-ui/dashboard
       gen:ios-contract`），十四个成员：时间线窗口、退避与看门狗、三个 Live Activity 超时、
@@ -314,31 +335,60 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
    回前台把待发消息递回页面由页面发，零凭据使用，代价是不在前台就补发不了。
    —— 仍然倾向 (a)。这条纯粹是红线要不要改，早就不是工作量问题了。
 
-**下一轮做 M2 的最后一条：本地存储（SQLite + FTS5）**，这也是 M2 唯一剩下的一条。
-它是 M3「冷启动先画本地快照」的前提，做完 M2 就整块完了。要点：
+**M2 整块做完了。下一轮开 M3 的前两条**，两条一起做才有东西可看：
 
-- `lib/chat-cache/sync-plan.ts` 的 `planSync`（55 行纯函数）**原样照抄，连测试一起**。
-  移植前先照 `evolution/lessons.md` 那条办：**把 TS 原函数抠出来在 node 里跑十来个输入
-  打成对照表，再照着表写断言** —— 别凭读代码推断边界行为。`lib/chat-cache/types.ts`
-  的空洞证明（`nextId`）是它的输入，一起读。
-- FTS5：中文语料上严格优于现在的线性 `indexOf`。分词器选型自己查一下
-  （`unicode61` 对中文按字切，`trigram` 更像人要的），**先拿真语料跑一遍再定**。
-- 别急着接 `HermitStream`：那一步是 M3/M4 的调用点，M2 只要一个能建表、能写、
-  能按 `planSync` 决定「取哪一段」的本地层。
-- 一轮做不完就只做 `planSync` 的移植 + 对照表，`schema` 和 FTS5 留到下一轮。
+1. **`UINavigationController` 当根容器**，替换 `SceneDelegate.swift:10-14`。
+   同文件三处强转要一起改（`:18` 交给 `AppDelegate.attach`、`:39`、`:49`），
+   **改漏了不会报错**，只是深链接不跳、音频会话不放。
+2. **原生会话列表**：`UICollectionView` + `UIHostingConfiguration`，
+   直接复用 `Shared/SessionCard.swift`、`Shared/StatusPalette.swift`、
+   `LiveActivity/SessionCardViews.swift`（364 行 SwiftUI，只 import SwiftUI）。
+   数据只发**一个** tRPC 查询 `chat.listSessions`，排序/分组规则不要在 Swift 里重新发明。
 
-`HermitStream` 还差一件事，要等有调用方才做得了：**前后台切换**。它是 Foundation-only 的，
-故意不 import UIKit，所以「离开前台就 `stop()`、回来新建一个」是调用点的活（M3/M4）。
-网页那边是 `visibilitychange`，理由一样 —— 后台挂着的会话会让服务端一直按 2 秒的
-兜底 tick 查 Postgres。
+这是**第一次真的构造 `HermitAPI`**，所以「壳不使用凭据」那条红线在这一轮会被跨过去 ——
+`key` 闭包接上 `Keychain.read` 就是了。sway 那条待拍板的 A2 选项 (a) 其实在这里被
+提前决定了：会话列表不带 key 就是空的。**动手前先看一眼下面那两条待拍板的事**，
+如果 sway 还没答，就按 (a) 做并在 11 处红线文字里如实改掉，别装作没跨。
 
-M3 的「像素比对流程」现在有个现成的起点：这一轮为了证明生成的调色板没改变屏幕，
-临时写过一个 25 行的 PNG 差分器（`NSImage` → `CGContext` 取 RGBA → 逐通道比），
-`swiftc -O` 编出来就能用。要做 M3 那条比对流程时，把它落成 `tools/png-diff.swift`
-比重写一个便宜。
+M3 的第三条「像素比对流程」建议紧跟着做，因为后面每一屏都靠它验收。现成的起点有两个：
+第 9 轮那个 25 行的 PNG 差分器（`NSImage` → `CGContext` 取 RGBA → 逐通道比，
+`swiftc -O` 编出来就能用，落成 `tools/png-diff.swift` 比重写便宜）；
+截图那一半照 `tools/bridge-fixture.sh` 的路子走，13 秒一个 UI 用例。
+
+`ChatCache` 还欠两件事，都要等有调用方才做得了（M3/M4）：
+**（a）`full` / `digest` 两层**（今天只有 `text` 这一层散文 + `sessions` 记账），
+LRU 15 个会话、`nextId` 空洞证明照 `lib/chat-cache/types.ts:47-68`；
+**（b）真机上的 FTS5**。`ChatCache.open` 在建表时就 `CREATE VIRTUAL TABLE`，
+所以旧系统缺 FTS5 会在**开库**时报错而不是在查询中途 —— 但这条路径**只在这台 Mac 的
+libsqlite3 上跑过**，M7 装到模拟器/真机那一轮要亲眼确认一次。
+
+`HermitStream` 那件旧欠账不变：**前后台切换**。它是 Foundation-only 的，
+「离开前台就 `stop()`、回来新建一个」是调用点（M3/M4）的活。
 
 ## 踩过的坑
 
+- **FTS5 的 `trigram` 分词器对不到三个字符的查询是静默返回 0 行**，不报错、不警告。
+  中文查询两个字是常态（「义脑」就是），所以这不是边角是主路。判据必须写在调用方
+  （`ChatCache.canUseIndex` 一票否决 + fixture 里一条专门断言它对「义脑」返回 false），
+  不能指望 SQLite 提醒你。**另一半同样重要：`unicode61`（默认分词器）对中文查询
+  一行都不返回** —— 它把整句汉字当一个词。这两件事都是跑出来的不是查出来的，
+  `tools/cache-fixture.sh` 每次都会把三列数字打出来。
+- **`INSERT OR REPLACE` 会让 external-content 的 FTS5 索引悄悄长脏，而搜索看不出来。**
+  REPLACE 是靠**删掉**冲突行来满足约束的，而删除触发器只在 `recursive_triggers` 打开时
+  才触发（默认是关的），于是旧行的 trigram 留在索引里，新行还换了一个 rowid。
+  但是 `search` 是 `prose_fts JOIN prose ON rowid` 的，孤儿条目连不上表、直接被丢掉 ——
+  **查询结果一直是对的，唯一的症状是文件永远变大**。所以写入用 upsert
+  （`ON CONFLICT(id) DO UPDATE`），并且验收要用 FTS5 自己的完整性检查。
+- **`integrity-check` 不带参数（或带 0）只检查索引和它自己一致，检查不出上面那种孤儿。**
+  要跟内容表对账必须写 `INSERT INTO t(t, rank) VALUES('integrity-check', 1)`。
+  第一版反证 `INSERT OR REPLACE` 时 502 条检查**全绿**，就是因为参数没给 1；
+  给了 1 之后，同一处改动准确地只红了那一条。（SQLite 3.42+，iOS 17 是 3.43。）
+- **一条断言反证不出来，不代表它没用，但要写下来它反证不出来。** 这一轮四个反证里，
+  「`planSync` 的稳定排序」那条**没有变红** —— Swift 的 `sorted(by:)` 文档上说不保证稳定，
+  但今天的实现（timsort）实际就是稳定的，所以把显式的次序兜底删掉，26 个等值 watermark
+  的用例照样全过。兜底留着（文档承诺才是契约，实现不是），但**这张表证明不了它在起作用**，
+  下一个人不要以为它证明了。另外三条反证是有效的：片段窗口差 1、分词器换回 `unicode61`、
+  上面那条 REPLACE，各自只红了预期的那几条。
 - **Foundation 的 `AsyncLineSequence`（`bytes.lines`）会把空行整个吞掉，而 SSE 的空行
   就是帧分隔符。** `"a\n\nb\n"` 出来是 `["a", "b"]`，没有开关能关掉；纯内存的字节序列
   也一样，所以不是 `URLSession` 的问题。后果极其安静：连接建立、字段一行行读进来、
@@ -542,6 +592,7 @@ M3 的「像素比对流程」现在有个现成的起点：这一轮为了证�
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 10 | 2026-09-05 | **M2 完成**：本地存储 `Hermit/ChatCache.swift`（SQLite + FTS5 `trigram`，`libsqlite3` 直调，无第三方依赖）与 `Hermit/SyncPlan.swift`（`planSync` 移植）。分词器是量出来的：`unicode61` 对每个中文查询 0 行，`trigram` 与线性 `indexOf` 同解、检索 0.0–0.3ms vs 1.8–2.5ms；**少于 3 字符的查询 trigram 静默答 0 行**，`canUseIndex` 一票否决走扫描。索引只缩小范围，命中行一律在 Swift 里按网页的 `indexOf` 规则重核，片段偏移是 UTF-16 码元。搜索的三个常量（`SNIPPET_PAD`/`DEFAULT_PAGE`/`MAX_MATCHES_PER_ROW`）并入第 9 轮的生成器。新增两个生成器 + 两张共享对照表 + `tools/cache-fixture.sh` | `xcodegen` + `swiftc -typecheck` **exit 0**（用故意写错的临时文件反证过它真在检查）；`tools/cache-fixture.sh` **502/502 条检查过**（22 例 planSync + 22 例 search 逐字段比片段/高亮/计数 + 分词器实测 + FTS5 `integrity-check, 1`）；**四个反证做过，三个如期变红**（片段窗口差 1、换回 `unicode61`、`INSERT OR REPLACE`），第四个（稳定排序）红不了并已写进「踩过的坑」；dashboard `tsc --noEmit` **0 错**，`ios-contract` + `chat-cache` 全部单测 **57/57**。无界面改动（`WebContract.swift` 只增三个 Int，颜色一字未动），未截图；没起过模拟器 |
 | 9 | 2026-09-05 | M2 的「防漂移」：新增生成器 `apps/dashboard/scripts/gen-ios-contract.ts` 和生成物 `apps/ios/Shared/WebContract.swift`（14 个成员），`StatusPalette` / `HermitStream` / `LiveActivityManager` 改成读它，Swift 侧不再有手抄的数字。**修掉那处已知漂移**：`workingStaleAfter` 10 分钟 → 服务端的 15 分钟。颜色由 `session-status.ts` / `ctx-bar.tsx` 里的 Tailwind 类名经 `tailwindcss/theme.css` 的 oklch 转 Display P3 得到。新增 `apps/dashboard/src/lib/ios-contract.test.ts`（7 条）。`render-cards.sh` 的文件清单同步 | `xcodegen` + `swiftc -typecheck` **exit 0 无输出**（并用一个故意写错的临时文件反证过它真在检查）；`ios-contract.test.ts` **7/7 过**，且**两次故意制造漂移都只红了预期的那一条**、恢复后全绿；dashboard `tsc --noEmit` **0 错**（先 prisma generate）；`tools/render-cards.sh` 编过并出图，与改动前的五张**逐像素比对：最多 0.12% 的像素差 1/255**，即生成的调色板没改变屏幕；`expanded-question.png` 亲眼看过（amber 的「去回答」、55% 的 emerald ctx 条）。**没起过模拟器** |
 | 8 | 2026-09-05 | M2 的 SSE 客户端：`Hermit/HermitStream.swift`（576 行）—— `URLSession.bytes(for:)` 的字节流，退避 `[1s,2s,5s]`、35 秒僵尸看门狗、首连 `skipInitial=1` 重连不带，`messages`/`status` 两种帧走一条 unbounded 的 `AsyncStream`；401/404 不再重连（复用 `HermitAPIError.isRetriable`）；补了 `SessionStatusFrame`/`SessionActivity`/`TimelineWindow`；`HermitAPI.decoder` 由 private 改共享，全 App 只有一份 ISO-8601 解析。另加 `tools/stream-fixture.sh` + `tools/stream-fixture/`（会真推 SSE 的假 dashboard，15 秒，四个场景）。**红线未动，仍然没有一处构造 `HermitStream`** | `xcodegen` + `swiftc -typecheck` **0 warning 0 error**；`tools/stream-fixture.sh` **真跑过，每一条事件都亲眼核对**：`{rows,gone}` 与裸数组两种形状都解、中文和 `&`/`<b>` 原样、带毫秒和不带毫秒的 Date 都解、`activity` 是字符串时只丢活动不丢 `state`、坏 JSON 和类型不符各出一条 `frameDropped`（后者报到 `rows[0].id`）而流不断、**被拆成两个包中间隔 150ms 的帧正确重组**、未知 `event: typing` 静默跳过、`: ping` 不产生事件；服务端请求日志确认重连那条**没有** `skipInitial`、`x-asst-key` 到位且无 cookie；看门狗按 1 秒的截止时间准点开火；401 只发了一次请求然后序列结束。`tools/api-fixture.sh` 回归重跑，无退化。dashboard 未改动，未跑它的 typecheck；无界面改动，未截图 |
 | 7 | 2026-09-05 | M2 前两条：`Hermit/HermitAPI.swift`（352 行）—— tRPC over HTTP 的 `query`/`mutate`，成功读 `j[0].result.data.json`、失败先解 `j[0].error.json` 再退回 HTTP 状态码，`URLError` 不包装，`HermitAPIError` 带 `isUnauthorized`/`isRetriable`，`ephemeral` 会话（无 cookie、无缓存、不等联网、30 秒）；superjson 的 `meta` 整块不声明，Date 走两档 ISO8601 解码。**key 是构造时传进来的闭包，全仓没有一处构造它，红线未动。** 另加 `tools/api-fixture.sh` + `tools/api-fixture/`（假 dashboard，8 秒，不用模拟器/key/网络） | `xcodegen` + `swiftc -typecheck` 过；`tools/api-fixture.sh` **真跑过，7 条请求全部亲眼核对**：GET 的 `input=` 编码、POST 的 body、`x-asst-key` 送到、无 cookie；带毫秒和不带毫秒的两种 Date 都解出来；401 出 `UNAUTHORIZED: invalid key`（retriable=false）、502 HTML 出 `HTTP 502`（retriable=true）、非 batch 正文和坏日期都出 `unreadable response`、死端口出 `URLError(-1004)` 而不是 `HermitAPIError`。`percentEncoded` 与 node 的 `encodeURIComponent` 四组输入**逐字节相同**。dashboard 未改动，未跑它的 typecheck；无界面改动，未截图 |

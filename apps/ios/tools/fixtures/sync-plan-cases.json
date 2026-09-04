@@ -1,0 +1,1644 @@
+{
+  "cases": [
+    {
+      "name": "unknown session",
+      "why": "Nothing cached — the whole history has to come down, from 0, without a wipe first.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "cached": [],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 10
+            },
+            "since": 0,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "unchanged session",
+      "why": "Watermark AND count level with the server is the only state that means \"do nothing\".",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [],
+        "upToDate": [
+          {
+            "sessionId": "s1",
+            "agentName": "asst",
+            "title": null,
+            "preview": null,
+            "watermark": 100,
+            "count": 10
+          }
+        ]
+      }
+    },
+    {
+      "name": "watermark moved forward",
+      "why": "The ordinary case: fetch the delta from where the cache stopped, do not wipe.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 200,
+          "count": 12
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 200,
+              "count": 12
+            },
+            "since": 100,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "watermark moved BACKWARD",
+      "why": "Server watermark older than the cached one (a clock step, or rows restored from a backup). Not a wipe — count did not shrink — so `since` ends up AHEAD of the server. Whether that is right is a separate question; the port has to reproduce it.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 50,
+          "count": 10
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 50,
+              "count": 10
+            },
+            "since": 100,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "count shrank",
+      "why": "A row was deleted (dequeue / clearQueue). MAX(updatedAt) cannot see that and a delta cannot repair it, so wipe and refetch from 0.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 8
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 8
+            },
+            "since": 0,
+            "reset": true
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "count grew at the same watermark",
+      "why": "Possible when two rows share a millisecond. Still a delta, not a wipe.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 11
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 11
+            },
+            "since": 100,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "count shrank AND watermark moved",
+      "why": "Both signals at once. The wipe wins: `since` is 0, not the cached watermark.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 300,
+          "count": 8
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 300,
+              "count": 8
+            },
+            "since": 0,
+            "reset": true
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "session the server no longer reports",
+      "why": "Deleted upstream. Dropped, and never fetched.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        },
+        {
+          "sessionId": "gone",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 50,
+          "count": 3
+        }
+      ],
+      "expected": {
+        "drop": [
+          "gone"
+        ],
+        "fetch": [],
+        "upToDate": [
+          {
+            "sessionId": "s1",
+            "agentName": "asst",
+            "title": null,
+            "preview": null,
+            "watermark": 100,
+            "count": 10
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty probe drops everything",
+      "why": "Also pins the ORDER of `drop`: it is the order `cached` came in, not sorted and not hashed.",
+      "probe": [],
+      "cached": [
+        {
+          "sessionId": "d",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 4,
+          "count": 4
+        },
+        {
+          "sessionId": "a",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 1,
+          "count": 1
+        },
+        {
+          "sessionId": "c",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 3,
+          "count": 3
+        },
+        {
+          "sessionId": "b",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 2,
+          "count": 2
+        }
+      ],
+      "expected": {
+        "drop": [
+          "d",
+          "a",
+          "c",
+          "b"
+        ],
+        "fetch": [],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "empty probe and empty cache",
+      "why": "A first run before the server has answered. Three empty lists, not a crash.",
+      "probe": [],
+      "cached": [],
+      "expected": {
+        "drop": [],
+        "fetch": [],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "fetches are newest-activity first",
+      "why": "A cold start makes searchable first what the user was just talking about.",
+      "probe": [
+        {
+          "sessionId": "old",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 10,
+          "count": 1
+        },
+        {
+          "sessionId": "new",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 999,
+          "count": 1
+        },
+        {
+          "sessionId": "mid",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 500,
+          "count": 1
+        }
+      ],
+      "cached": [],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "new",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 999,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "mid",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 500,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "old",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 10,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "equal watermarks keep probe order",
+      "why": "The comparator returns 0 for a tie and Array.prototype.sort is stable, so the server order survives. Swift `sort` is documented as NOT stable — this case is the one that catches a naive port.",
+      "probe": [
+        {
+          "sessionId": "z",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "y",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "x",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "w",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "v",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "u",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "t",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "s",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "r",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "q",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "pp",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "o",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "n",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "m",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "l",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "k",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "j",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "i",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "h",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "g",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "f",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "e",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "d",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "cc",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "b",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "a",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        }
+      ],
+      "cached": [],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "z",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "y",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "x",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "w",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "v",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "u",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "t",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "s",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "r",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "q",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "pp",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "o",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "n",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "m",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "l",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "k",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "j",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "i",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "h",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "g",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "f",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "e",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "d",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "cc",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "b",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "a",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "ties inside a sorted run keep probe order",
+      "why": "Same stability question, but with the tie in the middle of real ordering work rather than across the whole array.",
+      "probe": [
+        {
+          "sessionId": "a",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 500,
+          "count": 1
+        },
+        {
+          "sessionId": "b",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "c",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 900,
+          "count": 1
+        },
+        {
+          "sessionId": "d",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        },
+        {
+          "sessionId": "e",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 500,
+          "count": 1
+        },
+        {
+          "sessionId": "f",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 1
+        }
+      ],
+      "cached": [],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "c",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 900,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "a",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 500,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "e",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 500,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "b",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "d",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "f",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "duplicated id in the probe",
+      "why": "Both rows are planned — the loop is over the probe, not over the ids — while `live` collapses them. A port keyed on a dictionary would silently drop one.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        },
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 90,
+          "count": 9
+        }
+      ],
+      "cached": [],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 10
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 90,
+              "count": 9
+            },
+            "since": 0,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "duplicated id in the cache",
+      "why": "The Map keeps the LAST one, so the second entry decides the plan. `set` overwrites; it does not ignore.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        },
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 40,
+          "count": 4
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 100,
+              "count": 10
+            },
+            "since": 40,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "zero watermark and zero count",
+      "why": "A session with no messages. 0 === 0 is level, not missing — this must be upToDate, not a full fetch.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 0,
+          "count": 0
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 0,
+          "count": 0
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [],
+        "upToDate": [
+          {
+            "sessionId": "s1",
+            "agentName": "asst",
+            "title": null,
+            "preview": null,
+            "watermark": 0,
+            "count": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "cached count zero against a server that has rows",
+      "why": "An interrupted first sync. Delta from watermark 0, which is the same rows a full fetch would bring.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 500,
+          "count": 3
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 0,
+          "count": 0
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 500,
+              "count": 3
+            },
+            "since": 0,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "negative watermark",
+      "why": "Not reachable through the API today, but it is a plain number, and it pins the comparator on values either side of zero.",
+      "probe": [
+        {
+          "sessionId": "a",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": -5,
+          "count": 1
+        },
+        {
+          "sessionId": "b",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 5,
+          "count": 1
+        },
+        {
+          "sessionId": "c",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 0,
+          "count": 1
+        }
+      ],
+      "cached": [],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "b",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 5,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "c",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 0,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "a",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": -5,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "a watermark past 2^31",
+      "why": "Every real watermark is one: epoch milliseconds passed 2^31 in 1970+24 years. A port that reached for a 32-bit integer would truncate here.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 1757030400000,
+          "count": 2
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 1757030300000,
+          "count": 1
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 1757030400000,
+              "count": 2
+            },
+            "since": 1757030300000,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "metadata rides along on the probe row",
+      "why": "The plan carries the PROBE row, not the cached one, so a renamed session or a fresh preview reaches the writer even when only the metadata changed.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "brain",
+          "title": "标题变了",
+          "preview": "最后一句话",
+          "watermark": 200,
+          "count": 10
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": "旧标题",
+          "preview": null,
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "s1",
+              "agentName": "brain",
+              "title": "标题变了",
+              "preview": "最后一句话",
+              "watermark": 200,
+              "count": 10
+            },
+            "since": 100,
+            "reset": false
+          }
+        ],
+        "upToDate": []
+      }
+    },
+    {
+      "name": "metadata changed but the session is level",
+      "why": "The counterpart: nothing is fetched, and the row that lands in `upToDate` is the SERVER's, so a caller refreshing titles from it gets the new one.",
+      "probe": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": "新标题",
+          "preview": "新预览",
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "s1",
+          "agentName": "asst",
+          "title": "旧标题",
+          "preview": "旧预览",
+          "watermark": 100,
+          "count": 10
+        }
+      ],
+      "expected": {
+        "drop": [],
+        "fetch": [],
+        "upToDate": [
+          {
+            "sessionId": "s1",
+            "agentName": "asst",
+            "title": "新标题",
+            "preview": "新预览",
+            "watermark": 100,
+            "count": 10
+          }
+        ]
+      }
+    },
+    {
+      "name": "a realistic mixed pass",
+      "why": "Everything at once, which is the only case that pins how the three lists interleave.",
+      "probe": [
+        {
+          "sessionId": "quiet",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 300,
+          "count": 5
+        },
+        {
+          "sessionId": "busy",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 900,
+          "count": 40
+        },
+        {
+          "sessionId": "trimmed",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 700,
+          "count": 2
+        },
+        {
+          "sessionId": "fresh",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 800,
+          "count": 1
+        }
+      ],
+      "cached": [
+        {
+          "sessionId": "busy",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 850,
+          "count": 38
+        },
+        {
+          "sessionId": "quiet",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 300,
+          "count": 5
+        },
+        {
+          "sessionId": "trimmed",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 700,
+          "count": 9
+        },
+        {
+          "sessionId": "vanished",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 10,
+          "count": 1
+        },
+        {
+          "sessionId": "alsoGone",
+          "agentName": "asst",
+          "title": null,
+          "preview": null,
+          "watermark": 20,
+          "count": 2
+        }
+      ],
+      "expected": {
+        "drop": [
+          "vanished",
+          "alsoGone"
+        ],
+        "fetch": [
+          {
+            "probe": {
+              "sessionId": "busy",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 900,
+              "count": 40
+            },
+            "since": 850,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "fresh",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 800,
+              "count": 1
+            },
+            "since": 0,
+            "reset": false
+          },
+          {
+            "probe": {
+              "sessionId": "trimmed",
+              "agentName": "asst",
+              "title": null,
+              "preview": null,
+              "watermark": 700,
+              "count": 2
+            },
+            "since": 0,
+            "reset": true
+          }
+        ],
+        "upToDate": [
+          {
+            "sessionId": "quiet",
+            "agentName": "asst",
+            "title": null,
+            "preview": null,
+            "watermark": 300,
+            "count": 5
+          }
+        ]
+      }
+    }
+  ]
+}

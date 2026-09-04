@@ -11,6 +11,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "gen:ios-contract": "tsx scripts/gen-ios-contract.ts",
+    "gen:sync-plan-fixture": "tsx scripts/gen-sync-plan-fixture.ts",
+    "gen:search-fixture": "tsx scripts/gen-search-fixture.ts",
     "seed": "tsx scripts/seed-machine.ts",
     "migrate": "prisma migrate deploy",
     "migrate:dev": "prisma migrate dev",
