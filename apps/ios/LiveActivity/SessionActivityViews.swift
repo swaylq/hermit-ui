@@ -23,20 +23,32 @@ import WidgetKit
 // MARK: - Phase presentation
 
 private extension SessionPhase {
+    /// Straight from the web app's spec — see StatusPalette. Nothing is chosen
+    /// here; a Lock Screen with its own idea of what "working" looks like is the
+    /// same drift `session-status.ts` exists to prevent.
     var tint: Color {
         switch self {
-        case .working: return .cyan
-        case .blocked: return .orange   // the only "you" colour, used nowhere else
-        case .done:    return .green
-        case .failed:  return .red
+        // One hue for both, as the spec has it: a blocked turn IS mid-turn. What
+        // separates them on the web is the pulse, and here it is the symbol, the
+        // button and the alert.
+        case .working, .blocked: return StatusPalette.amber
+        // Not green. A turn that just finished is "unread" in this product's
+        // vocabulary, and unread is red — you have something to go read.
+        case .done:   return StatusPalette.rose
+        // A turn that died leaves a session with no live process: "down".
+        case .failed: return StatusPalette.zinc
         }
     }
 
-    var symbol: String {
+    /// A second glyph, only where there is room for one and only for the state
+    /// that has something to say beyond its colour. Working and blocked share a
+    /// hue by design (see StatusPalette), so this is what carries the difference
+    /// in the presentations wide enough to show it.
+    var badge: String? {
         switch self {
-        case .working: return "circle.hexagongrid"
+        case .working: return nil
         case .blocked: return "hand.raised.fill"
-        case .done:    return "checkmark.circle.fill"
+        case .done:    return "checkmark"
         case .failed:  return "exclamationmark.triangle.fill"
         }
     }
@@ -63,6 +75,28 @@ private func url(for sessionId: String) -> URL? {
     URL(string: "hermit://session/\(sessionId)")
 }
 
+/// Hermit's own mark, tinted by what the session is doing.
+///
+/// The same file the dashboard uses (`public/logo-crab-mono.png`, an alpha
+/// silhouette it tints with CSS), imported as a template image so it takes a
+/// `foregroundStyle` here the same way. Using the app icon instead would not
+/// work and would be wrong twice over: it is a full-colour raster with its own
+/// background, and a mark that cannot take the state colour is exactly what this
+/// slot must not be.
+private struct CrabMark: View {
+    let tint: Color
+    var size: CGFloat = 15
+
+    var body: some View {
+        Image("CrabMark")
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .foregroundStyle(tint)
+    }
+}
+
 // MARK: - Lock Screen / banner
 
 struct SessionActivityBanner: View {
@@ -73,9 +107,12 @@ struct SessionActivityBanner: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Image(systemName: phase.symbol)
-                    .font(.caption)
-                    .foregroundStyle(phase.tint)
+                CrabMark(tint: phase.tint, size: 15)
+                if let badge = phase.badge {
+                    Image(systemName: badge)
+                        .font(.caption2)
+                        .foregroundStyle(phase.tint)
+                }
                 Text(context.attributes.agentName)
                     .font(.footnote.weight(.semibold))
                     .monospaced()
@@ -134,9 +171,7 @@ struct SessionActivityIsland {
         return DynamicIsland {
             DynamicIslandExpandedRegion(.leading) {
                 HStack(spacing: 5) {
-                    Image(systemName: phase.symbol)
-                        .font(.caption)
-                        .foregroundStyle(phase.tint)
+                    CrabMark(tint: phase.tint, size: 14)
                     Text(context.attributes.agentName)
                         .font(.footnote.weight(.semibold))
                         .monospaced()
@@ -189,9 +224,10 @@ struct SessionActivityIsland {
                 }
             }
         } compactLeading: {
-            Image(systemName: phase.symbol)
-                .font(.caption2)
-                .foregroundStyle(phase.tint)
+            // The app's own mark, coloured by what the session is doing — this
+            // slot is the one place a person reads "which app" and "what state"
+            // in the same glance.
+            CrabMark(tint: phase.tint, size: 15)
         } compactTrailing: {
             if phase.showsTimer {
                 Text(context.state.since, style: .timer)
@@ -208,9 +244,7 @@ struct SessionActivityIsland {
                     .foregroundStyle(phase.tint)
             }
         } minimal: {
-            Image(systemName: phase.symbol)
-                .font(.caption2)
-                .foregroundStyle(phase.tint)
+            CrabMark(tint: phase.tint, size: 15)
         }
         .widgetURL(url(for: context.attributes.sessionId))
         .keylineTint(phase.tint)
