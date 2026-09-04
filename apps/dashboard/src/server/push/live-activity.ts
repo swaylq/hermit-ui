@@ -26,6 +26,7 @@ import { backgroundOutstanding } from '@/lib/session-status';
 import { contextWindowFor } from '@/lib/context-window';
 import { ctxPct } from '@/lib/format';
 import { PREVIEW_KEYS } from '@/server/message-digest';
+import { USER_QUEUE_FILTER } from '@/lib/chat-queue';
 
 /// What the widget decodes. Field-for-field with
 /// apps/ios/Shared/SessionActivityAttributes.swift — a name that does not match
@@ -164,7 +165,11 @@ export async function syncSessionActivity(sessionId: string): Promise<void> {
       orderBy: { createdAt: 'desc' },
       select: { kind: true, payload: true },
     }),
-    prisma.chatMessage.count({ where: { sessionId, role: 'user', deliveredAt: null } }),
+    // USER_QUEUE_FILTER, not a hand-written where. A bare role+deliveredAt also
+    // matches every row the gateway synced from the transcript — the agent's own
+    // tool_results are role 'user' in Anthropic's format — which is how this
+    // first shipped showing "排队 511" on a Lock Screen.
+    prisma.chatMessage.count({ where: { sessionId, ...USER_QUEUE_FILTER } }),
   ]);
 
   const phase: Phase = session.closedAt ? 'done' : phaseOf(session.state, pending != null, session.activity);

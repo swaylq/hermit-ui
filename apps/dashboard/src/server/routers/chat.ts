@@ -10,7 +10,7 @@ import { prisma } from '../db';
 // "ready" for up to POLL_MS after you pressed send: the SSE stream only
 // noticed the row on its 2 s safety-net poll. Every write here signals.
 import { fire as fireChat } from '../chat-bus';
-import { QUEUE_LIMIT } from '../../lib/chat-queue';
+import { QUEUE_LIMIT, USER_QUEUE_FILTER } from '../../lib/chat-queue';
 import { sessionRecencyMs } from '../../lib/session-recency';
 import { backgroundOutstanding, backgroundSummary } from '../../lib/session-status';
 import { stripNulDeep } from '../sanitize';
@@ -56,16 +56,8 @@ const ContentBlock = z.union([
   z.object({ type: z.string(), [Symbol.for('passthrough')]: z.any() }).passthrough(),
 ]);
 
-// What counts as a QUEUE message: one the USER composed in the dashboard composer
-// (the `send` mutation), not yet picked up by the gateway. The decisive field is
-// externalId === null — `send` never sets externalId, whereas every row the
-// gateway syncs FROM the claude transcript carries one (the JSONL uuid). Those
-// transcript rows are ALSO role:'user' + deliveredAt:null (a tool_result, or an
-// image the agent Read mid-task, is role 'user' in Anthropic's format), so
-// without the externalId:null guard the queue, the cap, clearQueue, and the
-// gateway's pollPending would all scoop up the agent's OWN attachments. Shared by
-// all four so they can never drift apart.
-const USER_QUEUE_FILTER = { role: 'user', deliveredAt: null, externalId: null } as const;
+// USER_QUEUE_FILTER moved to lib/chat-queue.ts — the Live Activity needs the
+// same object and must not import a router to get it. Four call sites below.
 
 // Growth ceiling on the recents payload (S4): without a bound listSessions returns
 // every session ever, unbounded, polled every 5s on every page. 200 is well above

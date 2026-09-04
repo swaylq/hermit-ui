@@ -21,6 +21,7 @@
 // never happens without a human confirming the list.
 
 import { prisma } from './db';
+import { USER_QUEUE_FILTER } from '../lib/chat-queue';
 
 /**
  * Spread into any ChatSession `where` that feeds a list, a count, a notification
@@ -169,7 +170,7 @@ export async function computeCleanup(machineId: string, opts: CleanupOptions = {
         select: { sessionId: true }, distinct: ['sessionId'],
       }),
       prisma.chatMessage.findMany({
-        where: { sessionId: { in: ids }, role: 'user', deliveredAt: null, externalId: null },
+        where: { sessionId: { in: ids }, ...USER_QUEUE_FILTER },
         select: { sessionId: true }, distinct: ['sessionId'],
       }),
       prisma.chatMessage.findMany({
