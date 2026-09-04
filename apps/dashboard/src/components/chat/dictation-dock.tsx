@@ -26,6 +26,17 @@
 //   'tap'  — hands-free, from the mic button beside the box. The ✓ in that same
 //            slot, or the one on the bar, finishes it.
 //
+// THE STREAM CAN ALSO SUCCEED AT NOTHING. Measured against the live service on
+// 2026-09-04: in one bad quarter of an hour, three runs in six returned an
+// empty transcript for a clean 14-second utterance — no error, no close, just
+// silence and then `done`. (Two others in the same period got an explicit
+// "Too many requests … system capacity limits"; it recovered on its own.) That
+// used to lose the whole utterance, because the capture buffer was dropped the
+// moment we asked the socket to finish, so by the time an empty tail came back
+// there was nothing to fall back to. The audio is now held until the tail
+// arrives and only then thrown away. Whoever is at fault upstream, the words
+// someone just said are not ours to lose.
+//
 // DEGRADING, NOT FAILING. There is no separate "old mode" any more, so this has
 // to cover everyone the socket can't serve: no DASHSCOPE_API_KEY, a scoped
 // agent-share token (the socket is machine-key only), a dropped connection
@@ -129,6 +140,10 @@ export const DictationDock = forwardRef<DictationHandle, {
   // run's passage, and then torn down by the first run's teardown.
   const runIdRef = useRef(0);
   const refineAbort = useRef<AbortController | null>(null);
+  // The recording, kept back until the stream's tail arrives — see the note at
+  // the top about runs that return nothing. Holding it costs one buffer for the
+  // length of the flush; dropping it early cost whole sentences.
+  const heldRef = useRef<Promise<Blob> | null>(null);
 
   // ── the reveal animation ──────────────────────────────────────────────────
   // `target` is what the transcript says; `shown` is how much of it has been
@@ -177,6 +192,7 @@ export const DictationDock = forwardRef<DictationHandle, {
     refineAbort.current?.abort();
     refineAbort.current = null;
     if (silenceTimer.current) { clearTimeout(silenceTimer.current); silenceTimer.current = null; }
+    heldRef.current = null;
     stopTyping();
     streamRef.current?.cancel();
     streamRef.current = null;
@@ -189,14 +205,10 @@ export const DictationDock = forwardRef<DictationHandle, {
     releaseWarmMic();
   }, [composerRef, setActiveBoth, stopTyping, setPhase]);
 
-  /** Transcribe whatever the capture layer is holding, the batch way. */
-  const flushBatch = useCallback(async (): Promise<string> => {
-    const stream = streamRef.current;
-    streamRef.current = null;
-    if (!stream) return '';
+  /** One recording → text, the batch way. Empty string on anything going wrong. */
+  const transcribeBlob = useCallback(async (wav: Blob): Promise<string> => {
+    if (wav.size <= BATCH_MIN_BYTES) return '';
     try {
-      const wav = await stream.stop();
-      if (wav.size <= BATCH_MIN_BYTES) return '';
       const fd = new FormData();
       fd.append('sessionId', sessionId);
       fd.append('wav', wav, 'voice.wav');
@@ -207,6 +219,14 @@ export const DictationDock = forwardRef<DictationHandle, {
       return '';
     }
   }, [sessionId]);
+
+  /** Close the capture layer and transcribe what it was holding. */
+  const flushBatch = useCallback(async (): Promise<string> => {
+    const stream = streamRef.current;
+    streamRef.current = null;
+    if (!stream) return '';
+    try { return await transcribeBlob(await stream.stop()); } catch { return ''; }
+  }, [transcribeBlob]);
 
   // The socket is unusable. Do NOT end the run — keep the mic open and finish as
   // a recording. The only thing that has to go is the partial: its audio is
@@ -284,8 +304,11 @@ export const DictationDock = forwardRef<DictationHandle, {
       });
       return;
     }
-    // Capture first, socket second: no audio may arrive after 'stop'.
-    streamRef.current?.cancel();
+    // Capture first, socket second: no audio may arrive after 'stop'. stop()
+    // rather than cancel() — it hands back the WAV instead of binning it, which
+    // is what onDone falls back to when the stream returns an empty tail (and
+    // it keeps the mic warm for the next run).
+    heldRef.current = streamRef.current?.stop() ?? null;
     streamRef.current = null;
     sockRef.current?.stop();
   }, [flushBatch, settleTo, teardown, onNotice, refineRun, setPhase]);
@@ -341,8 +364,28 @@ export const DictationDock = forwardRef<DictationHandle, {
           onSentence: () => streamRef.current?.mark(),
           onDone: (tail) => {
             const runId = runIdRef.current;
-            settleTo(tail);
-            void refineRun(tail, runId).then(() => { if (runIdRef.current === runId) teardown(); });
+            const held = heldRef.current;
+            heldRef.current = null;
+            if (tail) {
+              // Not needed — but it is a live promise, so give it somewhere to
+              // land rather than leaving an unhandled rejection lying around.
+              void held?.catch(() => {});
+              settleTo(tail);
+              void refineRun(tail, runId).then(() => { if (runIdRef.current === runId) teardown(); });
+              return;
+            }
+            // Nothing came back at all. No sentence ever closed, so mark() was
+            // never called and the buffer still holds the whole utterance —
+            // transcribe that rather than dropping what was said.
+            void (async () => {
+              let text = '';
+              try { if (held) text = await transcribeBlob(await held); } catch { text = ''; }
+              if (runIdRef.current !== runId) return;
+              settleTo(text);
+              onNotice?.(text ? '实时识别没出结果，已改用整段转写' : '这段没听清，什么也没转出来');
+              await refineRun(text, runId);
+              if (runIdRef.current === runId) teardown();
+            })();
           },
           onFailure: (message) => degradeToBatch(message, /not configured/.test(message)),
         });
@@ -371,7 +414,7 @@ export const DictationDock = forwardRef<DictationHandle, {
         onNotice?.(denied ? '麦克风被拒绝，去系统设置开启' : '麦克风不可用');
         teardown();
       });
-  }, [sessionId, composerRef, setActiveBoth, teardown, degradeToBatch, armSilenceStop, stop, onNotice, typeTo, settleTo, onActiveChange, refineRun, setPhase]);
+  }, [sessionId, composerRef, setActiveBoth, teardown, degradeToBatch, armSilenceStop, stop, onNotice, typeTo, settleTo, onActiveChange, refineRun, setPhase, transcribeBlob]);
 
   useImperativeHandle(ref, () => ({
     start,

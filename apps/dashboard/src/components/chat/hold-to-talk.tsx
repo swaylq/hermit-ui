@@ -280,46 +280,8 @@ export function HoldToTalkOverlay({
       </div>
 
       {/* The three targets. During 授权 there is no choice to make — releasing
-          anywhere opens the system alert — so drawing targets would be a lie.
-          They rise out of the bottom edge, which is where they belong: the
-          assembly is a circle whose centre is below the screen. */}
-      {vPhase !== 'auth' && (
-        <div
-          className="relative shrink-0 overflow-hidden transition-transform ease-out"
-          style={{
-            height: ZONE_H,
-            transform: show ? 'none' : 'translateY(24px)',
-            transitionDuration: ms,
-            willChange: 'transform',
-          }}
-        >
-          {/* ── the send disc ────────────────────────────────────────────── */}
-          <div
-            style={{
-              width: R_DOME * 2,
-              height: R_DOME * 2,
-              marginLeft: -R_DOME,
-              bottom: -(DROP + R_DOME),
-              opacity: vZone === 'send' ? 0.85 : 0.13,
-            }}
-            className="absolute left-1/2 rounded-full bg-white transition-opacity duration-150"
-          />
-          <div
-            style={{ bottom: R_DOME - DROP - 47 }}
-            className={cn(
-              'absolute inset-x-0 flex items-center justify-center gap-1.5 text-[15px] font-medium transition-colors duration-150',
-              vZone === 'send' ? 'text-neutral-800' : 'text-transparent',
-            )}
-          >
-            {vPhase === 'finishing' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {vPhase === 'finishing' ? '正在发送' : '松开发送'}
-          </div>
-
-          {/* ── the two arcs ─────────────────────────────────────────────── */}
-          <Arc side="left" active={cancelling} label="取消" />
-          <Arc side="right" active={vZone === 'edit' && vPhase === 'listening'} label="编辑" />
-        </div>
-      )}
+          anywhere opens the system alert — so drawing targets would be a lie. */}
+      {vPhase !== 'auth' && <Zones zone={vZone} phase={vPhase} show={show} ms={ms} />}
 
       {/* Hit boxes, invisible, and OUTSIDE the sliding container on purpose:
           the composer measures them mid-gesture, and a rect that is still
@@ -376,6 +338,65 @@ function Meter({ running, dimmed }: { running: boolean; dimmed: boolean }) {
  * The clip sits on a FULL-WIDTH wrapper so its `50%` means the middle of the
  * screen; the ring is a child of that and is still centred on the screen.
  */
+/**
+ * The bottom of the screen, as one memoised block.
+ *
+ * Everything in here is expensive to paint and none of it depends on the words:
+ * while you talk, the transcript rewrites the overlay's props about 36 times a
+ * second, and without this memo the disc, both arcs and their labels are
+ * reconciled every one of those times — on the same main thread the audio
+ * capture callback is trying to run on.
+ */
+const Zones = memo(function Zones({
+  zone,
+  phase,
+  show,
+  ms,
+}: {
+  zone: HoldZone;
+  phase: HoldPhase;
+  show: boolean;
+  ms: string;
+}) {
+  return (
+    <div
+      className="relative shrink-0 overflow-hidden transition-transform ease-out"
+      style={{
+        height: ZONE_H,
+        transform: show ? 'none' : 'translateY(24px)',
+        transitionDuration: ms,
+        willChange: 'transform',
+      }}
+    >
+      {/* ── the send disc ────────────────────────────────────────────────── */}
+      <div
+        style={{
+          width: R_DOME * 2,
+          height: R_DOME * 2,
+          marginLeft: -R_DOME,
+          bottom: -(DROP + R_DOME),
+          opacity: zone === 'send' ? 0.85 : 0.13,
+        }}
+        className="absolute left-1/2 rounded-full bg-white transition-opacity duration-150"
+      />
+      <div
+        style={{ bottom: R_DOME - DROP - 47 }}
+        className={cn(
+          'absolute inset-x-0 flex items-center justify-center gap-1.5 text-[15px] font-medium transition-colors duration-150',
+          zone === 'send' ? 'text-neutral-800' : 'text-transparent',
+        )}
+      >
+        {phase === 'finishing' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+        {phase === 'finishing' ? '正在发送' : '松开发送'}
+      </div>
+
+      {/* ── the two arcs ─────────────────────────────────────────────────── */}
+      <Arc side="left" active={zone === 'cancel' && phase === 'listening'} label="取消" />
+      <Arc side="right" active={zone === 'edit' && phase === 'listening'} label="编辑" />
+    </div>
+  );
+});
+
 // memo: the transcript rewrites the overlay's props about 36 times a second
 // while you talk, and none of it reaches these three props. Without this, both
 // arcs re-render at that rate for nothing.
@@ -432,7 +453,10 @@ const Arc = memo(function Arc({ side, active, label }: { side: 'left' | 'right';
 /** A bubble with a tail pointing down at the finger. */
 function Bubble({ tint, children }: { tint: string; children: React.ReactNode }) {
   return (
-    <div className="relative max-w-[min(30rem,84vw)]">
+    // willChange: this text is rewritten ~36×/s and it sits on top of the
+    // overlay's backdrop-filter. Its own layer keeps those repaints from going
+    // back through the filter.
+    <div className="relative max-w-[min(30rem,84vw)]" style={{ willChange: 'transform' }}>
       <div
         style={{ background: tint, boxShadow: '0 18px 50px -12px rgba(0,0,0,0.7)' }}
         className="max-h-[42vh] overflow-hidden rounded-[20px] px-4 py-3"
