@@ -101,6 +101,66 @@ final class SmokeTests: XCTestCase {
         shootPage("/watchdogs", named: "06-watchdogs")
     }
 
+    /// The screen that fixes a wrong address, driven end to end.
+    ///
+    /// It needs no key and no network, because it is only reachable when the
+    /// address answers nothing: `-hermitOriginOverride` is read straight out of
+    /// UserDefaults' argument domain, so this launch behaves exactly like one
+    /// where the user had typed that address — without writing it to disk, which
+    /// would follow the install into the next test.
+    ///
+    /// What it is checking is the wiring, not the parsing: `normalizeOrigin` has
+    /// its own unit tests, and what those cannot see is whether a person can
+    /// actually reach it, read the refusal, and get their typing back.
+    func testServerAddressCanBeChanged() {
+        // A high closed port, NOT one of the low ones. WebKit refuses to load
+        // anything from its blocked-port list (9, 25, 587, …) and the refusal is
+        // not a navigation failure — it commits an empty document, so the offline
+        // screen never appears and the app just sits there white.
+        let dead = "http://127.0.0.1:49517"
+        app.launchArguments = ["-hermitOriginOverride", dead]
+        app.launch()
+
+        let change = app.buttons["Change server"]
+        XCTAssertTrue(change.waitForExistence(timeout: 30), "no offline screen for an address nothing answers on")
+        XCTAssertTrue(app.buttons["Retry"].exists, "the offline screen lost its Retry button")
+        XCTAssertTrue(app.staticTexts[dead].exists, "the offline screen does not say WHICH server it tried")
+        shoot("07-offline")
+
+        change.tap()
+        let dialog = app.alerts["Server address"]
+        XCTAssertTrue(dialog.waitForExistence(timeout: 5), "Change server opened nothing")
+        let field = dialog.textFields.firstMatch
+        XCTAssertEqual(field.value as? String, dead, "the address box did not start from the current address")
+        XCTAssertTrue(dialog.buttons["Use default"].exists, "no way back to the shipped address")
+        shoot("08-server-address")
+
+        // A path on the end: the typo `normalizeOrigin` exists to catch, and the
+        // one that would otherwise put a machine key on the wire to a stranger.
+        let typo = "https://example.com/path"
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: dead.count))
+        field.typeText(typo)
+        dialog.buttons["Connect"].tap()
+
+        let refusal = app.alerts["Can't use that address"]
+        XCTAssertTrue(refusal.waitForExistence(timeout: 5), "a bad address was accepted")
+        XCTAssertTrue(
+            refusal.staticTexts["backend address must be a bare origin, no path"].exists,
+            "the refusal is not the web layer's own wording")
+        shoot("09-address-refused")
+
+        refusal.buttons["OK"].tap()
+        let second = app.alerts["Server address"]
+        XCTAssertTrue(second.waitForExistence(timeout: 5), "the refusal was a dead end")
+        XCTAssertEqual(
+            second.textFields.firstMatch.value as? String, typo,
+            "the address had to be retyped from scratch to fix one character")
+        shoot("10-address-kept")
+        second.buttons["Cancel"].tap()
+        XCTAssertTrue(change.waitForExistence(timeout: 5), "Cancel did not put the offline screen back")
+    }
+
     // MARK: - helpers
 
     private var springboard: XCUIApplication { XCUIApplication(bundleIdentifier: "com.apple.springboard") }

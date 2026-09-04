@@ -8,7 +8,10 @@ import WebKit
 final class WebViewController: UIViewController {
     private var webView: WKWebView!
     private let bridge = NativeBridge()
-    private lazy var offlineView = OfflineView { [weak self] in self?.reload() }
+    private lazy var offlineView = OfflineView(
+        onRetry: { [weak self] in self?.reload() },
+        onChangeServer: { [weak self] in self?.presentOriginEditor() }
+    )
 
     // MARK: - Setup
 
@@ -145,6 +148,109 @@ final class WebViewController: UIViewController {
     private func reload() {
         offlineView.hide()
         if webView.url == nil { load() } else { webView.reload() }
+    }
+
+    // MARK: - Which deployment this shell points at
+
+    /// Ask for a backend address and, if one is accepted, start over against it.
+    ///
+    /// Reachable from two places, and both have to work when the current address
+    /// resolves to nothing at all: the offline screen's "Change server" button,
+    /// and `hermit://server` (SceneDelegate). The second exists because the first
+    /// only appears when the document FAILS to load — an address that answers but
+    /// isn't a dashboard would otherwise leave no way back, and until M1 puts a
+    /// control inside the page there is no third door.
+    ///
+    /// The URL only opens this dialog; it carries no address of its own. Any app
+    /// or web page can open a URL scheme, and none of them may point this shell
+    /// somewhere the user did not type.
+    func presentOriginEditor(prefill: String? = nil) {
+        let alert = UIAlertController(
+            title: "Server address",
+            message: "Where this app looks for Hermit.",
+            preferredStyle: .alert
+        )
+        // Held rather than read back off the alert inside the handler: capturing
+        // the controller in its own action's closure is a retain cycle, and a
+        // text field does not own the alert.
+        var input: UITextField?
+        alert.addTextField { field in
+            field.text = prefill ?? AppConfig.origin.absoluteString
+            field.placeholder = AppConfig.defaultOrigin.absoluteString
+            field.keyboardType = .URL
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.clearButtonMode = .whileEditing
+            input = field
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        // Only when there is something to undo. With no address stored this
+        // button would do exactly what Cancel does.
+        if AppConfig.userOrigin != nil {
+            alert.addAction(UIAlertAction(title: "Use default", style: .default) { [weak self] _ in
+                AppConfig.clearOrigin()
+                self?.switchOrigin()
+            })
+        }
+        let connect = UIAlertAction(title: "Connect", style: .default) { [weak self] _ in
+            let typed = input?.text ?? ""
+            do {
+                try AppConfig.setOrigin(typed)
+                self?.switchOrigin()
+            } catch {
+                self?.reportOriginError(error, retypeFrom: typed)
+            }
+        }
+        alert.addAction(connect)
+        // So the keyboard's return key submits instead of doing nothing.
+        alert.preferredAction = connect
+        presentOnTop(alert)
+    }
+
+    /// `OriginError.message` is already the user-facing sentence — worded exactly
+    /// like the web layer's, so the two can never disagree about the same typo —
+    /// and is shown as-is rather than rephrased here.
+    ///
+    /// What they typed comes back with them: having to retype a whole address on a
+    /// phone to fix one character is its own reason to give up.
+    private func reportOriginError(_ error: Error, retypeFrom typed: String) {
+        let message = (error as? AppConfig.OriginError)?.message ?? error.localizedDescription
+        let alert = UIAlertController(
+            title: "Can't use that address", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+            // Next runloop: this fires while the first alert is still unwinding,
+            // and presenting into that leaves the second one on the floor with
+            // only a console line to say so.
+            DispatchQueue.main.async { self?.presentOriginEditor(prefill: typed) }
+        })
+        presentOnTop(alert)
+    }
+
+    /// Load `AppConfig.origin` from scratch.
+    ///
+    /// Not `webView.reload()`: a reload repeats the address of the document that
+    /// is already loaded, which is the one thing changing here. Not a navigation
+    /// either — the page builds its tRPC client, its SSE reader and its WebSockets
+    /// once per document against one backend (apps/dashboard/src/lib/api-base.ts),
+    /// so anything short of a fresh load would leave half of them pointed at the
+    /// old deployment.
+    ///
+    /// The new origin is a different localStorage jar, so this lands on the
+    /// sign-in gate. That is correct: the key belongs to the deployment it was
+    /// issued by, and moving it is not this milestone's job.
+    private func switchOrigin() {
+        offlineView.hide()
+        bridge.pageWillReload()
+        // Reported by the PREVIOUS page, about deployments its keyring knew. This
+        // set decides which links stay inside the app; nothing on the incoming
+        // origin has vouched for them, so it starts empty and is refilled by the
+        // new page's `origins` message.
+        AppConfig.setKnownHosts([])
+        // The Lock Screen activities belong to the deployment being left: its
+        // server holds the push tokens that keep them current, and the incoming
+        // page has no way to learn they exist, let alone end them.
+        LiveActivityManager.endAll()
+        webView.load(URLRequest(url: AppConfig.origin))
     }
 
     @objc private func didEnterForeground() {

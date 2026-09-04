@@ -11,12 +11,19 @@ extension UIColor {
 /// Shown when the document itself fails to load. The web app's own offline.html
 /// can't help here: a service worker has nothing to serve if the very first
 /// navigation never reached the network.
+///
+/// It is also the only screen that can fix a wrong address, which is why it names
+/// the one it tried and offers a way to change it — see `presentOriginEditor` in
+/// WebViewController.
 final class OfflineView: UIView {
     private let onRetry: () -> Void
+    private let onChangeServer: () -> Void
     private let detail = UILabel()
+    private let address = UILabel()
 
-    init(onRetry: @escaping () -> Void) {
+    init(onRetry: @escaping () -> Void, onChangeServer: @escaping () -> Void) {
         self.onRetry = onRetry
+        self.onChangeServer = onChangeServer
         super.init(frame: .zero)
         build()
     }
@@ -38,16 +45,38 @@ final class OfflineView: UIView {
         detail.textAlignment = .center
         detail.numberOfLines = 3
 
-        var config = UIButton.Configuration.borderedProminent()
-        config.title = "Retry"
-        let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in
+        // WHICH server failed. Without it "Can't reach Hermit" reads as "the
+        // network is down" even when the real answer is that the address is
+        // wrong — and this screen is where that gets corrected. Truncated in the
+        // middle so a long host keeps both its start and its port.
+        address.font = .monospacedSystemFont(
+            ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .regular)
+        address.textColor = .tertiaryLabel
+        address.textAlignment = .center
+        address.numberOfLines = 1
+        address.lineBreakMode = .byTruncatingMiddle
+
+        var retryConfig = UIButton.Configuration.borderedProminent()
+        retryConfig.title = "Retry"
+        let retry = UIButton(configuration: retryConfig, primaryAction: UIAction { [weak self] _ in
             self?.onRetry()
         })
 
-        let stack = UIStackView(arrangedSubviews: [title, detail, button])
+        // Plain, not a second prominent button: the usual answer here is still
+        // "try again", and two filled buttons would make the rarer one look like
+        // the expected one.
+        var changeConfig = UIButton.Configuration.plain()
+        changeConfig.title = "Change server"
+        let change = UIButton(configuration: changeConfig, primaryAction: UIAction { [weak self] _ in
+            self?.onChangeServer()
+        })
+
+        let stack = UIStackView(arrangedSubviews: [title, detail, address, retry, change])
         stack.axis = .vertical
         stack.spacing = 12
         stack.alignment = .center
+        // The two buttons are one cluster; the 12pt gap is for the text above.
+        stack.setCustomSpacing(0, after: retry)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -60,6 +89,9 @@ final class OfflineView: UIView {
 
     func show(in parent: UIView, message: String) {
         detail.text = message
+        // Read at show time, not at build time: after a failed switch this view is
+        // reused, and a stale address would name the wrong server.
+        address.text = AppConfig.origin.absoluteString
         guard superview == nil else { return }
         translatesAutoresizingMaskIntoConstraints = false
         parent.addSubview(self)

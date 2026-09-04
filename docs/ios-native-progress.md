@@ -24,8 +24,14 @@
    `xcodebuild test -project Hermit.xcodeproj -scheme Hermit -only-testing:HermitTests \
    -destination 'platform=iOS Simulator,id=<udid>' -derivedDataPath "$TMPDIR/hermit-ios-dd" \
    CODE_SIGNING_ALLOWED=NO`（约 50 秒，首轮含全量构建约 2 分钟），跑完 `xcrun simctl shutdown all`。
-4. 改了看得见的界面才出截图（`tools/render-cards.sh`，或 `smoke.sh` 上模拟器）；
-   跑完确认 `xcrun simctl list devices booted` 为空。
+4. 改了看得见的界面才出截图（`tools/render-cards.sh` 只画 Live Activity 卡片，
+   画不了 App 的屏；要 App 的屏就得上模拟器）；跑完确认
+   `xcrun simctl list devices booted` 为空，并 `simctl erase` 掉自己开的那台。
+   **不需要 key、不需要网络的一屏**可以只跑单个 UI 用例，13 秒：
+   `xcodebuild build-for-testing …` 然后
+   `TEST_RUNNER_HERMIT_SHOT_DIR=$PWD/shots xcodebuild test-without-building … \
+   -only-testing:HermitUITests/SmokeTests/<用例名>`。
+   `shots/` 是 gitignore 的（截图不进仓库），所以 M7 那批要单独交给 sway。
 5. 回来更新这个文件：勾掉做完的、重写「下一项」、把踩到的坑写进最下面那节。
 
 ---
@@ -44,9 +50,27 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       （smoke.sh 要往它后面接路由，README 记着 LAN 上的 http 开发服务器）；
       `hermitOriginOverride` 存用户输入、过 `normalizeOrigin`。优先级
       launch argument > 用户设的 > `defaultOrigin`
-- [ ] 一个改 origin 的入口（先做最简单的：设置里一个输入框；不要为它建一整页）
-- [ ] 改完 origin 要整个重来：tRPC / SSE / WS 三条连接全拆重建，等同冷启动
-      （`docs/multi-deployment-design.md:42-51`）
+- [x] 一个改 origin 的入口（先做最简单的：设置里一个输入框；不要为它建一整页）
+      —— 第 2 轮。**两个入口**：离线屏的 "Change server" 按钮，和 `hermit://server`
+      （`SceneDelegate.open(_:)` 里和 `hermit://session/<id>` 并列的第二个 case）。
+      第二个是必须的：地址如果**答得出东西但不是 dashboard**，离线屏根本不出现，
+      按钮就够不着。URL 不带地址，只是把对话框打开——任何 App 都能开 URL scheme。
+      对话框是 `presentOriginEditor(prefill:)`：预填当前 origin，
+      设过 `userOrigin` 才多一个 "Use default"，校验失败原样显示 `OriginError.message`
+      并把用户打的字带回来
+- [x] 改完 origin 要整个重来：tRPC / SSE / WS 三条连接全拆重建，等同冷启动
+      （`docs/multi-deployment-design.md:42-51`）—— 第 2 轮，`WebViewController.switchOrigin()`：
+      `bridge.pageWillReload()` → `AppConfig.setKnownHosts([])` → `LiveActivityManager.endAll()`
+      → `webView.load(...)`。后两条不是顺手加的：`knownHosts` 是**上一个**页面报的，
+      决定哪些链接留在 App 里；Live Activity 的推送令牌握在正要离开的那个部署的服务端手上，
+      新页面无从知道它们存在，更别说结束它们
+- [ ] **`normalizeOrigin` 要拒掉 WebKit 的封禁端口**（第 2 轮发现，见「踩过的坑」）。
+      `https://x:9` 现在能通过校验，然后 WebKit 拒绝加载、**提交一个空文档**——
+      不是导航失败，所以 `didFailProvisionalNavigation` 不响，离线屏永远不出现，
+      屏幕就一直白着。名单抄 Fetch 规范的 bad ports（1,7,9,11,13,15,17,19–23,25,37,42,43,
+      53,69,77,79,87,95,101–115,117,119,123,135,137–139,143,161,179,389,427,465,512–515,
+      526,530–532,540,548,554,556,563,587,601,636,989,990,993,995,1719,1720,1723,2049,
+      3659,4045,5060,5061,6000,6566,6665–6669,6697,10080）
 - [x] `AppConfigTests.swift` 补对应用例 —— 第 1 轮，35 个用例真跑过（见「一轮怎么做」第 3 条）
 - [x] **不要顺手**把麦克风判定放宽到 `isInternal` —— `knownHosts` 是页面报上来的，
       放宽等于把麦克风授权范围交给页面决定。要改的话判据是「用户自己配过的那个 origin」
@@ -162,23 +186,22 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**M0 第 2、3 条合起来做**：一个改 origin 的入口，加上「改完整个重来」。
+M0 只剩新加的那一条，先做掉它，再开 M1 的头。
 
-配置层已经就位（`AppConfig.setOrigin(_:) throws` / `clearOrigin()` / `userOrigin`），
-但现在没有任何调用方 —— 用户还是改不了地址，M0 的目的没达成。两件事一起做：
-
-- 入口：`OfflineView`（`Hermit/OfflineView.swift`，已经有一个居中的 title/detail/Retry
-  竖栈）加第二个按钮 "Change server"，弹 `UIAlertController(style: .alert)` 带一个
-  `addTextField`，预填 `AppConfig.origin.absoluteString`。**这块屏正是地址错了以后人
-  唯一看得见的东西**，所以它必须能改。设了 `userOrigin` 再多一个 "Use default"。
-  校验失败就把 `OriginError.message` 原样显示（措辞已经和网页对齐了）。
-  从正常页面里也要够得着 —— 最省事的是 A0 桥加一条消息，但那是 M1，这轮先只做离线屏。
-- 重来：`WebViewController` 加 `func switchOrigin()`，**别用 `webView.reload()`**
-  —— 那只会重发旧 URL。要 `webView.load(URLRequest(url: AppConfig.origin))`，
-  并且先 `bridge.pageWillReload()`。新旧 origin 是两个 localStorage 罐子，
-  换过去等于没登录，这是对的，不要试图搬密钥（那是 M1 的 Keychain）。
-
----
+- **`normalizeOrigin` 拒掉封禁端口**（M0 最后一条）。改一个地方：`AppConfig.swift` 的
+  `normalizeOrigin`，在现有的 `1...65535` 那句旁边加名单判断，措辞跟着现有风格走
+  （现有的都是 `backend address …` 开头的小写短句）。**网页那侧
+  `apps/dashboard/src/lib/api-base.ts` 的 `normalizeBase()` 也没有这个判断** ——
+  两边措辞要对齐，不然 M2 的防漂移断言会立刻打架；判据照第 1 轮那条教训，
+  先把两个函数拿同一组输入在 node / swift 里各跑一遍再写断言。
+- **M1 第一条：A0 桥的问答通道**。`web→native {type:'req', id, method, params}` /
+  `native→web window.__hermitNative.onReply(id, ok, payload)`。Swift 侧一张
+  `[String: (Bool, Any?) -> Void]` 待答表，双向 5 秒超时。新消息加在
+  `NativeBridge.swift` 的 switch（现在在 :150-189 那段，第 2 轮没动它）；
+  `NativeApi`（`native-bridge.ts:28-34`）加 `onReply`。
+  这条是 A1 Keychain 和 A2 出站队列的前置，先做它别跳过。
+  顺手可以把「从正常页面里改 origin」挂上去（`method: 'setOrigin'`），
+  这轮只做到离线屏 + URL scheme。
 
 ## 踩过的坑
 
@@ -195,6 +218,31 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
   一致，才敢写死断言。
 - **`swiftc -typecheck Hermit/*.swift Shared/*.swift` 编不到 `HermitTests/`。**
   只跑它，改坏的单测一声不吭。真跑单测的命令见上面「一轮怎么做」第 3 条。
+- **别拿低号端口当「连不上的地址」——WebKit 的封禁端口不会产生导航失败。**
+  第 2 轮我用 `http://127.0.0.1:9` 想逼出离线屏，屏幕白了一片，
+  `didFailProvisionalNavigation` 一次没响。WebKit 对 Fetch 规范里的 bad ports
+  （9 是 discard）是拒绝加载并**提交一个空文档**，日志里看到的是
+  `didCommitLoadForFrame` + `didFinishLoadForFrame`，24 毫秒。换成 `49517` 立刻正常：
+  8 秒内出离线屏。**排查花了半小时，因为「白屏」和「延迟很久的白屏」长得一模一样**——
+  同一轮里 `https://no-such-host.invalid` 也白屏，但那个是真失败，只是 WebKit
+  等了 **37 秒**才报 `NSURLErrorDomain -1200`。所以看到白屏先看时间：秒级 = 被封端口，
+  半分钟以上 = 真在等超时。
+- **模拟器上 `simctl openurl` 弹的「在 "Hermit" 中打开?」是 SpringBoard 级的模态，
+  会一直挂在那儿挡住后面所有事。** 它熬过了 `simctl uninstall` + `install`，
+  导致后一次 UI 测试 43 秒全程什么都点不到、报的却是「找不到按钮」。
+  没有 `simctl` 命令能点掉它（`simctl` 没有 tap），XCUITest 可以，
+  但触发 openurl 的又只能是宿主机 —— 两边碰不到一起。
+  **判据：UI 测试莫名找不到自己的控件，先 `simctl io screenshot` 看一眼整屏。**
+  清掉的办法是 `simctl shutdown` + `simctl erase`。
+- **`defaults write <容器路径>/Library/Preferences/<bundleid>.plist` 种不进模拟器 App 的
+  UserDefaults。** 宿主机的 `cfprefsd` 和模拟器里的不是同一个，写完读得回来，App 起来照样
+  拿默认值。要伪造一个「用户设过的地址」，用**启动参数**：`-hermitOriginOverride <url>`
+  —— UserDefaults 的 argument 域优先级最高，`AppConfig.userOrigin` 直接就读到了，
+  而且**不落盘**，不会污染同一次安装里跑的其他测试。
+- **本机的模拟器是中文的**（系统弹窗是「取消 / 打开」）。所以 XCUITest 里别去找系统控件的
+  英文标签；自己代码里写死的英文标题（`Connect` / `Cancel` / `OK` / `Use default`）不受影响，
+  但 `clearButtonMode` 给的清除按钮是系统的，要清输入框请发退格
+  （`XCUIKeyboardKey.delete.rawValue` 重复 N 次），别按标签找。
 
 ---
 
@@ -203,4 +251,5 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 2 | 2026-09-04 | M0 第 2、3 条：离线屏加 "Change server"（并显示试的是哪个地址）、`hermit://server`、`presentOriginEditor` + `switchOrigin`；新增 UI 用例 `testServerAddressCanBeChanged` | `xcodegen` + `swiftc -typecheck` 过、`xcodebuild build` 0 warning；UI 用例 13 秒通过，4 张截图在 `apps/ios/shots/07..10`，逐张看过 |
 | 1 | 2026-09-04 | M0 第 1、4、5 条：`AppConfig.origin` 成了 UserDefaults 里的值（两个键 + `normalizeOrigin`），单测从 22 条加到 35 条 | typecheck 过；`xcodebuild test -only-testing:HermitTests` 35/35 过；无界面改动，未截图 |

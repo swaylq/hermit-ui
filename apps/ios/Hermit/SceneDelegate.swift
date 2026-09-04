@@ -27,20 +27,33 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if let url = URLContexts.first?.url { open(url) }
     }
 
-    /// `hermit://session/<id>` — the only URL this app answers to, built by the
-    /// Live Activity and consumed here. Routed through the same bridge call as a
-    /// notification tap, so a session opened from the Lock Screen and one opened
-    /// from a banner take the identical path (including the hard navigation that
-    /// Next's router needs — see lib/native-bridge.ts).
+    /// The two `hermit://` URLs this app answers to.
+    ///
+    /// `hermit://session/<id>` is built by the Live Activity and routed through the
+    /// same bridge call as a notification tap, so a session opened from the Lock
+    /// Screen and one opened from a banner take the identical path (including the
+    /// hard navigation that Next's router needs — see lib/native-bridge.ts).
+    ///
+    /// `hermit://server` opens the address dialog. It is the way back in when the
+    /// app is pointed at something that answers but is not a dashboard: the
+    /// offline screen never appears, so its "Change server" button is out of
+    /// reach. Carries no address of its own — see `presentOriginEditor`.
     private func open(_ url: URL) {
-        guard url.scheme == "hermit", url.host == "session" else { return }
-        let id = url.lastPathComponent
-        guard !id.isEmpty, id != "session" else { return }
+        guard url.scheme == "hermit" else { return }
         guard let controller = window?.rootViewController as? WebViewController else { return }
-        // The path shape the page already understands. No machine parameter: the
-        // activity belongs to whichever workspace raised it, and the page picks
-        // the session up from its own keyring.
-        controller.openDeepLink("/chat?session=\(id)")
+        switch url.host {
+        case "session":
+            let id = url.lastPathComponent
+            guard !id.isEmpty, id != "session" else { return }
+            // The path shape the page already understands. No machine parameter:
+            // the activity belongs to whichever workspace raised it, and the page
+            // picks the session up from its own keyring.
+            controller.openDeepLink("/chat?session=\(id)")
+        case "server":
+            controller.presentOriginEditor()
+        default:
+            return
+        }
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {

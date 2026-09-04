@@ -170,7 +170,7 @@ WARNINGS=$(grep 'warning:' "$LOG" | grep -vc 'appintentsmetadataprocessor' || tr
 echo "==> compiler warnings: $WARNINGS"
 
 # Only now that there is something to run: clear the previous run's evidence.
-rm -f "$SHOT_DIR"/0*.png
+rm -f "$SHOT_DIR"/*.png
 
 echo "==> running the tests"
 # Exported, not `env VAR=… xcodebuild`: an assignment in argv is visible in `ps`
