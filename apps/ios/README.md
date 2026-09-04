@@ -237,6 +237,14 @@ is typed anywhere.
 5. **Export** with `signingStyle: manual`, `signingCertificate: Apple Distribution` and
    a `provisioningProfiles` entry mapping the bundle id to the profile name from step 3.
 
+**Every embedded extension repeats steps 3 and 5.** Manual signing wants one profile per
+bundle id inside the `.app`, so the Live Activity widget (`ai.swaylab.hermit.LiveActivity`)
+needed its own registered bundle id and its own `IOS_APP_STORE` profile against the same
+distribution certificate. Its name goes in `.release.env` as `ASC_PROFILE_EXT`. Skip it and
+the archive still succeeds — `-allowProvisioningUpdates` quietly registers a development
+profile — and then export fails with `No profiles for 'ai.swaylab.hermit.LiveActivity'`,
+several minutes in.
+
 **Things that bite, in the order they bite**
 
 | | |

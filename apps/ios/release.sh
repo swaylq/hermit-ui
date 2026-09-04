@@ -12,7 +12,8 @@
 #   ASC_KEY_ID=ABCDE12345        # App Store Connect API key, App Manager role
 #   ASC_ISSUER_ID=<uuid>         # Users and Access → Integrations
 #   ASC_TEAM_ID=ABCDE12345
-#   ASC_PROFILE="<name of the App Store provisioning profile>"
+#   ASC_PROFILE="<name of the App Store profile for ai.swaylab.hermit>"
+#   ASC_PROFILE_EXT="<name of the App Store profile for the .LiveActivity extension>"
 #
 # The key itself is never a file in the repo and never an argument: it arrives
 # base64-encoded in ASC_KEY_P8_B64 (or ASC_KEY_P8_HERMIT_B64, which is what the
@@ -37,7 +38,7 @@ UPLOAD=1
 
 [ -f .release.env ] && . ./.release.env
 KEY_B64="${ASC_KEY_P8_B64:-${ASC_KEY_P8_HERMIT_B64:-}}"
-for v in ASC_KEY_ID ASC_ISSUER_ID ASC_TEAM_ID ASC_PROFILE; do
+for v in ASC_KEY_ID ASC_ISSUER_ID ASC_TEAM_ID ASC_PROFILE ASC_PROFILE_EXT; do
   [ -n "${!v:-}" ] || { echo "missing $v (put it in apps/ios/.release.env)" >&2; exit 1; }
 done
 [ -n "$KEY_B64" ] || { echo "no key: run under \`secret exec ASC_KEY_P8_HERMIT_B64 --\`" >&2; exit 1; }
@@ -62,6 +63,11 @@ cat > "$WORK/ExportOptions.plist" <<PLIST
   <key>signingCertificate</key><string>Apple Distribution</string>
   <key>provisioningProfiles</key><dict>
     <key>ai.swaylab.hermit</key><string>$ASC_PROFILE</string>
+    <!-- Manual signing needs one entry per bundle id in the .app, embedded
+         extensions included. Leave the Live Activity out and export dies with
+         "No profiles for 'ai.swaylab.hermit.LiveActivity' were found" -- after
+         a full archive, which is the slow way to find out. -->
+    <key>ai.swaylab.hermit.LiveActivity</key><string>$ASC_PROFILE_EXT</string>
   </dict>
   <key>uploadSymbols</key><true/>
   <key>destination</key><string>export</string>
