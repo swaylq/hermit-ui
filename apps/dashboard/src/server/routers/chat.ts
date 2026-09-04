@@ -1122,6 +1122,19 @@ export const chatRouter = router({
     .input(
       z.object({
         sessionId: z.string(),
+        // Idempotency key, chosen by the client, scoped to this session. A client
+        // that retries a send whose answer it never saw — the iOS outbox replaying
+        // after the network came back — passes the same clientId and gets the
+        // first call's row back instead of posting the message a second time.
+        // Optional: the browser composer sends without one and keeps today's
+        // behaviour exactly.
+        //
+        // The charset is deliberately narrow rather than a bare string: it covers
+        // every id a client would actually generate (UUID, cuid, ULID,
+        // `<install>:<seq>`) while making a NUL byte — which Postgres refuses to
+        // store in a text column — a zod error at the edge instead of a failed
+        // INSERT halfway through the mutation.
+        clientId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional(),
         // Text is optional when at least one image is attached. We still
         // require AT LEAST ONE of text/images so we never insert empty rows.
         text: z.string().max(64_000).default(''),
@@ -1165,6 +1178,30 @@ export const chatRouter = router({
       const s = await prisma.chatSession.findUnique({ where: { id: input.sessionId } });
       if (!s || s.machineId !== ctx.machine.id) throw new Error('not found');
       ctx.assertAgent(s.agentName);
+
+      // ── Idempotency ─────────────────────────────────────────────────────────
+      // A clientId we've already stored means this exact send landed; hand back
+      // the row it produced and stop. Everything below this line is a side
+      // effect that already happened once: counting the queue against
+      // QUEUE_LIMIT would make a retry of a message ALREADY in the queue count
+      // itself and get refused, `takeoverTurns` would charge the Brain twice for
+      // one sentence, and endTakeover would fire a second time. The ownership
+      // checks stay ABOVE it so this can't be used to read a row on a session
+      // that isn't yours.
+      //
+      // It also sits above the closed-session check on purpose: if the session
+      // closed between the original call and the retry, the message is still in
+      // the database, and "it landed" is the truthful answer. Throwing here
+      // would push a client into re-sending under a fresh clientId — the exact
+      // duplicate this key exists to prevent.
+      const idem = input.clientId
+        ? { sessionId_clientId: { sessionId: input.sessionId, clientId: input.clientId } }
+        : null;
+      if (idem) {
+        const prior = await prisma.chatMessage.findUnique({ where: idem });
+        if (prior) return prior;
+      }
+
       if (s.closedAt) throw new Error('session is closed');
 
       // ── Takeover gate ───────────────────────────────────────────────────────
@@ -1216,16 +1253,36 @@ export const chatRouter = router({
         });
       }
 
-      const msg = await prisma.chatMessage.create({
-        // content is JSON in the DB; prisma wants Prisma.InputJsonValue, the
-        // Record-shaped union confuses inference, hence the cast.
-        data: {
-          sessionId: input.sessionId,
-          role: 'user',
-          content: stripNulDeep(content) as unknown as Parameters<typeof prisma.chatMessage.create>[0]['data']['content'],
-          authoredBy: byBrain ? 'brain' : null,
-        },
-      });
+      // The lookup above catches a retry that arrives after the first call
+      // finished. Two arriving TOGETHER — the outbox waking on "network is back"
+      // while its previous attempt is still in flight — both miss it and both
+      // INSERT; the unique index picks a winner and the loser gets P2002 here.
+      // Same answer as the fast path: hand back the winner's row and let the
+      // winner own the side effects below, so one message stays one message.
+      const inserted = await prisma.chatMessage
+        .create({
+          // content is JSON in the DB; prisma wants Prisma.InputJsonValue, the
+          // Record-shaped union confuses inference, hence the cast.
+          data: {
+            sessionId: input.sessionId,
+            role: 'user',
+            content: stripNulDeep(content) as unknown as Parameters<typeof prisma.chatMessage.create>[0]['data']['content'],
+            authoredBy: byBrain ? 'brain' : null,
+            clientId: input.clientId ?? null,
+          },
+        })
+        .then((row) => ({ row, raced: false }))
+        .catch(async (e: unknown) => {
+          // Only a clientId collision is ours to absorb. Anything else — and a
+          // P2002 that somehow leaves no row to point at — is a real failure and
+          // has to keep looking like one.
+          if (!idem || (e as { code?: string } | null)?.code !== 'P2002') throw e;
+          const won = await prisma.chatMessage.findUnique({ where: idem });
+          if (!won) throw e;
+          return { row: won, raced: true };
+        });
+      if (inserted.raced) return inserted.row;
+      const msg = inserted.row;
       // Wake every SSE stream watching this session NOW. Without it the row sat
       // in Postgres until the stream's 2 s safety-net poll found it, and the
       // header — which reads "a user row with no answer yet" as working — stayed

@@ -126,10 +126,26 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       放内存，Keychain 在后面写；`auth-gate.tsx` 在渲染任何东西之前 await 它。
       迁移顺序照做了：写入 → **读回逐字节比对** → 才 `localStorage.removeItem`。
       登出（列表清空）走 `keychain.clear`，不是存一个空数组
-- [ ] **服务端幂等键**（必须先于出站队列）：`chat.send`（`routers/chat.ts:1121`）加可选
-      `clientId`，`ChatMessage` 加 `@@unique([sessionId, clientId])`，重复请求返回已存在那行
-- [ ] **A2 出站队列**：App Group 里一个 append-only JSON 行文件即可，不要数据库。
-      重试时机 `NWPathMonitor` + 回前台 + `BGAppRefreshTask`
+- [x] **服务端幂等键**（必须先于出站队列）—— 第 6 轮。`chat.send` 加可选 `clientId`
+      （字符集限死 `^[A-Za-z0-9._:-]{1,128}$`，把 NUL 字节挡在 zod 而不是 INSERT 半路），
+      `ChatMessage` 加 `clientId String?` + `@@unique([sessionId, clientId])`，
+      迁移 `20260905090000_chatmessage_client_id`（**没在任何数据库上跑过**，见下）。
+      **没有复用 `externalId`**：那一列是 `/api/sync/chat-message` 的 upsert 目标，
+      客户端能写它就能占住一个 Anthropic 消息 id，让 agent 自己的转录行盖上来。
+      命中重复时**整段提前返回**，不只是不插入 —— 下面每一件都是已经发生过一次的副作用：
+      `QUEUE_LIMIT` 那个 count 会把「已经在队列里的那条」算进自己头上然后拒绝重试，
+      `takeoverTurns` 会为同一句话给 Brain 记两次账，`endTakeover` 会再触发一次。
+      归属校验留在提前返回**上面**（不能拿别人 session 的行当探针），而
+      `closedAt` 检查留在**下面**：会话如果在原请求和重试之间关掉了，消息本来就在库里，
+      「它落地了」才是实话；这里报错只会逼客户端换一个 `clientId` 重发，
+      正好制造这个键要防的那条重复。并发两条一起来（都没命中查询、都去 INSERT）
+      由唯一索引裁决，输的那条收 P2002、回读赢家那行、同样提前返回
+- [ ] **A2 出站队列**：一个 append-only JSON 行文件即可，不要数据库。
+      重试时机 `NWPathMonitor` + 回前台 + `BGAppRefreshTask`。
+      **第 6 轮修正了两处**：（1）不需要 App Group —— 只有主 App 读写这个文件，
+      widget 不发消息，放 App 自己的 Application Support 目录零权限就够，
+      `Hermit.entitlements` 今天只有 `aps-environment`，不用动；
+      （2）**真正的前提不是幂等键，是「谁来发这一次重试」**，见「下一项」
 - [x] 红线文字更新 —— 第 5 轮，和 A1 同一个提交，**实际是 11 处不是 6 处**：
       `README.md`、`NativeBridge.swift` 两处、`LiveActivityManager.swift`、
       `HermitLiveActivityBundle.swift`、`AppConfig.swift`、`WebViewController.swift`
@@ -228,20 +244,29 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-M1 只剩「服务端幂等键 + A2 出站队列」这一对，它们有先后：**幂等键必须先做**。
+**先把两件要 sway 拍板的事办了**，两件都不用他动手，只要一句话：
 
-- **服务端幂等键**（先做，一轮就能完）。`chat.send`（`apps/dashboard/src/server/routers/chat.ts:1121`）
-  加一个可选的 `clientId`，`ChatMessage` 加 `@@unique([sessionId, clientId])`，
-  重复请求返回已存在那行而不是插第二条。没有它，出站队列的重试会在网络抖动时
-  发出两条一样的消息 —— 那比不重试更糟。要动 Prisma schema，记得 `prisma generate`
-  之后再 `tsc`（配方在「踩过的坑」）；**迁移文件要不要一起生成、要不要在服务器上跑，
-  这个先问 sway**，别自己 `prisma migrate dev`。
-- **A2 出站队列**（幂等键落地之后）。App Group 里一个 append-only 的 JSON 行文件就够，
-  不要数据库。重试时机：`NWPathMonitor` 恢复、回前台、`BGAppRefreshTask`。
-  注意这是**第一个真的需要 App Group 的东西**（A1 没用上，见上面），
-  加 `com.apple.security.application-groups` 权限会影响真机描述文件，先确认一下。
+1. **迁移要不要上服务器。** 第 6 轮写了 `apps/dashboard/prisma/migrations/20260905090000_chatmessage_client_id/`，
+   内容是 `ADD COLUMN "clientId" TEXT` + 一条唯一索引，加完全是 NULL、不用回填。
+   **这台 Mac 上没有 Postgres 也没有 Docker**（`pg_isready`/`docker` 都不存在，5432 没人听），
+   所以它从没在任何库上跑过。跑之前**部署上的 `chat.send` 会整个坏掉** ——
+   Prisma 客户端按新 schema 生成，`create` 会 SELECT 一列数据库里不存在的 `clientId`，
+   连不带 `clientId` 的普通网页发消息都一起挂。也就是说：**这个提交和
+   `pnpm --filter @hermit-ui/dashboard migrate`（`prisma migrate deploy`）必须一起上线。**
+   索引是全表扫，建的时候会挡住 `ChatMessage` 的写（读不挡），挑个没人聊天的时候。
+2. **A2 的重试由谁发出去。** 这是 A2 真正的前提，不是幂等键。壳现在没有任何网络层
+   （HTTP 全在网页里），而 A1 之后壳手里恰好有 key —— 但红线文字刚统一成
+   「壳**不使用**凭据，只按 origin 存一个不透明字符串」。两条路：
+   **(a) 壳自己 POST** `chat.send`：后台也能补发（`BGAppRefreshTask` 时页面根本没加载），
+   代价是壳开始用凭据、红线要再改一次，而且实际上是提前做了 M2 的 `HermitAPI.swift`；
+   **(b) 回放给网页**：壳只管存，网络恢复/回前台时把待发消息递回页面、由页面发，
+   壳保持零凭据使用，代价是 App 没在前台就补发不了。
+   —— 倾向 (a)，因为 M2 早晚要写那个 HTTP 客户端，而 (b) 会做出一个后台不工作的队列；
+   但「壳开始用凭据」这条红线是 sway 定的，得他点头。
 
-M1 做完就进 M2（原生网络层），那是第一块「不再靠网页」的活。
+拍板之前不要空等，**下一轮直接进 M2 的第一条 `HermitAPI.swift`**（tRPC over HTTP）：
+它是 (a) 和整个 M2 的共同前提，两条路都不白写，而且不需要碰数据库。
+照抄 `lib/keyring.ts:140-176` 和 `apps/gateway/src/api.ts:150-214` 两份现成实现。
 
 ## 踩过的坑
 
@@ -341,6 +366,27 @@ M1 做完就进 M2（原生网络层），那是第一块「不再靠网页」�
   但 `clearButtonMode` 给的清除按钮是系统的，要清输入框请发退格
   （`XCUIKeyboardKey.delete.rawValue` 重复 N 次），别按标签找。
 
+- **这台 Mac 上没有 Postgres，也没有 Docker** —— 没有 `psql`/`pg_isready`/`initdb`，
+  5432 端口没人监听，`secret list` 里也没有这个库的 `DATABASE_URL`。所以**改服务端
+  数据库逻辑这件事，在本机拿不到「真的跑一遍」这个档位**，验证的天花板是三条：
+  `prisma generate` 后 `tsc --noEmit` 0 错（这一步顺带证明了 `sessionId_clientId`
+  这个复合键真的存在）；`prisma migrate diff --from-empty --to-schema-datamodel
+  prisma/schema.prisma --script`（**不连库**）打出 Prisma 自己会生成的 SQL，
+  拿来跟手写的迁移逐字比对；然后就只能读代码了。**别把「typecheck 过了」写成
+  「幂等键验证过了」**，报告里要分开说。
+- **`.gitignore` 里的 `node_modules/` 挡不住 `node_modules` 这个软链。** 上面那条
+  typecheck 配方要 `ln -sfn ~/hermit-ui/node_modules $WT/node_modules`，而带斜杠的
+  ignore 规则只匹配目录，软链在 git 眼里不是目录 —— 于是它以 `??` 出现在
+  `git status` 里，一个 `git add -A` 就把一条指向 worktree 外面的软链提交进仓库。
+  跑完 typecheck 顺手 `rm -f $WT/node_modules`，别依赖 ignore。
+- **幂等键留了一个窄窗口，是知情选择，不是漏掉的。** `chat.send` 里 INSERT 和后面那次
+  `chatSession.update`（`lastMessageAt`、清 `cancelRequestedAt`、`preview`）不在同一个
+  事务里。原请求如果正好在两者之间被进程重启打断，重试会命中幂等键、整段提前返回，
+  于是那次 update 永远不会发生 —— 最难受的是 `cancelRequestedAt` 没被清掉，
+  gateway 会当场把新一轮杀掉。修法是把两次写包进 `prisma.$transaction`，
+  但那是全 App 最热的写路径，而本机没有数据库可以验证，所以没动。
+  真要修，等有库能跑的时候连着一起验。
+
 ---
 
 ## 轮次日志
@@ -348,6 +394,7 @@ M1 做完就进 M2（原生网络层），那是第一块「不再靠网页」�
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 6 | 2026-09-05 | M1 的服务端幂等键：`chat.send` 加可选 `clientId`，`ChatMessage` 加 `clientId` 列 + `@@unique([sessionId, clientId])`，重复请求在做任何副作用之前返回已存在那行，并发插入撞唯一索引走 P2002 回读；手写迁移 `20260905090000_chatmessage_client_id`。顺带确认 A2 不需要 App Group、真正的前提是「谁发重试」 | `prisma generate` + dashboard `tsc --noEmit` **0 错**；`prisma migrate diff --from-empty --script`（不连库）打出的 SQL 与手写迁移**逐字一致**；`xcodegen` + `swiftc -typecheck` 过（iOS 未改动）。**没有数据库可跑，重复发送的行为本身没被真的驱动过**；无界面改动，未截图 |
 | 5 | 2026-09-04 | M1 的 A1 Keychain：`Hermit/Keychain.swift` + `keychain.get/.set/.clear`（判据是主框架 URL 与 `AppConfig.origin` 精确同源，账号按 origin 分条）；`keyring.ts` 的 `read()`/`write()` 改走内存副本 + `hydrateKeyring()`（写→读回校验→才清 localStorage），`auth-gate.tsx` 在渲染前 await；11 处红线文字同一提交改掉；`bridge-fixture.sh`/`smoke.sh` 改 ad-hoc 签名 | `xcodegen` + `swiftc -typecheck` 过；dashboard `tsc --noEmit` **0 错**；`tools/bridge-fixture.sh` **2 个 UI 用例 41 秒全过**（新增 `testTheKeychainKeepsTheKeyring`，旧的 `testThePageCanProposeAnotherServer` 未回归）；截图 `shots/14`、`15` 看过：重启后 `keychain.get` 回 `{"value":"keyring-marker-42"}`。收工 `simctl list devices booted` 为空 |
 | 4 | 2026-09-04 | M1 的第一个真 method：`WebViewController.answer()` 方法表 + `getOrigin` / `setOrigin`（页面只能提议，人确认）；`tools/bridge-fixture.sh` + `tools/bridge-fixture/`（不用 key、不用网络的真页面） | `xcodegen` + `swiftc -typecheck` 过；`xcodebuild build-for-testing` 过；UI 用例 `testThePageCanProposeAnotherServer` **22 秒通过，同一份代码跑了两遍**；3 张截图（`shots/11..13`，gitignore）逐张看过：确认框写着 `:49518 → :49517`，第二次启动的离线屏写着 `:49517`。收工 `simctl list devices booted` 为空 |
 | 3 | 2026-09-04 | M0 最后一条（两边都拒封禁端口）+ M1 A0（桥的问答通道，双向 5 秒超时）| `xcodegen` + `swiftc -typecheck` 过；`xcodebuild test -only-testing:HermitTests` **47/47 过**（新增 9 条）；dashboard `tsc --noEmit` **0 错**（先 prisma generate，见「踩过的坑」）；`api-base.test.ts` 16/16 过。无新界面，未截图 |

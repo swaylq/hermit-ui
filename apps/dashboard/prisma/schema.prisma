@@ -814,6 +814,18 @@ model ChatMessage {
   // as a cheap change signal instead of fetching + stringifying the whole
   // window each 250ms tick — see api/chat/stream/route.ts.
   updatedAt   DateTime    @default(now()) @updatedAt
+  // Idempotency key for user-composed rows, supplied by the CLIENT on chat.send.
+  // A client that retries a send it never saw the answer to (the iOS outbox
+  // replaying after the network came back) passes the same clientId, and the
+  // second call returns the first call's row instead of posting the message
+  // twice. NULL for every browser send — the composer doesn't set one — and
+  // Postgres treats NULLs as distinct, so those never collide.
+  //
+  // Deliberately NOT reusing externalId: that column is the gateway's upsert
+  // target in /api/sync/chat-message, so a client able to write it could park a
+  // row on an Anthropic message id and have the agent's own transcript row
+  // land on top of it. Separate namespaces, separate columns.
+  clientId    String?
 
   // Dedup key for gateway-synced rows (assistant/tool/system blocks carry a
   // stable externalId): lets the chat-message sync route upsert by point-lookup
@@ -821,6 +833,7 @@ model ChatMessage {
   // partials idempotent. externalId is NULL for user-composed rows (created via
   // chat.send), and Postgres treats NULLs as distinct, so those never collide.
   @@unique([sessionId, externalId])
+  @@unique([sessionId, clientId])
   @@index([sessionId, createdAt])
   @@index([sessionId, deliveredAt])
   @@index([sessionId, updatedAt])
