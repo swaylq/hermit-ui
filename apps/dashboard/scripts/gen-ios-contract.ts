@@ -44,6 +44,7 @@ export const SOURCES = {
   statusDots: 'apps/dashboard/src/lib/session-status.ts',
   ctxBar: 'apps/dashboard/src/components/ctx-bar.tsx',
   search: 'apps/dashboard/src/lib/chat-cache/search-core.ts',
+  theme: 'apps/dashboard/src/app/globals.css',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -96,6 +97,38 @@ export function readNumberArrayConst(rel: string, name: string): number[] {
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
     .map((s, i) => evalNumber(s, `${rel} ${name}[${i}]`));
+}
+
+/**
+ * A `--custom-property` from `globals.css`, in both schemes.
+ *
+ * The shadcn theme colours are not Tailwind palette entries — they are CSS
+ * custom properties declared twice, once under `:root` and once under `.dark`,
+ * and `text-muted-foreground` resolves to whichever block is in force. So a
+ * phone drawing the same row needs BOTH values and has to pick at render time,
+ * exactly like the browser does.
+ *
+ * Read as text rather than through a CSS parser for the same reason the two
+ * `.tsx` sources are: a rename breaks it LOUDLY in `ios-contract.test.ts`,
+ * which is the only place anyone finds out.
+ */
+export function readThemeVar(rel: string, name: string): { light: string; dark: string } {
+  const src = read(rel);
+  const block = (selector: string): string => {
+    const re = new RegExp(`(?:^|\\n)${selector}\\s*\\{([^}]*)\\}`);
+    const m = re.exec(src);
+    if (!m) throw new Error(`${rel}: no \`${selector} { … }\` block`);
+    return m[1];
+  };
+  const pick = (selector: string): string => {
+    const body = block(selector);
+    const hits = [...body.matchAll(new RegExp(`--${name}:\\s*([^;]+);`, 'g'))];
+    if (hits.length !== 1) {
+      throw new Error(`${rel} ${selector}: expected one \`--${name}\`, found ${hits.length}`);
+    }
+    return hits[0][1].trim();
+  };
+  return { light: pick(':root'), dark: pick('\\.dark') };
 }
 
 /** Every Tailwind colour class a file names, as `family-shade`, deduped. */
@@ -197,6 +230,17 @@ export interface PaletteEntry {
   p3: [number, number, number];
 }
 
+export interface ThemeEntry {
+  /** `muted-foreground` — the CSS custom property, without the dashes. */
+  cssVar: string;
+  /** `mutedForeground` */
+  swiftName: string;
+  light: { oklch: string; p3: [number, number, number] };
+  dark: { oklch: string; p3: [number, number, number] };
+  /** What the row that reads it uses it for. */
+  note: string;
+}
+
 export interface Contract {
   timelineLimit: number;
   timelineDigest: boolean;
@@ -213,7 +257,25 @@ export interface Contract {
   searchPageSize: number;
   maxMatchesPerRow: number;
   palette: PaletteEntry[];
+  theme: ThemeEntry[];
 }
+
+/**
+ * The theme colours a native screen needs, and nothing else.
+ *
+ * Not every variable in `globals.css`: an unused colour over here is a value
+ * nobody can check against anything, and the file has thirty. This list grows
+ * one entry at a time, when a screen actually draws with it.
+ */
+export const THEME_VARS: ReadonlyArray<{ cssVar: string; note: string }> = [
+  { cssVar: 'sidebar', note: 'the session list\'s own background' },
+  { cssVar: 'sidebar-foreground', note: 'a session row\'s title' },
+  { cssVar: 'sidebar-accent', note: 'the row you are looking at' },
+  { cssVar: 'muted-foreground', note: 'the agent name, the time, the status word' },
+] as const;
+
+/** `muted-foreground` → `mutedForeground` */
+const camel = (v: string) => v.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 
 const SHADE = (cls: string) => Number(cls.split('-')[1]);
 const FAMILY = (cls: string) => cls.split('-')[0];
@@ -236,6 +298,12 @@ export function readContract(): Contract {
       oklch,
       p3: oklchToDisplayP3(parseOklch(oklch)),
     };
+  });
+
+  const themeColors: ThemeEntry[] = THEME_VARS.map(({ cssVar, note }) => {
+    const raw = readThemeVar(SOURCES.theme, cssVar);
+    const conv = (css: string) => ({ oklch: css, p3: oklchToDisplayP3(parseOklch(css)) });
+    return { cssVar, swiftName: camel(cssVar), light: conv(raw.light), dark: conv(raw.dark), note };
   });
 
   const bands = [...new Set([...read(SOURCES.ctxBar).matchAll(/pct\s*>=\s*(\d+)/g)].map((m) => Number(m[1])))]
@@ -265,6 +333,7 @@ export function readContract(): Contract {
     searchPageSize: readNumberConst(SOURCES.search, 'DEFAULT_PAGE'),
     maxMatchesPerRow: readNumberConst(SOURCES.search, 'MAX_MATCHES_PER_ROW'),
     palette,
+    theme: themeColors,
   };
 }
 
@@ -373,6 +442,40 @@ export function renderWebContractSwift(c: Contract): string {
       `    static let ${p.swiftName} = Color(.displayP3, red: ${chan(p.p3[0])}, green: ${chan(p.p3[1])}, blue: ${chan(p.p3[2])})`,
     );
   }
+  L.push('');
+  L.push(`    // MARK: - Theme colours (${SOURCES.theme})`);
+  L.push('    //');
+  L.push('    // The shadcn variables, which are not palette entries: each is declared');
+  L.push('    // twice in that file, under `:root` and under `.dark`, and the browser');
+  L.push('    // picks by the scheme in force. So both values come across and the view');
+  L.push('    // picks the same way — see `ThemeColor.resolve`.');
+  L.push('');
+  for (const t of c.theme) {
+    L.push(`    /// \`--${t.cssVar}\` — ${t.note}.`);
+    L.push(`    /// light ${t.light.oklch} · dark ${t.dark.oklch}`);
+    L.push(`    static let ${t.swiftName} = ThemeColor(`);
+    L.push(
+      `        light: Color(.displayP3, red: ${chan(t.light.p3[0])}, green: ${chan(t.light.p3[1])}, blue: ${chan(t.light.p3[2])}),`,
+    );
+    L.push(
+      `        dark: Color(.displayP3, red: ${chan(t.dark.p3[0])}, green: ${chan(t.dark.p3[1])}, blue: ${chan(t.dark.p3[2])})`,
+    );
+    L.push('    )');
+  }
+  L.push('}');
+  L.push('');
+  L.push('/// One theme variable, in the two schemes it is declared in.');
+  L.push('///');
+  L.push('/// A `Color` that follows the scheme on its own would be a `UIColor` with a');
+  L.push('/// trait-collection block, and that is UIKit — it would stop this file (and');
+  L.push('/// every view reading it) from compiling for the Mac, which is how the');
+  L.push('/// layouts get looked at without a simulator (tools/render-list.sh).');
+  L.push('/// Carrying both and resolving against `\\.colorScheme` costs one call and');
+  L.push('/// works everywhere SwiftUI does.');
+  L.push('struct ThemeColor {');
+  L.push('    let light: Color');
+  L.push('    let dark: Color');
+  L.push('    func resolve(_ scheme: ColorScheme) -> Color { scheme == .dark ? dark : light }');
   L.push('}');
   L.push('');
   return L.join('\n');

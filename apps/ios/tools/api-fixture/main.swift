@@ -85,6 +85,21 @@ Task<Void, Never> {
         say("boom.baddate         \(String(e.localizedDescription.prefix(58)))")
     } catch { say("boom.baddate threw the wrong type: \(error)") }
 
+    // The real listSessions shape, decoded into the type the native list draws
+    // — and then judged by the port of sessionStatusView, so the whole path
+    // from "the server's JSON" to "which dot" runs once outside a simulator.
+    // The row carries eleven fields SessionListItem does not declare; if
+    // Decodable ever stopped ignoring them this is where it would surface.
+    do {
+        let rows = try await api.query("chat.recents", as: [SessionListItem].self)
+        for r in rows {
+            let v = SessionStatus.view(r.statusRow, StatusOptions(unread: r.unread))
+            say("chat.recents         \(r.id) title=\(r.displayTitle) "
+                + "recency=\(iso.string(from: r.recencyAt)) unread=\(r.unread) "
+                + "dot=\(v.dot) label=\(v.label)")
+        }
+    } catch { say("chat.recents         FAILED \(error)") }
+
     // Nothing is listening here. A URLError must come out, NOT a HermitAPIError:
     // the outbound queue has to tell "offline" from "the server said no".
     let dead = HermitAPI(origin: URL(string: "http://127.0.0.1:1")!, key: { "K" })

@@ -106,19 +106,29 @@ AppDelegate            APNs registration → device token
                                   using the web app's own authenticated client
 ```
 
-The shell **uses** no credentials. It never sends an authenticated request of
-its own: it hands the device token to the page and the web layer does the
-registering, which keeps auth in one place and means a phone carrying three
-machine keys is subscribed to all three machines.
-
-It does now **store** them. Since M1 the keyring lives in the device Keychain
+The shell **stores** the keyring. Since M1 it lives in the device Keychain
 rather than the web view's localStorage (`Hermit/Keychain.swift`), because
-localStorage is an unencrypted SQLite file in the app container. The web layer
-still owns it: the shell keeps one opaque string per origin, hands it back on
-`keychain.get`, and never looks inside. Only a page loaded from the origin the
-shell was pointed at can ask — the same exact-host rule the microphone uses, and
-for the same reason there is no confirmation dialog on it (a read happens on
-every page load).
+localStorage is an unencrypted SQLite file in the app container. The shell keeps
+one opaque string per origin and hands it back on `keychain.get`. Only a page
+loaded from the origin the shell was pointed at can ask — the same exact-host
+rule the microphone uses, and for the same reason there is no confirmation
+dialog on it (a read happens on every page load).
+
+The shell also **uses** it, as of M3. That is a change: through M2 it never sent
+an authenticated request of its own, and this file said so. The native session
+list cannot exist without one, so the line moved — deliberately, and to exactly
+one place. `Hermit/KeyStore.swift` is the only file in the app that turns the
+stored keyring into a token on a request; `HermitAPI` and `HermitStream` still
+take a key closure and still read no Keychain, so every native call site has to
+name where its credential came from.
+
+Two things did **not** change with it. Push registration is still the page's
+job, using the web app's own authenticated client — that is what keeps a phone
+carrying three machine keys subscribed to all three machines, which a shell
+sending one key could not do. And the shell still cannot pick a machine on its
+own: WHICH entry is active lives in the page's `sessionStorage`, so the page
+reports it over `keychain.setActive` and native code follows. The fallback when
+it never has is `list[0]`, which is the web's own fallback in `getActiveEntry()`.
 
 ## Verifying push end to end
 

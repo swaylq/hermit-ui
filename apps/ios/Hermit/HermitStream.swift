@@ -119,9 +119,10 @@ enum HermitStreamSession {
 /// `GET /api/chat/stream` — one chat session's timeline, pushed as
 /// Server-Sent Events, decoded into typed frames.
 ///
-/// **The credential red line is unchanged.** Like `HermitAPI`, this never reads
-/// the Keychain and never chooses a key: it calls a closure the caller hands it,
-/// and nothing in the shell constructs one today.
+/// **This file reads no Keychain and chooses no key.** Like `HermitAPI` it calls
+/// a closure the caller hands it; unlike `HermitAPI` nothing in the shell
+/// constructs one yet — the timeline is M4. The choosing lives in
+/// `KeyStore.swift`, the one file that opens the stored keyring.
 ///
 /// ## Why not `EventSource`, or any SSE library
 ///

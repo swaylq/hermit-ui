@@ -225,9 +225,44 @@ final class WebViewController: UIViewController {
             let stored = Keychain.write(value, account: account)
             reply(stored == errSecSuccess,
                   stored == errSecSuccess ? nil : ["error": "the keychain refused the write (\(stored))"])
+        case "keychain.setActive":
+            // Which of the stored entries the page is using. NOT a secret — an
+            // id, next to the list it indexes — but it lives in the Keychain
+            // anyway so that it is scoped to the same origin, protected by the
+            // same class, and cleared by the same call. See KeyStore.
+            //
+            // The page owns this because only the page knows: the selection is
+            // per-tab `sessionStorage` over there, which nothing native can
+            // read. Without it a native screen has to guess `list[0]`, and a
+            // user who switched machines in the web app would silently be shown
+            // another machine's sessions.
+            guard let account = keychainAccount(reply) else { return }
+            guard let id = params["id"] as? String else {
+                reply(false, ["error": "keychain.setActive needs a string id"])
+                return
+            }
+            // Comfortably longer than a cuid; short enough that a page looping
+            // on this cannot grow an item the user can only clear by deleting
+            // the app. Same reasoning as the keyring's own cap, smaller number.
+            guard id.utf8.count <= 256 else {
+                reply(false, ["error": "keychain.setActive id is too large"])
+                return
+            }
+            guard let origin = URL(string: account) else {
+                reply(false, ["error": "the shell's own origin is not a URL"])
+                return
+            }
+            let marked = KeyStore.setActiveId(id, origin: origin)
+            reply(marked == errSecSuccess,
+                  marked == errSecSuccess ? nil : ["error": "the keychain refused the write (\(marked))"])
         case "keychain.clear":
             guard let account = keychainAccount(reply) else { return }
-            let cleared = Keychain.delete(account: account)
+            // Both halves: an active id pointing at an entry that no longer
+            // exists is worse than none, because `KeyStore.active` would fall
+            // through to `list[0]` anyway and the stale pointer would only ever
+            // confuse whoever read it next.
+            let cleared = URL(string: account).map { KeyStore.clear(origin: $0) }
+                ?? Keychain.delete(account: account)
             reply(cleared == errSecSuccess,
                   cleared == errSecSuccess ? nil : ["error": "the keychain refused the delete (\(cleared))"])
         default:

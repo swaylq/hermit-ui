@@ -266,11 +266,19 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       `/50`、`/30` 那个百分比不能丢——它是「在跑但没动」和「在跑」的唯一区别。
       两个阈值 `SNAPSHOT_STALE_MS` / `BACKGROUND_RESIDENT_MS` 并入第 9 轮的生成器
       （毫秒，不是秒：这个移植保留原函数的时钟单位）
-- [ ] 原生会话列表：`UICollectionView` + `UIHostingConfiguration`，直接复用现成的
-      `Shared/SessionCard.swift`、`Shared/StatusPalette.swift`、
-      `LiveActivity/SessionCardViews.swift`（364 行 SwiftUI，只 import SwiftUI）
-- [ ] 只发**一个** tRPC 查询 `chat.listSessions`，排序/分组规则不要在 Swift 里重新发明
+- [x] 原生会话列表：`UICollectionView` + `UIHostingConfiguration` —— 第 12 轮。
+      `Hermit/SessionRowView.swift` 是行视图（纯 SwiftUI + 一个值类型，不 import UIKit），
+      `Hermit/SessionListViewController.swift` 是列表，`Hermit/SessionListItem.swift` 是行数据。
+      **没有复用 `LiveActivity/SessionCardViews.swift`** —— 那是锁屏卡片的排版（大字号、
+      计时器、按钮），侧栏的行是 13px 标题加一行 10px 等宽副标题，共用只会两边都拧着。
+      共用的是判定和颜色：`SessionStatus.view` 出 dot/label/pulse，`WebContract` 出颜色。
+      入口是 `hermit://sessions`（推进栈），**还不是前门** —— 见下一条
+- [x] 只发**一个** tRPC 查询 `chat.listSessions` —— 第 12 轮。服务端已按
+      `sessionRecencyMs` 排好并截到 200，Swift 侧原样渲染、一次都不重排
 - [ ] 冷启动先画 App Group 里的本地快照，同时后台预热 WebView
+      —— 这一条才是「列表变成前门」：`SceneDelegate` 的根从 `WebViewController`
+      换成 `SessionListViewController`，随之而来的是冷启动、离线、深链接、
+      `AppDelegate.attach` 全归它管
 - [ ] **像素比对流程**：模拟器截图 vs 同视口的网页截图，建一个可复跑的脚本，
       结果存 `apps/ios/shots/`。这一步做完，后面每一屏都用它验收
 
@@ -333,7 +341,7 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**两件要 sway 拍板的事还欠着**，两件都不用他动手，只要一句话：
+**一件要 sway 拍板的事还欠着**（第二件这一轮自己解决了，见下）：
 
 1. **迁移要不要上服务器。** 第 6 轮写的
    `apps/dashboard/prisma/migrations/20260905090000_chatmessage_client_id/`
@@ -343,38 +351,32 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
    SELECT 一列数据库里不存在的 `clientId`，连普通网页发消息都一起挂。
    **这个提交和 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线。**
    索引是全表扫，建的时候挡写不挡读，挑个没人聊天的时候。
-2. **A2 的重试由谁发出去。** 壳有 HTTP 客户端（第 7 轮）也有 SSE 客户端（第 8 轮），
-   但没有一处代码构造它们，所以红线仍然是真的。**(a) 壳自己 POST `chat.send`**：
-   `key` 闭包接上 `Keychain.read` 就通，后台也能补发（`BGAppRefreshTask` 时页面没加载），
-   代价是壳开始**使用**凭据、11 处红线文字要再改一次。**(b) 回放给网页**：壳只管存，
-   回前台把待发消息递回页面由页面发，零凭据使用，代价是不在前台就补发不了。
-   —— 仍然倾向 (a)。这条纯粹是红线要不要改，早就不是工作量问题了。
 
-**M3 的第一条做完了，第二条的前提也做完了。下一轮就是画那张列表**：
+**A2 那条不再是待办：红线这一轮跨过去了。** 壳现在自己发认证请求（原生列表那一个
+`chat.listSessions`），`Hermit/KeyStore.swift` 是全 App 唯一打开 keyring 的地方，
+`HermitAPI` / `HermitStream` 仍然只收闭包、仍然不读 Keychain。11 处红线文字已改。
+剩下的选择缩小成一句话：**A2 的补发要不要也走这条路**（现在能走了），还是留给页面。
 
-1. **原生会话列表**：`UICollectionView` + `UIHostingConfiguration`，行视图复用
-   `Shared/SessionCard.swift`、`Shared/StatusPalette.swift`、
-   `LiveActivity/SessionCardViews.swift`。状态点和标签直接调
-   `SessionStatus.view(_:_:)`，**不要在行视图里再判一次**——那正是这一轮移植它的原因。
-   列表进栈之后 `SceneDelegate` 只要改一行（`UINavigationController(rootViewController:)`
-   的参数），`web` 那个访问器已经按「在栈里找」写好了。
-2. **只发一个 tRPC 查询 `chat.listSessions`**，排序照 `lib/session-recency.ts` 的
-   `sessionRecencyMs`（服务端已经按它排好，Swift 侧照抄顺序即可，别自己再排一遍）。
+**「哪一条是活动的」也解决了，选的是 (b)。** 方法表加了 `keychain.setActive`，
+网页的 `setActiveMachine` / `addScopedMachine` / `hydrateKeyring` 都会把 id 推过来，
+存在 Keychain 的 `<origin>#active` 账号下；壳没收到过就退回 `list[0]` ——
+和网页 `getActiveEntry()` 的兜底是同一条，所以两边不会各自为政。
 
-**这一步会跨过「壳不使用凭据」那条红线，而且有一个没解的问题。** Keychain 里存的是
-网页 `keyring.ts` 序列化的**整个** `KeyringEntry[]`，而「哪一条是活动的」存在
-localStorage / sessionStorage，**不在 Keychain 里**——壳读不到。网页自己的
-`getActiveEntry()` 在没有活动 id 时退回 `list[0]`，所以原生列表照 `list[0]` 取
-是**网页同款的兜底、不是同款的答案**：用户在网页上切过机器，原生列表就会显示另一台。
-三条路，选一条再动手：(a) 壳也读 WebView 的 localStorage（`evaluateJavaScript`，
-要等页面起来）；(b) 方法表加一个 `keychain.setActive`，页面切机器时告诉壳；
-(c) 先按 `list[0]` 做，把这条写在屏幕上。**倾向 (b)**，它和现有的 `keychain.*`
-是同一条路，且不要求页面已加载完。
+**下一轮建议做这两条：**
 
-M3 的第三条「像素比对流程」建议紧跟着做，因为后面每一屏都靠它验收。现成的起点有两个：
-第 9 轮那个 25 行的 PNG 差分器（`NSImage` → `CGContext` 取 RGBA → 逐通道比，
-`swiftc -O` 编出来就能用，落成 `tools/png-diff.swift` 比重写便宜）；
-截图那一半照 `tools/bridge-fixture.sh` 的路子走，一次 UI 用例约 50 秒（含全量构建）。
+1. **让列表真的在模拟器上跑一次**，这是这一轮唯一没做的验证。
+   `keychain.setActive` 的往返、`KeyStore.active()` 挑对了哪一条、
+   `UIHostingConfiguration` 的行高在真 UIKit 里对不对 —— 三件都只在 Mac 上
+   编译过和渲染过，没在 iOS 上跑过。最省的路子是给 `tools/bridge-fixture.sh`
+   加一个用例：假页面调 `keychain.set` + `keychain.setActive`，再让壳打开
+   `hermit://sessions`，截图。**假页面答不了 `chat.listSessions`** ——
+   `tools/bridge-fixture/` 是个 `python3 -m http.server`，要么给它加一个
+   假 tRPC 路由（`tools/api-fixture/server.py` 已经是现成的一个，端口指过去即可），
+   要么这一步只验 keychain 往返、列表只看空态文案
+2. **像素比对流程**（M3 最后一条）。现在有一半了：`tools/render-list.sh` 出
+   Mac 端的 PNG，5 秒一次、不用模拟器。缺的是网页那一半 —— 同视口截一张侧栏，
+   和它并排。第 9 轮那个 25 行的 PNG 差分器还没落成文件，落成
+   `tools/png-diff.swift` 比重写便宜
 
 `ChatCache` 还欠两件事，都要等有调用方才做得了（M3/M4）：
 **（a）`full` / `digest` 两层**（今天只有 `text` 这一层散文 + `sessions` 记账），
@@ -385,6 +387,8 @@ libsqlite3 上跑过**，M7 装到模拟器/真机那一轮要亲眼确认一次
 
 `HermitStream` 那件旧欠账不变：**前后台切换**。它是 Foundation-only 的，
 「离开前台就 `stop()`、回来新建一个」是调用点（M3/M4）的活。
+列表现在只在 `viewWillAppear` 拉一次 + 下拉刷新，**没有网页那个 5 秒轮询**，
+这也是列表当前和网页最明显的行为差别。
 
 ## 踩过的坑
 
@@ -629,11 +633,55 @@ libsqlite3 上跑过**，M7 装到模拟器/真机那一轮要亲眼确认一次
 - **`URL(fileURLToPath:)` 是 Node 的写法，Swift 是 `URL(fileURLWithPath:)`。**
   写夹具驱动脚本时手指比脑子快，编译器的报错还挺长。
 
+### 一个可编译的行视图不等于一个能在 Mac 上看的行视图（第 12 轮）
+
+`SessionRowView` 从第一行就写成「纯 SwiftUI + 一个值类型」，不是风格洁癖：
+`tools/render-list.sh` 因此能用 `swiftc -O` 给 macOS 编一遍、5 秒出两张 PNG（明暗两套），
+不用模拟器、不用签名、不用服务端。做法照抄第 0 轮就有的 `tools/render-cards.sh`。
+**代价是一条纪律**：视图里不能出现 UIKit，包括「顺手」用 `UIColor` 做随配色方案变化的颜色。
+所以 `WebContract` 生成的是 `ThemeColor { light, dark }` 而不是一个动态 `UIColor`，
+由视图自己 `resolve(colorScheme)` —— 一个 `UIColor { trait in }` 会让这个文件和每个读它的
+视图都编不出 macOS，也就等于再也没人看。
+另外 `@main` 只能放在**不叫 `main.swift`** 的文件里，`tools/render-list/main.swift`
+会报 `'main' attribute cannot be used in a module that contains top-level code`；
+`render-cards.swift` 直接放在 `tools/` 下不是随手放的。
+
+### 侧栏的颜色不是 Tailwind 调色板，是 CSS 变量，声明了两遍（第 12 轮）
+
+第 9 轮的生成器只认 `bg-amber-400` 这种调色板类名。而侧栏的行用的是
+`text-sidebar-foreground/85`、`text-muted-foreground/60`、`bg-sidebar-accent` ——
+这些是 `globals.css` 里的自定义属性，`:root` 一份、`.dark` 一份，浏览器按当前方案挑。
+**两个值都得过去**，只抄一份等于把暗色模式钉死。生成器新增 `readThemeVar`，
+按 `SOURCES.theme` 读那两个块；`THEME_VARS` 是一张显式清单，只列真的有屏幕在画的四个
+—— 那个文件有三十个变量，抄过去没人用的等于抄了一堆没人能验的数字。
+**这一步的独立验证不用查表**：这四个今天都是中性灰（chroma = 0），而中性色在
+Oklab→线性 sRGB 那一步会塌成三个通道都等于 L³，Display P3 和 sRGB 的中性轴又是同一条，
+所以整条转换必须化简成 `gamma(L³)` —— 测试里直接按 sRGB 传输函数算一遍比，
+不碰生成器用的任何一个矩阵。
+
+### 「移植一个纯函数先跑一遍」这条，对 JS 的 falsy 尤其成立（第 12 轮，第三次）
+
+`s.title || s.preview || s.agentName` 里，**空字符串的标题会掉到下一个**。
+一个刚建、还没起标题的会话，`title` 正好就是空串。所有用非空标题写的样例都看不出这个差别。
+`lastMessageAt` 为 null 时 `sessionRecencyAt` 退回 `startedAt` 也一样。
+两条都是在 `tools/api-fixture.sh` 里拿**服务端真实那一行 JSON**跑出来看到的，
+不是读代码读出来的 —— 那个夹具里第二行专门是「从没说过话的新会话」。
+顺带证实了 `SessionListItem` 少声明的那十一个字段真的被 `Decodable` 忽略掉，
+而不是让整个响应解不出来。
+
+### 一个新屏先挂在 URL 上，不要一上来就当根（第 12 轮）
+
+`hermit://sessions` 推进栈，`SceneDelegate` 的根还是 `WebViewController`。
+换根是一行，但那一行同时把冷启动、离线屏、深链接落点、`AppDelegate.attach(controller)`
+全交给新屏 —— 第 11 轮单独换容器就是为了让这类问题一个一个冒出来，这里不该再合并。
+代价是这一轮的列表在真机上还没被人点开过，已写进「下一项」的第一条。
+
 ## 轮次日志
 
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 12 | 2026-09-05 | **M3 第三、四条**：原生会话列表。`Hermit/SessionListItem.swift`（`chat.listSessions` 的行 + `relTime`/未读/recency 三个纯函数移植）、`Hermit/SessionRowView.swift`（纯 SwiftUI 行视图，逐个 Tailwind 类当 CSS 像素读）、`Hermit/SessionListViewController.swift`（`UICollectionView` list + `UIHostingConfiguration`，一个 `chat.listSessions`、不重排、下拉刷新、失败把错误原文写在屏幕上）。**红线跨过去了**：`Hermit/KeyStore.swift` 是全 App 唯一打开 keyring 的地方，`HermitAPI`/`HermitStream` 仍只收闭包；11 处红线文字同一提交改掉。方法表加 `keychain.setActive`（网页 `setActiveMachine`/`addScopedMachine`/`hydrateKeyring` 推过来，存 `<origin>#active`），解决了上一轮记下的「哪一条是活动的」。生成器加 `readThemeVar` + `ThemeColor`，把 `--sidebar`/`--sidebar-foreground`/`--sidebar-accent`/`--muted-foreground` 的明暗两套带过来。新增 `tools/render-list.sh`（Mac 端 5 秒出图，不用模拟器）| `xcodegen` + `swiftc -typecheck` **exit 0**（故意写错的临时文件反证过它真在检查）；`tools/api-fixture.sh` 加了一条**服务端真实形状**的 `chat.listSessions`，两行都逐字段核对过（空标题掉到 agentName、无消息的会话 recency 退回 startedAt、未读判定、dot=`bg-amber-400` / `bg-emerald-500/30`），十一个未声明字段被忽略而不是解不出来；`ios-contract.test.ts` **11/11**（新增 4 条），**反证做过**：把行视图里的颜色改回字面量，只红了「行视图仍从 contract 读颜色」那一条，恢复后全绿；dashboard `tsc --noEmit` **0 错**；`tools/render-list.sh` 出图，**明暗两张都亲眼看过**——九种状态色、`/50` 与 `/30` 的透明度、标题截断、图钉/眼睛/月亮三个 12pt 标记、归档与隐藏的整行透明度都对；`render-cards.sh` 回归重跑没退化。**没起过模拟器**，收工 `simctl list devices booted` 为空 |
 | 11 | 2026-09-05 | M3 第一条 + 第二条的前提：`SceneDelegate` 换成 `UINavigationController` 当根（栈里仍只有 `WebViewController`，导航栏隐藏），三处 `rootViewController as? WebViewController` 强转合并成一个「在栈里找」的访问器；`Hermit/SessionStatus.swift`（441 行）把 `lib/session-status.ts` 的判定阶梯连同 `shortDuration`/`activityLabel`/`backgroundSummary`/`backgroundTaskList`/`backgroundStillRunning`/`snapshotSilenceMs` 移植过来，`SessionActivity` 从 `HermitStream.swift` 搬进来，`StatusView.dot` 保留网页的 Tailwind 类名原文、`StatusPalette.dot` 负责转颜色（含 `/50`、`/30` 的透明度）。生成器加两个阈值（`SNAPSHOT_STALE_MS`/`BACKGROUND_RESIDENT_MS`，毫秒）。新增 `scripts/gen-status-fixture.ts` + `tools/fixtures/status-cases.json` + `tools/status-fixture.sh` + `src/lib/status-fixture.test.ts` | `xcodegen` + `swiftc -typecheck` **exit 0**（故意写错的临时文件反证过它真在检查）；`tools/status-fixture.sh` **213/213**（20 条时长 + 22 条 activity 逐项比 label/summary/tasks + 30 条状态逐字段比 key/label/dot/pulse/detail，再加 silence 与配色查表）；**四个反证做过，四个都如期只红了预期那几条**（关掉 JS 数字格式化 → 12 条时长；unread 排到 asleep 之后 → 只红 `unread-beats-asleep`；45 秒边界改成闭区间 → 只红 `stale-boundary-just-under`；空字符串当有效 label → 只红 `tool-empty-label`），恢复后全绿；dashboard `tsc --noEmit` **0 错**，`status-fixture` + `ios-contract` **10/10**；**模拟器上跑过** `tools/bridge-fixture.sh` 2 个 UI 用例 41 秒全过，截图 `shots/11` 亲眼看过——页面仍是满屏、没有多出导航栏、安全区没有变。收工 `simctl list devices booted` 为空 |
 | 10 | 2026-09-05 | **M2 完成**：本地存储 `Hermit/ChatCache.swift`（SQLite + FTS5 `trigram`，`libsqlite3` 直调，无第三方依赖）与 `Hermit/SyncPlan.swift`（`planSync` 移植）。分词器是量出来的：`unicode61` 对每个中文查询 0 行，`trigram` 与线性 `indexOf` 同解、检索 0.0–0.3ms vs 1.8–2.5ms；**少于 3 字符的查询 trigram 静默答 0 行**，`canUseIndex` 一票否决走扫描。索引只缩小范围，命中行一律在 Swift 里按网页的 `indexOf` 规则重核，片段偏移是 UTF-16 码元。搜索的三个常量（`SNIPPET_PAD`/`DEFAULT_PAGE`/`MAX_MATCHES_PER_ROW`）并入第 9 轮的生成器。新增两个生成器 + 两张共享对照表 + `tools/cache-fixture.sh` | `xcodegen` + `swiftc -typecheck` **exit 0**（用故意写错的临时文件反证过它真在检查）；`tools/cache-fixture.sh` **502/502 条检查过**（22 例 planSync + 22 例 search 逐字段比片段/高亮/计数 + 分词器实测 + FTS5 `integrity-check, 1`）；**四个反证做过，三个如期变红**（片段窗口差 1、换回 `unicode61`、`INSERT OR REPLACE`），第四个（稳定排序）红不了并已写进「踩过的坑」；dashboard `tsc --noEmit` **0 错**，`ios-contract` + `chat-cache` 全部单测 **57/57**。无界面改动（`WebContract.swift` 只增三个 Int，颜色一字未动），未截图；没起过模拟器 |
 | 9 | 2026-09-05 | M2 的「防漂移」：新增生成器 `apps/dashboard/scripts/gen-ios-contract.ts` 和生成物 `apps/ios/Shared/WebContract.swift`（14 个成员），`StatusPalette` / `HermitStream` / `LiveActivityManager` 改成读它，Swift 侧不再有手抄的数字。**修掉那处已知漂移**：`workingStaleAfter` 10 分钟 → 服务端的 15 分钟。颜色由 `session-status.ts` / `ctx-bar.tsx` 里的 Tailwind 类名经 `tailwindcss/theme.css` 的 oklch 转 Display P3 得到。新增 `apps/dashboard/src/lib/ios-contract.test.ts`（7 条）。`render-cards.sh` 的文件清单同步 | `xcodegen` + `swiftc -typecheck` **exit 0 无输出**（并用一个故意写错的临时文件反证过它真在检查）；`ios-contract.test.ts` **7/7 过**，且**两次故意制造漂移都只红了预期的那一条**、恢复后全绿；dashboard `tsc --noEmit` **0 错**（先 prisma generate）；`tools/render-cards.sh` 编过并出图，与改动前的五张**逐像素比对：最多 0.12% 的像素差 1/255**，即生成的调色板没改变屏幕；`expanded-question.png` 亲眼看过（amber 的「去回答」、55% 的 emerald ctx 条）。**没起过模拟器** |

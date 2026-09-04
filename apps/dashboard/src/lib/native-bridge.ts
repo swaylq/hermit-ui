@@ -274,8 +274,15 @@ export function requestNativePush(): void {
 //
 // The ASKER owns the timeout, so neither side can be left holding a promise (or
 // a completion block) that never settles. Callers so far: lib/keyring.ts
-// (`keychain.get`/`.set`/`.clear`) and the server switcher (`getOrigin`/
-// `setOrigin`). The outbox for offline sends is the next one.
+// (`keychain.get`/`.set`/`.clear`/`.setActive`) and the server switcher
+// (`getOrigin`/`setOrigin`). The outbox for offline sends is the next one.
+//
+// `keychain.setActive` is the odd one: it sends nothing the shell needs to
+// STORE, only which of the stored entries this tab is using. The selection is
+// per-tab `sessionStorage` over here — invisible to native code — and since M3
+// there are native screens making their own requests, which without it would
+// have to guess `list[0]` and would show another machine's sessions the moment
+// the user switched.
 // See apps/ios/Hermit/NativeBridge.swift.
 
 /** Both halves give up on an answer after this. Mirrored in NativeBridge.swift

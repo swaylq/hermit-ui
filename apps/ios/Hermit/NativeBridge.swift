@@ -3,12 +3,18 @@ import WebKit
 
 /// The web ⇄ native seam.
 ///
-/// The shell USES no credentials. It knows its APNs device token; the web layer
-/// knows the machine keys. So the token is handed across and the web side does the
-/// registering through its own authenticated client — see lib/native-bridge.ts.
-/// Since M1 the shell does STORE that keyring, as one opaque string per origin in
-/// the device Keychain (Keychain.swift, `keychain.get`/`.set`/`.clear` in
-/// WebViewController.answer) — it never parses it and never sends it anywhere.
+/// PUSH REGISTRATION stays the page's job. The shell knows its APNs device
+/// token; the web layer knows the machine keys, and a phone holding three of
+/// them has to be registered against all three machines — which one key cannot
+/// do. So the token is handed across and the web side registers through its own
+/// authenticated client (see lib/native-bridge.ts). None of that changed when
+/// the shell started making requests of its own.
+///
+/// The keyring itself has lived in the device Keychain since M1 (Keychain.swift,
+/// `keychain.get`/`.set`/`.clear`/`.setActive` in WebViewController.answer), as
+/// one opaque string per origin. As of M3 native code also READS it, in exactly
+/// one file — KeyStore.swift — so the native session list can make the one query
+/// it needs. Nothing else in this app opens that blob.
 ///
 /// Two shapes travel over it. Most messages are one-way announcements, which is
 /// why both directions have to tolerate arriving early: a push token can land

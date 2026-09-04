@@ -100,4 +100,50 @@ enum WebContract {
     static let sky400 = Color(.displayP3, red: 0.3060, green: 0.7250, blue: 0.9802)
     /// `zinc-400` — oklch(70.5% 0.015 286.067)
     static let zinc400 = Color(.displayP3, red: 0.6226, green: 0.6226, blue: 0.6598)
+
+    // MARK: - Theme colours (apps/dashboard/src/app/globals.css)
+    //
+    // The shadcn variables, which are not palette entries: each is declared
+    // twice in that file, under `:root` and under `.dark`, and the browser
+    // picks by the scheme in force. So both values come across and the view
+    // picks the same way — see `ThemeColor.resolve`.
+
+    /// `--sidebar` — the session list's own background.
+    /// light oklch(0.985 0 0) · dark oklch(0.205 0 0)
+    static let sidebar = ThemeColor(
+        light: Color(.displayP3, red: 0.9803, green: 0.9803, blue: 0.9803),
+        dark: Color(.displayP3, red: 0.0905, green: 0.0905, blue: 0.0905)
+    )
+    /// `--sidebar-foreground` — a session row's title.
+    /// light oklch(0.145 0 0) · dark oklch(0.985 0 0)
+    static let sidebarForeground = ThemeColor(
+        light: Color(.displayP3, red: 0.0394, green: 0.0394, blue: 0.0394),
+        dark: Color(.displayP3, red: 0.9803, green: 0.9803, blue: 0.9803)
+    )
+    /// `--sidebar-accent` — the row you are looking at.
+    /// light oklch(0.97 0 0) · dark oklch(0.269 0 0)
+    static let sidebarAccent = ThemeColor(
+        light: Color(.displayP3, red: 0.9606, green: 0.9606, blue: 0.9606),
+        dark: Color(.displayP3, red: 0.1494, green: 0.1494, blue: 0.1494)
+    )
+    /// `--muted-foreground` — the agent name, the time, the status word.
+    /// light oklch(0.556 0 0) · dark oklch(0.708 0 0)
+    static let mutedForeground = ThemeColor(
+        light: Color(.displayP3, red: 0.4515, green: 0.4515, blue: 0.4515),
+        dark: Color(.displayP3, red: 0.6302, green: 0.6302, blue: 0.6302)
+    )
+}
+
+/// One theme variable, in the two schemes it is declared in.
+///
+/// A `Color` that follows the scheme on its own would be a `UIColor` with a
+/// trait-collection block, and that is UIKit — it would stop this file (and
+/// every view reading it) from compiling for the Mac, which is how the
+/// layouts get looked at without a simulator (tools/render-list.sh).
+/// Carrying both and resolving against `\.colorScheme` costs one call and
+/// works everywhere SwiftUI does.
+struct ThemeColor {
+    let light: Color
+    let dark: Color
+    func resolve(_ scheme: ColorScheme) -> Color { scheme == .dark ? dark : light }
 }

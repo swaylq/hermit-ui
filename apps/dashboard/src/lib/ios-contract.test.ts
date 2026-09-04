@@ -31,6 +31,7 @@ import {
   oklchToDisplayP3,
   parseOklch,
   readContract,
+  readThemeVar,
   renderCurrent,
 } from '../../scripts/gen-ios-contract';
 
@@ -39,6 +40,8 @@ const swift = (rel: string) => readFileSync(join(REPO_ROOT, rel), 'utf8');
 const STATUS_PALETTE = 'apps/ios/Shared/StatusPalette.swift';
 const LIVE_ACTIVITY = 'apps/ios/Hermit/LiveActivityManager.swift';
 const STREAM = 'apps/ios/Hermit/HermitStream.swift';
+const ROW = 'apps/ios/Hermit/SessionRowView.swift';
+const LIST = 'apps/ios/Hermit/SessionListViewController.swift';
 
 test('the checked-in WebContract.swift is what this app renders today', () => {
   assert.equal(
@@ -98,7 +101,7 @@ test('every WebContract member the Swift app reads still exists', () => {
   );
   assert.ok(declared.size >= 12, `only ${declared.size} members generated`);
 
-  const readers = [STATUS_PALETTE, LIVE_ACTIVITY, STREAM];
+  const readers = [STATUS_PALETTE, LIVE_ACTIVITY, STREAM, ROW, LIST];
   const used = new Set<string>();
   for (const rel of readers) {
     for (const m of swift(rel).matchAll(/\bWebContract\.(\w+)/g)) used.add(m[1]);
@@ -202,5 +205,82 @@ test('the status dot classes are all colours the phone has', () => {
   assert.ok(used.length >= 5, `only found ${used.length} dot colours in ${SOURCES.statusDots}`);
   for (const cls of new Set(used)) {
     assert.ok(known.has(cls), `session-status.ts uses bg-${cls}, which is not in the iOS palette`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The theme colours — `--sidebar`, `--muted-foreground` and friends.
+//
+// Not Tailwind palette entries: each is a CSS custom property declared twice in
+// globals.css, under `:root` and under `.dark`, and the browser picks by the
+// scheme in force. A native row has to carry both and pick the same way, which
+// is what `ThemeColor` is for.
+// ---------------------------------------------------------------------------
+
+test('the theme variables come across in both schemes', () => {
+  const theme = readContract().theme;
+  assert.ok(theme.length >= 4, `only ${theme.length} theme colours generated`);
+  for (const t of theme) {
+    assert.notDeepEqual(
+      t.light.p3,
+      t.dark.p3,
+      `--${t.cssVar} is the same colour in both schemes; is one block missing it?`,
+    );
+    // Every one of these is a neutral (chroma 0) today. If that ever stops
+    // being true this assertion is the place to find out, because a coloured
+    // theme variable would need a second look at the conversion below.
+    assert.equal(parseOklch(t.light.oklch).c, 0, `--${t.cssVar} light is no longer neutral`);
+    assert.equal(parseOklch(t.dark.oklch).c, 0, `--${t.cssVar} dark is no longer neutral`);
+  }
+});
+
+test('a neutral oklch converts to a neutral, at the value the transfer function gives', () => {
+  // Independent of the matrices: at chroma 0 the Oklab → linear-sRGB step
+  // collapses to L³ on all three channels, and a neutral is the same neutral in
+  // Display P3 as in sRGB (the two share a white point and a transfer function).
+  // So the whole conversion has to reduce to gamma(L³) — computed here from the
+  // sRGB spec rather than from anything the generator uses.
+  const srgbTransfer = (u: number) =>
+    u <= 0.0031308 ? 12.92 * u : 1.055 * Math.pow(u, 1 / 2.4) - 0.055;
+  for (const l of [0.145, 0.205, 0.269, 0.556, 0.708, 0.97, 0.985]) {
+    const [r, g, b] = oklchToDisplayP3({ l, c: 0, h: 0 });
+    const want = srgbTransfer(l ** 3);
+    for (const [i, ch] of [r, g, b].entries()) {
+      assert.ok(
+        Math.abs(ch - want) < 0.0005,
+        `oklch(${l} 0 0) channel ${i}: ${ch.toFixed(4)} vs ${want.toFixed(4)}`,
+      );
+    }
+  }
+});
+
+test('reading a theme variable fails loudly when it is renamed away', () => {
+  const got = readThemeVar(SOURCES.theme, 'sidebar-foreground');
+  assert.match(got.light, /^oklch\(/);
+  assert.match(got.dark, /^oklch\(/);
+  assert.notEqual(got.light, got.dark);
+  assert.throws(
+    () => readThemeVar(SOURCES.theme, 'sidebar-foregruond'),
+    /expected one/,
+    'a typo in a variable name has to throw, not return a default',
+  );
+});
+
+test('the native session row still reads its colours from the contract', () => {
+  // The whole point of generating these. A literal back in the row means
+  // someone typed a colour on the phone, and a background half a percent off
+  // the web's would look right in every screenshot ever taken of it.
+  for (const rel of [ROW, LIST]) {
+    assert.equal(
+      swift(rel).includes('Color(.displayP3'),
+      false,
+      `${rel} declares a raw colour; it should read WebContract`,
+    );
+  }
+  const themeNames = new Set(readContract().theme.map((t) => t.swiftName));
+  const resolved = [...swift(ROW).matchAll(/\bWebContract\.(\w+)\.resolve\b/g)].map((m) => m[1]);
+  assert.ok(resolved.length > 0, `${ROW} resolves no theme colour at all`);
+  for (const name of resolved) {
+    assert.ok(themeNames.has(name), `${ROW} resolves WebContract.${name}, which is not a ThemeColor`);
   }
 });

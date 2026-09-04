@@ -2,13 +2,12 @@ import Foundation
 
 /// tRPC over HTTP, hand-written. The first native network code in this app.
 ///
-/// **This does not change the credential red line.** `HermitAPI` never reads the
-/// Keychain and never picks a key: it calls a closure the caller hands it. Nothing
-/// in the shell constructs one yet, so today the shell still makes no
-/// authenticated request of its own — which is what `README.md` and
-/// `NativeBridge.swift` say. Wiring `Keychain.read` into that closure is a
-/// separate decision (docs/ios-native-progress.md, "A2 的重试由谁发出去") and it
-/// belongs in the call site, not here.
+/// **This file still reads no Keychain and picks no key.** It calls a closure the
+/// caller hands it, which is the point: as of M3 the shell does make
+/// authenticated requests (the native session list), and keeping the choosing
+/// out of the transport means every call site has to name where its credential
+/// came from. `KeyStore.swift` is the single place that answers that, and it is
+/// the only file in the app that opens the stored keyring.
 ///
 /// ## The wire format
 ///

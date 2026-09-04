@@ -59,7 +59,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         return nav.viewControllers.lazy.compactMap({ $0 as? WebViewController }).first
     }
 
-    /// The two `hermit://` URLs this app answers to.
+    /// The `hermit://` URLs this app answers to.
     ///
     /// `hermit://session/<id>` is built by the Live Activity and routed through the
     /// same bridge call as a notification tap, so a session opened from the Lock
@@ -70,6 +70,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// app is pointed at something that answers but is not a dashboard: the
     /// offline screen never appears, so its "Change server" button is out of
     /// reach. Carries no address of its own — see `presentOriginEditor`.
+    ///
+    /// `hermit://sessions` pushes the native session list. See the case below
+    /// for why a screen ships behind a URL before it ships as the front door.
     private func open(_ url: URL) {
         guard url.scheme == "hermit" else { return }
         guard let controller = web else { return }
@@ -83,6 +86,19 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             controller.openDeepLink("/chat?session=\(id)")
         case "server":
             controller.presentOriginEditor()
+        case "sessions":
+            // The native session list, pushed in front of the page.
+            //
+            // A URL rather than a button, and not the root of the stack, because
+            // this screen is new: making it the front door means it also owns
+            // cold start, the offline case and every deep link, and none of that
+            // is what wants looking at first. This door is how it gets driven on
+            // a real phone against a real server while the web view stays
+            // exactly where it was. M3's "cold start paints the local snapshot"
+            // is what turns it around.
+            guard let nav = window?.rootViewController as? UINavigationController else { return }
+            if nav.viewControllers.contains(where: { $0 is SessionListViewController }) { return }
+            nav.pushViewController(SessionListViewController(), animated: true)
         default:
             return
         }

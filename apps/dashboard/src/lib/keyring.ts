@@ -97,6 +97,29 @@ function pushToShell(list: KeyringEntry[]) {
 }
 
 /**
+ * Tell the shell which entry this tab is using.
+ *
+ * The LIST is in the device Keychain; the SELECTION is `sessionStorage`, which
+ * is inside the web view and invisible to native code. A native screen that
+ * makes its own request therefore had no way to pick the same key the page
+ * picks, and `list[0]` is only right until the user switches machines — after
+ * that the native session list would quietly show a different machine than the
+ * page above it, with nothing anywhere saying so.
+ *
+ * So the selection is mirrored across whenever it changes. Same queue as the
+ * list write, so the two cannot land out of order; a browser, or a shell too old
+ * for the method, is a no-op.
+ */
+function pushActiveToShell(id: string) {
+  if (secure === null) return;
+  pushQueue = pushQueue
+    .then(() => askShell('keychain.setActive', { id }))
+    .catch((e: unknown) => {
+      console.warn('[keyring] the shell would not record the active machine:', e);
+    });
+}
+
+/**
  * Move the keyring into the device Keychain, once, before the app reads it.
  *
  * A no-op everywhere except the iOS shell — in a browser, and in any shell too
@@ -139,6 +162,11 @@ export async function hydrateKeyring(): Promise<void> {
   }
   secure = local;
   localStorage.removeItem(KEYRING);
+  // Whatever this tab is about to use — including the `list[0]` fallback when
+  // nothing has ever been picked. Without this, an install that was already
+  // signed in would carry no active id at all until the next machine switch,
+  // and every native screen would run on the fallback in the meantime.
+  pushActiveToShell(getActiveEntry()?.id ?? '');
 }
 
 export function getKeyring(): KeyringEntry[] {
@@ -175,6 +203,7 @@ export function setActiveMachine(id: string) {
   // localStorage so the NEXT freshly-opened tab inherits your latest machine.
   sessionStorage.setItem(ACTIVE, id);
   localStorage.setItem(ACTIVE, id);
+  pushActiveToShell(id);
 }
 
 export function addMachine(entry: KeyringEntry) {
@@ -196,6 +225,7 @@ export function addScopedMachine(entry: KeyringEntry) {
   if (typeof window === 'undefined') return;
   sessionStorage.setItem(ACTIVE, entry.id);
   if (localStorage.getItem(ACTIVE) == null) localStorage.setItem(ACTIVE, entry.id);
+  pushActiveToShell(entry.id);
 }
 
 // Returns the next active entry (first remaining), or null if the keyring is empty.
@@ -207,6 +237,11 @@ export function removeMachine(id: string): KeyringEntry | null {
     else {
       sessionStorage.removeItem(ACTIVE);
       localStorage.removeItem(ACTIVE);
+      // `write([])` above already sent `keychain.clear`, which drops the active
+      // id with the list. This is the case where entries remain but none is
+      // active — impossible today (next[0] exists whenever the list is
+      // non-empty) and harmless if it ever is.
+      pushActiveToShell('');
     }
   }
   return next[0] ?? null;

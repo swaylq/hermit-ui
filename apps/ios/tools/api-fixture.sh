@@ -18,7 +18,8 @@ BUILD="$(mktemp -d)"
 # successful run reports failure.
 trap 'kill "${SRV:-}" 2>/dev/null || true; wait "${SRV:-}" 2>/dev/null || true; rm -rf "$BUILD"' EXIT
 
-swiftc -o "$BUILD/drive" Hermit/HermitAPI.swift tools/api-fixture/main.swift
+swiftc -o "$BUILD/drive" Hermit/HermitAPI.swift Hermit/SessionListItem.swift \
+  Hermit/SessionStatus.swift Shared/WebContract.swift tools/api-fixture/main.swift
 
 python3 tools/api-fixture/server.py "$PORT" "$BUILD/requests.jsonl" &
 SRV=$!
