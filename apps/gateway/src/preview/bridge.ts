@@ -386,13 +386,21 @@ function bridgeClient(): string {
     var t = e.touches[0];
     var dx = t.screenX - sw.x0, dy = t.screenY - sw.y0;
     if (!sw.on) {
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;   // still undecided
-      if (dx <= 0 || Math.abs(dx) <= Math.abs(dy) || absorbsRight(e.target) || ownsTouch(e.target)) { sw.dead = true; return; }
+      var ax = Math.abs(dx), ay = Math.abs(dy);
+      if (!ax && !ay) return;
+      // The call is made on the first move that says anything, because a
+      // touchmove that goes unprevented can hand the gesture to this page's own
+      // scroller, which then keeps it: the panel would come away while the page
+      // underneath went on scrolling. Vertical-dominant gives it straight back.
+      if (ay > ax) { sw.dead = true; return; }
+      if (absorbsRight(e.target) || ownsTouch(e.target)) { sw.dead = true; return; }
+      if (!e.cancelable) { sw.dead = true; return; }   // already scrolling; leave it alone
+      e.preventDefault();                              // held, while we see where it goes
+      if (Math.max(ax, ay) < 5) return;                // not committed yet
+      if (dx <= 0) { sw.dead = true; return; }         // leftward: not a dismissal
       sw.on = true;
       up({ type: 'swipe', phase: 'start' });
     }
-    // Cancelable only until the browser has committed to a scroll of its own;
-    // asking after that is a console warning and nothing else.
     if (e.cancelable) e.preventDefault();
     var now = e.timeStamp;
     if (now > sw.t) sw.vx = (t.screenX - sw.x) / (now - sw.t);

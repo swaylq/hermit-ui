@@ -28,6 +28,11 @@ import { nativeHaptic } from '@/lib/native-bridge';
 const W = 280;      // drawer width (matches w-[280px])
 const EDGE = 28;    // left-edge zone that can start an OPEN gesture
 const SLOP = 10;    // px of travel before we commit to horizontal vs vertical
+// An edge pull has to be called before the scroller underneath claims the
+// gesture — once the browser is scrolling, preventDefault is ignored and the
+// drawer comes out over a transcript that is still moving. The reasoning, and
+// the measurements, are written out in components/chat/preview-drag.ts.
+const EDGE_SLOP = 5;
 const FLICK = 0.3;  // px/ms — above this the flick's direction wins over distance
 /** A finger that has held still this long is not flicking any more, whatever it
  *  was doing before. Without this, parking the drawer half-open and then lifting
@@ -103,10 +108,20 @@ export function useDrawerSwipe({
       const t = e.touches[0];
       const dx = t.clientX - startX, dy = t.clientY - startY;
       if (!decided) {
-        if (Math.abs(dx) < SLOP && Math.abs(dy) < SLOP) return;
+        const ax = Math.abs(dx), ay = Math.abs(dy);
+        if (!ax && !ay) return;
+        if (mode === 'open') {
+          if (ay > ax) { mode = null; return; }        // plainly a scroll: never touched
+          if (!e.cancelable) { mode = null; return; }  // already scrolling: leave it alone
+          e.preventDefault();                          // hold the scroller off while we look
+          if (Math.max(ax, ay) < EDGE_SLOP) return;
+        } else if (ax < SLOP && ay < SLOP) {
+          return;
+        }
         decided = true;
         const rightDir = mode === 'open' ? dx > 0 : dx < 0;
-        engaged = Math.abs(dx) > Math.abs(dy) && rightDir;
+        engaged = ax > ay && rightDir;
+        if (engaged && !e.cancelable) engaged = false;
         if (!engaged) { mode = null; return; } // a vertical scroll — let it through
       }
       e.preventDefault(); // we own this horizontal gesture; block page scroll

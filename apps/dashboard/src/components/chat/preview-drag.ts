@@ -21,6 +21,26 @@
 export const SLIDE_MS = 300;
 /** px of travel before a touch is called horizontal rather than a scroll. */
 export const SLOP = 10;
+/**
+ * The same call, for a gesture that starts at a screen edge — deliberately much
+ * smaller, and this is the reason it is a separate number.
+ *
+ * A browser starts its own scroll once a finger has travelled far enough, and
+ * from that moment `preventDefault()` on a touchmove is ignored: the gesture is
+ * the scroller's and it will not give it back. So a decision taken at SLOP can
+ * arrive AFTER the transcript has begun to move, and the rest of the drag then
+ * does both — the panel slides out while the conversation scrolls underneath it,
+ * which is exactly what it looked like.
+ *
+ * How far is far enough is not ours to know — ~18px in emulated Chrome, nearer
+ * 10 for UIKit's pan recogniser, and WebKit is widely held to start the moment
+ * one touchmove goes unprevented. So an edge pull does not wait at all: the
+ * first move that says anything at all decides. Vertical-dominant hands the
+ * gesture back untouched (it was a scroll); otherwise the move is prevented
+ * immediately, which holds the scroller off, and EDGE_SLOP is only how far the
+ * finger must then travel before the panel starts following it.
+ */
+export const EDGE_SLOP = 5;
 /** px/ms. Above this the flick's direction settles it, however far it got. */
 export const FLICK = 0.3;
 /** Otherwise: how much of the screen it has to cross. Asymmetric by

@@ -26,7 +26,7 @@
 
 import { useEffect, useRef, type RefObject } from 'react';
 import { nativeHaptic } from '@/lib/native-bridge';
-import { paintLayer, settleLayer, settlesOpen, willCommit, SLOP, STALE_MS } from '@/components/chat/preview-drag';
+import { paintLayer, settleLayer, settlesOpen, willCommit, SLOP, EDGE_SLOP, STALE_MS } from '@/components/chat/preview-drag';
 
 /** Right-edge zone that can start an OPEN pull. Wider than the drawer's 28 on the
  *  left because the tab lives in it: a pull that starts ON the handle has to be
@@ -117,10 +117,24 @@ export function usePreviewSwipe({
       const t = e.touches[0];
       const dx = t.clientX - startX, dy = t.clientY - startY;
       if (!decided) {
-        if (Math.abs(dx) < SLOP && Math.abs(dy) < SLOP) return;
+        const ax = Math.abs(dx), ay = Math.abs(dy);
+        if (!ax && !ay) return;
+        if (mode === 'open') {
+          // The edge zone belongs to the pull, and the call has to be made on the
+          // first move that says anything: a touchmove that goes unprevented can
+          // hand the whole gesture to the scroller, which then keeps it — that is
+          // how the transcript ended up sliding under a panel being pulled out.
+          if (ay > ax) { mode = null; return; }        // plainly a scroll: never touched
+          if (!e.cancelable) { mode = null; return; }  // already scrolling: leave it alone
+          e.preventDefault();                          // hold the scroller off while we look
+          if (Math.max(ax, ay) < EDGE_SLOP) return;    // held, but not committed yet
+        } else if (ax < SLOP && ay < SLOP) {
+          return;
+        }
         decided = true;
         const inwards = mode === 'open' ? dx < 0 : dx > 0;
-        engaged = Math.abs(dx) > Math.abs(dy) && inwards;
+        engaged = ax > ay && inwards;
+        if (engaged && !e.cancelable) engaged = false;
         if (!engaged) { mode = null; return; } // a scroll, or a pull the wrong way
         if (mode === 'open') primeRef.current(url);
       }
