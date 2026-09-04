@@ -155,12 +155,28 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
 
 ## M2 — 原生网络层与数据层
 
-- [ ] `HermitAPI.swift`：tRPC over HTTP。
-      查询 `GET /api/trpc/<proc>?batch=1&input=<urlencoded {"0":{"json":…}}>`，
-      变更 `POST` 同路径、body `{"0":{"json":{…}}}`，头 `x-asst-key`，读 `j[0].result.data.json`。
-      照抄现成的两份：`lib/keyring.ts:140-176`、`apps/gateway/src/api.ts:150-214`
-- [ ] **superjson 的 meta 整块忽略** —— Date 在 `json` 里就是 ISO 字符串，
-      Swift 声明成 `Date` 配 ISO8601 解码即可。全仓返回值没有 Map/Set/BigInt
+- [x] `HermitAPI.swift`（第 7 轮，352 行）：tRPC over HTTP。
+      `query` / `mutate` 各两个重载（有输入 / 无输入），泛型 `Out: Decodable`。
+      成功读 `j[0].result.data.json`；失败先按 `j[0].error.json` 解析（拿到
+      `UNAUTHORIZED: invalid key` 这种真句子），解不出来才退回 `HTTP <状态码>: <正文前 400 字>`，
+      所以一张 nginx 502 的 HTML 页不会被当成 tRPC 错误。`URLError`**不包装**，
+      原样往上抛 —— 断网/超时/取消各有自己的 code，调用方要能分开。
+      `HermitAPIError` 另外给了 `isUnauthorized` 和 `isRetriable`（4xx 不重试，
+      408 / 429 / 5xx / 0 重试），A2 的出站队列直接能用。
+      会话是自建的 `ephemeral`：不带 cookie（认证只有 `x-asst-key` 这一条路）、
+      不走缓存、`waitsForConnectivity = false`（断网必须立刻失败，重试由队列决定）、
+      30 秒超时（和 gateway 一样）。
+      **红线没动**：key 是构造时传进来的闭包，`HermitAPI` 自己不碰 Keychain，
+      而且今天全仓没有一处构造它 —— 壳仍然不发任何带凭据的请求。
+      **进度文件原来写的「照抄 `lib/keyring.ts:140-176`」是错的**，那段是 keyring 存取；
+      现成的两份手写调用方其实是 `apps/gateway/src/api.ts` 和 `app/providers.tsx`
+- [x] **superjson 的 meta 整块忽略**（第 7 轮，和上一条同一个文件）——
+      `Batch.Success.Payload` 只声明 `json`，`meta` 连字段都不写。
+      Date 用 `.custom` 解码策略，两个 `ISO8601DateFormatter` 依次试
+      （带毫秒 / 不带）：superjson 出的是 `toISOString()` 一定有 `.000`，
+      但 `/api/sync/*` 那些手写 payload 不一定，少一个 `.000` 不该整屏失败。
+      安全前提复核过：`server/routers/` 里返回值没有 Map/Set/BigInt，
+      输入侧 `grep -rn 'z\.date()'` **零命中**，所以编码方向永远不用发 `meta`
 - [ ] SSE 客户端：`URLSession` 的 bytes 流（不能用现成 SSE 库，要能设 header）。
       退避 `[1s,2s,5s]`，35 秒无字节的僵尸看门狗，首连 `skipInitial=1`、重连不带。
       帧只有两种：`messages`（`delta=1` 时是 `{rows,gone}`）和 `status`，**都是纯 JSON**
@@ -244,29 +260,35 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**先把两件要 sway 拍板的事办了**，两件都不用他动手，只要一句话：
+**两件要 sway 拍板的事还欠着**，两件都不用他动手，只要一句话。第 7 轮没有让它们变得更急，
+也没有绕开它们：
 
-1. **迁移要不要上服务器。** 第 6 轮写了 `apps/dashboard/prisma/migrations/20260905090000_chatmessage_client_id/`，
-   内容是 `ADD COLUMN "clientId" TEXT` + 一条唯一索引，加完全是 NULL、不用回填。
-   **这台 Mac 上没有 Postgres 也没有 Docker**（`pg_isready`/`docker` 都不存在，5432 没人听），
-   所以它从没在任何库上跑过。跑之前**部署上的 `chat.send` 会整个坏掉** ——
-   Prisma 客户端按新 schema 生成，`create` 会 SELECT 一列数据库里不存在的 `clientId`，
-   连不带 `clientId` 的普通网页发消息都一起挂。也就是说：**这个提交和
-   `pnpm --filter @hermit-ui/dashboard migrate`（`prisma migrate deploy`）必须一起上线。**
-   索引是全表扫，建的时候会挡住 `ChatMessage` 的写（读不挡），挑个没人聊天的时候。
-2. **A2 的重试由谁发出去。** 这是 A2 真正的前提，不是幂等键。壳现在没有任何网络层
-   （HTTP 全在网页里），而 A1 之后壳手里恰好有 key —— 但红线文字刚统一成
-   「壳**不使用**凭据，只按 origin 存一个不透明字符串」。两条路：
-   **(a) 壳自己 POST** `chat.send`：后台也能补发（`BGAppRefreshTask` 时页面根本没加载），
-   代价是壳开始用凭据、红线要再改一次，而且实际上是提前做了 M2 的 `HermitAPI.swift`；
-   **(b) 回放给网页**：壳只管存，网络恢复/回前台时把待发消息递回页面、由页面发，
+1. **迁移要不要上服务器。** 第 6 轮写了 `apps/dashboard/prisma/migrations/20260905090000_chatmessage_client_id/`
+   （`ADD COLUMN "clientId" TEXT` + 一条唯一索引，加完全是 NULL、不用回填）。
+   **这台 Mac 上没有 Postgres 也没有 Docker**，所以它从没在任何库上跑过。
+   跑之前**部署上的 `chat.send` 会整个坏掉** —— Prisma 客户端按新 schema 生成，
+   `create` 会 SELECT 一列数据库里不存在的 `clientId`，连普通网页发消息都一起挂。
+   也就是说：**这个提交和 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线。**
+   索引是全表扫，建的时候挡写不挡读，挑个没人聊天的时候。
+2. **A2 的重试由谁发出去。** 壳现在**有**一个 HTTP 客户端了（第 7 轮的 `HermitAPI.swift`），
+   但没有一处代码构造它，所以红线仍然是真的。两条路：
+   **(a) 壳自己 POST `chat.send`** —— `HermitAPI(origin:key:)` 的 `key` 闭包接上
+   `Keychain.read` 就通了，后台也能补发（`BGAppRefreshTask` 时页面根本没加载），
+   代价是壳开始**使用**凭据、11 处红线文字要再改一次；
+   **(b) 回放给网页** —— 壳只管存，回前台时把待发消息递回页面、由页面发，
    壳保持零凭据使用，代价是 App 没在前台就补发不了。
-   —— 倾向 (a)，因为 M2 早晚要写那个 HTTP 客户端，而 (b) 会做出一个后台不工作的队列；
-   但「壳开始用凭据」这条红线是 sway 定的，得他点头。
+   —— 仍然倾向 (a)。第 7 轮把 (a) 的成本从「要写一个 HTTP 客户端」降到了「接一个闭包」，
+   所以现在这条纯粹是红线要不要改的问题，不再是工作量问题。
 
-拍板之前不要空等，**下一轮直接进 M2 的第一条 `HermitAPI.swift`**（tRPC over HTTP）：
-它是 (a) 和整个 M2 的共同前提，两条路都不白写，而且不需要碰数据库。
-照抄 `lib/keyring.ts:140-176` 和 `apps/gateway/src/api.ts:150-214` 两份现成实现。
+拍板之前不要空等。**下一轮做 M2 的 SSE 客户端**（`HermitStream.swift`）：
+`URLSession` 的 `bytes(for:)` 流，退避 `[1s,2s,5s]`，35 秒无字节的僵尸看门狗，
+首连 `skipInitial=1`、重连不带；帧只有 `messages` 和 `status` 两种，都是纯 JSON。
+它和凭据决定无关（同样收一个 key 闭包），是 M4 时间线的前提。
+
+**验证用 `apps/ios/tools/api-fixture.sh`**（第 7 轮加的，约 8 秒，不用模拟器、不用 key、
+不用网络）：`tools/api-fixture/server.py` 是一个假 dashboard，加一条 SSE 路由就能驱动
+`HermitStream`；它会把「Swift 解出了什么」和「服务器真正收到的请求行」两边都打出来。
+这是目前唯一能真的跑一次原生网络层的办法 —— `swiftc -typecheck` 只证明它编得过。
 
 ## 踩过的坑
 
@@ -386,6 +408,30 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
   gateway 会当场把新一轮杀掉。修法是把两次写包进 `prisma.$transaction`，
   但那是全 App 最热的写路径，而本机没有数据库可以验证，所以没动。
   真要修，等有库能跑的时候连着一起验。
+- **`wt.sh check` 在 cron 会话里会回 `sole-session`，而那是错的。** 已知的坑是
+  「`enter` 会 die、`check` 反而正常」—— 第 7 轮发现 `check` 也是坏的，而且坏得更危险：
+  没有 `HERMIT_SESSION_ID` 时它不报错，直接输出
+  `isolated=no reason=sole-session`，也就是在**建议你直接在共享检出里动手**，
+  哪怕 SessionStart 的提示明明列了 8 个兄弟会话。补上
+  `HERMIT_WT_SELF` 之后同一条命令立刻变成 `isolated=needed siblings=8`。
+  所以 cron 会话里那行 export 不是给 `enter` 用的，是**在 `check` 之前**就要设：
+  `export HERMIT_WT_SELF="hermit-$(printf '%s' "$CLAUDE_CODE_SESSION_ID" | sed 's/[^a-zA-Z0-9_-]/_/g' | awk '{n=length($0); print substr($0, n>12 ? n-11 : 1)}')"`
+- **Swift 的 `JSONEncoder` 把字符串里的 `/` 写成 `\/`，`JSON.stringify` 不会。**
+  于是 `chat.listSessions` 的 GET 里，输入 `a/b` 出去是 `%22a%5C%2Fb%22`，
+  网页端同一个输入是 `%22a%2Fb%22`。**这不是 bug**：`\/` 是合法的 JSON 转义，
+  `JSON.parse` 还原成同一个字符串，而且没有任何东西对这个 URL 签名或缓存。
+  写在这里是因为它看起来太像一个编码 bug —— 第 7 轮为此专门比对了
+  `HermitAPI.percentEncoded` 和 `encodeURIComponent` 四组输入，**逐字节相同**，
+  差异全部来自 JSONEncoder 那一层。
+- **`swiftc` 报 `ambiguous use of 'init(name:priority:operation:)'`（指着 `Task {`）
+  或者 `failed to produce diagnostic for expression`，说的都不是 `Task`。** 那是类型检查器
+  在闭包里某处放弃了，然后把错报在最外层。第 7 轮的真凶是
+  `optional.map(String.init)` —— `String.init` 有几十个重载。改成 `.map { "\($0)" }`
+  就好了。诀窍是别去改它指着的那一行，去找闭包里最"聪明"的那个表达式。
+- **`set -e` 在 EXIT trap 里同样生效，所以 `wait` 一个刚被 `kill` 掉的后台任务
+  会让整个脚本以 143 退出。** `api-fixture.sh` 收尾要 `wait` 才能不打印
+  `Terminated: 15`，但不加 `|| true` 的话，一次完全成功的运行会报失败 ——
+  下一轮的 cron 看到非零退出码就会以为验证没过。
 
 ---
 
@@ -394,6 +440,7 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 7 | 2026-09-05 | M2 前两条：`Hermit/HermitAPI.swift`（352 行）—— tRPC over HTTP 的 `query`/`mutate`，成功读 `j[0].result.data.json`、失败先解 `j[0].error.json` 再退回 HTTP 状态码，`URLError` 不包装，`HermitAPIError` 带 `isUnauthorized`/`isRetriable`，`ephemeral` 会话（无 cookie、无缓存、不等联网、30 秒）；superjson 的 `meta` 整块不声明，Date 走两档 ISO8601 解码。**key 是构造时传进来的闭包，全仓没有一处构造它，红线未动。** 另加 `tools/api-fixture.sh` + `tools/api-fixture/`（假 dashboard，8 秒，不用模拟器/key/网络） | `xcodegen` + `swiftc -typecheck` 过；`tools/api-fixture.sh` **真跑过，7 条请求全部亲眼核对**：GET 的 `input=` 编码、POST 的 body、`x-asst-key` 送到、无 cookie；带毫秒和不带毫秒的两种 Date 都解出来；401 出 `UNAUTHORIZED: invalid key`（retriable=false）、502 HTML 出 `HTTP 502`（retriable=true）、非 batch 正文和坏日期都出 `unreadable response`、死端口出 `URLError(-1004)` 而不是 `HermitAPIError`。`percentEncoded` 与 node 的 `encodeURIComponent` 四组输入**逐字节相同**。dashboard 未改动，未跑它的 typecheck；无界面改动，未截图 |
 | 6 | 2026-09-05 | M1 的服务端幂等键：`chat.send` 加可选 `clientId`，`ChatMessage` 加 `clientId` 列 + `@@unique([sessionId, clientId])`，重复请求在做任何副作用之前返回已存在那行，并发插入撞唯一索引走 P2002 回读；手写迁移 `20260905090000_chatmessage_client_id`。顺带确认 A2 不需要 App Group、真正的前提是「谁发重试」 | `prisma generate` + dashboard `tsc --noEmit` **0 错**；`prisma migrate diff --from-empty --script`（不连库）打出的 SQL 与手写迁移**逐字一致**；`xcodegen` + `swiftc -typecheck` 过（iOS 未改动）。**没有数据库可跑，重复发送的行为本身没被真的驱动过**；无界面改动，未截图 |
 | 5 | 2026-09-04 | M1 的 A1 Keychain：`Hermit/Keychain.swift` + `keychain.get/.set/.clear`（判据是主框架 URL 与 `AppConfig.origin` 精确同源，账号按 origin 分条）；`keyring.ts` 的 `read()`/`write()` 改走内存副本 + `hydrateKeyring()`（写→读回校验→才清 localStorage），`auth-gate.tsx` 在渲染前 await；11 处红线文字同一提交改掉；`bridge-fixture.sh`/`smoke.sh` 改 ad-hoc 签名 | `xcodegen` + `swiftc -typecheck` 过；dashboard `tsc --noEmit` **0 错**；`tools/bridge-fixture.sh` **2 个 UI 用例 41 秒全过**（新增 `testTheKeychainKeepsTheKeyring`，旧的 `testThePageCanProposeAnotherServer` 未回归）；截图 `shots/14`、`15` 看过：重启后 `keychain.get` 回 `{"value":"keyring-marker-42"}`。收工 `simctl list devices booted` 为空 |
 | 4 | 2026-09-04 | M1 的第一个真 method：`WebViewController.answer()` 方法表 + `getOrigin` / `setOrigin`（页面只能提议，人确认）；`tools/bridge-fixture.sh` + `tools/bridge-fixture/`（不用 key、不用网络的真页面） | `xcodegen` + `swiftc -typecheck` 过；`xcodebuild build-for-testing` 过；UI 用例 `testThePageCanProposeAnotherServer` **22 秒通过，同一份代码跑了两遍**；3 张截图（`shots/11..13`，gitignore）逐张看过：确认框写着 `:49518 → :49517`，第二次启动的离线屏写着 `:49517`。收工 `simctl list devices booted` 为空 |
