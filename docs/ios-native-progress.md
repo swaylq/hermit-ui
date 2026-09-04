@@ -34,6 +34,11 @@
    `-hermitOrigin` 指过去，跑一个 UI 用例，约 30 秒 + 一次全量构建。
    模拟器进程就跑在这台 Mac 上，模拟器里的 127.0.0.1 就是这台 Mac 的 loopback，
    不需要任何端口转发。要验证桥、验证壳对页面的反应都从这里加，别去连真 dashboard。
+   **只想驱动原生网络层**（不要模拟器、不要 key、不要网络）：tRPC 那半用
+   `tools/api-fixture.sh`（8 秒），SSE 那半用 `tools/stream-fixture.sh`（15 秒）。
+   两个都是假 dashboard + 一个 `swiftc` 直接编出来的驱动程序，会把「Swift 解出了什么」
+   和「服务器真收到的请求行」两边都打出来。**它们不在任何 target 里，
+   `swiftc -typecheck Hermit/*.swift` 看不见 `tools/`** —— 编不过只有跑一次才知道。
    **不需要 key、不需要网络的一屏**可以只跑单个 UI 用例，13 秒：
    `xcodebuild build-for-testing …` 然后
    `TEST_RUNNER_HERMIT_SHOT_DIR=$PWD/shots xcodebuild test-without-building … \
@@ -177,9 +182,32 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       但 `/api/sync/*` 那些手写 payload 不一定，少一个 `.000` 不该整屏失败。
       安全前提复核过：`server/routers/` 里返回值没有 Map/Set/BigInt，
       输入侧 `grep -rn 'z\.date()'` **零命中**，所以编码方向永远不用发 `meta`
-- [ ] SSE 客户端：`URLSession` 的 bytes 流（不能用现成 SSE 库，要能设 header）。
-      退避 `[1s,2s,5s]`，35 秒无字节的僵尸看门狗，首连 `skipInitial=1`、重连不带。
-      帧只有两种：`messages`（`delta=1` 时是 `{rows,gone}`）和 `status`，**都是纯 JSON**
+- [x] SSE 客户端 —— 第 8 轮，`Hermit/HermitStream.swift`（576 行，`HermitStream<Row>`
+      泛型在行类型上，因为 M4 的消息 schema 还没定）。`URLSession.bytes(for:)`
+      的字节流，退避 `[1s,2s,5s]`，35 秒僵尸看门狗，首连 `skipInitial=1`、重连不带。
+      事件是 `connected` / `messages(rows:gone:)` / `status` / `frameDropped` /
+      `disconnected(Error?)`，走一条 `AsyncStream`，**缓冲策略必须是 unbounded**：
+      `delta=1` 的帧是增量不是快照，`.bufferingNewest` 丢一帧就在时间线上留一个洞。
+      几个和网页不同、故意的地方：
+      （a）**401 / 404 不重连**（`isRetriable` 复用 `HermitAPIError` 那份），
+      网页是任何失败都无限退避重连，手机上那等于为了反复得到同一个答案耗电；
+      （b）行是**自己按字节切的**，不是 `.lines` —— 见「踩过的坑」，这条是这一轮的真坑；
+      （c）帧里 `data:` 多行按 SSE 语法拼接（网页只取第一行），两边不可能分叉，
+      因为双方都用 JSON 编码器序列化，裸换行出不来；
+      （d）不认识的 `event:` 名**静默跳过**而不是当成 messages 去解，
+      新服务端加一种帧不该让老 App 刷一屏 `frameDropped`。
+      顺带补齐两个帧类型：`SessionStatusFrame` / `SessionActivity`（照抄
+      `server/session-status-frame.ts` 和 `lib/session-status.ts` 的字段），
+      `activity` 单独 `try?` —— 那是一列不透明 JSON，它解不出来只该丢掉活动那一行，
+      不该连 `state` 一起丢。`TimelineWindow.limit/digest` 抄自 `lib/chat-window.ts`，
+      是下面「防漂移」的现成目标。**红线没动**：key 同样是构造时传进来的闭包，
+      全仓仍然没有一处构造 `HermitStream`
+- [x] `tools/stream-fixture.sh` + `tools/stream-fixture/` —— 第 8 轮，会真推 SSE 的假
+      dashboard，约 15 秒，不用模拟器、不用 key、不用网络。四个场景由 `sessionId` 选：
+      `s_frames`（所有帧形状 + 一个被拆成两个 TCP 包的帧 + 干净关闭后重连）、
+      `s_silent`（开了就不说话，驱动看门狗）、`s_unauth`（401，证明它不重连）、
+      `s_notstream`（200 但是 HTML，门户劫持）。服务端必须是 `ThreadingHTTPServer`：
+      一条 SSE 连接会占住整个线程
 - [ ] 本地存储：SQLite + FTS5（中文语料上严格优于现在的线性 `indexOf`）。
       `lib/chat-cache/sync-plan.ts` 的 `planSync` 55 行纯函数**原样照抄**，连测试一起
 - [ ] **防漂移**：把手抄的常量改成生成的（`StatusPalette.swift` ← `lib/session-status.ts`
@@ -260,37 +288,69 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**两件要 sway 拍板的事还欠着**，两件都不用他动手，只要一句话。第 7 轮没有让它们变得更急，
-也没有绕开它们：
+**两件要 sway 拍板的事还欠着**，两件都不用他动手，只要一句话。第 8 轮没让它们更急，
+也没绕开它们：
 
-1. **迁移要不要上服务器。** 第 6 轮写了 `apps/dashboard/prisma/migrations/20260905090000_chatmessage_client_id/`
-   （`ADD COLUMN "clientId" TEXT` + 一条唯一索引，加完全是 NULL、不用回填）。
-   **这台 Mac 上没有 Postgres 也没有 Docker**，所以它从没在任何库上跑过。
-   跑之前**部署上的 `chat.send` 会整个坏掉** —— Prisma 客户端按新 schema 生成，
-   `create` 会 SELECT 一列数据库里不存在的 `clientId`，连普通网页发消息都一起挂。
-   也就是说：**这个提交和 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线。**
+1. **迁移要不要上服务器。** 第 6 轮写的
+   `apps/dashboard/prisma/migrations/20260905090000_chatmessage_client_id/`
+   （`ADD COLUMN "clientId" TEXT` + 一条唯一索引，加完全是 NULL、不用回填）
+   **从没在任何库上跑过**（这台 Mac 没有 Postgres 也没有 Docker）。跑之前，
+   部署上的 `chat.send` 会整个坏掉 —— Prisma 客户端按新 schema 生成，`create` 会
+   SELECT 一列数据库里不存在的 `clientId`，连普通网页发消息都一起挂。
+   **这个提交和 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线。**
    索引是全表扫，建的时候挡写不挡读，挑个没人聊天的时候。
-2. **A2 的重试由谁发出去。** 壳现在**有**一个 HTTP 客户端了（第 7 轮的 `HermitAPI.swift`），
-   但没有一处代码构造它，所以红线仍然是真的。两条路：
-   **(a) 壳自己 POST `chat.send`** —— `HermitAPI(origin:key:)` 的 `key` 闭包接上
-   `Keychain.read` 就通了，后台也能补发（`BGAppRefreshTask` 时页面根本没加载），
-   代价是壳开始**使用**凭据、11 处红线文字要再改一次；
-   **(b) 回放给网页** —— 壳只管存，回前台时把待发消息递回页面、由页面发，
-   壳保持零凭据使用，代价是 App 没在前台就补发不了。
-   —— 仍然倾向 (a)。第 7 轮把 (a) 的成本从「要写一个 HTTP 客户端」降到了「接一个闭包」，
-   所以现在这条纯粹是红线要不要改的问题，不再是工作量问题。
+2. **A2 的重试由谁发出去。** 壳现在有 HTTP 客户端（第 7 轮）也有 SSE 客户端（第 8 轮），
+   但没有一处代码构造它们，所以红线仍然是真的。**(a) 壳自己 POST `chat.send`**：
+   `key` 闭包接上 `Keychain.read` 就通，后台也能补发（`BGAppRefreshTask` 时页面没加载），
+   代价是壳开始**使用**凭据、11 处红线文字要再改一次。**(b) 回放给网页**：壳只管存，
+   回前台把待发消息递回页面由页面发，零凭据使用，代价是不在前台就补发不了。
+   —— 仍然倾向 (a)。这条纯粹是红线要不要改，早就不是工作量问题了。
 
-拍板之前不要空等。**下一轮做 M2 的 SSE 客户端**（`HermitStream.swift`）：
-`URLSession` 的 `bytes(for:)` 流，退避 `[1s,2s,5s]`，35 秒无字节的僵尸看门狗，
-首连 `skipInitial=1`、重连不带；帧只有 `messages` 和 `status` 两种，都是纯 JSON。
-它和凭据决定无关（同样收一个 key 闭包），是 M4 时间线的前提。
+拍板之前不要空等。**下一轮做 M2 的「防漂移」**，理由是这一轮把手抄常量的面积又扩大了：
+现在 Swift 侧至少有四组数字是照着 TypeScript 抄的 —— `StatusPalette.swift` 的色谱
+（← `lib/session-status.ts` + `ctx-bar.tsx`）、`TimelineWindow.limit/digest`
+（← `lib/chat-window.ts` 的 `INITIAL_WINDOW` / `TIMELINE_DIGEST`）、
+`HermitStream` 的退避与看门狗（← `chat/page.tsx` 的 `BACKOFFS` / `IDLE_DEAD_MS`）、
+以及 `LiveActivityManager.swift:36` 的超时（← `push/live-activity.ts`）。
+**最后那组已经漂了**：Swift 是 10 分钟，`WORKING_STALE_MS` 是 15 分钟。
+做法照清单：能生成的就生成，生成不了的写成断言放
+`apps/dashboard/src/lib/ios-contract.test.ts`（`pnpm test` 已经在跑这个目录）。
+这一项小、边界清楚、一轮做得完，而且是唯一一条「不做会慢慢变坏」的。
 
-**验证用 `apps/ios/tools/api-fixture.sh`**（第 7 轮加的，约 8 秒，不用模拟器、不用 key、
-不用网络）：`tools/api-fixture/server.py` 是一个假 dashboard，加一条 SSE 路由就能驱动
-`HermitStream`；它会把「Swift 解出了什么」和「服务器真正收到的请求行」两边都打出来。
-这是目前唯一能真的跑一次原生网络层的办法 —— `swiftc -typecheck` 只证明它编得过。
+再往后是 M2 最后一条（SQLite + FTS5，`lib/chat-cache/sync-plan.ts` 的 `planSync`
+55 行纯函数原样照抄、连测试一起），它是 M3「冷启动先画本地快照」的前提。
+移植前先照 `evolution/lessons.md` 那条办：**把 TS 原函数抠出来在 node 里跑十来个输入
+打成对照表，再照着表写断言** —— 别凭读代码推断边界行为。
+
+`HermitStream` 本身还差一件事，但要等有调用方才做得了：**前后台切换**。
+它是 Foundation-only 的，故意不 import UIKit，所以「离开前台就 `stop()`、回来新建一个」
+是调用点的活（M3/M4）。网页那边是 `visibilitychange`，理由一样 ——
+后台挂着的会话会让服务端一直按 2 秒的兜底 tick 查 Postgres。
 
 ## 踩过的坑
+
+- **Foundation 的 `AsyncLineSequence`（`bytes.lines`）会把空行整个吞掉，而 SSE 的空行
+  就是帧分隔符。** `"a\n\nb\n"` 出来是 `["a", "b"]`，没有开关能关掉；纯内存的字节序列
+  也一样，所以不是 `URLSession` 的问题。后果极其安静：连接建立、字段一行行读进来、
+  **一个帧都不投递**，然后报告干净地读到了流末尾。不抛异常、不打日志、
+  `swiftc -typecheck` 当然更看不出来 —— 第一版 `HermitStream` 就是这样，
+  `tools/stream-fixture.sh` 头一次跑就抓到了（12 个事件期望，实到 0 个）。
+  改成自己按字节切行（`0x0A` / `0x0D` / CRLF），代价是每字节一次 `await`，
+  而 `.lines` 内部本来就是这么干的，所以没有更便宜的写法 —— 真嫌慢就得上
+  `URLSessionDataDelegate` 收整块。**推广一下：Foundation 里名字像"按行切"的东西，
+  先拿 `a\n\nb` 试一遍再用。**
+- **`HermitAPI` 那个 `URLSession` 绝对不能拿来跑流。** 它设了
+  `timeoutIntervalForResource = 30`，那是**整条连接的寿命上限**，不是空闲超时 ——
+  SSE 挂上去会每次都在第 30 秒被掐断，症状是「每次重连后时间线更新半分钟然后安静」，
+  看起来像服务端的锅。`HermitStreamSession.shared` 是另一份配置：资源超时一周，
+  空闲超时按每个请求的 `idleDeadline` 设。
+- **泛型类里不能有 static 存储属性**（`static stored properties not supported in
+  generic types`）。`HermitStream<Row>` 想挂一个共享 `URLSession` 就得把它放到外面
+  一个非泛型的 `enum` 里。
+- **`Task { await self.run() }` 会让 `deinit` 永远不触发。** 实例方法在任务里跑着，
+  任务就持有 `self`，于是「对象被释放时取消连接」这条永远不会发生，流会活过它的持有者。
+  `HermitStream` 的重连循环因此是 `static func run(_ cfg: Config, _ emit:)`，
+  把要用的东西全打包成一个值传进去，`self` 一点都不碰。
 
 - **模拟器上 keychain 的每一次调用都回 `-34018`，因为测试脚本是 `CODE_SIGNING_ALLOWED=NO`
   构建的。** 没签名的包不带任何 entitlement，也就没有 keychain access group，
@@ -440,6 +500,7 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 8 | 2026-09-05 | M2 的 SSE 客户端：`Hermit/HermitStream.swift`（576 行）—— `URLSession.bytes(for:)` 的字节流，退避 `[1s,2s,5s]`、35 秒僵尸看门狗、首连 `skipInitial=1` 重连不带，`messages`/`status` 两种帧走一条 unbounded 的 `AsyncStream`；401/404 不再重连（复用 `HermitAPIError.isRetriable`）；补了 `SessionStatusFrame`/`SessionActivity`/`TimelineWindow`；`HermitAPI.decoder` 由 private 改共享，全 App 只有一份 ISO-8601 解析。另加 `tools/stream-fixture.sh` + `tools/stream-fixture/`（会真推 SSE 的假 dashboard，15 秒，四个场景）。**红线未动，仍然没有一处构造 `HermitStream`** | `xcodegen` + `swiftc -typecheck` **0 warning 0 error**；`tools/stream-fixture.sh` **真跑过，每一条事件都亲眼核对**：`{rows,gone}` 与裸数组两种形状都解、中文和 `&`/`<b>` 原样、带毫秒和不带毫秒的 Date 都解、`activity` 是字符串时只丢活动不丢 `state`、坏 JSON 和类型不符各出一条 `frameDropped`（后者报到 `rows[0].id`）而流不断、**被拆成两个包中间隔 150ms 的帧正确重组**、未知 `event: typing` 静默跳过、`: ping` 不产生事件；服务端请求日志确认重连那条**没有** `skipInitial`、`x-asst-key` 到位且无 cookie；看门狗按 1 秒的截止时间准点开火；401 只发了一次请求然后序列结束。`tools/api-fixture.sh` 回归重跑，无退化。dashboard 未改动，未跑它的 typecheck；无界面改动，未截图 |
 | 7 | 2026-09-05 | M2 前两条：`Hermit/HermitAPI.swift`（352 行）—— tRPC over HTTP 的 `query`/`mutate`，成功读 `j[0].result.data.json`、失败先解 `j[0].error.json` 再退回 HTTP 状态码，`URLError` 不包装，`HermitAPIError` 带 `isUnauthorized`/`isRetriable`，`ephemeral` 会话（无 cookie、无缓存、不等联网、30 秒）；superjson 的 `meta` 整块不声明，Date 走两档 ISO8601 解码。**key 是构造时传进来的闭包，全仓没有一处构造它，红线未动。** 另加 `tools/api-fixture.sh` + `tools/api-fixture/`（假 dashboard，8 秒，不用模拟器/key/网络） | `xcodegen` + `swiftc -typecheck` 过；`tools/api-fixture.sh` **真跑过，7 条请求全部亲眼核对**：GET 的 `input=` 编码、POST 的 body、`x-asst-key` 送到、无 cookie；带毫秒和不带毫秒的两种 Date 都解出来；401 出 `UNAUTHORIZED: invalid key`（retriable=false）、502 HTML 出 `HTTP 502`（retriable=true）、非 batch 正文和坏日期都出 `unreadable response`、死端口出 `URLError(-1004)` 而不是 `HermitAPIError`。`percentEncoded` 与 node 的 `encodeURIComponent` 四组输入**逐字节相同**。dashboard 未改动，未跑它的 typecheck；无界面改动，未截图 |
 | 6 | 2026-09-05 | M1 的服务端幂等键：`chat.send` 加可选 `clientId`，`ChatMessage` 加 `clientId` 列 + `@@unique([sessionId, clientId])`，重复请求在做任何副作用之前返回已存在那行，并发插入撞唯一索引走 P2002 回读；手写迁移 `20260905090000_chatmessage_client_id`。顺带确认 A2 不需要 App Group、真正的前提是「谁发重试」 | `prisma generate` + dashboard `tsc --noEmit` **0 错**；`prisma migrate diff --from-empty --script`（不连库）打出的 SQL 与手写迁移**逐字一致**；`xcodegen` + `swiftc -typecheck` 过（iOS 未改动）。**没有数据库可跑，重复发送的行为本身没被真的驱动过**；无界面改动，未截图 |
 | 5 | 2026-09-04 | M1 的 A1 Keychain：`Hermit/Keychain.swift` + `keychain.get/.set/.clear`（判据是主框架 URL 与 `AppConfig.origin` 精确同源，账号按 origin 分条）；`keyring.ts` 的 `read()`/`write()` 改走内存副本 + `hydrateKeyring()`（写→读回校验→才清 localStorage），`auth-gate.tsx` 在渲染前 await；11 处红线文字同一提交改掉；`bridge-fixture.sh`/`smoke.sh` 改 ad-hoc 签名 | `xcodegen` + `swiftc -typecheck` 过；dashboard `tsc --noEmit` **0 错**；`tools/bridge-fixture.sh` **2 个 UI 用例 41 秒全过**（新增 `testTheKeychainKeepsTheKeyring`，旧的 `testThePageCanProposeAnotherServer` 未回归）；截图 `shots/14`、`15` 看过：重启后 `keychain.get` 回 `{"value":"keyring-marker-42"}`。收工 `simctl list devices booted` 为空 |

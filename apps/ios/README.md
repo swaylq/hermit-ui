@@ -328,3 +328,18 @@ that speaks the `{type:'req'}` wire protocol directly, which is how the web to
 native request channel gets driven against a real document — including the one
 thing worth being careful about there, that a page may only *propose* a backend
 address and a person has to confirm it (`WebViewController.proposeOrigin`).
+
+Two more fixtures drive the native network layer with no simulator at all — they
+compile the Swift straight with `swiftc` and talk to a fake dashboard on
+loopback, so a run costs seconds rather than a boot:
+
+    tools/api-fixture.sh      HermitAPI    — tRPC over HTTP        (~8s)
+    tools/stream-fixture.sh   HermitStream — Server-Sent Events   (~15s)
+
+Both print the events the Swift produced *and* the request lines the server
+received, because half of what can be wrong there is in the URL. Neither is part
+of any target, so `swiftc -typecheck Hermit/*.swift` does not see them: if one
+stops compiling you find out by running it. They are worth running after any
+change under `Hermit/Hermit*.swift` — the first run of `stream-fixture.sh` is
+what caught `AsyncLineSequence` silently eating the blank lines that separate SSE
+frames, a failure that type-checks, throws nothing, and logs nothing.

@@ -264,7 +264,11 @@ struct HermitAPI {
         )
     }
 
-    private static let decoder: JSONDecoder = {
+    /// Shared with `HermitStream`: there is one ISO-8601 parser in this app, not
+    /// one per transport. A stream frame and a tRPC payload carry the same
+    /// timestamps written by the same server, so a second copy could only ever
+    /// disagree with this one.
+    static let decoder: JSONDecoder = {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .custom { decoder in
             let s = try decoder.singleValueContainer().decode(String.self)
