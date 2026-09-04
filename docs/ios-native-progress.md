@@ -39,6 +39,9 @@
    都从这里加，别去连真 dashboard。
    **迭代时设 `HERMIT_DERIVED_DATA`**（例如 `$TMPDIR/hermit-ios-dd`）：脚本默认跑完就删，
    设了它既复用增量构建、也不会被清掉，第二次起省掉约一分钟。
+   **在 worktree 里跑，就把 `HERMIT_SHOT_DIR` 指到主检出**
+   （`HERMIT_SHOT_DIR=~/hermit-ui/apps/ios/shots`）—— 否则 `wt.sh land` 删 worktree 时
+   会把刚截的图一起删掉，见「踩过的坑」。
    **只想驱动原生网络层或数据层**（不要模拟器、不要 key、不要网络）：tRPC 那半用
    `tools/api-fixture.sh`（8 秒），SSE 那半用 `tools/stream-fixture.sh`（15 秒），
    本地库和搜索用 `tools/cache-fixture.sh`（4 秒），
@@ -643,6 +646,17 @@ libsqlite3 上跑过**，M7 装到模拟器/真机那一轮要亲眼确认一次
   （含全量构建），跑完自己 `shutdown` + `erase`。
 - **`URL(fileURLToPath:)` 是 Node 的写法，Swift 是 `URL(fileURLWithPath:)`。**
   写夹具驱动脚本时手指比脑子快，编译器的报错还挺长。
+
+### `wt.sh land` 会把 worktree 里的截图一起删掉（第 13 轮，真踩到了）
+
+`land` 最后一步是 `git worktree remove`，它删的是整个目录 —— 包括 `apps/ios/shots/`，
+而那个目录是 gitignore 的，**所以三张刚看过的截图在 land 的那一刻就没了**。
+只有提交进去的东西能活下来。两个办法，选一个：
+跑测试时把 `HERMIT_SHOT_DIR` 指到**主检出**（`HERMIT_SHOT_DIR=~/hermit-ui/apps/ios/shots`），
+或者 land 之前先拷出来。这一轮是从 xcresult 里捞回来的，能捞是因为
+`HERMIT_DERIVED_DATA` 设过、脚本没删它：
+`xcrun xcresulttool export attachments --path <…>.xcresult --output-path <dir>`，
+文件名在同目录的 `manifest.json` 里（导出的是 UUID 名，要照 manifest 改回来）。
 
 ### 假数据要按请求现算，不能写死时间戳（第 13 轮）
 
