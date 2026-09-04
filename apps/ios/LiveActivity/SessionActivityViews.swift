@@ -2,270 +2,79 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
-// The Live Activity's four presentations: the Lock Screen banner, and the
-// Dynamic Island's compact, minimal and expanded forms.
+// The WidgetKit side of the presentation: turn an `ActivityViewContext` into a
+// `SessionCard` and hand it to the views in SessionCardViews.swift.
 //
-// One rule shaped all of them — a lock screen is read at arm's length, in under
-// a second, often through a glance that was really about the time. So each
-// presentation answers the questions in the same order, and the smaller it gets
-// the fewer it answers:
-//
-//   minimal  → is it waiting on me?
-//   compact  → …and how long has it been?
-//   expanded → …and which session, and what is it doing?
-//   banner   → the same, with room for the line to breathe
-//
-// Nothing here animates on its own. The elapsed time is a system timer, which
-// ticks once a second with no push behind it; that is the only motion, and it is
-// enough to read as live. A spinner would have to be faked with pushes, and a
-// push per second is neither allowed nor useful.
+// Kept this thin on purpose. Everything here is untestable by construction —
+// the context type has no public initialiser — so the less that lives in it,
+// the more of the layout can be looked at before it ships.
 
-// MARK: - Phase presentation
-
-private extension SessionPhase {
-    /// Straight from the web app's spec — see StatusPalette. Nothing is chosen
-    /// here; a Lock Screen with its own idea of what "working" looks like is the
-    /// same drift `session-status.ts` exists to prevent.
-    var tint: Color {
-        switch self {
-        // One hue for both, as the spec has it: a blocked turn IS mid-turn. What
-        // separates them on the web is the pulse, and here it is the symbol, the
-        // button and the alert.
-        case .working, .blocked: return StatusPalette.amber
-        // Not green. A turn that just finished is "unread" in this product's
-        // vocabulary, and unread is red — you have something to go read.
-        case .done:   return StatusPalette.rose
-        // A turn that died leaves a session with no live process: "down".
-        case .failed: return StatusPalette.zinc
-        }
-    }
-
-    /// A second glyph, only where there is room for one and only for the state
-    /// that has something to say beyond its colour. Working and blocked share a
-    /// hue by design (see StatusPalette), so this is what carries the difference
-    /// in the presentations wide enough to show it.
-    var badge: String? {
-        switch self {
-        case .working: return nil
-        case .blocked: return "hand.raised.fill"
-        case .done:    return "checkmark"
-        case .failed:  return "exclamationmark.triangle.fill"
-        }
-    }
-
-    /// Two or three characters. Anything longer squeezes the timer out of the
-    /// compact island, which is the more useful of the two.
-    var shortLabel: String {
-        switch self {
-        case .working: return "运行"
-        case .blocked: return "待答"
-        case .done:    return "完成"
-        case .failed:  return "失败"
-        }
-    }
-
-    /// Does the elapsed time still mean anything? While working and while
-    /// blocked it is the headline number — how long you have been waiting, and
-    /// how long IT has been waiting on you. After the turn ends it is just a
-    /// clock counting up from a finished thing, so the views drop it.
-    var showsTimer: Bool { self == .working || self == .blocked }
+private func card(_ context: ActivityViewContext<SessionActivityAttributes>) -> SessionCard {
+    SessionCard(
+        sessionId: context.attributes.sessionId,
+        agentName: context.attributes.agentName,
+        machineName: context.attributes.machineName,
+        phase: SessionPhase(context.state.phase),
+        title: context.state.title,
+        line: context.state.line,
+        since: context.state.since,
+        queued: context.state.queued,
+        ctxPct: context.state.ctxPct
+    )
 }
-
-private func url(for sessionId: String) -> URL? {
-    URL(string: "hermit://session/\(sessionId)")
-}
-
-/// Hermit's own mark, tinted by what the session is doing.
-///
-/// The same file the dashboard uses (`public/logo-crab-mono.png`, an alpha
-/// silhouette it tints with CSS), imported as a template image so it takes a
-/// `foregroundStyle` here the same way. Using the app icon instead would not
-/// work and would be wrong twice over: it is a full-colour raster with its own
-/// background, and a mark that cannot take the state colour is exactly what this
-/// slot must not be.
-private struct CrabMark: View {
-    let tint: Color
-    var size: CGFloat = 15
-
-    var body: some View {
-        Image("CrabMark")
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .frame(width: size, height: size)
-            .foregroundStyle(tint)
-    }
-}
-
-// MARK: - Lock Screen / banner
 
 struct SessionActivityBanner: View {
     let context: ActivityViewContext<SessionActivityAttributes>
 
-    private var phase: SessionPhase { SessionPhase(context.state.phase) }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                CrabMark(tint: phase.tint, size: 15)
-                if let badge = phase.badge {
-                    Image(systemName: badge)
-                        .font(.caption2)
-                        .foregroundStyle(phase.tint)
-                }
-                Text(context.attributes.agentName)
-                    .font(.footnote.weight(.semibold))
-                    .monospaced()
-                if let machine = context.attributes.machineName {
-                    Text(machine)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                if phase.showsTimer {
-                    // Counts up from the start of THIS phase, not of the session.
-                    Text(context.state.since, style: .timer)
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(phase.tint)
-                        .lineLimit(1)
-                        // A timer's width changes as it crosses 10s, 10m, 1h.
-                        // Without a fixed box the whole row jitters once a second.
-                        .frame(minWidth: 44, alignment: .trailing)
-                }
-            }
-
-            // The line the whole thing exists to carry. Two lines, because a
-            // question worth interrupting you is usually a sentence, and one
-            // line truncates it exactly where the verb is.
-            Text(context.state.line)
-                .font(.subheadline)
-                .foregroundStyle(phase == .blocked ? .primary : .secondary)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 6) {
-                Text(context.state.title)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                QueueBadge(count: context.state.queued)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .activityBackgroundTint(nil)     // let the system pick; it matches the wallpaper
-        .activitySystemActionForegroundColor(phase.tint)
-        .widgetURL(url(for: context.attributes.sessionId))
+        let c = card(context)
+        SessionBannerBody(card: c)
+            .activitySystemActionForegroundColor(c.phase.tint)
+            .widgetURL(sessionURL(c.sessionId))
     }
 }
 
-// MARK: - Dynamic Island
-
-struct SessionActivityIsland {
+enum SessionActivityIsland {
     static func island(_ context: ActivityViewContext<SessionActivityAttributes>) -> DynamicIsland {
-        let phase = SessionPhase(context.state.phase)
+        let c = card(context)
 
         return DynamicIsland {
-            DynamicIslandExpandedRegion(.leading) {
-                HStack(spacing: 5) {
-                    CrabMark(tint: phase.tint, size: 14)
-                    Text(context.attributes.agentName)
-                        .font(.footnote.weight(.semibold))
-                        .monospaced()
-                        .lineLimit(1)
-                }
-            }
-            DynamicIslandExpandedRegion(.trailing) {
-                if phase.showsTimer {
-                    Text(context.state.since, style: .timer)
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(phase.tint)
-                        .lineLimit(1)
-                        .frame(minWidth: 44, alignment: .trailing)
-                } else {
-                    Text(phase.shortLabel)
-                        .font(.caption)
-                        .foregroundStyle(phase.tint)
-                }
-            }
-            DynamicIslandExpandedRegion(.center) {
-                Text(context.state.title)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
+            // Leading and trailing are the two narrow columns beside the camera;
+            // one fact each and nothing else.
+            DynamicIslandExpandedRegion(.leading) { IslandLeading(card: c) }
+            DynamicIslandExpandedRegion(.trailing) { IslandTrailing(card: c) }
+            // The centre region is the sliver BETWEEN those two, under the
+            // cutout. The first version put the session title there and it came
+            // out cramped and floating, a third column competing with the two
+            // beside it. Left empty on purpose: everything it held reads better
+            // in `bottom`, which is full width and directly below.
             DynamicIslandExpandedRegion(.bottom) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(context.state.line)
-                        .font(.subheadline)
-                        .foregroundStyle(phase == .blocked ? .primary : .secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    // Only when it is actually waiting on a human. A button that
-                    // is always there teaches you to ignore it, and this is the
-                    // one moment the island has something to ask for.
-                    if phase == .blocked, let link = url(for: context.attributes.sessionId) {
-                        Link(destination: link) {
-                            Text("去回答")
-                                .font(.footnote.weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 7)
-                                .background(phase.tint.opacity(0.22), in: Capsule())
-                        }
-                        .tint(phase.tint)
-                    } else {
-                        QueueBadge(count: context.state.queued)
-                    }
-                }
+                IslandBottom(card: c, link: sessionURL(c.sessionId))
             }
         } compactLeading: {
             // The app's own mark, coloured by what the session is doing — this
             // slot is the one place a person reads "which app" and "what state"
             // in the same glance.
-            CrabMark(tint: phase.tint, size: 15)
+            CrabMark(tint: c.phase.tint, size: 15)
         } compactTrailing: {
-            if phase.showsTimer {
-                Text(context.state.since, style: .timer)
+            if c.phase.showsTimer {
+                Text(c.since, style: .timer)
                     .font(.caption2.monospacedDigit())
-                    .foregroundStyle(phase.tint)
+                    .foregroundStyle(c.phase.tint)
                     // The compact island is a few dozen points wide. Without the
                     // cap a long-running turn pushes past an hour and the label
                     // is clipped mid-digit instead of shrinking.
                     .frame(maxWidth: 46)
                     .lineLimit(1)
             } else {
-                Text(phase.shortLabel)
+                Text(c.phase.shortLabel)
                     .font(.caption2)
-                    .foregroundStyle(phase.tint)
+                    .foregroundStyle(c.phase.tint)
             }
         } minimal: {
-            CrabMark(tint: phase.tint, size: 15)
+            CrabMark(tint: c.phase.tint, size: 15)
         }
-        .widgetURL(url(for: context.attributes.sessionId))
-        .keylineTint(phase.tint)
-    }
-}
-
-// MARK: - Bits
-
-/// "+3" when messages are stacked behind the running one. Nothing at all when
-/// there are none — an empty badge is a thing to decode for no information.
-private struct QueueBadge: View {
-    let count: Int?
-
-    var body: some View {
-        if let n = count, n > 0 {
-            Text("排队 \(n)")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(.quaternary, in: Capsule())
-        }
+        .widgetURL(sessionURL(c.sessionId))
+        .keylineTint(c.phase.tint)
     }
 }

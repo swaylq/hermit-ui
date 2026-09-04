@@ -234,7 +234,8 @@ struct LiveActivityCommand {
                 // seconds, because that is what the SERVER will put in an APNs
                 // content-state. One conversion, at the edge, in one place.
                 sinceEpoch: (s["sinceMs"] as? Double ?? Date().timeIntervalSince1970 * 1000) / 1000,
-                queued: s["queued"] as? Int
+                queued: s["queued"] as? Int,
+                ctxPct: s["ctxPct"] as? Int
             )
         } else {
             self.state = nil

@@ -37,6 +37,7 @@ import {
 } from '@/lib/native-bridge';
 import { getActiveEntry, getKeyring } from '@/lib/keyring';
 import { shortDuration } from '@/lib/session-status';
+import { ctxPct } from '@/lib/format';
 
 export interface LiveActivityInput {
   sessionId: string | undefined;
@@ -50,6 +51,11 @@ export interface LiveActivityInput {
   activityLabel: string | null;
   activityDetail: string | null;
   queued: number;
+  /** Tokens in the context window, and how many it holds. Both straight off the
+   *  session row, so the island cannot disagree with the header about how full
+   *  it is. */
+  contextTokens: number | null | undefined;
+  contextWindow: number;
 }
 
 /** The states the island distinguishes. Anything not working and not waiting on
@@ -101,7 +107,7 @@ export function useLiveActivity(i: LiveActivityInput) {
   const [support, setSupport] = useState(getLiveActivitySupport);
   useEffect(() => onLiveActivitySupport(setSupport), []);
 
-  const { sessionId, agentName, statusKey, activityLabel, activityDetail, title: rawTitle, queued } = i;
+  const { sessionId, agentName, statusKey, activityLabel, activityDetail, title: rawTitle, queued, contextTokens, contextWindow } = i;
 
   useEffect(() => {
     if (!isNativeShell() || !sessionId || !agentName) return;
@@ -122,16 +128,20 @@ export function useLiveActivity(i: LiveActivityInput) {
     if (phaseRef.current?.phase !== phase) {
       phaseRef.current = { phase, sinceMs: Date.now() };
     }
+    // Rounded here, once, and the rounded value is what goes in the signature —
+    // the raw count moves every few seconds and each move would cost a push.
+    const ctx = contextTokens == null ? undefined : Math.round(ctxPct(contextTokens, contextWindow));
     const state: LiveActivityState = {
       phase,
       title,
       line,
       sinceMs: phaseRef.current.sinceMs,
       queued: queued || undefined,
+      ctxPct: ctx,
     };
 
     // Everything a person would see. Deliberately no timestamp and no elapsed.
-    const sig = `${phase}|${title}|${line}|${queued}`;
+    const sig = `${phase}|${title}|${line}|${queued}|${ctx ?? '-'}`;
     const sent = sentRef.current;
 
     if (phase === 'done') {
@@ -159,7 +169,7 @@ export function useLiveActivity(i: LiveActivityInput) {
       liveActivityUpdate(sessionId, state);
       sentRef.current = { sessionId, sig };
     }
-  }, [sessionId, agentName, statusKey, activityLabel, activityDetail, rawTitle, queued, support]);
+  }, [sessionId, agentName, statusKey, activityLabel, activityDetail, rawTitle, queued, contextTokens, contextWindow, support]);
 
   // Leaving the session takes its activity down. The server would keep updating
   // an activity whose turn is still running, which is correct — but this pane is

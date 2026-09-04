@@ -43,4 +43,27 @@ enum StatusPalette {
     /// Ready: alive, idle, caught up. Also unused here — an activity that
     /// reaches "read" has already ended.
     static let emerald = Color(.displayP3, red: 0.2673, green: 0.7268, blue: 0.5082)
+
+    // The lighter pair the context readout uses for its NUMBER, where the bar
+    // uses the 500s. Same split as components/ctx-bar.tsx.
+    static let emerald400 = Color(.displayP3, red: 0.3349, green: 0.8196, blue: 0.5913)
+    static let rose400 = Color(.displayP3, red: 0.9430, green: 0.4307, blue: 0.5029)
+
+    /// How full the context window is, in the web app's three bands.
+    ///
+    /// `components/ctx-bar.tsx`: ≥90% rose, ≥70% amber, else emerald — with the
+    /// bar on the 500s and the percentage on the 400s. Copied rather than
+    /// re-judged; a phone that called 80% green while the sidebar called it
+    /// amber would be worse than no indicator.
+    static func ctxBar(_ pct: Int) -> Color {
+        if pct >= 90 { return rose }
+        if pct >= 70 { return amber }
+        return emerald
+    }
+
+    static func ctxText(_ pct: Int) -> Color {
+        if pct >= 90 { return rose400 }
+        if pct >= 70 { return amber }   // amber-400 is already the 400
+        return emerald400
+    }
 }

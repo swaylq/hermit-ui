@@ -55,30 +55,22 @@ struct SessionActivityAttributes: ActivityAttributes {
         /// and zero both render as nothing.
         var queued: Int?
 
+        /// How full this session's context window is, 0–100, or nil when no turn
+        /// has completed yet.
+        ///
+        /// A rounded INTEGER percent, and deliberately not the token count the
+        /// desktop shows beside it. The count moves every time the gateway reads
+        /// usage — at `412.0k` resolution that is a new value every few seconds,
+        /// and every new value is an APNs push. The percent moves at most a
+        /// hundred times in a session's life. This is the same cut the sidebar
+        /// already makes for tight rows (`CtxBar variant="compact"`).
+        ///
+        /// Rendered even when nil, as `ctx —`: "ctx 占比任何状态都要显示".
+        var ctxPct: Int?
+
         /// APNs caps a Live Activity payload at 4KB and there is no error when it
         /// is exceeded — the update is dropped silently. Both writers (the app and
         /// the server) truncate to this, which leaves room to spare.
         static let maxLine = 120
     }
-}
-
-/// The phases, with a decode that cannot fail.
-///
-/// The app ships through TestFlight and the server ships continuously, so the
-/// server WILL at some point send a phase this build has never heard of. Falling
-/// back to `.working` is deliberate: the wrong-but-plausible state is a running
-/// turn, and an activity stuck on "working" still shows the line and the timer,
-/// which is most of the value. Falling back to `.done` would end the thing.
-enum SessionPhase: String {
-    /// A turn is running.
-    case working
-    /// The agent stopped and is waiting for a human answer — a permission
-    /// decision, or a question it asked. The only phase that earns an alert.
-    case blocked
-    /// The turn finished. `line` carries the first line of what it said.
-    case done
-    /// The turn ended badly (a crash, a timeout, a cancelled run).
-    case failed
-
-    init(_ raw: String) { self = SessionPhase(rawValue: raw) ?? .working }
 }

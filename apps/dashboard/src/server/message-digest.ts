@@ -65,7 +65,7 @@ const PREVIEW_CHARS = 180;
 // The argument the chip shows, in the order tool-chips.ts:oneLineArg looks for
 // them — the digest has to keep whichever key that function would have picked,
 // or the collapsed row loses its subtitle.
-const PREVIEW_KEYS = ['file_path', 'path', 'url', 'command', 'pattern', 'query', 'name', 'text', 'prompt', 'description'];
+export const PREVIEW_KEYS = ['file_path', 'path', 'url', 'command', 'pattern', 'query', 'name', 'text', 'prompt', 'description'];
 
 function clip(s: string, n = PREVIEW_CHARS): string {
   const oneLine = s.replace(/\s+/g, ' ').trim();

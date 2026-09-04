@@ -151,6 +151,11 @@ export interface LiveActivityState {
   sinceMs: number;
   /** Messages waiting behind the running one. */
   queued?: number;
+  /** How full the context window is, 0-100, rounded. Undefined before the first
+   *  completed turn — the widget shows `ctx —` rather than hiding the row, the
+   *  same rule the web bar follows. Rounded because the raw token count moves
+   *  every few seconds and every move would be a push. */
+  ctxPct?: number;
 }
 
 /** Raise one for a session. A second call for a session that already has one

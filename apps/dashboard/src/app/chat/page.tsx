@@ -1738,6 +1738,8 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     activityLabel: runActivity.label,
     activityDetail: runActivity.detail,
     queued: queueLen,
+    contextTokens: session?.contextTokens,
+    contextWindow: contextWindowFor(session?.runtime, session?.runtimeModel),
   });
 
   // Which backend runs this session, resolved server-side (a session's own

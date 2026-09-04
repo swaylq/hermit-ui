@@ -23,6 +23,9 @@
 import { prisma } from '@/server/db';
 import { sendLiveActivity, isDeadToken, type ApnsEnv } from './apns';
 import { backgroundOutstanding } from '@/lib/session-status';
+import { contextWindowFor } from '@/lib/context-window';
+import { ctxPct } from '@/lib/format';
+import { PREVIEW_KEYS } from '@/server/message-digest';
 
 /// What the widget decodes. Field-for-field with
 /// apps/ios/Shared/SessionActivityAttributes.swift — a name that does not match
@@ -35,6 +38,10 @@ interface ContentState extends Record<string, unknown> {
    *  comment on `sinceEpoch` in the Swift file. */
   sinceEpoch: number;
   queued?: number;
+  /** Context window fullness, 0-100, rounded. Undefined until a turn completes.
+   *  Rounded on purpose: the raw token count moves every few seconds and the
+   *  signature below would turn every move into an APNs push. */
+  ctxPct?: number;
 }
 
 /** The widget truncates too, but a payload over 4KB is dropped silently, so the
@@ -67,6 +74,37 @@ type Phase = ContentState['phase'];
  * duration into the string ("Bash · 47s +2 bg") — correct for a header that
  * re-renders for free, fatal for something that costs an APNs push per change.
  */
+/**
+ * What a blocked turn is actually asking, in one line.
+ *
+ * "等你回答" says the state, which the colour, the raised hand and the button all
+ * say already. What nothing else on that Lock Screen can say is WHICH decision —
+ * whether this is worth reaching for the phone or can wait for the desk.
+ *
+ * Shapes come from api/sync/interaction: `permission` carries `{tool, input}`,
+ * `question` carries `{question}`. The argument is picked with the same key
+ * order the collapsed tool chip uses, so the island and the card in the
+ * timeline name the same thing.
+ */
+function blockedLine(kind: string, payload: unknown): string {
+  const p = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : {};
+  if (kind === 'question') {
+    const q = typeof p.question === 'string' ? p.question.replace(/\s+/g, ' ').trim() : '';
+    return q || '等你回答';
+  }
+  const tool = typeof p.tool === 'string' && p.tool ? p.tool : 'tool';
+  const input = p.input && typeof p.input === 'object' && !Array.isArray(p.input)
+    ? (p.input as Record<string, unknown>)
+    : {};
+  let arg = '';
+  for (const k of PREVIEW_KEYS) {
+    if (typeof input[k] === 'string' && input[k]) { arg = (input[k] as string).replace(/\s+/g, ' ').trim(); break; }
+  }
+  return arg ? `要用 ${tool}：${arg}` : `要用 ${tool}`;
+}
+
 function lineFor(phase: Phase, activity: unknown, agentName: string): string {
   if (phase === 'blocked') return '等你回答';
   if (phase !== 'working') return '回合结束';
@@ -91,7 +129,7 @@ function phaseOf(state: string | null, blocked: boolean, activity: unknown): Pha
 
 /** Everything a person would see. No timestamps, no durations. */
 function signature(s: ContentState): string {
-  return `${s.phase}|${s.title}|${s.line}|${s.queued ?? 0}`;
+  return `${s.phase}|${s.title}|${s.line}|${s.queued ?? 0}|${s.ctxPct ?? '-'}`;
 }
 
 /**
@@ -105,20 +143,39 @@ export async function syncSessionActivity(sessionId: string): Promise<void> {
 
   const session = await prisma.chatSession.findUnique({
     where: { id: sessionId },
-    select: { title: true, agentName: true, state: true, activity: true, closedAt: true },
+    select: {
+      title: true, agentName: true, state: true, activity: true, closedAt: true,
+      // For the context readout. `runtime`/`runtimeModel` decide the window size
+      // — a codex or kimi session does not have claude's, and showing 12% of the
+      // wrong denominator is worse than showing nothing.
+      contextTokens: true, runtime: true, runtimeModel: true,
+    },
   });
   if (!session) {
     await endActivities(rows, { phase: 'done', title: '', line: '会话已删除', sinceEpoch: nowSec() });
     return;
   }
 
-  const [blocked, queued] = await Promise.all([
-    prisma.interaction.count({ where: { sessionId, status: 'pending' } }),
+  const [pending, queued] = await Promise.all([
+    // The newest, not a count: a blocked turn's line is the decision it is
+    // waiting on, and that has to be read off the row itself.
+    prisma.interaction.findFirst({
+      where: { sessionId, status: 'pending' },
+      orderBy: { createdAt: 'desc' },
+      select: { kind: true, payload: true },
+    }),
     prisma.chatMessage.count({ where: { sessionId, role: 'user', deliveredAt: null } }),
   ]);
 
-  const phase: Phase = session.closedAt ? 'done' : phaseOf(session.state, blocked > 0, session.activity);
-  const line = lineFor(phase, session.activity, session.agentName ?? 'agent');
+  const phase: Phase = session.closedAt ? 'done' : phaseOf(session.state, pending != null, session.activity);
+  const line =
+    phase === 'blocked' && pending
+      ? blockedLine(pending.kind, pending.payload)
+      : lineFor(phase, session.activity, session.agentName ?? 'agent');
+  const ctx =
+    session.contextTokens == null
+      ? undefined
+      : Math.round(ctxPct(session.contextTokens, contextWindowFor(session.runtime, session.runtimeModel)));
 
   for (const row of rows) {
     // The start stamp moves only when the phase does — the widget's timer counts
@@ -132,6 +189,7 @@ export async function syncSessionActivity(sessionId: string): Promise<void> {
       line: line.slice(0, MAX_LINE),
       sinceEpoch: Math.floor(since.getTime() / 1000),
       ...(queued > 0 ? { queued } : {}),
+      ...(ctx === undefined ? {} : { ctxPct: ctx }),
     };
     const sig = signature(state);
     if (row.lastSig === sig) continue;
