@@ -65,6 +65,26 @@
 // snapshot of what was last on screen and fades THAT away — otherwise the
 // bubble would empty itself halfway through its own exit, which reads as a bug.
 //
+// ── WHY THIS IS FUSSY ABOUT PAINTING ───────────────────────────────────────
+//
+// The shapes here are enormous: the send disc is 1080px across and the band's
+// ring is 1240px, of which maybe 200px is ever on screen. At 3× that is a lot
+// of pixels to rasterise, and the first version of the enter/leave animation
+// was visibly rough on a phone because of it. Four rules keep it smooth, and
+// all four look like clutter until you take one away:
+//
+//  · The zone stack CLIPS (`overflow-hidden`). Without it those circles are
+//    only bounded by the viewport and get painted far larger than they show.
+//  · Lit/unlit is an OPACITY change, never a background-color one. Colour
+//    animates on the main thread and repaints the whole circle each frame;
+//    opacity is handed to the compositor.
+//  · `--lv` lives on the stage, NOT on the root. Writing a custom property
+//    invalidates style for everything below it, twelve times a second — and
+//    below the root is every one of those circles, none of which read it.
+//  · `will-change` is set only while this is on screen, which is a second or
+//    two. It is a promise the compositor pays memory for; leaving it on a
+//    permanently-mounted element would be worse than not using it.
+//
 // This file DRAWS ONLY. The gesture, the dictation run and the draft all live
 // in composer.tsx — which already owns the text these words are being written
 // into, so putting the zone arithmetic anywhere else would mean two components
@@ -75,7 +95,7 @@
 // what getBoundingClientRect can report and a slide that overshoots into the
 // corner above one should land on it anyway.
 
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Loader2, Mic } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -106,10 +126,15 @@ const ZONE_H = 224;
 /** Where each label sits along its arc, measured from the midline. */
 const LABEL_D = 114;
 
-/** Enter is a shade slower than leave: arriving should feel like it lands,
-  * leaving should get out of the way. Both must match the timeout below. */
-const ENTER_MS = 180;
-const LEAVE_MS = 140;
+/**
+ * Short on purpose. This arrives 260ms into a press that has not shown anything
+ * yet (HOLD_MS in composer.tsx), so any transition here is delay stacked on top
+ * of delay — and the longer it runs, the longer there is for a dropped frame to
+ * be visible on it. Enter is a touch slower than leave so arriving still reads
+ * as landing rather than snapping. Both must match the timeout that unmounts.
+ */
+const ENTER_MS = 140;
+const LEAVE_MS = 120;
 
 /** The one accent this app already uses for "the mic is open". */
 const ROSE = '#fb7185';
@@ -179,10 +204,10 @@ export function HoldToTalkOverlay({
   // never touches React state. Held at 0 while the finger is over 取消 — a blob
   // still bouncing over the words you are about to throw away reports on
   // nothing. 编辑 is still recording, so it keeps moving.
-  const rootRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const movingRef = useRef(true);
   useEffect(() => subscribeMicLevel((lv) => {
-    rootRef.current?.style.setProperty('--lv', movingRef.current ? lv.toFixed(3) : '0');
+    stageRef.current?.style.setProperty('--lv', movingRef.current ? lv.toFixed(3) : '0');
   }), []);
   // Which states the blob is allowed to move in. From an effect, not from the
   // render (a ref must not be written during one) — and applied to the node
@@ -190,7 +215,7 @@ export function HoldToTalkOverlay({
   // audio block and 取消 has to still the blob on the frame you reach it.
   useEffect(() => {
     movingRef.current = open && phase === 'listening' && zone !== 'cancel';
-    if (!movingRef.current) rootRef.current?.style.setProperty('--lv', '0');
+    if (!movingRef.current) stageRef.current?.style.setProperty('--lv', '0');
   }, [open, zone, phase]);
 
   // While open, draw the live props; on the way out, what the composer handed
@@ -208,14 +233,19 @@ export function HoldToTalkOverlay({
     // the pointer capture for this whole gesture, and an overlay that swallowed
     // events would only be able to steal them from it.
     <div
-      ref={rootRef}
-      style={{ '--lv': '0', opacity: show ? 1 : 0, transitionDuration: ms } as React.CSSProperties}
-      className="pointer-events-none fixed inset-0 z-[120] flex flex-col overflow-hidden bg-black/65 backdrop-blur-[6px] transition-opacity ease-out"
+      style={{ opacity: show ? 1 : 0, transitionDuration: ms, willChange: 'opacity' }}
+      className="pointer-events-none fixed inset-0 z-[120] flex flex-col overflow-hidden bg-black/70 backdrop-blur-[3px] transition-opacity ease-out"
     >
       {/* The words, where you can read them — up around the middle of the
           screen, nowhere near the thumb. */}
       <div
-        style={{ transform: show ? 'none' : 'translateY(10px) scale(0.97)', transitionDuration: ms }}
+        ref={stageRef}
+        style={{
+          '--lv': '0',
+          transform: show ? 'none' : 'translateY(10px) scale(0.97)',
+          transitionDuration: ms,
+          willChange: 'transform',
+        } as React.CSSProperties}
         className="flex min-h-0 flex-1 flex-col items-center justify-end gap-3 px-6 pb-[20vh] transition-transform ease-out"
       >
         {vPhase !== 'auth' && <Meter running={open && vPhase === 'listening'} dimmed={cancelling} />}
@@ -255,8 +285,13 @@ export function HoldToTalkOverlay({
           assembly is a circle whose centre is below the screen. */}
       {vPhase !== 'auth' && (
         <div
-          className="relative shrink-0 transition-transform ease-out"
-          style={{ height: ZONE_H, transform: show ? 'none' : `translateY(${ZONE_H * 0.16}px)`, transitionDuration: ms }}
+          className="relative shrink-0 overflow-hidden transition-transform ease-out"
+          style={{
+            height: ZONE_H,
+            transform: show ? 'none' : 'translateY(24px)',
+            transitionDuration: ms,
+            willChange: 'transform',
+          }}
         >
           {/* ── the send disc ────────────────────────────────────────────── */}
           <div
@@ -265,11 +300,9 @@ export function HoldToTalkOverlay({
               height: R_DOME * 2,
               marginLeft: -R_DOME,
               bottom: -(DROP + R_DOME),
+              opacity: vZone === 'send' ? 0.85 : 0.13,
             }}
-            className={cn(
-              'absolute left-1/2 rounded-full transition-colors duration-150',
-              vZone === 'send' ? 'bg-white/85' : 'bg-white/[0.13]',
-            )}
+            className="absolute left-1/2 rounded-full bg-white transition-opacity duration-150"
           />
           <div
             style={{ bottom: R_DOME - DROP - 47 }}
@@ -343,7 +376,10 @@ function Meter({ running, dimmed }: { running: boolean; dimmed: boolean }) {
  * The clip sits on a FULL-WIDTH wrapper so its `50%` means the middle of the
  * screen; the ring is a child of that and is still centred on the screen.
  */
-function Arc({ side, active, label }: { side: 'left' | 'right'; active: boolean; label: string }) {
+// memo: the transcript rewrites the overlay's props about 36 times a second
+// while you talk, and none of it reaches these three props. Without this, both
+// arcs re-render at that rate for nothing.
+const Arc = memo(function Arc({ side, active, label }: { side: 'left' | 'right'; active: boolean; label: string }) {
   const left = side === 'left';
   return (
     <>
@@ -391,7 +427,7 @@ function Arc({ side, active, label }: { side: 'left' | 'right'; active: boolean;
       </div>
     </>
   );
-}
+});
 
 /** A bubble with a tail pointing down at the finger. */
 function Bubble({ tint, children }: { tint: string; children: React.ReactNode }) {
