@@ -42,6 +42,10 @@
 <button id="kset">keychain.set</button>
 <button id="kclear">keychain.clear</button>
 
+<button id="kring">keychain.set — two machines</button>
+<button id="kactive2">keychain.setActive — m_two</button>
+<button id="kactive1">keychain.setActive — m_one</button>
+
 <div id="out">idle</div>
 
 <script>
@@ -54,6 +58,15 @@ var DEAD = 'http://127.0.0.1:49517';
 // Stands in for a keyring. A fixed string so the UI test can assert the exact
 // bytes came back — the shell stores this blind and must not reshape it.
 var SECRET = 'keyring-marker-42';
+
+// A real one, in the shape lib/keyring.ts writes and KeyStore.swift decodes.
+// Two entries so that "which one is active" is a question with a wrong answer:
+// server.py answers `chat.listSessions` differently per key, so the native
+// list's first row names whichever entry the shell actually reached for.
+var KEYRING = [
+  { id: 'm_one', name: 'first mac', key: 'key-one', scoped: false, agentName: null, baseUrl: '' },
+  { id: 'm_two', name: 'second mac', key: 'key-two', scoped: false, agentName: null, baseUrl: '' }
+];
 
 var seq = 0;
 var pending = {};
@@ -91,10 +104,13 @@ function post(msg) {
   return true;
 }
 
-function ask(method, params) {
+// `label` is only what the result line says. Two buttons can drive the same
+// method with different arguments, and a UI test asserting on "keychain.set ok"
+// must not be satisfied by whichever of them ran last.
+function ask(method, params, label) {
   var id = 'f' + (++seq);
-  pending[id] = method;
-  show('asked ' + method);
+  pending[id] = label || method;
+  show('asked ' + (label || method));
   if (!post({ type: 'req', id: id, method: method, params: params || {} })) delete pending[id];
 }
 
@@ -106,6 +122,15 @@ document.getElementById('nope').onclick = function () { ask('nosuchmethod'); };
 document.getElementById('kget').onclick = function () { ask('keychain.get'); };
 document.getElementById('kset').onclick = function () { ask('keychain.set', { value: SECRET }); };
 document.getElementById('kclear').onclick = function () { ask('keychain.clear'); };
+document.getElementById('kring').onclick = function () {
+  ask('keychain.set', { value: JSON.stringify(KEYRING) }, 'keyring');
+};
+document.getElementById('kactive2').onclick = function () {
+  ask('keychain.setActive', { id: 'm_two' }, 'active m_two');
+};
+document.getElementById('kactive1').onclick = function () {
+  ask('keychain.setActive', { id: 'm_one' }, 'active m_one');
+};
 
 post({ type: 'ready' });
 </script>

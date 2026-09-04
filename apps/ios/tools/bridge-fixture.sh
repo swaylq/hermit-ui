@@ -4,9 +4,11 @@
 #
 #   apps/ios/tools/bridge-fixture.sh [test-name ...]
 #
-# Serves tools/bridge-fixture/ over loopback, points the shell at it, and runs
-# the UI tests that use it (all of them by default). Simulator processes run natively on this Mac, so
-# 127.0.0.1 inside the simulator is this Mac's loopback — no port forwarding.
+# Runs tools/bridge-fixture/server.py over loopback — the fixture page, plus a
+# `chat.listSessions` that answers per key — points the shell at it, and runs the
+# UI tests that use it (all of them by default). Simulator processes run natively
+# on this Mac, so 127.0.0.1 inside the simulator is this Mac's loopback — no port
+# forwarding.
 #
 # Knobs: HERMIT_SIM_DEVICE  HERMIT_SHOT_DIR  HERMIT_FIXTURE_PORT
 #        HERMIT_DERIVED_DATA (also stops the cleanup from deleting it)
@@ -27,7 +29,11 @@ PORT="${HERMIT_FIXTURE_PORT:-49518}"
 # Every test that drives the fixture, in the order XCTest would pick anyway.
 # Naming one on the command line runs just that one.
 TESTS=("$@")
-[ ${#TESTS[@]} -gt 0 ] || TESTS=(testTheKeychainKeepsTheKeyring testThePageCanProposeAnotherServer)
+[ ${#TESTS[@]} -gt 0 ] || TESTS=(
+  testTheKeychainKeepsTheKeyring
+  testTheNativeListDrawsTheActiveMachinesSessions
+  testThePageCanProposeAnotherServer
+)
 
 command -v xcodegen >/dev/null || { echo "need xcodegen: brew install xcodegen" >&2; exit 1; }
 
@@ -69,7 +75,11 @@ mkdir -p "$SHOT_DIR"
 xcodegen generate >/dev/null
 
 echo "==> serving tools/bridge-fixture on 127.0.0.1:$PORT"
-python3 -m http.server "$PORT" --bind 127.0.0.1 --directory tools/bridge-fixture >/dev/null 2>&1 &
+# Its own server, not `python3 -m http.server`: the native session list needs a
+# `chat.listSessions` to draw, and that route answers differently per key. stderr
+# is deliberately NOT redirected — a traceback inside a request handler is the
+# only warning that the fixture, rather than the app, is what broke.
+python3 tools/bridge-fixture/server.py "$PORT" >/dev/null &
 FIXTURE_PID=$!
 # Fail here rather than 30 seconds into a UI test that reports "the fixture page
 # never loaded" and cannot say why.

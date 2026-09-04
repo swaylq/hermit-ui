@@ -300,7 +300,118 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(fixtureSays("{\"value\":null}"), "signing out left the keyring in the keychain")
     }
 
+    /// The native session list, on a real phone, against a server that answers
+    /// per key.
+    ///
+    /// The screen already compiles and renders on the Mac — `tools/render-list.sh`
+    /// draws it in five seconds without a simulator. What only a device can show
+    /// is the half that is not layout: the shell opening the Keychain by itself,
+    /// choosing between two stored entries, and putting that entry's token on a
+    /// request it makes with nobody's help.
+    ///
+    /// So the fixture server answers `chat.listSessions` differently per key, and
+    /// the first row is titled with whichever machine the shell reached for. This
+    /// is the only assertion here that could not be made on the Mac: a shell that
+    /// ignored the active id and sent `list[0]` would draw a full, plausible,
+    /// entirely wrong list, and nothing would error.
+    ///
+    /// Needs `HERMIT_BRIDGE_ORIGIN`; `tools/bridge-fixture.sh` provides it.
+    func testTheNativeListDrawsTheActiveMachinesSessions() throws {
+        let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
+        guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
+
+        app.launchArguments = ["-hermitOrigin", fixture]
+        app.launch()
+        XCTAssertTrue(
+            app.webViews.buttons["keychain.set — two machines"].waitForExistence(timeout: 30),
+            "the fixture page never loaded — is the fixture server still up?")
+
+        // Start from nothing, then a keyring with two machines in it and the
+        // SECOND one active. `list[0]` is `m_one`, on purpose.
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer")
+        app.webViews.buttons["keychain.set — two machines"].tap()
+        XCTAssertTrue(fixtureSays("keyring ok"), "the shell refused to store the keyring")
+        app.webViews.buttons["keychain.setActive — m_two"].tap()
+        XCTAssertTrue(fixtureSays("active m_two ok"), "the shell would not record which entry is active")
+
+        openSessionList()
+        XCTAssertTrue(
+            screenSays("active key: m_two"),
+            "the list is drawn with the wrong machine's key — or did not load at all")
+        // Two things the port gets wrong invisibly. An empty title has to fall
+        // through to the preview (JavaScript's falsiness, and the state every
+        // brand-new session is in), and a row with background work outstanding
+        // has to print the note, which is the only piece of `activity` the
+        // sidebar poll carries.
+        XCTAssertTrue(screenSays("帮我看看这个构建为什么挂了", timeout: 5),
+                      "an empty title drew a blank row instead of falling through to the preview")
+        XCTAssertTrue(screenSays("background · 2 tasks", timeout: 5),
+                      "the parked row lost the only status words the poll carries")
+        shoot("16-session-list")
+
+        // Back to the page, make the OTHER entry active, and come back. The key
+        // is read per request rather than captured at construction, so the same
+        // screen has to return naming the other machine.
+        popToPage()
+        app.webViews.buttons["keychain.setActive — m_one"].tap()
+        XCTAssertTrue(fixtureSays("active m_one ok"), "the shell would not move the active entry")
+        openSessionList()
+        XCTAssertTrue(
+            screenSays("active key: m_one"),
+            "switching machines on the page did not change what the native list asks for")
+        shoot("17-session-list-other-machine")
+
+        // Signed out. The list has to say why it is empty — every failure here
+        // (no key, wrong key, no network) otherwise looks like "no sessions".
+        // This also leaves the install clean for whatever runs next.
+        popToPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer the second time")
+        openSessionList()
+        XCTAssertTrue(
+            screenSays("No machine key on this device yet"),
+            "with no keyring at all the list explained nothing")
+        shoot("18-session-list-signed-out")
+    }
+
     // MARK: - helpers
+
+    /// `hermit://sessions`, opened through the system rather than a back door
+    /// built for the test. The list ships behind a URL before it ships as the
+    /// front door (see SceneDelegate), so this is its only entrance today.
+    private func openSessionList() {
+        XCUIDevice.shared.system.open(URL(string: "hermit://sessions")!)
+        // A custom scheme can draw a confirmation on some builds. Answering it
+        // is cheap; waiting on one that never comes is not, hence the 2s.
+        let alert = springboard.alerts.firstMatch
+        if alert.waitForExistence(timeout: 2) {
+            let open = alert.buttons["Open"].exists ? alert.buttons["Open"] : alert.buttons.element(boundBy: alert.buttons.count - 1)
+            if open.exists { open.tap() }
+        }
+        XCTAssertTrue(
+            app.navigationBars["Sessions"].waitForExistence(timeout: 20),
+            "hermit://sessions did not push the native list")
+    }
+
+    /// Back out of the native list onto the fixture page.
+    private func popToPage() {
+        app.navigationBars["Sessions"].buttons.firstMatch.tap()
+        XCTAssertTrue(
+            app.webViews.buttons["keychain.clear"].waitForExistence(timeout: 10),
+            "Back did not return to the page")
+    }
+
+    /// Anything on screen whose label contains this.
+    ///
+    /// Not `staticTexts[…]`: a `UIHostingConfiguration` cell may expose a row as
+    /// one merged accessibility element or as its separate texts depending on
+    /// the build, and what these assertions are about is the words, not the
+    /// shape of the tree.
+    private func screenSays(_ needle: String, timeout: TimeInterval = 20) -> Bool {
+        let match = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", needle))
+        return match.firstMatch.waitForExistence(timeout: timeout)
+    }
 
     /// Wait for the fixture's result line to mention something. Substring rather
     /// than equality: the line carries the method and the shell's own sentence,
