@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>bridge fixture</title>
+<!--
+  A stand-in for the dashboard, for exercising the web -> native request channel
+  without the dashboard, a machine key or a network.
+
+  It speaks the wire protocol directly rather than importing
+  lib/native-bridge.ts, on purpose: what the UI test needs to pin down is the
+  shape the SHELL will accept from any page, and a fixture built on the same
+  helper as the caller would pass even if both drifted together. See
+  tools/bridge-fixture.sh, and testThePageCanProposeAnotherServer in
+  HermitUITests/SmokeTests.swift.
+-->
+<style>
+  :root { color-scheme: light dark; }
+  /* viewport-fit=cover plus the shell's contentInsetAdjustmentBehavior = .never
+     means the page owns its own insets, exactly as the dashboard does. */
+  body { font: 17px/1.4 -apple-system, system-ui, sans-serif; margin: 0;
+         padding: calc(env(safe-area-inset-top) + 20px) 16px calc(env(safe-area-inset-bottom) + 20px); }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.where { margin: 0 0 16px; opacity: .6; font-size: 14px; }
+  button { display: block; width: 100%; margin: 0 0 10px; padding: 13px; font-size: 16px;
+           border: 0; border-radius: 12px; background: #2563eb; color: #fff; }
+  #out { margin-top: 18px; padding: 12px; border-radius: 12px; background: rgba(127,127,127,.16);
+         font: 13px/1.45 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+<h1>bridge fixture</h1>
+<p class="where" id="where"></p>
+
+<button id="get">getOrigin</button>
+<button id="switch">setOrigin — dead address</button>
+<button id="bad">setOrigin — address with a path</button>
+<button id="nope">nosuchmethod</button>
+
+<div id="out">idle</div>
+
+<script>
+// Where "setOrigin — dead address" points. A high closed port, so the shell
+// lands on its own offline screen instead of waiting out a DNS timeout, and NOT
+// one of WebKit's blocked ports, which produce a permanent white screen instead
+// of a navigation failure.
+var DEAD = 'http://127.0.0.1:49517';
+
+var seq = 0;
+var pending = {};
+var out = document.getElementById('out');
+
+function show(text) { out.textContent = text; }
+
+// The half of window.__hermitNative this fixture needs. Everything else is
+// stubbed so an announcement arriving mid-test cannot throw inside the shell's
+// evaluateJavaScript and take the reply with it.
+window.__hermitNative = {
+  onReply: function (id, ok, payload) {
+    var method = pending[id] || '?';
+    delete pending[id];
+    var detail = '';
+    if (payload && typeof payload === 'object') {
+      detail = typeof payload.error === 'string' ? payload.error : JSON.stringify(payload);
+    }
+    show('RESULT ' + method + ' ' + (ok ? 'ok' : 'fail') + ' ' + detail);
+  },
+  onRequest: function (id) {
+    post({ type: 'reply', id: id, ok: false, payload: { error: 'the fixture answers nothing' } });
+  },
+  onPushToken: function () {},
+  onDeepLink: function () {},
+  onPushStatus: function () {},
+  onLiveActivityStatus: function () {},
+  onLiveActivityToken: function () {}
+};
+
+function post(msg) {
+  var h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hermit;
+  if (!h) { show('RESULT - fail not running inside the shell'); return false; }
+  h.postMessage(msg);
+  return true;
+}
+
+function ask(method, params) {
+  var id = 'f' + (++seq);
+  pending[id] = method;
+  show('asked ' + method);
+  if (!post({ type: 'req', id: id, method: method, params: params || {} })) delete pending[id];
+}
+
+document.getElementById('where').textContent = location.origin;
+document.getElementById('get').onclick = function () { ask('getOrigin'); };
+document.getElementById('switch').onclick = function () { ask('setOrigin', { origin: DEAD }); };
+document.getElementById('bad').onclick = function () { ask('setOrigin', { origin: 'https://example.com/path' }); };
+document.getElementById('nope').onclick = function () { ask('nosuchmethod'); };
+
+post({ type: 'ready' });
+</script>
+</body>
+</html>

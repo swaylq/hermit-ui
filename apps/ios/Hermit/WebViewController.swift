@@ -12,6 +12,12 @@ final class WebViewController: UIViewController {
         onRetry: { [weak self] in self?.reload() },
         onChangeServer: { [weak self] in self?.presentOriginEditor() }
     )
+    /// The "switch server?" alert, while one is on screen.
+    ///
+    /// Held only to refuse a second: `setOrigin` is reachable from the page, and
+    /// a page calling it in a loop would stack modals faster than a person can
+    /// dismiss them, with the app unreachable underneath.
+    private weak var originConfirmation: UIAlertController?
 
     // MARK: - Setup
 
@@ -60,6 +66,18 @@ final class WebViewController: UIViewController {
         bridge.onLiveActivityStatus = { [weak self] in
             let s = LiveActivityManager.status()
             self?.bridge.sendLiveActivityStatus(supported: s.supported, enabled: s.enabled)
+        }
+        // Questions, as opposed to every announcement above. `answer` holds the
+        // entire list of what a page may ask the shell to do, in one switch, so
+        // that list stays something you can read in one sitting.
+        bridge.onRequest = { [weak self] method, params, reply in
+            guard let self else {
+                // Nothing left to answer with. Saying so beats letting the page
+                // sit out its whole five-second timeout.
+                reply(false, ["error": "the shell is going away"])
+                return
+            }
+            self.answer(method, params: params, reply: reply)
         }
         // The app-wide token, watched from launch. It is reissued on the
         // system's own schedule, so starting to listen only once something wants
@@ -148,6 +166,41 @@ final class WebViewController: UIViewController {
     private func reload() {
         offlineView.hide()
         if webView.url == nil { load() } else { webView.reload() }
+    }
+
+    // MARK: - What the page may ask the shell to do
+
+    /// Answer one `{type:'req'}` from the page — the other half of
+    /// `nativeRequest()` in lib/native-bridge.ts.
+    ///
+    /// Everything reachable from here is deliberately small and deliberately
+    /// listed in one place. The web layer runs code the shell did not write and
+    /// cannot audit, so "what can a page make this app do" has to be a list, not
+    /// an emergent property of a dozen closures.
+    ///
+    /// `reply` runs exactly once per call, on the main queue. A method that
+    /// waits on a person (`setOrigin` does) answers late rather than twice; the
+    /// bridge drops everything after the first answer regardless.
+    private func answer(_ method: String, params: [String: Any], reply: @escaping (Bool, Any?) -> Void) {
+        switch method {
+        case "getOrigin":
+            // Not `location.origin`, which the page already knows. What it
+            // cannot see is which of the three sources that address came from —
+            // enough to render "Server: dash.swaylab.ai (default)" honestly.
+            reply(true, [
+                "origin": AppConfig.origin.absoluteString,
+                "defaultOrigin": AppConfig.defaultOrigin.absoluteString,
+                "isUserSet": AppConfig.userOrigin != nil,
+            ])
+        case "setOrigin":
+            proposeOrigin(params["origin"] as? String ?? "", reply: reply)
+        default:
+            // Same wording the bridge uses when there is no handler at all, so a
+            // page cannot tell "this shell is too old for that method" from
+            // "this shell has no method table" — there is nothing useful it
+            // would do differently.
+            reply(false, ["error": "unknown method: \(method)"])
+        }
     }
 
     // MARK: - Which deployment this shell points at
@@ -251,6 +304,84 @@ final class WebViewController: UIViewController {
         // page has no way to learn they exist, let alone end them.
         LiveActivityManager.endAll()
         webView.load(URLRequest(url: AppConfig.origin))
+    }
+
+    /// The page PROPOSES an address; the person holding the phone applies it.
+    ///
+    /// Not a silent `AppConfig.setOrigin`, and the reason is the microphone.
+    /// Capture is granted on an exact `origin.host == AppConfig.host` match
+    /// (`requestMediaCapturePermissionFor`, below), so wherever this shell is
+    /// pointed gets the microphone with no prompt, on every launch, until
+    /// someone changes it back. If one cross-site script on the dashboard could
+    /// write that value, the shell would be handing an attacker a permanent
+    /// silent microphone — strictly worse than the same script in Safari, which
+    /// inverts the reason this app exists at all.
+    ///
+    /// With a confirmation in the way, the worst a compromised page can do is
+    /// raise an alert naming the host it wants you to move to. That is a
+    /// question a person can answer.
+    private func proposeOrigin(_ raw: String, reply: @escaping (Bool, Any?) -> Void) {
+        guard originConfirmation == nil else {
+            reply(false, ["error": "a server switch is already waiting to be confirmed"])
+            return
+        }
+        let url: URL
+        do {
+            url = try AppConfig.normalizeOrigin(raw)
+        } catch {
+            // Refused with no alert at all. A malformed address is the page's
+            // own bug to surface, and a system dialog about a string the user
+            // never typed reads as the app malfunctioning.
+            let message = (error as? AppConfig.OriginError)?.message ?? error.localizedDescription
+            reply(false, ["error": message])
+            return
+        }
+        // Already pointed there. Not a no-op worth being strict about: the
+        // obvious thing for a page to do on mount is report where it thinks it
+        // is, and answering that with a full reload would be an infinite one.
+        guard url != AppConfig.origin else {
+            reply(true, ["applied": false, "origin": AppConfig.origin.absoluteString])
+            return
+        }
+        let alert = UIAlertController(
+            title: "Switch server?",
+            // The address on its own line. It is the only part worth reading:
+            // it decides where the machine key goes and who gets the microphone.
+            message: "\(AppConfig.origin.absoluteString)\n→\n\(url.absoluteString)\n\nThe app will reload, and you'll need to sign in there.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            self?.originConfirmation = nil
+            reply(false, ["error": "cancelled", "cancelled": true])
+        })
+        let confirm = UIAlertAction(title: "Switch", style: .default) { [weak self] _ in
+            self?.originConfirmation = nil
+            do {
+                try AppConfig.setOrigin(url.absoluteString)
+            } catch {
+                // Unreachable today — the same string already passed
+                // `normalizeOrigin` above — but the two calls are separated by
+                // however long the alert was on screen, so this stays an
+                // answered failure rather than a dropped question.
+                reply(false, ["error": (error as? AppConfig.OriginError)?.message ?? error.localizedDescription])
+                return
+            }
+            // Answer first, switch second. `switchOrigin` tears down the
+            // document that asked, and a reply evaluated into a dead page is one
+            // its caller waits out the full timeout for. Both are main-queue
+            // hops and the queue is FIFO, so the reply's JavaScript is issued
+            // before the load begins.
+            reply(true, ["applied": true, "origin": AppConfig.origin.absoluteString])
+            DispatchQueue.main.async { self?.switchOrigin() }
+        }
+        alert.addAction(confirm)
+        alert.preferredAction = confirm
+        originConfirmation = alert
+        // A dialog that never reached the screen must not leave the page
+        // waiting for an answer nobody can give.
+        if !presentOnTop(alert) {
+            originConfirmation = nil
+            reply(false, ["error": "the confirmation could not be shown"])
+        }
     }
 
     @objc private func didEnterForeground() {

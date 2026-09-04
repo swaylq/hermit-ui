@@ -27,6 +27,11 @@
 4. 改了看得见的界面才出截图（`tools/render-cards.sh` 只画 Live Activity 卡片，
    画不了 App 的屏；要 App 的屏就得上模拟器）；跑完确认
    `xcrun simctl list devices booted` 为空，并 `simctl erase` 掉自己开的那台。
+   **需要一张真页面、但不想要 key 和网络**：`tools/bridge-fixture.sh`（第 4 轮加的）
+   —— 用 `python3 -m http.server` 把 `tools/bridge-fixture/` 挂在 127.0.0.1 上，
+   `-hermitOrigin` 指过去，跑一个 UI 用例，约 30 秒 + 一次全量构建。
+   模拟器进程就跑在这台 Mac 上，模拟器里的 127.0.0.1 就是这台 Mac 的 loopback，
+   不需要任何端口转发。要验证桥、验证壳对页面的反应都从这里加，别去连真 dashboard。
    **不需要 key、不需要网络的一屏**可以只跑单个 UI 用例，13 秒：
    `xcodebuild build-for-testing …` 然后
    `TEST_RUNNER_HERMIT_SHOT_DIR=$PWD/shots xcodebuild test-without-building … \
@@ -87,6 +92,23 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       验收用例在 `HermitTests/NativeBridgeTests.swift`（真 WKWebView，不是假对象）：
       100 条并发问答乱序回答全部配对、答两次只送一次、超时走超时分支、
       `pageWillReload()` 当场废掉所有在途问题
+- [x] **A0.1 第一个真 method，通道进产品** —— 第 4 轮。`WebViewController.answer()` 是
+      整张方法表（一个 switch，刻意让「页面能让这个 App 做什么」是一份能一眼读完的清单），
+      挂在 `bridge.onRequest` 上。两个方法：`getOrigin`（只读，回
+      `{origin, defaultOrigin, isUserSet}` —— 页面自己知道 `location.origin`，
+      不知道的是这个地址来自三个来源里的哪一个）和 `setOrigin`。
+      **`setOrigin` 是「页面提议、人来拍板」，不是直接写。** 判据是麦克风：
+      授权走 `origin.host == AppConfig.host` 精确比对，壳指到哪，哪个 origin 就
+      拿到不弹框的麦克风、每次启动都拿。如果一次 XSS 就能写这个值，这个壳等于送出一个
+      永久静默麦克风 —— 比同一个 XSS 在 Safari 里更糟，正好把这个 App 存在的理由反过来了。
+      所以：地址不合法直接回错（**不弹框**，用户没打过的字不值得一个系统弹窗）；
+      合法就弹 "Switch server?"，消息里把 旧地址 → 新地址 两行都写出来；
+      确认了才 `setOrigin` + `switchOrigin()`。三个细节：
+      `originConfirmation` 弱引用做单例闸门（页面循环调用会把弹窗摞到人点不完，
+      底下的 App 就够不着了）；`url == AppConfig.origin` 直接回 `applied:false`
+      （页面挂载时上报「我在哪」是很自然的写法，拿整页重载去回答它就是死循环）；
+      **先回复、再切**（`switchOrigin` 拆掉的正是提问的那个 document，
+      回复打进死页面等于让调用方白等满 5 秒；两跳都是 main queue，FIFO 保证回复先发出去）
 - [ ] **A1 Keychain**：接缝只有 `keyring.ts:29`（读）和 `:36`（写）。
       `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`、不同步 iCloud、不进备份、
       放 App Group。迁移顺序：写入 → **读回校验** → 才清 localStorage。登出连带清 Keychain
@@ -189,23 +211,36 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-M0 全部做完，M1 的 A0 也做完了。下一轮从 A1 的**前置**开始，别直接写 Keychain。
+M0 全做完，M1 的 A0 和第一个真 method 也做完了。下一轮做 **A1 Keychain**。
 
-- **先给 A0 挂上第一个真 method，把通道从「测试里能跑」变成「产品里在用」。**
-  最小、最有用的那个是 `setOrigin`：`WebViewController` 里设 `bridge.onRequest`，
-  `method == "setOrigin"` 时调 `AppConfig.setOrigin` + `switchOrigin()`，
-  失败把 `OriginError.message` 原样放进 `payload.error`。
-  这样「从正常页面里改服务器地址」终于有了第三个入口（前两个是离线屏和 `hermit://server`）。
-  **要先想清楚一件事再动手**：主框架页面能改壳指向哪，而麦克风授权是按
-  `AppConfig.host` 精确比对的 —— 页面被打穿就等于壳被永久改指向。
-  网页那侧现在没有任何地方调 `nativeRequest`，所以先加原生侧 + 一个 UI 用例即可。
 - **A1 Keychain**。接缝仍然只有 `keyring.ts:29`（读）和 `:36`（写）。
   `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`、不同步 iCloud、不进备份、放 App Group。
   迁移顺序：写入 → **读回校验** → 才清 localStorage。登出连带清 Keychain。
   网页侧用 `nativeRequest('keychain.get' | 'keychain.set')`，浏览器里 reject，
   调用点必须有 localStorage 兜底 —— 同一份代码在浏览器里也要跑。
+  原生侧就加进 `WebViewController.answer()` 那张表（第 4 轮建好了，照着 `getOrigin` 写）。
+  **动手前先定一件事**：机器密钥现在是网页存的、壳一个都不碰
+  （`NativeBridge.swift:6` 和 README 的红线都是这么写的）。A1 把密钥挪进 Keychain 之后
+  这句话就不成立了，红线文字（M1 最后一条列的 6 处）必须在同一个提交里改掉，
+  不能留到 M7。另外 `keychain.get` 是一个**任何主框架页面都能调**的方法，
+  和 `setOrigin` 一样要先想清楚被打穿的后果 —— 但这次没法拿弹窗兜底
+  （每次读都弹一次没人受得了），判据只能是「Keychain 里只放当前 origin 自己的条目」。
 
 ## 踩过的坑
+
+- **`-hermitOrigin` 会盖住 `setOrigin` 刚写进去的值，所以「切服务器」这件事一次启动里
+  看不出来。** 优先级是 launch argument > 用户设的 > 默认，而 UserDefaults 的
+  **argument 域本来就压在 standard 域上面** —— 于是「用 `-hermitOrigin` 把 App 指到测试
+  页面 → 页面调 `setOrigin` → 确认」跑完，`AppConfig.origin` 一个字没变，
+  `switchOrigin()` 重新加载的还是那张测试页。这不是 bug，是第 1 轮定的优先级在起作用。
+  UI 用例得**分两次启动**：第一次带 `-hermitOrigin` 把页面喂进来并确认，
+  第二次 `launchArguments = []`，这时候屏幕上出现什么，完全由第一次落盘的值决定 ——
+  顺带把「真的持久化了」也一起验了。用例结尾必须点 "Use default" 收拾干净，
+  否则这次安装会一直指着一个死端口，`smoke.sh` 后面的用例全跟着遭殃
+  （XCTest 按方法名字母序跑，`testThePageCanProposeAnotherServer` 排最后，
+  这一层保险不要依赖）。
+- **`curl -fsS` 放在「等服务起来」的重试循环里，会把每次预期内的失败都打到 stderr。**
+  循环里用 `-fs`，最后那次确认才用 `-fsS`。看起来像跑挂了其实没有，浪费的是读日志的人。
 
 - **Fetch 的 bad ports 名单不能凭记忆写，它长得不像个规律。** 这个文件上一版把它记成
   「101–115」「137–139」「512–515」「6665–6669」那样的连续区间 —— **错的**：
@@ -275,6 +310,7 @@ M0 全部做完，M1 的 A0 也做完了。下一轮从 A1 的**前置**开始�
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 4 | 2026-09-04 | M1 的第一个真 method：`WebViewController.answer()` 方法表 + `getOrigin` / `setOrigin`（页面只能提议，人确认）；`tools/bridge-fixture.sh` + `tools/bridge-fixture/`（不用 key、不用网络的真页面） | `xcodegen` + `swiftc -typecheck` 过；`xcodebuild build-for-testing` 过；UI 用例 `testThePageCanProposeAnotherServer` **22 秒通过，同一份代码跑了两遍**；3 张截图（`shots/11..13`，gitignore）逐张看过：确认框写着 `:49518 → :49517`，第二次启动的离线屏写着 `:49517`。收工 `simctl list devices booted` 为空 |
 | 3 | 2026-09-04 | M0 最后一条（两边都拒封禁端口）+ M1 A0（桥的问答通道，双向 5 秒超时）| `xcodegen` + `swiftc -typecheck` 过；`xcodebuild test -only-testing:HermitTests` **47/47 过**（新增 9 条）；dashboard `tsc --noEmit` **0 错**（先 prisma generate，见「踩过的坑」）；`api-base.test.ts` 16/16 过。无新界面，未截图 |
 | 2 | 2026-09-04 | M0 第 2、3 条：离线屏加 "Change server"（并显示试的是哪个地址）、`hermit://server`、`presentOriginEditor` + `switchOrigin`；新增 UI 用例 `testServerAddressCanBeChanged` | `xcodegen` + `swiftc -typecheck` 过、`xcodebuild build` 0 warning；UI 用例 13 秒通过，4 张截图在 `apps/ios/shots/07..10`，逐张看过 |
 | 1 | 2026-09-04 | M0 第 1、4、5 条：`AppConfig.origin` 成了 UserDefaults 里的值（两个键 + `normalizeOrigin`），单测从 22 条加到 35 条 | typecheck 过；`xcodebuild test -only-testing:HermitTests` 35/35 过；无界面改动，未截图 |

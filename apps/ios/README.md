@@ -310,3 +310,11 @@ The end-to-end test is `HermitUITests/SmokeTests.swift`. It asserts the things t
 are specific to being an app rather than a tab: no system permission prompt on
 the sign-in screen, the sign-in gate actually clearing, and each route rendering
 content.
+
+One of its cases needs neither a key nor the dashboard: `tools/bridge-fixture.sh`
+serves `tools/bridge-fixture/` over loopback, points the shell at it and runs
+`testThePageCanProposeAnotherServer`. The fixture is a stand-in for the dashboard
+that speaks the `{type:'req'}` wire protocol directly, which is how the web to
+native request channel gets driven against a real document — including the one
+thing worth being careful about there, that a page may only *propose* a backend
+address and a person has to confirm it (`WebViewController.proposeOrigin`).

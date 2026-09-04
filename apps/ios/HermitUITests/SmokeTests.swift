@@ -161,7 +161,98 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(change.waitForExistence(timeout: 5), "Cancel did not put the offline screen back")
     }
 
+    /// The page asking the shell to point somewhere else — `nativeRequest`'s
+    /// first real method, driven end to end from a real document.
+    ///
+    /// Needs `HERMIT_BRIDGE_ORIGIN`, a static server holding
+    /// tools/bridge-fixture; `tools/bridge-fixture.sh` starts one and runs just
+    /// this test. No key and no dashboard: the fixture speaks the wire protocol
+    /// itself.
+    ///
+    /// Two launches, because one cannot show this. `-hermitOrigin` is read from
+    /// UserDefaults' ARGUMENT domain, which outranks the value `setOrigin`
+    /// writes — so while the fixture is on screen the shell cannot actually move.
+    /// The second launch drops the argument, and what appears is whatever the
+    /// first one persisted.
+    func testThePageCanProposeAnotherServer() throws {
+        let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
+        guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
+        // Must match DEAD in tools/bridge-fixture/index.html.
+        let dead = "http://127.0.0.1:49517"
+
+        app.launchArguments = ["-hermitOrigin", fixture]
+        app.launch()
+        XCTAssertTrue(
+            app.webViews.buttons["getOrigin"].waitForExistence(timeout: 30),
+            "the fixture page never loaded — is the static server still up?")
+        shoot("11-bridge-fixture")
+
+        // A method the shell has never heard of fails immediately rather than
+        // hanging: a page always ships ahead of the app store.
+        app.webViews.buttons["nosuchmethod"].tap()
+        XCTAssertTrue(fixtureSays("unknown method: nosuchmethod"), "an unknown method did not come back as one")
+
+        // Read-only, and the answer has to be the shell's view rather than the
+        // page's own `location.origin`.
+        app.webViews.buttons["getOrigin"].tap()
+        XCTAssertTrue(fixtureSays(fixture), "getOrigin did not report where the shell points")
+
+        // A bad address is refused with no dialog at all — and in the web
+        // layer's own wording, not a second opinion.
+        app.webViews.buttons["setOrigin — address with a path"].tap()
+        XCTAssertTrue(
+            fixtureSays("backend address must be a bare origin, no path"),
+            "a path on the end was either accepted or refused in different words")
+        XCTAssertFalse(app.alerts["Switch server?"].exists, "a malformed address should never reach a dialog")
+
+        // A good one does NOT apply itself. The microphone is granted on an
+        // exact host match against wherever the shell points, so a page that
+        // could move it silently would be a permanent silent microphone.
+        app.webViews.buttons["setOrigin — dead address"].tap()
+        let confirm = app.alerts["Switch server?"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "the page moved the shell without asking anyone")
+        XCTAssertTrue(
+            confirm.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", dead)).firstMatch.exists,
+            "the confirmation does not say which address it would move to")
+        shoot("12-switch-confirm")
+
+        confirm.buttons["Cancel"].tap()
+        XCTAssertTrue(fixtureSays("cancelled"), "Cancel left the page waiting instead of answering it")
+        XCTAssertTrue(app.webViews.buttons["getOrigin"].exists, "Cancel navigated away anyway")
+
+        app.webViews.buttons["setOrigin — dead address"].tap()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "the confirmation did not come back a second time")
+        confirm.buttons["Switch"].tap()
+
+        // Second launch, no launch argument: only what was persisted decides.
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+        let change = app.buttons["Change server"]
+        XCTAssertTrue(
+            change.waitForExistence(timeout: 30),
+            "after confirming, a relaunch did not come up against the new address")
+        XCTAssertTrue(app.staticTexts[dead].exists, "the shell relaunched against some other address")
+        shoot("13-switched")
+
+        // Put it back, or this install stays pointed at a dead port for whatever
+        // runs next. `clearOrigin` removes the key rather than overwriting it.
+        change.tap()
+        let editor = app.alerts["Server address"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5), "no way to undo the switch")
+        editor.buttons["Use default"].tap()
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 10), "the address dialog stayed up")
+    }
+
     // MARK: - helpers
+
+    /// Wait for the fixture's result line to mention something. Substring rather
+    /// than equality: the line carries the method and the shell's own sentence,
+    /// and the assertion is about the sentence.
+    private func fixtureSays(_ needle: String, timeout: TimeInterval = 8) -> Bool {
+        let match = app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", needle))
+        return match.firstMatch.waitForExistence(timeout: timeout)
+    }
 
     private var springboard: XCUIApplication { XCUIApplication(bundleIdentifier: "com.apple.springboard") }
 
