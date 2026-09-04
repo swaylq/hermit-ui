@@ -34,14 +34,19 @@ enum LiveActivityManager {
     /// state the server keeps refreshing, so silence means something broke.
     /// A blocked turn is genuinely static — it can sit for hours waiting for a
     /// human, and dimming it would be lying about a fact that is still true.
-    private static let workingStaleAfter: TimeInterval = 10 * 60
-    private static let blockedStaleAfter: TimeInterval = 6 * 60 * 60
+    /// The server stamps every `staleDate` it pushes with the SAME distance
+    /// (`WORKING_STALE_MS`), so these are generated from it rather than typed
+    /// here: this side was 10 minutes against the server's 15 for a while, and
+    /// the visible result was a Lock Screen that dimmed itself in the middle of
+    /// a long tool call and then un-dimmed on the next push.
+    private static let workingStaleAfter: TimeInterval = WebContract.workingStaleAfter
+    private static let blockedStaleAfter: TimeInterval = WebContract.blockedStaleAfter
 
     /// How long a finished activity stays on the Lock Screen before it clears
     /// itself. Long enough to catch on the next glance, short enough not to be
     /// litter — and the ordinary push notification already delivered the result,
     /// so this is a second chance to notice, not the only one.
-    private static let lingerAfterEnd: TimeInterval = 5 * 60
+    private static let lingerAfterEnd: TimeInterval = WebContract.lingerAfterEnd
 
     // MARK: - Reported to the page
 

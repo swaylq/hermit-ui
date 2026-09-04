@@ -10,19 +10,17 @@ import SwiftUI
 /// exactly that (a cyan "working" that exists nowhere else in the product, and
 /// clashes with the crab's own warm shell).
 ///
-/// The values are the Tailwind v4 classes that file names, converted once here:
+/// The channel values are no longer written here at all: `WebContract` is
+/// generated from the Tailwind classes those web files name, so this file is
+/// only the mapping from a class to what it MEANS on a Lock Screen. Add a
+/// colour on the web and it shows up in `WebContract` on the next generate;
+/// change one and this side changes with it.
 ///
 ///     working / needs-you   bg-amber-400
 ///     unread                bg-rose-500
 ///     down / stale          bg-zinc-400
 ///     starting / restarting bg-sky-400
-///
-/// **Display P3, not sRGB, and not the v3 hexes.** Tailwind 4 defines its
-/// palette in OKLCH, and three of these sit outside sRGB — converting to sRGB
-/// clips them (amber-400 lands on #FFB900 with the red and blue channels pinned)
-/// and the result is visibly flatter than the same colour in Safari on the same
-/// phone. It is also not the value anyone remembers: amber-400 was #FBBF24 in
-/// Tailwind 3 and is not that any more.
+///     ready                 bg-emerald-500
 enum StatusPalette {
     /// A turn is in flight, or is parked waiting for you. Both, deliberately:
     /// the web spec gives them one hue and separates them by PULSE — "the same
@@ -31,39 +29,40 @@ enum StatusPalette {
     /// the difference is carried by the things this medium does have: the
     /// symbol, the "去回答" button, the alert, and the relevance score that puts
     /// a blocked session first in the island.
-    static let amber = Color(.displayP3, red: 0.9593, green: 0.7385, blue: 0.1175)
+    static let amber = WebContract.amber400
     /// Finished, and you have not read it. Red means exactly that here — not an
     /// error. ("上一个对话的任务都处理完了，等待阅读".)
-    static let rose = Color(.displayP3, red: 0.9219, green: 0.2406, blue: 0.3555)
+    static let rose = WebContract.rose500
     /// Down: no live process. What a turn that died looks like in the sidebar.
-    static let zinc = Color(.displayP3, red: 0.6227, green: 0.6226, blue: 0.6596)
+    static let zinc = WebContract.zinc400
     /// Coming up — booting or being recycled. Unused by the activity today, kept
     /// so the next state that needs it does not invent a sixth colour.
-    static let sky = Color(.displayP3, red: 0.3061, green: 0.7250, blue: 0.9799)
+    static let sky = WebContract.sky400
     /// Ready: alive, idle, caught up. Also unused here — an activity that
     /// reaches "read" has already ended.
-    static let emerald = Color(.displayP3, red: 0.2673, green: 0.7268, blue: 0.5082)
+    static let emerald = WebContract.emerald500
 
     // The lighter pair the context readout uses for its NUMBER, where the bar
     // uses the 500s. Same split as components/ctx-bar.tsx.
-    static let emerald400 = Color(.displayP3, red: 0.3349, green: 0.8196, blue: 0.5913)
-    static let rose400 = Color(.displayP3, red: 0.9430, green: 0.4307, blue: 0.5029)
+    static let emerald400 = WebContract.emerald400
+    static let rose400 = WebContract.rose400
 
     /// How full the context window is, in the web app's three bands.
     ///
     /// `components/ctx-bar.tsx`: ≥90% rose, ≥70% amber, else emerald — with the
     /// bar on the 500s and the percentage on the 400s. Copied rather than
     /// re-judged; a phone that called 80% green while the sidebar called it
-    /// amber would be worse than no indicator.
+    /// amber would be worse than no indicator. The two thresholds are read out
+    /// of that file by the generator, so "copied" is now literally true.
     static func ctxBar(_ pct: Int) -> Color {
-        if pct >= 90 { return rose }
-        if pct >= 70 { return amber }
+        if pct >= WebContract.ctxDangerPct { return rose }
+        if pct >= WebContract.ctxWarnPct { return amber }
         return emerald
     }
 
     static func ctxText(_ pct: Int) -> Color {
-        if pct >= 90 { return rose400 }
-        if pct >= 70 { return amber }   // amber-400 is already the 400
+        if pct >= WebContract.ctxDangerPct { return rose400 }
+        if pct >= WebContract.ctxWarnPct { return amber }   // amber-400 is already the 400
         return emerald400
     }
 }

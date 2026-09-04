@@ -12,7 +12,7 @@ OUT="${1:-${TMPDIR:-/tmp}hermit-cards}"
 mkdir -p "$OUT"
 BIN="$(mktemp -d)/render-cards"
 swiftc -O -o "$BIN" \
-  Shared/SessionCard.swift Shared/StatusPalette.swift \
+  Shared/SessionCard.swift Shared/StatusPalette.swift Shared/WebContract.swift \
   LiveActivity/SessionCardViews.swift tools/render-cards.swift
 "$BIN" ../dashboard/public/logo-crab-mono.png "$OUT"
 echo "→ $OUT"

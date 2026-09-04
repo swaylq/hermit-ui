@@ -210,11 +210,20 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       一条 SSE 连接会占住整个线程
 - [ ] 本地存储：SQLite + FTS5（中文语料上严格优于现在的线性 `indexOf`）。
       `lib/chat-cache/sync-plan.ts` 的 `planSync` 55 行纯函数**原样照抄**，连测试一起
-- [ ] **防漂移**：把手抄的常量改成生成的（`StatusPalette.swift` ← `lib/session-status.ts`
-      + `ctx-bar.tsx`；超时值 ← `push/live-activity.ts`），断言写成
-      `apps/dashboard/src/lib/ios-contract.test.ts`（`pnpm test` 已经在跑这个目录）。
-      **已知漂了一处**：`LiveActivityManager.swift:36` 是 10 分钟，
-      `push/live-activity.ts:61` 的 `WORKING_STALE_MS` 是 15 分钟
+- [x] **防漂移** —— 第 9 轮。`apps/ios/Shared/WebContract.swift` 现在是**生成的**
+      （`apps/dashboard/scripts/gen-ios-contract.ts`，`pnpm --filter @hermit-ui/dashboard
+      gen:ios-contract`），十四个成员：时间线窗口、退避与看门狗、三个 Live Activity 超时、
+      两条 ctx 分档、七个颜色。三个手写文件改成读它（`StatusPalette` / `HermitStream` /
+      `LiveActivityManager`），**Swift 侧一个数字都不剩**。
+      **那处漂移修好了**：`workingStaleAfter` 由 10 分钟变成服务端的 15 分钟
+      —— 症状是长工具调用跑到第 10 分钟锁屏卡片自己变暗，下一次推送又亮回来。
+      颜色不是抄的：`session-status.ts` 和 `ctx-bar.tsx` 里出现的 Tailwind 类名被读出来，
+      拿 `tailwindcss/theme.css` 解析成 oklch，再转 Display P3，所以网页加一个颜色
+      这边就多一个常量。`apps/dashboard/src/lib/ios-contract.test.ts` 7 条断言
+      （`pnpm test` 已经在跑这个目录）：生成物与现在渲染的逐字节相同、
+      oklch→P3 与手写时期的七个值对得上、Swift 引用的成员都还在、
+      手写文件里没有复活的字面量、两边的 ctx 分档映射到同一个类名、
+      状态点用的类名 iOS 都有。**这些断言被反证过**（见「踩过的坑」）
 
 ## M3 — 前门
 
@@ -288,8 +297,7 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**两件要 sway 拍板的事还欠着**，两件都不用他动手，只要一句话。第 8 轮没让它们更急，
-也没绕开它们：
+**两件要 sway 拍板的事还欠着**，两件都不用他动手，只要一句话：
 
 1. **迁移要不要上服务器。** 第 6 轮写的
    `apps/dashboard/prisma/migrations/20260905090000_chatmessage_client_id/`
@@ -299,33 +307,35 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
    SELECT 一列数据库里不存在的 `clientId`，连普通网页发消息都一起挂。
    **这个提交和 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线。**
    索引是全表扫，建的时候挡写不挡读，挑个没人聊天的时候。
-2. **A2 的重试由谁发出去。** 壳现在有 HTTP 客户端（第 7 轮）也有 SSE 客户端（第 8 轮），
+2. **A2 的重试由谁发出去。** 壳有 HTTP 客户端（第 7 轮）也有 SSE 客户端（第 8 轮），
    但没有一处代码构造它们，所以红线仍然是真的。**(a) 壳自己 POST `chat.send`**：
    `key` 闭包接上 `Keychain.read` 就通，后台也能补发（`BGAppRefreshTask` 时页面没加载），
    代价是壳开始**使用**凭据、11 处红线文字要再改一次。**(b) 回放给网页**：壳只管存，
    回前台把待发消息递回页面由页面发，零凭据使用，代价是不在前台就补发不了。
    —— 仍然倾向 (a)。这条纯粹是红线要不要改，早就不是工作量问题了。
 
-拍板之前不要空等。**下一轮做 M2 的「防漂移」**，理由是这一轮把手抄常量的面积又扩大了：
-现在 Swift 侧至少有四组数字是照着 TypeScript 抄的 —— `StatusPalette.swift` 的色谱
-（← `lib/session-status.ts` + `ctx-bar.tsx`）、`TimelineWindow.limit/digest`
-（← `lib/chat-window.ts` 的 `INITIAL_WINDOW` / `TIMELINE_DIGEST`）、
-`HermitStream` 的退避与看门狗（← `chat/page.tsx` 的 `BACKOFFS` / `IDLE_DEAD_MS`）、
-以及 `LiveActivityManager.swift:36` 的超时（← `push/live-activity.ts`）。
-**最后那组已经漂了**：Swift 是 10 分钟，`WORKING_STALE_MS` 是 15 分钟。
-做法照清单：能生成的就生成，生成不了的写成断言放
-`apps/dashboard/src/lib/ios-contract.test.ts`（`pnpm test` 已经在跑这个目录）。
-这一项小、边界清楚、一轮做得完，而且是唯一一条「不做会慢慢变坏」的。
+**下一轮做 M2 的最后一条：本地存储（SQLite + FTS5）**，这也是 M2 唯一剩下的一条。
+它是 M3「冷启动先画本地快照」的前提，做完 M2 就整块完了。要点：
 
-再往后是 M2 最后一条（SQLite + FTS5，`lib/chat-cache/sync-plan.ts` 的 `planSync`
-55 行纯函数原样照抄、连测试一起），它是 M3「冷启动先画本地快照」的前提。
-移植前先照 `evolution/lessons.md` 那条办：**把 TS 原函数抠出来在 node 里跑十来个输入
-打成对照表，再照着表写断言** —— 别凭读代码推断边界行为。
+- `lib/chat-cache/sync-plan.ts` 的 `planSync`（55 行纯函数）**原样照抄，连测试一起**。
+  移植前先照 `evolution/lessons.md` 那条办：**把 TS 原函数抠出来在 node 里跑十来个输入
+  打成对照表，再照着表写断言** —— 别凭读代码推断边界行为。`lib/chat-cache/types.ts`
+  的空洞证明（`nextId`）是它的输入，一起读。
+- FTS5：中文语料上严格优于现在的线性 `indexOf`。分词器选型自己查一下
+  （`unicode61` 对中文按字切，`trigram` 更像人要的），**先拿真语料跑一遍再定**。
+- 别急着接 `HermitStream`：那一步是 M3/M4 的调用点，M2 只要一个能建表、能写、
+  能按 `planSync` 决定「取哪一段」的本地层。
+- 一轮做不完就只做 `planSync` 的移植 + 对照表，`schema` 和 FTS5 留到下一轮。
 
-`HermitStream` 本身还差一件事，但要等有调用方才做得了：**前后台切换**。
-它是 Foundation-only 的，故意不 import UIKit，所以「离开前台就 `stop()`、回来新建一个」
-是调用点的活（M3/M4）。网页那边是 `visibilitychange`，理由一样 ——
-后台挂着的会话会让服务端一直按 2 秒的兜底 tick 查 Postgres。
+`HermitStream` 还差一件事，要等有调用方才做得了：**前后台切换**。它是 Foundation-only 的，
+故意不 import UIKit，所以「离开前台就 `stop()`、回来新建一个」是调用点的活（M3/M4）。
+网页那边是 `visibilitychange`，理由一样 —— 后台挂着的会话会让服务端一直按 2 秒的
+兜底 tick 查 Postgres。
+
+M3 的「像素比对流程」现在有个现成的起点：这一轮为了证明生成的调色板没改变屏幕，
+临时写过一个 25 行的 PNG 差分器（`NSImage` → `CGContext` 取 RGBA → 逐通道比），
+`swiftc -O` 编出来就能用。要做 M3 那条比对流程时，把它落成 `tools/png-diff.swift`
+比重写一个便宜。
 
 ## 踩过的坑
 
@@ -495,11 +505,44 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ---
 
+- **`tools/render-cards.sh` 自己有一份 swiftc 文件清单，`Shared/` 加文件要手动同步它。**
+  它把 `Shared/SessionCard.swift Shared/StatusPalette.swift LiveActivity/SessionCardViews.swift`
+  单独编成一个 macOS 程序，所以 `StatusPalette` 一旦引用新的 `Shared/WebContract.swift`，
+  这个脚本就编不过 —— 而 `swiftc -typecheck Hermit/*.swift Shared/*.swift` **照样是绿的**，
+  因为它压根没编 `tools/`，也没编 `LiveActivity/`。反过来说：
+  **`render-cards.sh` 是目前唯一覆盖 widget target 那几个 SwiftUI 文件的命令**，
+  改了 `Shared/` 就顺手跑一次，5 秒。
+- **`swiftc -typecheck` 没有输出、退出 0，先确认它真的在干活。** 17 个文件 2 秒跑完是正常的，
+  但「没输出」和「没编到」长得一模一样。往 `Shared/` 扔一个
+  `let x: Int = "nope"` 的临时文件跑一遍（应当 exit 1、两条 error），再删掉 —— 这一轮做过，
+  是真的在检查。
+- **一条从没红过的防漂移断言等于没有。** 写完 `ios-contract.test.ts` 之后，
+  把 `WORKING_STALE_MS` 改成 10 分钟跑一次（应当只有「生成物过期」那条红）、
+  把 `ctx-bar.tsx` 的 70% 档改成 `bg-sky-400` 再跑一次（应当只有「分档映射」那条红），
+  然后恢复、确认全绿。两次都命中了**预期的那一条**，这才算断言是活的。
+- **判断「颜色改了没有」，PNG 逐字节比对不够用。** 生成的调色板和手写的差在小数第四位，
+  五张卡片**每一张的字节都不同**，但真去比像素是「最多 0.12% 的像素差 1/255」。
+  没有 ImageMagick 也没有 PIL 的机器上（这台就是），25 行 Swift 就够：
+  `NSImage(contentsOfFile:)` → `cgImage(forProposedRect:)` → 画进
+  `CGContext(bitsPerComponent: 8, premultipliedLast)` → 逐通道取 max。
+- **`tailwindcss/colors` 能直接给出 oklch 字符串，但它的 `exports` 里没有 `types` 条件。**
+  `dist/colors.d.mts` 文件是在的，`tsc` 靠邻居推断多半也能过，但那是赌运气。
+  `theme.css` **在** exports 里（`"./theme.css": "./theme.css"`），
+  `createRequire(import.meta.url).resolve('tailwindcss/theme.css')` 拿到路径自己
+  正则抓 `--color-<族>-<档>: oklch(...)`，零类型风险，而且那才是 `@import "tailwindcss"`
+  真正喂给浏览器的东西。
+- **`chat/page.tsx` 和 `push/live-activity.ts` 的常量只能按文本读，不能 import。**
+  前者的 `IDLE_DEAD_MS`/`BACKOFFS` 是组件内部的局部量，后者一 import 就把 Prisma
+  拉起来（`@/server/db`），在 `node --test` 里等于要数据库。所以生成器对这两个文件
+  走正则 + 一个只认数字和 `+-*/()_` 的表达式求值器，并且**要求声明恰好命中一次**
+  —— 改名会炸，但炸在测试里，这正是要的。剩下的 `chat-window.ts` 是叶子模块，直接 import。
+
 ## 轮次日志
 
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 9 | 2026-09-05 | M2 的「防漂移」：新增生成器 `apps/dashboard/scripts/gen-ios-contract.ts` 和生成物 `apps/ios/Shared/WebContract.swift`（14 个成员），`StatusPalette` / `HermitStream` / `LiveActivityManager` 改成读它，Swift 侧不再有手抄的数字。**修掉那处已知漂移**：`workingStaleAfter` 10 分钟 → 服务端的 15 分钟。颜色由 `session-status.ts` / `ctx-bar.tsx` 里的 Tailwind 类名经 `tailwindcss/theme.css` 的 oklch 转 Display P3 得到。新增 `apps/dashboard/src/lib/ios-contract.test.ts`（7 条）。`render-cards.sh` 的文件清单同步 | `xcodegen` + `swiftc -typecheck` **exit 0 无输出**（并用一个故意写错的临时文件反证过它真在检查）；`ios-contract.test.ts` **7/7 过**，且**两次故意制造漂移都只红了预期的那一条**、恢复后全绿；dashboard `tsc --noEmit` **0 错**（先 prisma generate）；`tools/render-cards.sh` 编过并出图，与改动前的五张**逐像素比对：最多 0.12% 的像素差 1/255**，即生成的调色板没改变屏幕；`expanded-question.png` 亲眼看过（amber 的「去回答」、55% 的 emerald ctx 条）。**没起过模拟器** |
 | 8 | 2026-09-05 | M2 的 SSE 客户端：`Hermit/HermitStream.swift`（576 行）—— `URLSession.bytes(for:)` 的字节流，退避 `[1s,2s,5s]`、35 秒僵尸看门狗、首连 `skipInitial=1` 重连不带，`messages`/`status` 两种帧走一条 unbounded 的 `AsyncStream`；401/404 不再重连（复用 `HermitAPIError.isRetriable`）；补了 `SessionStatusFrame`/`SessionActivity`/`TimelineWindow`；`HermitAPI.decoder` 由 private 改共享，全 App 只有一份 ISO-8601 解析。另加 `tools/stream-fixture.sh` + `tools/stream-fixture/`（会真推 SSE 的假 dashboard，15 秒，四个场景）。**红线未动，仍然没有一处构造 `HermitStream`** | `xcodegen` + `swiftc -typecheck` **0 warning 0 error**；`tools/stream-fixture.sh` **真跑过，每一条事件都亲眼核对**：`{rows,gone}` 与裸数组两种形状都解、中文和 `&`/`<b>` 原样、带毫秒和不带毫秒的 Date 都解、`activity` 是字符串时只丢活动不丢 `state`、坏 JSON 和类型不符各出一条 `frameDropped`（后者报到 `rows[0].id`）而流不断、**被拆成两个包中间隔 150ms 的帧正确重组**、未知 `event: typing` 静默跳过、`: ping` 不产生事件；服务端请求日志确认重连那条**没有** `skipInitial`、`x-asst-key` 到位且无 cookie；看门狗按 1 秒的截止时间准点开火；401 只发了一次请求然后序列结束。`tools/api-fixture.sh` 回归重跑，无退化。dashboard 未改动，未跑它的 typecheck；无界面改动，未截图 |
 | 7 | 2026-09-05 | M2 前两条：`Hermit/HermitAPI.swift`（352 行）—— tRPC over HTTP 的 `query`/`mutate`，成功读 `j[0].result.data.json`、失败先解 `j[0].error.json` 再退回 HTTP 状态码，`URLError` 不包装，`HermitAPIError` 带 `isUnauthorized`/`isRetriable`，`ephemeral` 会话（无 cookie、无缓存、不等联网、30 秒）；superjson 的 `meta` 整块不声明，Date 走两档 ISO8601 解码。**key 是构造时传进来的闭包，全仓没有一处构造它，红线未动。** 另加 `tools/api-fixture.sh` + `tools/api-fixture/`（假 dashboard，8 秒，不用模拟器/key/网络） | `xcodegen` + `swiftc -typecheck` 过；`tools/api-fixture.sh` **真跑过，7 条请求全部亲眼核对**：GET 的 `input=` 编码、POST 的 body、`x-asst-key` 送到、无 cookie；带毫秒和不带毫秒的两种 Date 都解出来；401 出 `UNAUTHORIZED: invalid key`（retriable=false）、502 HTML 出 `HTTP 502`（retriable=true）、非 batch 正文和坏日期都出 `unreadable response`、死端口出 `URLError(-1004)` 而不是 `HermitAPIError`。`percentEncoded` 与 node 的 `encodeURIComponent` 四组输入**逐字节相同**。dashboard 未改动，未跑它的 typecheck；无界面改动，未截图 |
 | 6 | 2026-09-05 | M1 的服务端幂等键：`chat.send` 加可选 `clientId`，`ChatMessage` 加 `clientId` 列 + `@@unique([sessionId, clientId])`，重复请求在做任何副作用之前返回已存在那行，并发插入撞唯一索引走 P2002 回读；手写迁移 `20260905090000_chatmessage_client_id`。顺带确认 A2 不需要 App Group、真正的前提是「谁发重试」 | `prisma generate` + dashboard `tsc --noEmit` **0 错**；`prisma migrate diff --from-empty --script`（不连库）打出的 SQL 与手写迁移**逐字一致**；`xcodegen` + `swiftc -typecheck` 过（iOS 未改动）。**没有数据库可跑，重复发送的行为本身没被真的驱动过**；无界面改动，未截图 |

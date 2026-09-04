@@ -6,12 +6,12 @@ import Foundation
 /// be describing the same window, or the stream merges rows into a list that
 /// does not contain them.
 ///
-/// Hand-copied today. Both values are on the list to be generated from the
-/// TypeScript instead (docs/ios-native-progress.md, 「防漂移」).
+/// Both values come from `WebContract`, which is generated from that very
+/// file — they are the same number, not a copy of it.
 enum TimelineWindow {
     /// `INITIAL_WINDOW`: the newest N messages. Fixed — "load earlier" pages
     /// older history separately rather than growing this.
-    static let limit = 60
+    static let limit = WebContract.timelineLimit
 
     /// `TIMELINE_DIGEST`: ask for the collapsed projection (tool arguments
     /// trimmed to the chip's preview, results to their first line, thinking to
@@ -19,7 +19,7 @@ enum TimelineWindow {
     /// two transports merge by id into one list, and a full-fidelity row landing
     /// in a digested window would re-expand a capsule the reader had collapsed —
     /// and change its height under them.
-    static let digest = true
+    static let digest = WebContract.timelineDigest
 }
 
 /// What a session is doing right now, as the gateway's runtime reports it.
@@ -243,8 +243,8 @@ final class HermitStream<Row: Decodable> {
          limit: Int = TimelineWindow.limit,
          digest: Bool = TimelineWindow.digest,
          skipInitial: Bool = true,
-         backoffs: [TimeInterval] = [1, 2, 5],
-         idleDeadline: TimeInterval = 35,
+         backoffs: [TimeInterval] = WebContract.streamBackoffs,
+         idleDeadline: TimeInterval = WebContract.streamIdleDeadline,
          session: URLSession? = nil) {
         self.cfg = Config(
             root: HermitAPI.rootOf(origin),

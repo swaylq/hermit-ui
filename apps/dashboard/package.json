@@ -10,6 +10,7 @@
     "next:start": "next start -p ${PORT:-4101}",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "gen:ios-contract": "tsx scripts/gen-ios-contract.ts",
     "seed": "tsx scripts/seed-machine.ts",
     "migrate": "prisma migrate deploy",
     "migrate:dev": "prisma migrate dev",
