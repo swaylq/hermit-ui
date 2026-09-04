@@ -1,6 +1,6 @@
 # Hermit iOS 原生化 — 设计
 
-2026-09-04 · 待 sway 拍板
+2026-09-04 · 三个前置决定 sway 已答复（见第五节），可以开工
 
 **Goal:** 让 iPhone 上的 Hermit 具备套壳做不到的事 —— 冷启动就能读、断网也能发、
 凭据不会被清掉 —— 同时**不**把变化最快的那部分代码搬进发布最慢的那一端。
@@ -15,12 +15,17 @@ iPad 专门排版。这份文档明确推翻 `docs/ios-shell-design.md:5` 里「
 
 | | 做什么 | 大概多少 Swift | 卡在什么上 |
 |---|---|---|---|
-| **第一段** 能力交接 | 桥加问答通道、密钥进 Keychain、离线发件箱 | ~600 行 | **凭据红线**（决定一）+ `chat.send` 加幂等键（服务端） |
-| **第二段** 换掉前门 | 原生导航容器 + 原生会话列表 + 部署可切换 | ~900 行（卡片视图已有） | 第一段 |
+| **第一段** 能力交接 | 桥加问答通道、密钥进 Keychain、离线发件箱 | ~600 行 | 只剩 `chat.send` 加幂等键（服务端，半天） |
+| **第二段** 换掉前门 | 原生导航容器 + 原生会话列表 + origin 可改 | ~900 行（卡片视图已有） | 第一段 |
 | **第三段** 时间线 | chat 那一屏做成原生 | 数千行，且要永远跟着改 | 三条闸门条件，现在**一条都不满足** |
 
 第三段现在不做。前两段做完，App 的界面只多一屏，但冷启动、断网、清存储这三种情况的
 行为完全变了。
+
+**插队一件事**：sway 已确认 `dash.swaylab.ai` 后续会并到 `hermit`。App 的 origin 今天是
+编译期常量，而麦克风授权按 origin 精确比对 host —— 迁移当天不改这里，这个 App 存在的
+唯一理由就没了。所以「origin 可改」不是第二段的搭头，是要**先于迁移**落地的一件事，
+详见第五节决定三。
 
 ---
 
@@ -224,12 +229,13 @@ UIWindow
   开始加载。等你点进某个会话时，网页通常已经起好了。
 - **其余 31 个页面全部原样是网页**，从列表右上角一个按钮进去，落在
   `/usage`（现在的设置入口）。一个页面都不移植。
-- **顺手解决只能连一个部署的问题**：`AppConfig.origin` 今天是 `static let` 硬编码
-  `https://dash.swaylab.ai`（`AppConfig.swift:8,16-22`），`hermit.zhinan.tech` 上的
-  机器根本没有 App 可用。原生列表既然要自己发请求，就顺带做成可切换，规则照抄
-  `api-base.ts:28-44` 的 `normalizeBase()`（必须是裸 origin、非 localhost 必须 https）。
-  注意 `docs/multi-deployment-design.md:42-51` 的前提：**切换部署等于整个重来**，
-  三条连接（tRPC、SSE、WS）都要拆掉重建。
+- **origin 从编译期常量改成可改的设置项**。今天 `AppConfig.origin` 是 `static let`
+  硬编码 `https://dash.swaylab.ai`（`AppConfig.swift:8,16-22`），只有 `smoke.sh` 用启动
+  参数覆盖过。sway 已定 `dash.swaylab.ai` 后续并入 `hermit`，所以这一条从「支持多部署」
+  变成了「迁移那天不至于要卡着一次装机」。做法：值存 UserDefaults，默认值仍是编译期常量，
+  校验照抄 `api-base.ts:28-44` 的 `normalizeBase()`（必须是裸 origin、非 localhost
+  必须 https）。改完要按 `docs/multi-deployment-design.md:42-51` 的前提整个重来 ——
+  tRPC、SSE、WS 三条连接全部拆掉重建，等同一次冷启动。
 
 **要新写的那层网络。** 今天原生侧零 `URLSession`。好消息是不用啃 tRPC：仓库里已经有
 两份手写的 tRPC-over-HTTP 调用可以照抄（`keyring.ts:140-176` 和
@@ -305,48 +311,72 @@ Swift 那份必须跑通同一份夹具 —— 一个实现两处，但有一处
 
 ---
 
-## 五、三个必须由 sway 拍板的决定
+## 五、三个前置决定（sway 2026-09-04 已答复）
 
-### 决定一：壳能不能持有机器密钥
+### 决定一：壳可以持有机器密钥 —— **可以**
 
-**这是唯一的阻塞项。** A0 之后的每一件事都要它。红线写在 6 处
-（`apps/ios/README.md:109`、`NativeBridge.swift:6`、`LiveActivityManager.swift:19`、
-`HermitLiveActivityBundle.swift:6`、`AppConfig.swift:26`、`native-bridge.ts:5`）。
+红线解除。原来写在 6 处（`apps/ios/README.md:109`、`NativeBridge.swift:6`、
+`LiveActivityManager.swift:19`、`HermitLiveActivityBundle.swift:6`、`AppConfig.swift:26`、
+`native-bridge.ts:5`），这 6 处文字要一起改掉，`PrivacyInfo.xcprivacy` 复核一遍。
 
-**我的判断是应该改，理由不是「原生需要」，是「现状更差」**：密钥今天已经在这台手机上，
-存在 WebView 的 localStorage 里（`keyring.ts:22`），没有加密、没有过期、清一次网站数据
-就全没。搬进 Keychain 是**提高**了安全性，不是降低。红线是在壳只有 350 行、除了加载
-一个 URL 什么都不做的时候写的，那时候「不要建一个凭据存储」是对的；现在的备选项不是
-「没有存储」，是「localStorage」。
+改这条的理由不是「原生需要」，是**现状更差**：密钥今天已经在这台手机上，存在 WebView 的
+localStorage 里（`keyring.ts:22`），没有加密、没有过期、清一次网站数据就全没。
+搬进 Keychain 是提高安全性。红线是在壳只有 350 行、除了加载一个 URL 什么都不做的时候
+写的，那时候「不要建一个凭据存储」是对的；今天的备选项不是「没有存储」，是「localStorage」。
 
-改了之后 6 处文字都要跟着改，`PrivacyInfo.xcprivacy` 要复核。
+落地时的三条硬要求：`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`（不同步 iCloud、
+不进备份）；放 App Group 容器，通知扩展和原生列表共用一份；**退出登录必须连带清 Keychain**，
+否则「清掉网站数据」不再等于登出。
 
-**顺带一个跟 iOS 无关但同样该做的**：机器密钥今天**没有过期、没有轮换接口**
+顺带一件跟 iOS 无关但同样该做的：机器密钥今天**没有过期也没有轮换接口**
 （`schema.prisma:17-25` 没有 `expiresAt`，轮换只能重跑 `seed-machine.ts`）。
-如果以后想让手机拿的是一个可吊销的设备令牌而不是机器主密钥，那是服务端的活，
-对网页端同样有价值 —— 但不要把它变成 iOS 的前置条件，否则第一段永远开不了工。
+以后想让手机拿的是可吊销的设备令牌而不是机器主密钥，那是服务端的活，对网页端同样有价值 ——
+但**不要把它变成第一段的前置条件**，否则第一段永远开不了工。
 
-### 决定二：App Store 现在到底是什么状态
+### 决定二：分发只走 TestFlight —— **不上 App Store**
 
-`apps/ios/README.md:68` 和 `docs/ios-shell-design.md:5` 都写着「不上 App Store，
-纯 webview 壳撞审核指南 4.2」。**sway 在 2026-09-04 说已经上架了** —— 也就是说这两处
-（还有 `README.md:256-263` 那段「外部 TestFlight 也不行」）全都过时了，至今没改。
+于是 `apps/ios/README.md:68` 和 `:256-263` 的说法照旧成立，不用改。
 
-这不是文档洁癖，它决定两件事：
+两个后果，一好一坏：
 
-- **发布节奏。** TestFlight 内部测试不用审核，App Store 每次更新要过审。如果已上架，
-  「壳落后网页端 5 周」这种事的代价更高，因为补救也要等审核。
-- **4.2 的暴露面。** 如果真的在架上，那么每次更新都可能被以「套壳」为由挡下来 ——
-  这反而是支持做原生的一条理由：原生功能越多，4.2 越站不住。
+- **好的**：内部测试不过审，出一个包到能装上手机是分钟级。这让第一段和第二段更划算 ——
+  原生和网页之间的版本差可以随时补，不用攒着等一次审核。也意味着第五节决定三那个迁移，
+  「当天出一个新包」是可行的补救手段，只是不该是唯一的。
+- **坏的**：我在上一版里把「4.2 审核压力」列成了支持做原生的理由之一。**那条不成立了，
+  删掉。** 做原生的理由只剩第三节那四条实打实的能力，没有合规这一条。
 
-### 决定三：第二个部署要不要能用
+也要跟着改的：内部测试上限 100 人，`release.sh` 那条手工签名的路（distribution 证书 +
+app 与 `.LiveActivity` **两个** `IOS_APP_STORE` 描述文件）仍然是唯一出包方式，
+`README:193-246` 那段照旧有效。
 
-`AppConfig.origin` 是 `static let`，硬编码 `https://dash.swaylab.ai`
-（`AppConfig.swift:8,16-22`）。`hermit.zhinan.tech` 上的机器**今天没有 iOS App 可用**。
-第二段顺手就能解决（加一个可切换的 origin），但要确认这是不是真需求 —— 如果那台部署
-本来就不打算从手机看，就不做，少一处状态。
+### 决定三：`dash.swaylab.ai` 后续并入 `hermit` —— 所以不做部署选择器，但 origin 必须能改
 
----
+不做多部署切换 UI（少一处状态）。但**迁移这件事本身对 App 是有杀伤力的，而且是静默的**：
+
+`AppConfig.origin` 是编译期常量（`AppConfig.swift:8,16-22`），`AppConfig.host` 由它派生
+（`:24`）。而麦克风授权那一句是**精确比对**，不是 `isInternal`：
+
+```swift
+guard origin.host == AppConfig.host, type == .microphone else { ... .deny }
+// WebViewController.swift:252
+```
+
+也就是说，迁移之后只要 App 装的还是旧包，麦克风就是拒绝 —— 而网页那侧的
+`canOpenMicSilently()` 在壳里直接返回 true（`docs/ios-shell-design.md` 第四节），
+**它不会退回到弹框，只会拿到一个 deny**。麦克风是这个 App 最初也是唯一的存在理由
+（`apps/ios/README.md:15-19` 自己写的），迁移当天把它弄没了，不会有任何报错。
+
+所以三件事，按顺序：
+
+1. **先**把 origin 做成 UserDefaults 里的值（默认仍是编译期常量），在迁移之前发一个包。
+   这一步做完，迁移当天就只是改一个设置，不是一场装机竞赛。
+2. 迁移当天把默认值改成 hermit，出一个 TestFlight 包 —— 有第 1 步兜底，谁没更新也不至于砖。
+3. 顺手复核麦克风那条判定要不要放宽到 `isInternal`。**不要顺手就放宽** ——
+   `knownHosts` 是网页层报上来的，放宽等于把麦克风的授权范围交给页面决定。
+   要改的话，判据应该是「用户自己配过的那个 origin」，不是「页面说它认识的那些」。
+
+推送这边不用担心：`hermit.zhinan.tech` 的 APNs 凭据 2026-09-04 03:18 已经补齐，
+`push.status` 从 `configured:["bark"]` 变成 `["ios","bark"]`，`push.test` 通了。
 
 ## 六、防漂移：把「静默坏一个月」变成一次响亮的失败
 
@@ -388,6 +418,7 @@ Swift 那份必须跑通同一份夹具 —— 一个实现两处，但有一处
 | A2 幂等 | 同一个 `clientId` 连发两次，`ChatMessage` 只多一行 | `pnpm test` |
 | B 前门 | 飞行模式冷启动 1 秒内看到上次的列表；两个部署都能连；点进会话和今天一样 | **真机** |
 | B 卡片排版 | `tools/render-cards.sh` 出 PNG，装机之前先看一眼（这条路今天就通） | 本机 |
+| origin 可改 | 把 origin 指到另一个部署 → 三条连接全部重建、麦克风仍然免弹框 | **真机** |
 | 防漂移 | 故意改掉 `session-status.ts` 里一个颜色，`pnpm test` 必须红 | 本机 |
 
 模拟器上验不了的：APNs、麦克风、真实的滚动手感。这三样任何时候都只能真机。
@@ -410,6 +441,9 @@ Swift 那份必须跑通同一份夹具 —— 一个实现两处，但有一处
    是所有形态里最糟的：两套滚动、两套渲染、两套 bug。要么整屏，要么不动。
 4. **出站队列会给服务端带来重复消息**，除非 `chat.send` 先加幂等键。
    这个顺序不能反 —— 先加键，再做队列。
-5. **本机能力已经不是瓶颈了**（Xcode 26.6、iOS 26.5 SDK、xcodegen 2.46、
+5. **`dash.swaylab.ai` 并入 `hermit` 那天，麦克风会静默失效**，除非 origin 已经能改
+   （决定三）。这是本文里唯一一条「不做原生也会发生」的风险，所以它的优先级在
+   第一段之上。
+6. **本机能力已经不是瓶颈了**（Xcode 26.6、iOS 26.5 SDK、xcodegen 2.46、
    系统盘余 355G），但真机验证仍然只能靠 sway 的设备和付费账号。
    代码侧最多只能保证「编译过、逻辑对」。
