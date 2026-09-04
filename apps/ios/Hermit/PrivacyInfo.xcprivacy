@@ -6,12 +6,14 @@
   slow way to find out.
 
   This app collects nothing and tracks nobody: it is a window onto the user's own
-  server, and the only credential involved (the machine key) lives in the web
-  layer's storage and is never read by native code. The one entry below is
-  UserDefaults, which AppConfig uses for the address of the server to load: it
-  reads the `-hermitOrigin` launch argument used by apps/ios/smoke.sh, and it
-  stores the one the user typed. Both are this app's own defaults, which is what
-  CA92.1 below declares.
+  server. The only credential involved (the machine key) belongs to the web layer,
+  which asks the app to keep it in the device Keychain — on device, never synced to
+  iCloud, never in a backup, and never sent anywhere by native code. The one entry
+  below is UserDefaults, which AppConfig uses for the address of the server to
+  load: it reads the `-hermitOrigin` launch argument used by apps/ios/smoke.sh, and
+  it stores the one the user typed. Both are this app's own defaults, which is what
+  CA92.1 below declares. The Keychain needs no declaration here — it is not one of
+  the required-reason APIs.
 -->
 <plist version="1.0">
 <dict>

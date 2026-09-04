@@ -23,17 +23,122 @@ const KEYRING = 'asst-dashboard-keyring';
 const ACTIVE = 'asst-dashboard-active';
 const LEGACY = 'asst-dashboard-key'; // pre-keyring single key
 
-function read(): KeyringEntry[] {
-  if (typeof window === 'undefined') return [];
+// Where the list actually lives. In a browser that is localStorage, as it always
+// was. Inside the iOS shell it is the device Keychain, reached over the native
+// bridge (`keychain.get` / `.set` / `.clear`) — machine keys are bearer tokens for
+// a whole machine, and localStorage is an unencrypted SQLite file in the app
+// container. See apps/ios/Hermit/Keychain.swift.
+//
+// The Keychain is asynchronous and `getActiveKey()` is called on every request,
+// so the list is held in memory for the life of the document and the Keychain is
+// written behind it. `hydrateKeyring()` fills that in before anything renders
+// (components/auth-gate.tsx); until it has run, or in any browser, `secure` stays
+// null and every path below is the localStorage one it has always been.
+let secure: KeyringEntry[] | null = null;
+
+function parseList(raw: string | null): KeyringEntry[] {
   try {
-    const v = JSON.parse(localStorage.getItem(KEYRING) || '[]');
+    const v = JSON.parse(raw || '[]');
     return Array.isArray(v) ? v : [];
   } catch {
     return [];
   }
 }
+
+function readLocal(): KeyringEntry[] {
+  if (typeof window === 'undefined') return [];
+  return parseList(localStorage.getItem(KEYRING));
+}
+
+function read(): KeyringEntry[] {
+  return secure ?? readLocal();
+}
 function write(list: KeyringEntry[]) {
+  if (secure !== null) {
+    secure = list;
+    pushToShell(list);
+    return;
+  }
   localStorage.setItem(KEYRING, JSON.stringify(list));
+}
+
+// Imported at call time, not at the top of the file: native-bridge.ts imports
+// THIS module, and a static cycle would have one of the two evaluate half-empty.
+// Kept once it has loaded, which is what lets a write post its message with no
+// awaits in front of it — see pushToShell.
+type Bridge = typeof import('./native-bridge');
+let bridge: Bridge | null = null;
+async function askShell<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+  bridge ??= await import('./native-bridge');
+  return bridge.nativeRequest<T>(method, params);
+}
+
+// One write at a time. Two overlapping `keychain.set`s could land in the other
+// order and leave the Keychain holding the older list — and the in-memory copy,
+// which is what the app reads, would then disagree with it until the next launch.
+let pushQueue: Promise<unknown> = Promise.resolve();
+function pushToShell(list: KeyringEntry[]) {
+  // Signing out of the last machine clears the entry rather than storing an
+  // empty list: nothing left to keep is not the same as "keep nothing".
+  const send = (b: Bridge) =>
+    list.length === 0
+      ? b.nativeRequest('keychain.clear')
+      : b.nativeRequest('keychain.set', { value: JSON.stringify(list) });
+  // The module is already loaded here in practice — hydrateKeyring warms it at
+  // boot — and that matters: signing in writes the keyring and then immediately
+  // sets `location.href`. A queued microtask still runs before the document goes
+  // away, so the message reaches the shell; waiting on a chunk fetch would not,
+  // and the key would be gone by the next launch.
+  pushQueue = pushQueue
+    .then(() => (bridge ? send(bridge) : import('./native-bridge').then((b) => send((bridge = b)))))
+    .catch((e: unknown) => {
+      console.warn('[keyring] the shell would not store the keyring:', e);
+    });
+}
+
+/**
+ * Move the keyring into the device Keychain, once, before the app reads it.
+ *
+ * A no-op everywhere except the iOS shell — in a browser, and in any shell too
+ * old to know the method, `nativeRequest` rejects and the keyring stays exactly
+ * where it was. Awaited by the auth gate, which renders nothing until it returns.
+ *
+ * The migration order is write → read back → only then drop the localStorage
+ * copy. Clearing first, or clearing on the strength of a write that merely didn't
+ * throw, would sign the user out of every machine they have if the Keychain
+ * refused the item.
+ */
+export async function hydrateKeyring(): Promise<void> {
+  if (typeof window === 'undefined' || secure !== null) return;
+  let stored: string | null;
+  try {
+    const got = await askShell<{ value?: unknown }>('keychain.get');
+    stored = typeof got?.value === 'string' ? got.value : null;
+  } catch {
+    return;
+  }
+  if (stored !== null) {
+    secure = parseList(stored);
+    // The Keychain is the store now, so a plaintext copy sitting beside it is
+    // the exact thing this change exists to remove.
+    localStorage.removeItem(KEYRING);
+    return;
+  }
+  const local = readLocal();
+  if (local.length === 0) {
+    secure = [];
+    return;
+  }
+  const payload = JSON.stringify(local);
+  try {
+    await askShell('keychain.set', { value: payload });
+    const back = await askShell<{ value?: unknown }>('keychain.get');
+    if (back?.value !== payload) return; // not verified → leave localStorage alone, retry next launch
+  } catch {
+    return;
+  }
+  secure = local;
+  localStorage.removeItem(KEYRING);
 }
 
 export function getKeyring(): KeyringEntry[] {

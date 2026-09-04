@@ -2,11 +2,15 @@
 
 // Bridge to the native iOS shell (apps/ios). No-op in a normal browser.
 //
-// The shell is deliberately credential-free: it knows its APNs device token and
-// nothing else. It hands that token here, and THIS side — which already holds the
-// keyring and an authenticated fetch path — registers it once per machine. So a
-// phone carrying three machine keys is subscribed to all three, and the native
-// code never touches a secret.
+// The shell authenticates nothing: it knows its APNs device token, and it hands
+// that token here, to the side that has the keyring and an authenticated fetch
+// path. THIS side registers it once per machine, so a phone carrying three machine
+// keys is subscribed to all three. Native code never sends a request of its own.
+//
+// It does hold the keyring, as of M1: `keychain.get`/`.set`/`.clear` over
+// `nativeRequest` below, called only from lib/keyring.ts. The shell keeps one
+// opaque string per origin in the device Keychain and never parses it — the web
+// layer remains the only thing that knows what a machine key is.
 //
 // Two directions:
 //   native → web   window.__hermitNative.onPushToken / .onDeepLink
@@ -140,7 +144,7 @@ export function setNativeEdgeSwipe(enabled: boolean): void {
 // is put down, which is the only time a lock-screen widget matters. So the app
 // starts one with a push token, hands the token here, and this side registers it
 // with the machine key — the same arrangement as the APNs device token, and for
-// the same reason: the native layer never holds a credential.
+// the same reason: the native layer never authenticates anything itself.
 //
 // What this side owes the shell is the lifecycle, because only the page knows
 // when a turn began. See components/chat/use-live-activity.ts.
@@ -269,10 +273,10 @@ export function requestNativePush(): void {
 //                  postMessage({ type:'reply', id, ok, payload })
 //
 // The ASKER owns the timeout, so neither side can be left holding a promise (or
-// a completion block) that never settles. Nothing calls this yet: it exists
-// because moving the machine keys into the Keychain and giving sends an outbox
-// both need to ask a question and be answered, and neither can be built on a
-// bridge that only broadcasts. See apps/ios/Hermit/NativeBridge.swift.
+// a completion block) that never settles. Callers so far: lib/keyring.ts
+// (`keychain.get`/`.set`/`.clear`) and the server switcher (`getOrigin`/
+// `setOrigin`). The outbox for offline sends is the next one.
+// See apps/ios/Hermit/NativeBridge.swift.
 
 /** Both halves give up on an answer after this. Mirrored in NativeBridge.swift
  *  (`replyTimeout`). */
@@ -469,9 +473,10 @@ export function installNativeBridge(): () => void {
   // arrived while the webview was still loading.
   postToNative({ type: 'ready' });
 
-  // Which dashboards this device holds a key for. The shell holds no keyring, so
-  // without this it treats a second deployment's uploads and links as off-site and
-  // hands them to Safari — a different storage jar, and out of the app entirely.
+  // Which dashboards this device holds a key for. The shell cannot read the
+  // keyring (it stores one opaque blob per origin and never parses it), so without
+  // this it treats a second deployment's uploads and links as off-site and hands
+  // them to Safari — a different storage jar, and out of the app entirely.
   postToNative({
     type: 'origins',
     origins: getKeyring()

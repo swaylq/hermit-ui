@@ -2,10 +2,10 @@
 # Drive the web -> native request channel against a real page, with no dashboard,
 # no machine key and no network:
 #
-#   apps/ios/tools/bridge-fixture.sh
+#   apps/ios/tools/bridge-fixture.sh [test-name ...]
 #
 # Serves tools/bridge-fixture/ over loopback, points the shell at it, and runs
-# the one UI test that uses it. Simulator processes run natively on this Mac, so
+# the UI tests that use it (all of them by default). Simulator processes run natively on this Mac, so
 # 127.0.0.1 inside the simulator is this Mac's loopback — no port forwarding.
 #
 # Knobs: HERMIT_SIM_DEVICE  HERMIT_SHOT_DIR  HERMIT_FIXTURE_PORT
@@ -23,6 +23,11 @@ LOG="${TMPDIR:-/tmp}/hermit-fixture-$$.log"
 # a server answering on it would turn the offline screen this test waits for into
 # a page that loads.
 PORT="${HERMIT_FIXTURE_PORT:-49518}"
+
+# Every test that drives the fixture, in the order XCTest would pick anyway.
+# Naming one on the command line runs just that one.
+TESTS=("$@")
+[ ${#TESTS[@]} -gt 0 ] || TESTS=(testTheKeychainKeepsTheKeyring testThePageCanProposeAnotherServer)
 
 command -v xcodegen >/dev/null || { echo "need xcodegen: brew install xcodegen" >&2; exit 1; }
 
@@ -83,7 +88,14 @@ common_args=(
   -sdk iphonesimulator
   -destination "platform=iOS Simulator,id=$UDID"
   -derivedDataPath "$DERIVED"
-  CODE_SIGNING_ALLOWED=NO
+  # Ad-hoc signed, NOT unsigned. An unsigned app carries no entitlements, and on
+  # the simulator that means no keychain access group: every SecItem call comes
+  # back -34018 (errSecMissingEntitlement) and the keyring silently has nowhere
+  # to live. `-` needs no team and no provisioning profile.
+  CODE_SIGN_IDENTITY=-
+  CODE_SIGN_STYLE=Manual
+  PROVISIONING_PROFILE_SPECIFIER=
+  DEVELOPMENT_TEAM=
 )
 
 echo "==> building for '$DEVICE' ($UDID)"
@@ -100,12 +112,14 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 
-echo "==> running testThePageCanProposeAnotherServer"
+echo "==> running ${TESTS[*]}"
 export TEST_RUNNER_HERMIT_BRIDGE_ORIGIN="http://127.0.0.1:$PORT"
 export TEST_RUNNER_HERMIT_SHOT_DIR="$SHOT_DIR"
+only=()
+for t in "${TESTS[@]}"; do only+=(-only-testing:"HermitUITests/SmokeTests/$t"); done
 set +e
 xcodebuild test-without-building "${common_args[@]}" \
-  -only-testing:HermitUITests/SmokeTests/testThePageCanProposeAnotherServer >> "$LOG" 2>&1 &
+  "${only[@]}" >> "$LOG" 2>&1 &
 wait $!
 status=$?
 set -e

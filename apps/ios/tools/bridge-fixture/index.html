@@ -38,6 +38,10 @@
 <button id="bad">setOrigin — address with a path</button>
 <button id="nope">nosuchmethod</button>
 
+<button id="kget">keychain.get</button>
+<button id="kset">keychain.set</button>
+<button id="kclear">keychain.clear</button>
+
 <div id="out">idle</div>
 
 <script>
@@ -46,6 +50,10 @@
 // one of WebKit's blocked ports, which produce a permanent white screen instead
 // of a navigation failure.
 var DEAD = 'http://127.0.0.1:49517';
+
+// Stands in for a keyring. A fixed string so the UI test can assert the exact
+// bytes came back — the shell stores this blind and must not reshape it.
+var SECRET = 'keyring-marker-42';
 
 var seq = 0;
 var pending = {};
@@ -95,6 +103,9 @@ document.getElementById('get').onclick = function () { ask('getOrigin'); };
 document.getElementById('switch').onclick = function () { ask('setOrigin', { origin: DEAD }); };
 document.getElementById('bad').onclick = function () { ask('setOrigin', { origin: 'https://example.com/path' }); };
 document.getElementById('nope').onclick = function () { ask('nosuchmethod'); };
+document.getElementById('kget').onclick = function () { ask('keychain.get'); };
+document.getElementById('kset').onclick = function () { ask('keychain.set', { value: SECRET }); };
+document.getElementById('kclear').onclick = function () { ask('keychain.clear'); };
 
 post({ type: 'ready' });
 </script>

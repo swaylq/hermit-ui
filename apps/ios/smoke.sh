@@ -138,7 +138,14 @@ common_args=(
   -sdk iphonesimulator
   -destination "platform=iOS Simulator,id=$UDID"
   -derivedDataPath "$DERIVED"
-  CODE_SIGNING_ALLOWED=NO
+  # Ad-hoc, not unsigned: an unsigned simulator build has no entitlements and so
+  # no keychain access group, and every SecItem call returns -34018. The keyring
+  # lives in the keychain now (Hermit/Keychain.swift), so an unsigned run would
+  # exercise a fallback path instead of the real one. `-` needs no team.
+  CODE_SIGN_IDENTITY=-
+  CODE_SIGN_STYLE=Manual
+  PROVISIONING_PROFILE_SPECIFIER=
+  DEVELOPMENT_TEAM=
 )
 
 # Build and test are separate steps on purpose. The warning count is only

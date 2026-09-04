@@ -23,7 +23,9 @@
    **`swiftc -typecheck` 看不到 `HermitTests/`**，动了单测要另外真跑一遍：
    `xcodebuild test -project Hermit.xcodeproj -scheme Hermit -only-testing:HermitTests \
    -destination 'platform=iOS Simulator,id=<udid>' -derivedDataPath "$TMPDIR/hermit-ios-dd" \
-   CODE_SIGNING_ALLOWED=NO`（约 50 秒，首轮含全量构建约 2 分钟），跑完 `xcrun simctl shutdown all`。
+   CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual PROVISIONING_PROFILE_SPECIFIER= DEVELOPMENT_TEAM=`
+   （约 50 秒，首轮含全量构建约 2 分钟），跑完 `xcrun simctl shutdown all`。
+   **别再用 `CODE_SIGNING_ALLOWED=NO`** —— 第 5 轮起 keychain 要签名才能用，见「踩过的坑」。
 4. 改了看得见的界面才出截图（`tools/render-cards.sh` 只画 Live Activity 卡片，
    画不了 App 的屏；要 App 的屏就得上模拟器）；跑完确认
    `xcrun simctl list devices booted` 为空，并 `simctl erase` 掉自己开的那台。
@@ -109,16 +111,31 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       （页面挂载时上报「我在哪」是很自然的写法，拿整页重载去回答它就是死循环）；
       **先回复、再切**（`switchOrigin` 拆掉的正是提问的那个 document，
       回复打进死页面等于让调用方白等满 5 秒；两跳都是 main queue，FIFO 保证回复先发出去）
-- [ ] **A1 Keychain**：接缝只有 `keyring.ts:29`（读）和 `:36`（写）。
-      `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`、不同步 iCloud、不进备份、
-      放 App Group。迁移顺序：写入 → **读回校验** → 才清 localStorage。登出连带清 Keychain
+- [x] **A1 Keychain** —— 第 5 轮。原生侧 `Hermit/Keychain.swift`（约 100 行，
+      `kSecClassGenericPassword`、`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`、
+      `kSecAttrSynchronizable = false`），方法表加 `keychain.get` / `.set` / `.clear`。
+      **没有用 App Group**：跨 target 共享 keychain 要 `keychain-access-groups` 权限 +
+      带这条的描述文件，而 widget 那边根本不需要 keyring（Live Activity 的内容全是推进去的），
+      所以用 app 自己的默认组，等真有 target 要读再加。
+      **账号（`kSecAttrAccount`）是 origin**，一个部署一条，这正是 localStorage 白送的隔离。
+      判据不是弹窗（每次读都弹没人受得了），是**和麦克风同一条**：`webView.url` 必须和
+      `AppConfig.origin` 精确同源才答 —— 不能用 `isInternal`，它连 `knownHosts` 也认，
+      而 `knownHosts` 是页面自己报的、主框架又允许导航过去。
+      网页侧 `keyring.ts` 的 `read()`/`write()` 改走内存副本 + `hydrateKeyring()`：
+      Keychain 是异步的而 `getActiveKey()` 每个请求都要调，所以整份列表在文档存活期内
+      放内存，Keychain 在后面写；`auth-gate.tsx` 在渲染任何东西之前 await 它。
+      迁移顺序照做了：写入 → **读回逐字节比对** → 才 `localStorage.removeItem`。
+      登出（列表清空）走 `keychain.clear`，不是存一个空数组
 - [ ] **服务端幂等键**（必须先于出站队列）：`chat.send`（`routers/chat.ts:1121`）加可选
       `clientId`，`ChatMessage` 加 `@@unique([sessionId, clientId])`，重复请求返回已存在那行
 - [ ] **A2 出站队列**：App Group 里一个 append-only JSON 行文件即可，不要数据库。
       重试时机 `NWPathMonitor` + 回前台 + `BGAppRefreshTask`
-- [ ] 红线文字更新（6 处）：`apps/ios/README.md:109`、`NativeBridge.swift:6`、
-      `LiveActivityManager.swift:19`、`HermitLiveActivityBundle.swift:6`、
-      `AppConfig.swift:26`、`native-bridge.ts:5`；`PrivacyInfo.xcprivacy` 复核
+- [x] 红线文字更新 —— 第 5 轮，和 A1 同一个提交，**实际是 11 处不是 6 处**：
+      `README.md`、`NativeBridge.swift` 两处、`LiveActivityManager.swift`、
+      `HermitLiveActivityBundle.swift`、`AppConfig.swift`、`WebViewController.swift`
+      （「dashboard 把 machine key 放 localStorage」那句注释）、`PrivacyInfo.xcprivacy`、
+      `native-bridge.ts` 三处。统一改成「壳**不使用**凭据」而不是「壳**没有**凭据」：
+      它现在存一份，但按 origin 存成一个不透明字符串，从不解析、从不自己发认证请求
 
 ## M2 — 原生网络层与数据层
 
@@ -211,22 +228,43 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-M0 全做完，M1 的 A0 和第一个真 method 也做完了。下一轮做 **A1 Keychain**。
+M1 只剩「服务端幂等键 + A2 出站队列」这一对，它们有先后：**幂等键必须先做**。
 
-- **A1 Keychain**。接缝仍然只有 `keyring.ts:29`（读）和 `:36`（写）。
-  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`、不同步 iCloud、不进备份、放 App Group。
-  迁移顺序：写入 → **读回校验** → 才清 localStorage。登出连带清 Keychain。
-  网页侧用 `nativeRequest('keychain.get' | 'keychain.set')`，浏览器里 reject，
-  调用点必须有 localStorage 兜底 —— 同一份代码在浏览器里也要跑。
-  原生侧就加进 `WebViewController.answer()` 那张表（第 4 轮建好了，照着 `getOrigin` 写）。
-  **动手前先定一件事**：机器密钥现在是网页存的、壳一个都不碰
-  （`NativeBridge.swift:6` 和 README 的红线都是这么写的）。A1 把密钥挪进 Keychain 之后
-  这句话就不成立了，红线文字（M1 最后一条列的 6 处）必须在同一个提交里改掉，
-  不能留到 M7。另外 `keychain.get` 是一个**任何主框架页面都能调**的方法，
-  和 `setOrigin` 一样要先想清楚被打穿的后果 —— 但这次没法拿弹窗兜底
-  （每次读都弹一次没人受得了），判据只能是「Keychain 里只放当前 origin 自己的条目」。
+- **服务端幂等键**（先做，一轮就能完）。`chat.send`（`apps/dashboard/src/server/routers/chat.ts:1121`）
+  加一个可选的 `clientId`，`ChatMessage` 加 `@@unique([sessionId, clientId])`，
+  重复请求返回已存在那行而不是插第二条。没有它，出站队列的重试会在网络抖动时
+  发出两条一样的消息 —— 那比不重试更糟。要动 Prisma schema，记得 `prisma generate`
+  之后再 `tsc`（配方在「踩过的坑」）；**迁移文件要不要一起生成、要不要在服务器上跑，
+  这个先问 sway**，别自己 `prisma migrate dev`。
+- **A2 出站队列**（幂等键落地之后）。App Group 里一个 append-only 的 JSON 行文件就够，
+  不要数据库。重试时机：`NWPathMonitor` 恢复、回前台、`BGAppRefreshTask`。
+  注意这是**第一个真的需要 App Group 的东西**（A1 没用上，见上面），
+  加 `com.apple.security.application-groups` 权限会影响真机描述文件，先确认一下。
+
+M1 做完就进 M2（原生网络层），那是第一块「不再靠网页」的活。
 
 ## 踩过的坑
+
+- **模拟器上 keychain 的每一次调用都回 `-34018`，因为测试脚本是 `CODE_SIGNING_ALLOWED=NO`
+  构建的。** 没签名的包不带任何 entitlement，也就没有 keychain access group，
+  `SecItemAdd` / `SecItemDelete` 一律 `errSecMissingEntitlement`。真机上没这个问题
+  （正常签名自带 `application-identifier`），**只有测试路径是坏的**，而且坏得很像
+  「keychain 代码写错了」。改法是 ad-hoc 签名而不是不签名：
+  `CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual PROVISIONING_PROFILE_SPECIFIER= DEVELOPMENT_TEAM=`
+  —— `-` 不需要 team、不需要描述文件，`tools/bridge-fixture.sh` 和 `smoke.sh` 都换过来了。
+  一并得到的教训：**`SecItem*` 的 OSStatus 不要在内部吞掉转成 Bool**。第一版
+  `Keychain.write` 返回 `Bool`，页面上只看到 `RESULT keychain.clear fail`，
+  什么都推断不出来；把数字带到错误文案里（`the keychain refused the delete (-34018)`）
+  之后，一张截图就定位了。这个设计留下了，不是临时调试代码。
+- **Keychain 是异步的，`getActiveKey()` 是每个请求都调的同步函数** —— 所以接缝不能是
+  「`read()` 里直接读 keychain」。做法是整份 keyring 在文档存活期内放内存
+  （`keyring.ts` 的 `secure`），启动时 `hydrateKeyring()` 一次性灌进去，写入时内存先改、
+  Keychain 在后面追。`auth-gate.tsx` 在 `hydrated` 之前只画骨架，所以没有「组件已经在查
+  但 key 还没到」的窗口。另外 `keyring.ts` 只能**动态 import** `native-bridge.ts`
+  （后者静态 import 前者，静态成环会让其中一个在求值时是半空的），而动态 import 又不能
+  出现在写入路径上：登录成功后紧接着 `window.location.href = '/chat'`，
+  等一次 chunk 加载就赶不上文档销毁、key 就没写进去。解法是 hydrate 时把模块暖上，
+  写入路径只排一个微任务。
 
 - **`-hermitOrigin` 会盖住 `setOrigin` 刚写进去的值，所以「切服务器」这件事一次启动里
   看不出来。** 优先级是 launch argument > 用户设的 > 默认，而 UserDefaults 的
@@ -310,6 +348,7 @@ M0 全做完，M1 的 A0 和第一个真 method 也做完了。下一轮做 **A1
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 5 | 2026-09-04 | M1 的 A1 Keychain：`Hermit/Keychain.swift` + `keychain.get/.set/.clear`（判据是主框架 URL 与 `AppConfig.origin` 精确同源，账号按 origin 分条）；`keyring.ts` 的 `read()`/`write()` 改走内存副本 + `hydrateKeyring()`（写→读回校验→才清 localStorage），`auth-gate.tsx` 在渲染前 await；11 处红线文字同一提交改掉；`bridge-fixture.sh`/`smoke.sh` 改 ad-hoc 签名 | `xcodegen` + `swiftc -typecheck` 过；dashboard `tsc --noEmit` **0 错**；`tools/bridge-fixture.sh` **2 个 UI 用例 41 秒全过**（新增 `testTheKeychainKeepsTheKeyring`，旧的 `testThePageCanProposeAnotherServer` 未回归）；截图 `shots/14`、`15` 看过：重启后 `keychain.get` 回 `{"value":"keyring-marker-42"}`。收工 `simctl list devices booted` 为空 |
 | 4 | 2026-09-04 | M1 的第一个真 method：`WebViewController.answer()` 方法表 + `getOrigin` / `setOrigin`（页面只能提议，人确认）；`tools/bridge-fixture.sh` + `tools/bridge-fixture/`（不用 key、不用网络的真页面） | `xcodegen` + `swiftc -typecheck` 过；`xcodebuild build-for-testing` 过；UI 用例 `testThePageCanProposeAnotherServer` **22 秒通过，同一份代码跑了两遍**；3 张截图（`shots/11..13`，gitignore）逐张看过：确认框写着 `:49518 → :49517`，第二次启动的离线屏写着 `:49517`。收工 `simctl list devices booted` 为空 |
 | 3 | 2026-09-04 | M0 最后一条（两边都拒封禁端口）+ M1 A0（桥的问答通道，双向 5 秒超时）| `xcodegen` + `swiftc -typecheck` 过；`xcodebuild test -only-testing:HermitTests` **47/47 过**（新增 9 条）；dashboard `tsc --noEmit` **0 错**（先 prisma generate，见「踩过的坑」）；`api-base.test.ts` 16/16 过。无新界面，未截图 |
 | 2 | 2026-09-04 | M0 第 2、3 条：离线屏加 "Change server"（并显示试的是哪个地址）、`hermit://server`、`presentOriginEditor` + `switchOrigin`；新增 UI 用例 `testServerAddressCanBeChanged` | `xcodegen` + `swiftc -typecheck` 过、`xcodebuild build` 0 warning；UI 用例 13 秒通过，4 张截图在 `apps/ios/shots/07..10`，逐张看过 |

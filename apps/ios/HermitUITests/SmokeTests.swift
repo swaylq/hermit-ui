@@ -244,6 +244,62 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(editor.waitForNonExistence(timeout: 10), "the address dialog stayed up")
     }
 
+    /// The keyring's new home, driven from a real document.
+    ///
+    /// Same fixture and same two-launch shape as the test above, for a different
+    /// reason: what has to be shown here is that the value OUTLIVES the process,
+    /// which is the entire point of moving it out of the web view's localStorage.
+    /// (localStorage would have survived too — the Keychain is about the file on
+    /// disk being encrypted, which no UI test can see. What this pins down is that
+    /// the round trip works and nothing reshapes the bytes on the way.)
+    func testTheKeychainKeepsTheKeyring() throws {
+        let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
+        guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
+        // Must match SECRET in tools/bridge-fixture/index.html.
+        let secret = "keyring-marker-42"
+
+        app.launchArguments = ["-hermitOrigin", fixture]
+        app.launch()
+        XCTAssertTrue(
+            app.webViews.buttons["keychain.get"].waitForExistence(timeout: 30),
+            "the fixture page never loaded — is the static server still up?")
+
+        // Start from nothing, whatever ran before. `{"value":null}` and not an
+        // error: "there is no entry" is an answer the dashboard acts on — it is
+        // the signal to migrate its localStorage copy in.
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(
+            fixtureSays("keychain.clear ok"),
+            "keychain.clear did not answer — a `-34018` in the result line means this "
+                + "build is unsigned; see CODE_SIGN_IDENTITY in tools/bridge-fixture.sh")
+        app.webViews.buttons["keychain.get"].tap()
+        XCTAssertTrue(fixtureSays("{\"value\":null}"), "an empty keychain did not read back as empty")
+
+        app.webViews.buttons["keychain.set"].tap()
+        XCTAssertTrue(fixtureSays("keychain.set ok"), "the shell refused to store anything")
+        app.webViews.buttons["keychain.get"].tap()
+        XCTAssertTrue(fixtureSays(secret), "what came back is not what went in")
+        shoot("14-keychain-roundtrip")
+
+        // A cold start is the one that matters: on the real thing this is the
+        // difference between opening the app and being asked to sign in again.
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(
+            app.webViews.buttons["keychain.get"].waitForExistence(timeout: 30),
+            "the fixture page never came back")
+        app.webViews.buttons["keychain.get"].tap()
+        XCTAssertTrue(fixtureSays(secret), "the keychain lost the value across a relaunch")
+        shoot("15-keychain-after-relaunch")
+
+        // Signing out has to actually remove it, and leave this install clean for
+        // whatever test runs next.
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer the second time")
+        app.webViews.buttons["keychain.get"].tap()
+        XCTAssertTrue(fixtureSays("{\"value\":null}"), "signing out left the keyring in the keychain")
+    }
+
     // MARK: - helpers
 
     /// Wait for the fixture's result line to mention something. Substring rather

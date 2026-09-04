@@ -106,9 +106,19 @@ AppDelegate            APNs registration → device token
                                   using the web app's own authenticated client
 ```
 
-The shell holds **no credentials**. It never sees a machine key; the web layer
-does the registering. That keeps auth in one place and means a phone carrying
-three machine keys is subscribed to all three machines.
+The shell **uses** no credentials. It never sends an authenticated request of
+its own: it hands the device token to the page and the web layer does the
+registering, which keeps auth in one place and means a phone carrying three
+machine keys is subscribed to all three machines.
+
+It does now **store** them. Since M1 the keyring lives in the device Keychain
+rather than the web view's localStorage (`Hermit/Keychain.swift`), because
+localStorage is an unencrypted SQLite file in the app container. The web layer
+still owns it: the shell keeps one opaque string per origin, hands it back on
+`keychain.get`, and never looks inside. Only a page loaded from the origin the
+shell was pointed at can ask — the same exact-host rule the microphone uses, and
+for the same reason there is no confirmation dialog on it (a read happens on
+every page load).
 
 ## Verifying push end to end
 

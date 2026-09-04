@@ -5,8 +5,10 @@ import WidgetKit
 //
 // It contains exactly one thing — the Live Activity — and no Home Screen
 // widgets. A widget would need the machine key to fetch anything, and this app's
-// whole arrangement is that the native side holds no credentials (see
-// NativeBridge.swift). A Live Activity needs none: its content is pushed to it.
+// whole arrangement is that native code never makes an authenticated request (see
+// NativeBridge.swift). The keyring the app does keep is in the containing app's
+// own Keychain access group, which this extension is not in — deliberately.
+// A Live Activity needs none of it: its content is pushed to it.
 @main
 struct HermitLiveActivityBundle: WidgetBundle {
     var body: some Widget {

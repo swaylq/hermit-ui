@@ -3,9 +3,12 @@ import WebKit
 
 /// The web ⇄ native seam.
 ///
-/// The shell holds NO credentials. It knows its APNs device token; the web layer
+/// The shell USES no credentials. It knows its APNs device token; the web layer
 /// knows the machine keys. So the token is handed across and the web side does the
 /// registering through its own authenticated client — see lib/native-bridge.ts.
+/// Since M1 the shell does STORE that keyring, as one opaque string per origin in
+/// the device Keychain (Keychain.swift, `keychain.get`/`.set`/`.clear` in
+/// WebViewController.answer) — it never parses it and never sends it anywhere.
 ///
 /// Two shapes travel over it. Most messages are one-way announcements, which is
 /// why both directions have to tolerate arriving early: a push token can land
@@ -121,7 +124,8 @@ final class NativeBridge: NSObject {
     /// A push token for the activity system. `kind` is "update" (addresses one
     /// running activity, so it carries the session it belongs to) or "start"
     /// (app-wide, no session — the empty string). The page registers it with the
-    /// machine key; native never sees one.
+    /// machine key. Native holds that key only as an opaque blob in the Keychain
+    /// and never uses one itself.
     func sendLiveActivityToken(kind: String, token: String, sessionId: String, sinceMs: Double) {
         guard let webView else { return }
         call(webView, "onLiveActivityToken", [kind, token, sessionId, sinceMs])

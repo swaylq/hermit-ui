@@ -17,8 +17,9 @@ import Foundation
 ///   which is exactly when a lock-screen widget is supposed to earn its place.
 ///   So the activity is requested with `pushType: .token`, and the token goes to
 ///   the page, which registers it with the machine key it already holds — the
-///   same arrangement as the APNs device token (NativeBridge.swift). The shell
-///   still holds no credentials.
+///   same arrangement as the APNs device token (NativeBridge.swift). Nothing
+///   native authenticates anything: the shell stores the keyring (Keychain.swift)
+///   but every request that needs a key is still the page's.
 /// · **The elapsed time updates itself.** `Text(_:style:.timer)` is drawn by the
 ///   system once a second with nothing behind it. Everything else costs a push,
 ///   so everything else is event-driven — a turn boundary, a new activity line,

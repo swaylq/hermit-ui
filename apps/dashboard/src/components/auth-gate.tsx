@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
-import { getKeyring, addMachine, removeMachine, getActiveEntry, fetchMachineByKey, migrateLegacyKey } from '@/lib/keyring';
+import { getKeyring, addMachine, removeMachine, getActiveEntry, fetchMachineByKey, migrateLegacyKey, hydrateKeyring } from '@/lib/keyring';
 import { normalizeBase } from '@/lib/api-base';
 import { LoginScreen } from '@/components/login-screen';
 import { Card } from '@/components/ui/card';
@@ -34,9 +34,13 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   useEffect(() => {
-    // Await the legacy-key migration before checking the keyring, so an existing
-    // single-key user is folded in (not bounced to the login screen).
+    // Both awaited before the keyring is read, and in this order. Inside the iOS
+    // shell the list lives in the device Keychain, which is asynchronous: read it
+    // first, or a returning user is shown the sign-in screen for a moment and the
+    // legacy migration below runs against an empty list. In a browser both calls
+    // are effectively free.
     void (async () => {
+      await hydrateKeyring();
       await migrateLegacyKey();
       setCount(getKeyring().length);
       setHydrated(true);

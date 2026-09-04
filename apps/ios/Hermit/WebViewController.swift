@@ -34,8 +34,11 @@ final class WebViewController: UIViewController {
 
     private func buildWebView() {
         let config = WKWebViewConfiguration()
-        // Persistent store: the dashboard keeps its machine keys in localStorage,
-        // so this is what makes "enter the key once" true across launches.
+        // Persistent store: the dashboard's session state, caches and the
+        // per-tab active machine live here across launches. The machine KEYS moved
+        // out to the Keychain in M1 (Keychain.swift) — this store is an
+        // unencrypted SQLite file in the app container, which is fine for
+        // everything still in it and was not fine for bearer tokens.
         config.websiteDataStore = .default()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -194,6 +197,39 @@ final class WebViewController: UIViewController {
             ])
         case "setOrigin":
             proposeOrigin(params["origin"] as? String ?? "", reply: reply)
+        case "keychain.get":
+            guard let account = keychainAccount(reply) else { return }
+            // NSNull, not a missing field: "there is nothing stored" is an answer
+            // the page acts on (it migrates its localStorage copy in), and an
+            // absent key would be indistinguishable from an older shell.
+            let got = Keychain.read(account: account)
+            guard got.value != nil || got.status == errSecItemNotFound else {
+                reply(false, ["error": "the keychain would not open (\(got.status))"])
+                return
+            }
+            let value: Any = got.value ?? NSNull()
+            reply(true, ["value": value])
+        case "keychain.set":
+            guard let account = keychainAccount(reply) else { return }
+            guard let value = params["value"] as? String else {
+                reply(false, ["error": "keychain.set needs a string value"])
+                return
+            }
+            // A keyring is a few hundred bytes. The cap is not about the keychain
+            // coping — it is that a page looping on this must not be able to grow
+            // an item the user can only clear by deleting the app.
+            guard value.utf8.count <= 64 * 1024 else {
+                reply(false, ["error": "keychain value is too large"])
+                return
+            }
+            let stored = Keychain.write(value, account: account)
+            reply(stored == errSecSuccess,
+                  stored == errSecSuccess ? nil : ["error": "the keychain refused the write (\(stored))"])
+        case "keychain.clear":
+            guard let account = keychainAccount(reply) else { return }
+            let cleared = Keychain.delete(account: account)
+            reply(cleared == errSecSuccess,
+                  cleared == errSecSuccess ? nil : ["error": "the keychain refused the delete (\(cleared))"])
         default:
             // Same wording the bridge uses when there is no handler at all, so a
             // page cannot tell "this shell is too old for that method" from
@@ -201,6 +237,37 @@ final class WebViewController: UIViewController {
             // would do differently.
             reply(false, ["error": "unknown method: \(method)"])
         }
+    }
+
+    /// Which keychain entry the page in front of us is allowed to touch, or nil
+    /// after answering the refusal itself.
+    ///
+    /// `setOrigin` can lean on a person tapping Confirm. This cannot: a read
+    /// happens on every page load, and a system dialog on every page load is a
+    /// dialog nobody reads. So the gate is structural, and it is the same one the
+    /// microphone uses — an EXACT match against the address the shell was pointed
+    /// at, not `isInternal`. `isInternal` also accepts `knownHosts`, which the
+    /// PAGE supplies, and the main frame is allowed to navigate to those: without
+    /// this check a dashboard that reported an attacker's host could then send the
+    /// main frame there and read the keyring back out of the keychain.
+    ///
+    /// The account is the origin, so each deployment gets its own entry — the same
+    /// separation localStorage gave for free, kept rather than quietly widened.
+    private func keychainAccount(_ reply: (Bool, Any?) -> Void) -> String? {
+        // Ports compared with the scheme default filled in: `URL.port` is nil for
+        // an address that simply omitted it, so `https://x` and `https://x:443`
+        // are the same origin and must not read as two.
+        func port(_ u: URL) -> Int? { u.port ?? (u.scheme == "https" ? 443 : u.scheme == "http" ? 80 : nil) }
+        let here = webView.url
+        guard let here,
+              here.scheme == AppConfig.origin.scheme,
+              here.host == AppConfig.origin.host,
+              port(here) == port(AppConfig.origin)
+        else {
+            reply(false, ["error": "the keychain is only readable from the shell's own origin"])
+            return nil
+        }
+        return AppConfig.origin.absoluteString
     }
 
     // MARK: - Which deployment this shell points at

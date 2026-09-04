@@ -184,8 +184,9 @@ enum AppConfig {
     ///
     /// One installed app can drive several deployments (docs/multi-deployment-
     /// design.md): a keyring entry carries a `baseUrl`, and its uploads, links and
-    /// share URLs live on that origin. The shell has no keyring — it deliberately
-    /// holds no credentials — so the web layer tells it (`{type:'origins'}` in
+    /// share URLs live on that origin. The shell cannot read the keyring — it
+    /// stores it as one opaque blob per origin and never parses it (Keychain.swift)
+    /// — so the web layer tells it (`{type:'origins'}` in
     /// lib/native-bridge.ts). Without this, opening a picture that lives on the
     /// second deployment threw the user out to Safari, which is a different
     /// storage jar: the feature simply stopped at the app's edge.
