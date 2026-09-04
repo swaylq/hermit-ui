@@ -66,6 +66,8 @@ import { Check, ChevronLeft, ChevronRight, Copy, ExternalLink, RotateCw, SquareD
 import { cn } from '@/lib/utils';
 import type { LivePreviewInfo } from '@/lib/live-preview';
 import { readPreviewElementPick, type PreviewElementPick } from '@/components/chat/preview-element-pick';
+import { paintLayer, settleLayer, settlesOpen, willCommit, SLIDE_MS as DRAG_SLIDE_MS } from '@/components/chat/preview-drag';
+import { nativeHaptic } from '@/lib/native-bridge';
 import { copyText } from '@/lib/copy-text';
 
 // ── divider width persistence ────────────────────────────────────────────────
@@ -76,8 +78,10 @@ const MAX_W = 1100;
 /** The split before anyone drags the divider — was `lg:w-[45%] lg:max-w-[720px]`. */
 const DEFAULT_SPLIT = 0.45;
 const DEFAULT_MAX_W = 720;
-/** Open/close travel. Also the parent's unmount delay — keep the two in step. */
-const SLIDE_MS = 300;
+/** Open/close travel. Also the parent's unmount delay — keep the two in step.
+ *  Lives in preview-drag.ts now, because the two hands that move this layer both
+ *  need it and neither owns it. */
+const SLIDE_MS = DRAG_SLIDE_MS;
 /** Keep this much room for the chat column (+ sidebar) no matter how far the divider goes. */
 const CHAT_MIN = 480;
 
@@ -234,13 +238,77 @@ export function LivePreviewPanel({
     [origin],
   );
 
+  // The layer itself. Three things write to it: the divider (its width, as a CSS
+  // var), and the two drags that slide it off-screen — the one on our chrome and
+  // the one relayed from the page below.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  // ── the previewed page's own dismissal drag ──────────────────────────────
+  // On a phone this panel is a full-screen layer and the iframe fills it, so the
+  // swipe that puts it away lands on a document in ANOTHER ORIGIN: those touches
+  // never reach the dashboard at all, and for a while the only way back out was
+  // this panel's header. The bridge watches for the drag over there and posts it
+  // here (apps/gateway/src/preview/bridge.ts); the moving happens on this side,
+  // through the same preview-drag.ts the thumb-on-our-chrome case uses.
+  //
+  // A bridge that cannot do this — an older gateway, or a preview mounted
+  // --no-reload, which suppresses the injection — announces itself as v1, and
+  // the strip further down gives the drag something of ours to start on instead.
+  const [pageSwipe, setPageSwipe] = useState(false);
+  const pageDrag = useRef<{ width: number; tx: number; willClose: boolean } | null>(null);
+  const pageDragClear = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (pageDragClear.current) clearTimeout(pageDragClear.current); }, []);
+
+  const onPageSwipe = useCallback(
+    (d: Record<string, unknown>) => {
+      const el = panelRef.current;
+      // Phone shape only: on lg+ this is a column beside the chat and nothing
+      // about it slides.
+      if (!el || !window.matchMedia('(max-width: 1023px)').matches) return;
+      const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+      if (d.phase === 'start') {
+        if (pageDragClear.current) { clearTimeout(pageDragClear.current); pageDragClear.current = null; }
+        pageDrag.current = { width: el.offsetWidth || window.innerWidth, tx: 0, willClose: false };
+        return;
+      }
+      const g = pageDrag.current;
+      if (!g) return;
+      const tx = Math.max(0, Math.min(g.width, num(d.dx)));
+      if (d.phase === 'move') {
+        g.tx = tx;
+        paintLayer(el, tx);
+        // Same detent tick as the pull that opened it, so both directions of the
+        // same drawer answer the same way.
+        const willClose = !willCommit(tx, g.width, true);
+        if (willClose !== g.willClose) {
+          g.willClose = willClose;
+          nativeHaptic('selection');
+        }
+        return;
+      }
+      // 'end' — and anything unrecognised settles rather than sticking.
+      const stay = settlesOpen({ tx, width: g.width, vx: num(d.vx), wasOpen: true });
+      pageDrag.current = null;
+      pageDragClear.current = settleLayer(el, stay, g.width);
+      if (!stay) onClose();
+    },
+    [onClose],
+  );
+
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (!origin || e.origin !== origin) return;
       if (e.source !== frameRef.current?.contentWindow) return;
       const d = e.data as Record<string, unknown> & { source?: unknown; type?: unknown } & PageState;
       if (!d || d.source !== MSG_UP) return;
+      // Protocol 2 is "this bridge forwards the page's touches". Only ever read
+      // as a capability, never required: a v1 page still does everything else.
+      if (typeof d.v === 'number' && d.v >= 2) setPageSwipe(true);
 
+      if (d.type === 'swipe') {
+        onPageSwipe(d);
+        return;
+      }
       if (d.type === 'state') {
         setReady(true);
         const h = hist.current;
@@ -271,7 +339,7 @@ export function LivePreviewPanel({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [origin, onPickElement, preview.url]);
+  }, [origin, onPickElement, preview.url, onPageSwipe]);
 
   useEffect(() => {
     if (!picked) return;
@@ -313,9 +381,9 @@ export function LivePreviewPanel({
   }, [ready, post]);
 
   // Divider state. null = the default 45% split (no stored width). While a drag
-  // is live the width goes straight to the CSS var through panelRef; React sees
-  // one setWidth at pointer-up.
-  const panelRef = useRef<HTMLDivElement | null>(null);
+  // is live the width goes straight to the CSS var through panelRef (declared
+  // above, next to the other hand that writes to it); React sees one setWidth at
+  // pointer-up.
   const [width, setWidth] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
   const drag = useRef({ on: false, startX: 0, startW: 0, lastW: 0 });
@@ -426,6 +494,10 @@ export function LivePreviewPanel({
         if (rootRef) rootRef.current = el;
       }}
       data-esc-layer=""
+      // On a phone this layer covers the chat outright, which is what makes the
+      // nav drawer's left-edge pull stand down while it is up (use-drawer-swipe).
+      // Static because the gesture that reads it only runs at phone widths.
+      data-covers-viewport=""
       style={{ '--pv-w': `${targetW}px`, '--pv-ms': `${SLIDE_MS}ms` } as React.CSSProperties}
       className={cn(
         'flex flex-col bg-background',
@@ -574,6 +646,13 @@ export function LivePreviewPanel({
             post({ type: 'hello' });
           }}
         />
+        {/* No bridge to forward the page's own touches (a gateway too old for
+            protocol 2, or a preview mounted --no-reload, which suppresses the
+            injection): the dismissal drag needs something of OURS to start on,
+            so put a thumb's width of catcher down the left edge — the edge iOS
+            dismisses from. It costs the page its leftmost 24px, which is why it
+            is not here the rest of the time. */}
+        {!pageSwipe && <div aria-hidden="true" className="absolute inset-y-0 left-0 z-10 w-6 lg:hidden" />}
         <div
           aria-hidden="true"
           className={cn(

@@ -54,7 +54,11 @@ function bridgeClient(): string {
   function up(msg) {
     try {
       msg.source = OUT;
-      msg.v = 1;
+      // 2 = "this page forwards the panel's dismissal drag" (see the touch
+      // handlers below). The panel reads it as a capability and nothing else; a
+      // page still speaking 1 keeps every other feature and gets an edge strip
+      // of the panel's own to be dismissed from.
+      msg.v = 2;
       if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
     } catch (e) {}
   }
@@ -328,6 +332,87 @@ function bridgeClient(): string {
     if (dropTimer) { clearTimeout(dropTimer); dropTimer = null; }
     if (eatTrailingClick) dropTimer = setTimeout(drop, 400); else drop();
   }
+
+  // ── the panel's dismissal drag, when the finger is on THIS page ─────────
+  // On a phone the panel is a full-screen layer and this document fills it, so
+  // the swipe that puts it away lands here — in an origin the panel cannot read
+  // touches from, however hard it tries. Watch for one and describe it upward;
+  // the panel does the moving, so all the numbers stay on that side.
+  //
+  // What is NOT a dismissal: a tap, a vertical scroll, a leftward drag, a drag
+  // while the element picker is armed, and — the one that would be infuriating —
+  // a drag over something that can still scroll that way itself, e.g. a wide
+  // code block pushed to the right. Those keep the page's own behaviour.
+  var sw = null;
+
+  // Pages that mean to handle horizontal drags themselves: a range input, a
+  // slider, a draggable, or anything that has taken touch-action away from the
+  // browser (canvas apps, carousels, map panes). Dismissing the panel out from
+  // under one of those would make the preview useless for exactly the pages
+  // most worth previewing.
+  var OWNS = 'input,select,textarea,[role=slider],[role=scrollbar],[draggable=true],[contenteditable=""],[contenteditable=true]';
+
+  function ownsTouch(el) {
+    for (var n = el, i = 0; n && n.nodeType === 1 && i < 8; n = n.parentElement, i++) {
+      try { if (n.matches(OWNS)) return true; } catch (e) {}
+      var ta = '';
+      try { ta = getComputedStyle(n).touchAction || ''; } catch (e) {}
+      if (ta && ta !== 'auto' && ta !== 'manipulation') return true;
+    }
+    return false;
+  }
+
+  function absorbsRight(el) {
+    for (var n = el; n && n.nodeType === 1 && n !== document.documentElement; n = n.parentElement) {
+      if (n.scrollLeft > 0) return true;
+    }
+    var se = document.scrollingElement;
+    return !!(se && se.scrollLeft > 0);
+  }
+
+  // screenX, not clientX. The panel slides THIS DOCUMENT sideways as the drag
+  // goes, so a coordinate measured against this viewport shrinks by however far
+  // the panel has already travelled — the finger appears to move at half speed
+  // and the panel stalls at half the distance. Screen coordinates do not move
+  // when the frame does.
+  addEventListener('touchstart', function (e) {
+    if (picking || e.touches.length !== 1) { sw = null; return; }
+    var t = e.touches[0];
+    sw = { x0: t.screenX, y0: t.screenY, x: t.screenX, t: e.timeStamp, dx: 0, vx: 0, on: false, dead: false };
+  }, { passive: true });
+
+  addEventListener('touchmove', function (e) {
+    if (!sw || sw.dead || e.touches.length !== 1) return;
+    var t = e.touches[0];
+    var dx = t.screenX - sw.x0, dy = t.screenY - sw.y0;
+    if (!sw.on) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;   // still undecided
+      if (dx <= 0 || Math.abs(dx) <= Math.abs(dy) || absorbsRight(e.target) || ownsTouch(e.target)) { sw.dead = true; return; }
+      sw.on = true;
+      up({ type: 'swipe', phase: 'start' });
+    }
+    // Cancelable only until the browser has committed to a scroll of its own;
+    // asking after that is a console warning and nothing else.
+    if (e.cancelable) e.preventDefault();
+    var now = e.timeStamp;
+    if (now > sw.t) sw.vx = (t.screenX - sw.x) / (now - sw.t);
+    sw.x = t.screenX; sw.t = now; sw.dx = dx;
+    up({ type: 'swipe', phase: 'move', dx: dx });
+  }, { passive: false });
+
+  function endSwipe(e) {
+    if (sw && sw.on) {
+      // A finger that has held still is not flicking any more, whatever it was
+      // doing a moment ago. Report no speed and let the panel decide on
+      // distance, or parking it half-out and lifting is settled by a flick that
+      // ended a second earlier.
+      var stale = !!e && e.timeStamp - sw.t > 80;
+      up({ type: 'swipe', phase: 'end', dx: sw.dx, vx: stale ? 0 : sw.vx });
+    }
+    sw = null;
+  }
+  addEventListener('touchend', endSwipe, { passive: true });
+  addEventListener('touchcancel', endSwipe, { passive: true });
 
   // ── commands from the panel ─────────────────────────────────────────────
   addEventListener('message', function (ev) {

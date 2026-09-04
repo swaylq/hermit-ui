@@ -4,10 +4,11 @@
 //
 // preview-tab.tsx is the handle you tap; this is the same drawer's other half,
 // the one you drag. It is the mirror image of the mobile nav drawer
-// (app-sidebar.tsx): a zone at the edge starts the gesture, SLOP px decide
-// horizontal from vertical, the panel tracks the finger, and a flick or a third
-// of the screen settles it. Phones only — on lg+ the panel is a split beside the
-// chat with a divider of its own, so there is no drawer there to pull.
+// (components/sidebar/use-drawer-swipe.ts): a zone at the edge starts the
+// gesture, SLOP px decide horizontal from vertical, the panel tracks the finger,
+// and a flick or a third of the screen settles it. Phones only — on lg+ the
+// panel is a split beside the chat with a divider of its own, so there is no
+// drawer there to pull.
 //
 // One thing is NOT a mirror. The nav drawer is always in the DOM, so it has
 // something to drag from the first frame. This panel is lazy-loaded and
@@ -18,36 +19,19 @@
 // horizontal. Until React has painted it there is nothing to move, so the offset
 // is remembered and applied by the first frame that finds the element.
 //
-// Closing works from wherever a touch actually reaches us — the header and the
-// safe-area padding. Not from over the iframe: those touches never leave it,
-// being another origin's document. So the header is the grabber, the way it is
-// on a sheet.
+// This side sees only the touches that land on the DASHBOARD: the panel's header
+// and its padding. A finger on the previewed page itself is in another origin's
+// document and never reaches here — that half of the push-back is forwarded by
+// the bridge and replayed in preview-panel.tsx, through the same preview-drag.ts.
 
 import { useEffect, useRef, type RefObject } from 'react';
 import { nativeHaptic } from '@/lib/native-bridge';
+import { paintLayer, settleLayer, settlesOpen, willCommit, SLOP, STALE_MS } from '@/components/chat/preview-drag';
 
 /** Right-edge zone that can start an OPEN pull. Wider than the drawer's 28 on the
  *  left because the tab lives in it: a pull that starts ON the handle has to be
  *  the same gesture as one that starts beside it, and the tab is 34px. */
 const EDGE = 36;
-/** Travel before horizontal vs vertical is called. Below it, this may still be a scroll. */
-const SLOP = 10;
-/** px/ms. Above this the flick's direction settles it, however far it got. */
-const FLICK = 0.3;
-/** Otherwise: how much of the screen the panel has to cross. Asymmetric by
- *  construction — from closed you pull COMMIT in, from open you push COMMIT back
- *  out — so neither state sits one twitch away from flipping. */
-const COMMIT = 0.35;
-/** Must match SLIDE_MS in preview-panel.tsx: the CSS travel we hand back to. */
-const SETTLE_MS = 300;
-/** A finger that has held still this long is not flicking any more, whatever it
- *  was doing before. Without this, parking the panel half-open and then lifting
- *  is settled by a flick that ended a second ago. */
-const STALE_MS = 80;
-/** The nav drawer's own edge zone (app-sidebar.tsx). A close-drag starting inside
- *  it would pull the sidebar in underneath us at the same time — both listeners
- *  sit on document, both read a rightward drag, and that one runs first. */
-const DRAWER_EDGE = 28;
 
 export function usePreviewSwipe({
   url,
@@ -82,15 +66,14 @@ export function usePreviewSwipe({
     let startX = 0, startY = 0, lastX = 0, lastT = 0, vx = 0;
     let width = 0, tx = 0;
     let decided = false, engaged = false, willOpen = false;
-    let chaseRaf = 0, clearTimer = 0;
+    let chaseRaf = 0, clearTimer: ReturnType<typeof setTimeout> | null = null;
 
     const isPhone = () => window.matchMedia('(max-width: 1023px)').matches;
 
     const paint = (): boolean => {
       const el = panelRef.current;
       if (!el) return false;
-      el.style.transition = 'none';
-      el.style.transform = `translateX(${tx}px)`;
+      paintLayer(el, tx);
       return true;
     };
     // The panel is still mounting. Keep trying, so a finger that has stopped
@@ -106,7 +89,7 @@ export function usePreviewSwipe({
     };
 
     const onStart = (e: TouchEvent) => {
-      if (clearTimer) { window.clearTimeout(clearTimer); clearTimer = 0; }
+      if (clearTimer) { clearTimeout(clearTimer); clearTimer = null; }
       stopChase();
       // A second finger landing mid-pull: settle where we stand. Dropping the
       // gesture instead would strand the panel at a half transform with the
@@ -115,15 +98,14 @@ export function usePreviewSwipe({
       if (!isPhone() || e.touches.length !== 1) { mode = null; return; }
       const t = e.touches[0];
       width = window.innerWidth;
-      if (openRef.current) {
-        if (t.clientX <= DRAWER_EDGE) { mode = null; return; }
-        mode = 'close';
-      } else if (t.clientX >= width - EDGE) {
-        mode = 'open';
-      } else {
-        mode = null;
-        return;
-      }
+      // Open: only from the right edge. Closed-ward: from anywhere the touch
+      // reaches us at all, which while the panel covers the screen means its
+      // header and padding — the left edge included, because a full-screen layer
+      // is up and the nav drawer's own edge-pull stands down under one
+      // (use-drawer-swipe.ts, `[data-covers-viewport]`).
+      if (openRef.current) mode = 'close';
+      else if (t.clientX >= width - EDGE) mode = 'open';
+      else { mode = null; return; }
       startX = lastX = t.clientX; startY = t.clientY; lastT = e.timeStamp;
       tx = mode === 'open' ? width : 0;
       decided = false; engaged = false; vx = 0;
@@ -149,7 +131,7 @@ export function usePreviewSwipe({
       tx = Math.max(0, Math.min(width, (mode === 'open' ? width : 0) + dx));
       // Say when letting go would keep it, before the finger lifts — the detent
       // tick a picker gives, not a thud.
-      const past = 1 - tx / width > (mode === 'close' ? 1 - COMMIT : COMMIT);
+      const past = willCommit(tx, width, mode === 'close');
       if (past !== willOpen) {
         willOpen = past;
         nativeHaptic('selection');
@@ -161,22 +143,9 @@ export function usePreviewSwipe({
       stopChase();
       if (mode === null || !engaged) { mode = null; return; }
       if (e.timeStamp - lastT > STALE_MS) vx = 0;
-      const settleOpen = Math.abs(vx) > FLICK ? vx < 0 : willOpen;
+      const settleOpen = settlesOpen({ tx, width, vx, wasOpen: mode === 'close' });
       const el = panelRef.current;
-      if (el) {
-        // Hand the rest of the travel back to the class's transition, but through
-        // the inline transform — clearing it here would snap the panel to
-        // whatever the class says one frame before React agrees.
-        el.style.transition = '';
-        el.style.transform = settleOpen ? 'translateX(0)' : `translateX(${width}px)`;
-        clearTimer = window.setTimeout(() => {
-          clearTimer = 0;
-          const cur = panelRef.current; // gone already, if it closed and unmounted
-          if (!cur) return;
-          cur.style.transition = '';
-          cur.style.transform = '';
-        }, SETTLE_MS);
-      }
+      if (el) clearTimer = settleLayer(el, settleOpen, width);
       settleRef.current(settleOpen);
       mode = null; engaged = false;
     };
@@ -187,7 +156,7 @@ export function usePreviewSwipe({
     document.addEventListener('touchcancel', onEnd, { passive: true });
     return () => {
       stopChase();
-      if (clearTimer) window.clearTimeout(clearTimer);
+      if (clearTimer) clearTimeout(clearTimer);
       document.removeEventListener('touchstart', onStart);
       document.removeEventListener('touchmove', onMove);
       document.removeEventListener('touchend', onEnd);

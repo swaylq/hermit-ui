@@ -61,6 +61,7 @@ import { ComposeBar, MicHintBar, QueueBar, type ComposerHandle } from '@/compone
 import type { DictationHandle, DictationSource } from '@/components/chat/dictation-dock';
 import { parseLivePreview } from '@/lib/live-preview';
 import { usePreviewSwipe } from '@/components/chat/use-preview-swipe';
+import { SLIDE_MS as PREVIEW_SLIDE_MS } from '@/components/chat/preview-drag';
 import { INITIAL_WINDOW, timelineQueryInput, timelineStreamParams } from '@/lib/chat-window';
 import { readCachedSessions } from '@/lib/session-list-cache';
 import { ModelChip } from '@/components/chat/model-chip';
@@ -429,8 +430,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // registration stops matching and the panel closes by construction.
   const [previewOpenUrl, setPreviewOpenUrl] = useState<string | null>(null);
   // The panel animates BOTH ways, so closing cannot just unmount it. `shown`
-  // drives the travel; the url keeps it mounted until the travel is over.
-  // Must match SLIDE_MS in preview-panel.tsx.
+  // drives the travel; the url keeps it mounted until the travel is over — for
+  // exactly PREVIEW_SLIDE_MS, the same constant the panel's CSS transition and
+  // both of its drag paths use.
   const [previewShown, setPreviewShown] = useState(false);
   const previewExit = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The exact input the sidebar's hover-prefetch uses — see lib/chat-window.
@@ -1981,7 +1983,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   const closePreview = useCallback(() => {
     setPreviewShown(false);
     if (previewExit.current) clearTimeout(previewExit.current);
-    previewExit.current = setTimeout(() => { setPreviewOpenUrl(null); previewExit.current = null; }, 300);
+    previewExit.current = setTimeout(() => { setPreviewOpenUrl(null); previewExit.current = null; }, PREVIEW_SLIDE_MS);
   }, []);
 
   useEffect(() => () => { if (previewExit.current) clearTimeout(previewExit.current); }, []);

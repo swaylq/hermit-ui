@@ -87,6 +87,11 @@ export function useDrawerSwipe({
       if (!isMobile() || e.touches.length !== 1) { mode = null; return; }
       const t = e.touches[0];
       if (openRef.current) mode = 'close';
+      // A layer is covering the chat (the live preview, on a phone): the left
+      // edge belongs to whatever is on top, not to the drawer underneath it.
+      // Marked rather than inferred — `data-esc-layer` would be the obvious
+      // test and is wrong, an inline strip like chat-find carries that too.
+      else if (document.querySelector('[data-covers-viewport]')) { mode = null; return; }
       else if (t.clientX <= EDGE) mode = 'open';
       else { mode = null; return; }
       startX = lastX = t.clientX; startY = t.clientY; lastT = e.timeStamp;
