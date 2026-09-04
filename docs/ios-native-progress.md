@@ -64,13 +64,11 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       → `webView.load(...)`。后两条不是顺手加的：`knownHosts` 是**上一个**页面报的，
       决定哪些链接留在 App 里；Live Activity 的推送令牌握在正要离开的那个部署的服务端手上，
       新页面无从知道它们存在，更别说结束它们
-- [ ] **`normalizeOrigin` 要拒掉 WebKit 的封禁端口**（第 2 轮发现，见「踩过的坑」）。
-      `https://x:9` 现在能通过校验，然后 WebKit 拒绝加载、**提交一个空文档**——
-      不是导航失败，所以 `didFailProvisionalNavigation` 不响，离线屏永远不出现，
-      屏幕就一直白着。名单抄 Fetch 规范的 bad ports（1,7,9,11,13,15,17,19–23,25,37,42,43,
-      53,69,77,79,87,95,101–115,117,119,123,135,137–139,143,161,179,389,427,465,512–515,
-      526,530–532,540,548,554,556,563,587,601,636,989,990,993,995,1719,1720,1723,2049,
-      3659,4045,5060,5061,6000,6566,6665–6669,6697,10080）
+- [x] **`normalizeOrigin` 要拒掉 WebKit 的封禁端口** —— 第 3 轮。`AppConfig.blockedPorts`
+      和 `api-base.ts` 的 `BLOCKED_PORTS` 各一份，**82 个数字、报错措辞逐字相同**
+      （`backend address port 9 is blocked (browsers refuse to open it)`）。
+      名单不是照着上面那行范围抄的：**上面那行是错的**，见「踩过的坑」。
+      真名单是从一个活的 Fetch 实现里读出来的
 - [x] `AppConfigTests.swift` 补对应用例 —— 第 1 轮，35 个用例真跑过（见「一轮怎么做」第 3 条）
 - [x] **不要顺手**把麦克风判定放宽到 `isInternal` —— `knownHosts` 是页面报上来的，
       放宽等于把麦克风授权范围交给页面决定。要改的话判据是「用户自己配过的那个 origin」
@@ -79,11 +77,16 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
 
 ## M1 — 能力交接（页面不改）
 
-- [ ] **A0 桥加问答通道**：`web→native {type:'req', id, method, params}` /
-      `native→web window.__hermitNative.onReply(id, ok, payload)`。
-      Swift 侧一张 `[String: (Bool, Any?) -> Void]` 待答表，双向 5 秒超时。
-      新消息加在 `NativeBridge.swift:150-189` 的 switch；`NativeApi`
-      （`native-bridge.ts:28-34`）加 `onReply`
+- [x] **A0 桥加问答通道** —— 第 3 轮，两个方向都做了。
+      `NativeBridge`：新的 `case "req"` / `case "reply"`、`onRequest` 闭包、
+      `request(_:params:completion:)`、`pendingReplies` 待答表、`replyTimeout = 5`。
+      `native-bridge.ts`：`nativeRequest()`（Promise，5 秒 reject）、
+      `onNativeRequest()`（网页注册自己答哪些 method）、`NativeApi.onReply` / `.onRequest`。
+      **还没有任何 method**：`onRequest` 是 nil，也就是「立刻回 unknown method」而不是沉默 ——
+      老壳碰上新方法要 1 毫秒失败，不能让网页干等 5 秒。
+      验收用例在 `HermitTests/NativeBridgeTests.swift`（真 WKWebView，不是假对象）：
+      100 条并发问答乱序回答全部配对、答两次只送一次、超时走超时分支、
+      `pageWillReload()` 当场废掉所有在途问题
 - [ ] **A1 Keychain**：接缝只有 `keyring.ts:29`（读）和 `:36`（写）。
       `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`、不同步 iCloud、不进备份、
       放 App Group。迁移顺序：写入 → **读回校验** → 才清 localStorage。登出连带清 Keychain
@@ -186,24 +189,45 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-M0 只剩新加的那一条，先做掉它，再开 M1 的头。
+M0 全部做完，M1 的 A0 也做完了。下一轮从 A1 的**前置**开始，别直接写 Keychain。
 
-- **`normalizeOrigin` 拒掉封禁端口**（M0 最后一条）。改一个地方：`AppConfig.swift` 的
-  `normalizeOrigin`，在现有的 `1...65535` 那句旁边加名单判断，措辞跟着现有风格走
-  （现有的都是 `backend address …` 开头的小写短句）。**网页那侧
-  `apps/dashboard/src/lib/api-base.ts` 的 `normalizeBase()` 也没有这个判断** ——
-  两边措辞要对齐，不然 M2 的防漂移断言会立刻打架；判据照第 1 轮那条教训，
-  先把两个函数拿同一组输入在 node / swift 里各跑一遍再写断言。
-- **M1 第一条：A0 桥的问答通道**。`web→native {type:'req', id, method, params}` /
-  `native→web window.__hermitNative.onReply(id, ok, payload)`。Swift 侧一张
-  `[String: (Bool, Any?) -> Void]` 待答表，双向 5 秒超时。新消息加在
-  `NativeBridge.swift` 的 switch（现在在 :150-189 那段，第 2 轮没动它）；
-  `NativeApi`（`native-bridge.ts:28-34`）加 `onReply`。
-  这条是 A1 Keychain 和 A2 出站队列的前置，先做它别跳过。
-  顺手可以把「从正常页面里改 origin」挂上去（`method: 'setOrigin'`），
-  这轮只做到离线屏 + URL scheme。
+- **先给 A0 挂上第一个真 method，把通道从「测试里能跑」变成「产品里在用」。**
+  最小、最有用的那个是 `setOrigin`：`WebViewController` 里设 `bridge.onRequest`，
+  `method == "setOrigin"` 时调 `AppConfig.setOrigin` + `switchOrigin()`，
+  失败把 `OriginError.message` 原样放进 `payload.error`。
+  这样「从正常页面里改服务器地址」终于有了第三个入口（前两个是离线屏和 `hermit://server`）。
+  **要先想清楚一件事再动手**：主框架页面能改壳指向哪，而麦克风授权是按
+  `AppConfig.host` 精确比对的 —— 页面被打穿就等于壳被永久改指向。
+  网页那侧现在没有任何地方调 `nativeRequest`，所以先加原生侧 + 一个 UI 用例即可。
+- **A1 Keychain**。接缝仍然只有 `keyring.ts:29`（读）和 `:36`（写）。
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`、不同步 iCloud、不进备份、放 App Group。
+  迁移顺序：写入 → **读回校验** → 才清 localStorage。登出连带清 Keychain。
+  网页侧用 `nativeRequest('keychain.get' | 'keychain.set')`，浏览器里 reject，
+  调用点必须有 localStorage 兜底 —— 同一份代码在浏览器里也要跑。
 
 ## 踩过的坑
+
+- **Fetch 的 bad ports 名单不能凭记忆写，它长得不像个规律。** 这个文件上一版把它记成
+  「101–115」「137–139」「512–515」「6665–6669」那样的连续区间 —— **错的**：
+  真名单里 105、106、107、108、112、114、138 都**不在**，而 104 和 109 在；
+  另外 4190、6679 上一版整个漏了。照着区间抄会把用户自己机器上的合法端口封掉。
+  正确做法是从一个活的实现里读出来：`fetch('http://127.0.0.1:<p>/')` 跑 1–11000，
+  留下报 `bad port` 的（Node 26 的 undici 实现的就是这条规范），耗时 0.7 秒，
+  结果 82 个数字。跟第 1 轮那条教训是同一件事 —— 移植常量和移植函数一样，先跑再写。
+- **`pnpm --filter @hermit-ui/dashboard typecheck` 在这台机器上从来就过不了，
+  跟你改没改它无关。** 两层原因：worktree 里根本没有 `node_modules`（pnpm 装在
+  `~/hermit-ui`，而且是 hoisted，`apps/dashboard/node_modules` 不存在）；
+  就算链过去，Prisma 客户端没生成，`tsc` 会报 **261 个** `implicitly has an 'any' type`。
+  能用的配方（第 3 轮验证过，跑完是 0 个错）：
+  `ln -sfn ~/hermit-ui/node_modules $WT/node_modules`，然后在 `$WT/apps/dashboard` 里
+  `DATABASE_URL="postgresql://x:x@127.0.0.1:5432/x" $WT/node_modules/.bin/prisma generate`
+  （只生成类型，不连库，77 毫秒），最后 `$WT/node_modules/.bin/tsc --noEmit`。
+  **别拿 261 个错当「我改坏了」**，也别拿它当「反正本来就红」—— 先生成再看。
+- **`normalizeOrigin` 和 `normalizeBase` 已知有两处不一致，都是有意的**，M2 写防漂移
+  断言时别把它们当 bug：`""` 网页返回 `''`（意思是「本站」），Swift 报
+  `backend address is empty`（壳没有「本站」）；`https://x:0` 网页放行、Swift 报
+  `backend address is not a URL`（Swift 多一句 `1...65535`）。除这两条外，
+  第 3 轮拿 25 组输入两边逐条比过，完全一致。
 
 - **`normalizeBase` 不能整份套到 `-hermitOrigin` 那个键上。** 它要求裸 origin、
   非 localhost 必须 https，而 `SmokeTests.launch(path:)` 恰恰往后面接路由
@@ -251,5 +275,6 @@ M0 只剩新加的那一条，先做掉它，再开 M1 的头。
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 3 | 2026-09-04 | M0 最后一条（两边都拒封禁端口）+ M1 A0（桥的问答通道，双向 5 秒超时）| `xcodegen` + `swiftc -typecheck` 过；`xcodebuild test -only-testing:HermitTests` **47/47 过**（新增 9 条）；dashboard `tsc --noEmit` **0 错**（先 prisma generate，见「踩过的坑」）；`api-base.test.ts` 16/16 过。无新界面，未截图 |
 | 2 | 2026-09-04 | M0 第 2、3 条：离线屏加 "Change server"（并显示试的是哪个地址）、`hermit://server`、`presentOriginEditor` + `switchOrigin`；新增 UI 用例 `testServerAddressCanBeChanged` | `xcodegen` + `swiftc -typecheck` 过、`xcodebuild build` 0 warning；UI 用例 13 秒通过，4 张截图在 `apps/ios/shots/07..10`，逐张看过 |
 | 1 | 2026-09-04 | M0 第 1、4、5 条：`AppConfig.origin` 成了 UserDefaults 里的值（两个键 + `normalizeOrigin`），单测从 22 条加到 35 条 | typecheck 过；`xcodebuild test -only-testing:HermitTests` 35/35 过；无界面改动，未截图 |

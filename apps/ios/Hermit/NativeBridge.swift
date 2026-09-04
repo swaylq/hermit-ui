@@ -7,10 +7,20 @@ import WebKit
 /// knows the machine keys. So the token is handed across and the web side does the
 /// registering through its own authenticated client — see lib/native-bridge.ts.
 ///
-/// Both directions have to tolerate arriving early. A push token can land before
-/// the web view has finished loading, and a notification tap can launch the app
-/// cold. Anything that arrives before the page says `ready` is parked here and
-/// replayed the moment it does.
+/// Two shapes travel over it. Most messages are one-way announcements, which is
+/// why both directions have to tolerate arriving early: a push token can land
+/// before the web view has finished loading, and a notification tap can launch
+/// the app cold, so anything that arrives before the page says `ready` is parked
+/// here and replayed the moment it does. The other shape is a QUESTION, paired
+/// with its answer by an id the asker invents and the answerer echoes back:
+///
+///     web → native   { type: 'req',   id, method, params }
+///                    window.__hermitNative.onReply(id, ok, payload)
+///     native → web   window.__hermitNative.onRequest(id, method, params)
+///                    { type: 'reply', id, ok, payload }
+///
+/// The asker owns the timeout, five seconds on both sides, so no caller is left
+/// holding a completion block that never runs.
 final class NativeBridge: NSObject {
     /// Message-handler name; must match `window.webkit.messageHandlers.hermit`.
     static let handlerName = "hermit"
@@ -33,11 +43,24 @@ final class NativeBridge: NSObject {
     var onLiveActivity: ((LiveActivityCommand) -> Void)?
     /// The page is asking whether this device can show one at all.
     var onLiveActivityStatus: (() -> Void)?
+    /// Answer one `{type:'req'}` from the page: `(method, params, reply)`.
+    ///
+    /// Nil is not "ignore it": with no handler the bridge replies `unknown
+    /// method` straight away, so a page calling something its shell is too old to
+    /// know fails in a millisecond instead of sitting out the full timeout.
+    var onRequest: ((String, [String: Any], @escaping (Bool, Any?) -> Void) -> Void)?
+
+    /// How long each side waits for the other's answer before giving up. The web
+    /// half of this number is `REPLY_TIMEOUT_MS` in lib/native-bridge.ts.
+    static let replyTimeout: TimeInterval = 5
 
     private weak var webView: WKWebView?
     private var pageReady = false
     private var pendingToken: (token: String, env: ApnsEnvironment)?
     private var pendingPath: String?
+    /// Questions THIS side asked the page, keyed by the id it was asked under.
+    /// Main-thread only, like everything WebKit hands us.
+    private var pendingReplies: [String: (Bool, Any?) -> Void] = [:]
 
     func attach(to webView: WKWebView) {
         self.webView = webView
@@ -47,6 +70,12 @@ final class NativeBridge: NSObject {
     /// until it tells us it's back.
     func pageWillReload() {
         pageReady = false
+        // Every question in flight was asked of a document that is about to stop
+        // existing, so nothing will ever answer it. Fail them now rather than
+        // leave each caller to find out five seconds later.
+        let orphans = Array(pendingReplies.values)
+        pendingReplies.removeAll()
+        for done in orphans { done(false, nil) }
     }
 
     // MARK: - native → web
@@ -96,6 +125,43 @@ final class NativeBridge: NSObject {
     func sendLiveActivityToken(kind: String, token: String, sessionId: String, sinceMs: Double) {
         guard let webView else { return }
         call(webView, "onLiveActivityToken", [kind, token, sessionId, sinceMs])
+    }
+
+    // MARK: - asking the page something
+
+    /// Ask the page a question and get its answer back.
+    ///
+    /// `completion` runs exactly once and always on the main queue: with the
+    /// page's answer, or with `(false, nil)` if the page is not there yet, never
+    /// answers, or navigates away mid-question. Callers are meant to lean on
+    /// "exactly once" — a Keychain migration or an outbox flush that can hang
+    /// forever is worse than one that fails.
+    func request(_ method: String, params: [String: Any] = [:], completion: @escaping (Bool, Any?) -> Void) {
+        // Before `ready` there is no `window.__hermitNative` to call, and the
+        // reply would be swallowed by the `&&` in `call`. Say so immediately.
+        guard pageReady, let webView else { completion(false, nil); return }
+        let id = UUID().uuidString
+        pendingReplies[id] = completion
+        call(webView, "onRequest", [id, method, params])
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.replyTimeout) { [weak self] in
+            guard let done = self?.pendingReplies.removeValue(forKey: id) else { return }
+            done(false, nil)
+        }
+    }
+
+    /// Answer one of the page's questions. `id` is echoed back exactly as it
+    /// arrived — it is the page's own bookkeeping, not ours to interpret.
+    private func reply(_ id: String, ok: Bool, payload: Any?) {
+        guard let webView else { return }
+        let value = payload ?? NSNull()
+        // A payload Foundation cannot serialise would make `call` drop the whole
+        // message, and the page would then wait out its entire timeout for an
+        // answer that already exists. Fail it now instead.
+        guard JSONSerialization.isValidJSONObject([id, ok, value]) else {
+            call(webView, "onReply", [id, false, NSNull()])
+            return
+        }
+        call(webView, "onReply", [id, ok, value])
     }
 
     /// Invoke `window.__hermitNative.<fn>(...)`. Arguments go through JSON so a
@@ -184,6 +250,35 @@ extension NativeBridge: WKScriptMessageHandler {
             onReadPushStatus? { [weak self] status, registered in
                 self?.sendPushStatus(status, registered: registered)
             }
+        case "req":
+            // A question. Pairing the answer back to its id is all this does;
+            // answering is `onRequest`'s job.
+            guard let id = body["id"] as? String, !id.isEmpty else { return }
+            let method = body["method"] as? String ?? ""
+            guard let handler = onRequest else {
+                reply(id, ok: false, payload: ["error": "unknown method: \(method)"])
+                return
+            }
+            var answered = false
+            handler(method, body["params"] as? [String: Any] ?? [:]) { [weak self] ok, payload in
+                // Hop to main, and drop everything after the first answer. A
+                // handler that fires its callback twice — a retry racing its own
+                // completion — must not send two replies for one id: the page
+                // frees the id on the first, so the second would land on
+                // whichever question took that id next.
+                DispatchQueue.main.async {
+                    guard !answered else { return }
+                    answered = true
+                    self?.reply(id, ok: ok, payload: payload)
+                }
+            }
+        case "reply":
+            // The page answering something `request(_:params:completion:)` asked.
+            // An id that is no longer in the table already timed out, and its
+            // completion has run — dropping this is the correct end.
+            guard let id = body["id"] as? String,
+                  let done = pendingReplies.removeValue(forKey: id) else { return }
+            done(body["ok"] as? Bool ?? false, body["payload"])
         default:
             break
         }

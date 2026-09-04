@@ -215,6 +215,42 @@ final class AppConfigTests: XCTestCase {
         assertRefused("https://hermit.zhinan.tech:99999", "backend address is not a URL")
     }
 
+    /// A port WebKit will not open is the worst kind of bad address, because it
+    /// does NOT fail: WebKit commits an empty document, no navigation delegate
+    /// fires, the offline screen never appears and the app is simply white with
+    /// no way back. Refusing it at the point it is typed is the whole fix.
+    func testBlockedPortIsRefused() {
+        assertRefused("https://hermit.zhinan.tech:9",
+                      "backend address port 9 is blocked (browsers refuse to open it)")
+        assertRefused("http://localhost:6000",
+                      "backend address port 6000 is blocked (browsers refuse to open it)")
+        // A bare host with a blocked port gets `https://` first, then refused —
+        // it must not slip past by taking a different route through the parser.
+        assertRefused("hermit.zhinan.tech:22",
+                      "backend address port 22 is blocked (browsers refuse to open it)")
+    }
+
+    /// The list has gaps that look like transcription mistakes and are not: 104
+    /// and 109 are blocked while 105-108 and 112 are fine. Pinned so that
+    /// "tidying" the ranges shows up as a failing test rather than as an address
+    /// the user can no longer enter.
+    func testTheBlockedListIsNotTidyRanges() {
+        assertOrigin("https://hermit.zhinan.tech:105", "https://hermit.zhinan.tech:105")
+        assertOrigin("https://hermit.zhinan.tech:112", "https://hermit.zhinan.tech:112")
+        assertRefused("https://hermit.zhinan.tech:104",
+                      "backend address port 104 is blocked (browsers refuse to open it)")
+        assertRefused("https://hermit.zhinan.tech:109",
+                      "backend address port 109 is blocked (browsers refuse to open it)")
+        XCTAssertEqual(AppConfig.blockedPorts.count, 82)
+    }
+
+    /// The ports a real deployment actually uses have to survive all of this.
+    func testOrdinaryPortsStillPass() {
+        assertOrigin("https://hermit.zhinan.tech:8443", "https://hermit.zhinan.tech:8443")
+        assertOrigin("http://localhost:4101", "http://localhost:4101")
+        assertOrigin("http://localhost:4102", "http://localhost:4102")
+    }
+
     // MARK: - setting, reading back and clearing the origin
 
     func testSetOriginMovesTheShell() throws {

@@ -12,6 +12,10 @@
 //   native → web   window.__hermitNative.onPushToken / .onDeepLink
 //   web → native   window.webkit.messageHandlers.hermit.postMessage({type:'ready'})
 //
+// …and two shapes. Everything above is a one-way announcement; `nativeRequest`
+// and `onNativeRequest` below are the other shape, a question paired with its
+// answer by an id.
+//
 // See docs/ios-shell-design.md.
 
 import { getKeyring, getActiveEntry } from './keyring';
@@ -31,6 +35,10 @@ interface NativeApi {
   onPushStatus(status: NativePushStatus['status'], registered: boolean): void;
   onLiveActivityStatus(supported: boolean, enabled: boolean): void;
   onLiveActivityToken(kind: 'update' | 'start', token: string, sessionId: string, sinceMs: number): void;
+  /** The shell answering a `nativeRequest`. */
+  onReply(id: string, ok: boolean, payload: unknown): void;
+  /** The shell asking THIS side something; answered by `onNativeRequest`. */
+  onRequest(id: string, method: string, params: Record<string, unknown>): void;
 }
 
 declare global {
@@ -249,11 +257,103 @@ export function requestNativePush(): void {
   postToNative({ type: 'requestPush' });
 }
 
-function postToNative(msg: unknown): void {
+// ── The question channel ────────────────────────────────────────────────
+//
+// Everything above is an announcement: it is sent and forgotten. A question is
+// the other shape — it expects an answer, in either direction, matched to its
+// request by an id the asker invents and the answerer echoes back untouched.
+//
+//   web → native   postMessage({ type:'req',   id, method, params })
+//                  window.__hermitNative.onReply(id, ok, payload)
+//   native → web   window.__hermitNative.onRequest(id, method, params)
+//                  postMessage({ type:'reply', id, ok, payload })
+//
+// The ASKER owns the timeout, so neither side can be left holding a promise (or
+// a completion block) that never settles. Nothing calls this yet: it exists
+// because moving the machine keys into the Keychain and giving sends an outbox
+// both need to ask a question and be answered, and neither can be built on a
+// bridge that only broadcasts. See apps/ios/Hermit/NativeBridge.swift.
+
+/** Both halves give up on an answer after this. Mirrored in NativeBridge.swift
+ *  (`replyTimeout`). */
+const REPLY_TIMEOUT_MS = 5000;
+
+type Pending = {
+  method: string;
+  resolve: (v: unknown) => void;
+  reject: (e: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+const pendingReplies = new Map<string, Pending>();
+let requestSeq = 0;
+
+/** The shell's own words when it refuses, or a generic line if it sent none. */
+function replyError(method: string, payload: unknown): Error {
+  const said = (payload as { error?: unknown } | null | undefined)?.error;
+  return new Error(typeof said === 'string' && said ? said : `native ${method} failed`);
+}
+
+/**
+ * Ask the shell something, and wait for its answer.
+ *
+ * Rejects rather than hangs in all four ways this can go wrong: outside the
+ * shell, when the shell has never heard of the method, when the shell answers
+ * with a failure, and after five seconds of silence. Callers need a web-side
+ * fallback for the first of those regardless — this same code runs in a browser.
+ */
+export function nativeRequest<T = unknown>(
+  method: string,
+  params: Record<string, unknown> = {},
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (!isNativeShell()) {
+      reject(new Error('not running in the native shell'));
+      return;
+    }
+    // Unique within this document, which is all it needs to be: the shell drops
+    // everything it was waiting on the moment the page navigates.
+    const id = `w${++requestSeq}`;
+    const timer = setTimeout(() => {
+      pendingReplies.delete(id);
+      reject(new Error(`native ${method} timed out`));
+    }, REPLY_TIMEOUT_MS);
+    pendingReplies.set(id, { method, resolve: resolve as (v: unknown) => void, reject, timer });
+    if (!postToNative({ type: 'req', id, method, params })) {
+      clearTimeout(timer);
+      pendingReplies.delete(id);
+      reject(new Error('not running in the native shell'));
+    }
+  });
+}
+
+type NativeRequestHandler = (params: Record<string, unknown>) => unknown | Promise<unknown>;
+const requestHandlers = new Map<string, NativeRequestHandler>();
+
+/**
+ * Answer `method` when the SHELL asks. Returns an unregister.
+ *
+ * One handler per method, last registration wins: two components claiming the
+ * same method is a bug, and silently leaving the second one unreachable would
+ * hide it.
+ */
+export function onNativeRequest(method: string, fn: NativeRequestHandler): () => void {
+  requestHandlers.set(method, fn);
+  return () => {
+    if (requestHandlers.get(method) === fn) requestHandlers.delete(method);
+  };
+}
+
+/** True when the message went to the shell; false in a browser, or if the
+ *  handler has gone away underneath us. */
+function postToNative(msg: unknown): boolean {
   try {
-    window.webkit?.messageHandlers?.hermit?.postMessage(msg);
+    const handler = window.webkit?.messageHandlers?.hermit;
+    if (!handler) return false;
+    handler.postMessage(msg);
+    return true;
   } catch {
     /* not in the shell, or the handler went away — nothing to do */
+    return false;
   }
 }
 
@@ -314,6 +414,41 @@ export function installNativeBridge(): () => void {
       void registerLiveActivityToken(kind, token, sessionId, sinceMs);
     },
 
+    onReply(id, ok, payload) {
+      const p = pendingReplies.get(id);
+      // No entry means it already timed out (its caller has moved on), or an id
+      // this document never issued. Either way there is nothing to settle.
+      if (!p) return;
+      pendingReplies.delete(id);
+      clearTimeout(p.timer);
+      if (ok) p.resolve(payload);
+      else p.reject(replyError(p.method, payload));
+    },
+
+    onRequest(id, method, params) {
+      const fn = requestHandlers.get(method);
+      if (!fn) {
+        // Answered, not ignored: the shell is holding a completion block, and
+        // silence would cost it the full five seconds for a question that can
+        // never be answered by this build.
+        postToNative({ type: 'reply', id, ok: false, payload: { error: `unknown method: ${method}` } });
+        return;
+      }
+      void (async () => {
+        try {
+          const payload = await fn(params ?? {});
+          postToNative({ type: 'reply', id, ok: true, payload: payload ?? null });
+        } catch (e) {
+          postToNative({
+            type: 'reply',
+            id,
+            ok: false,
+            payload: { error: String((e as Error)?.message ?? e) },
+          });
+        }
+      })();
+    },
+
     onDeepLink(path) {
       if (!path.startsWith('/')) return; // only in-app paths, never an external URL
       // Hard navigation on purpose: with Next 16 behind the custom server, a
@@ -359,5 +494,13 @@ export function installNativeBridge(): () => void {
 
   return () => {
     if (window.__hermitNative === api) delete window.__hermitNative;
+    // A question asked through a bridge that is being torn down has no route
+    // left for its answer, so settle it here rather than let it time out.
+    const inflight = [...pendingReplies.values()];
+    pendingReplies.clear();
+    for (const p of inflight) {
+      clearTimeout(p.timer);
+      p.reject(new Error(`native ${p.method} was cancelled`));
+    }
   };
 }

@@ -73,6 +73,24 @@ test('plaintext http is refused except on localhost', () => {
   assert.equal(normalizeBase('http://127.0.0.1:4101'), 'http://127.0.0.1:4101');
 });
 
+// A port from the Fetch spec's blocked set is the address that fails WORST: the
+// browser refuses to open the connection, and the iOS shell around this same
+// function gets an empty document rather than a navigation failure, so it shows
+// a white screen with no error and no way back. Refused where it is typed.
+//
+// The gaps are real, not typos — 104 and 109 are blocked, 105 and 112 are not —
+// and are pinned here so that "tidying up the ranges" fails a test instead of
+// locking someone out of their own port.
+test('a port browsers refuse to open is rejected', () => {
+  assert.throws(() => normalizeBase('https://hermit.zhinan.tech:9'), /port 9 is blocked/);
+  assert.throws(() => normalizeBase('hermit.zhinan.tech:22'), /port 22 is blocked/);
+  assert.throws(() => normalizeBase('http://localhost:6000'), /port 6000 is blocked/);
+  assert.throws(() => normalizeBase('https://hermit.zhinan.tech:10080'), /port 10080 is blocked/);
+  assert.equal(normalizeBase('https://hermit.zhinan.tech:105'), 'https://hermit.zhinan.tech:105');
+  assert.equal(normalizeBase('https://hermit.zhinan.tech:112'), 'https://hermit.zhinan.tech:112');
+  assert.equal(normalizeBase('https://hermit.zhinan.tech:8443'), 'https://hermit.zhinan.tech:8443');
+});
+
 // ── which backend the active entry names ────────────────────────────────────
 
 test('an old keyring entry (no baseUrl) stays on this origin', () => {

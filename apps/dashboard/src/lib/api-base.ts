@@ -21,6 +21,29 @@ import { getActiveEntry, getKeyring, setActiveMachine } from '@/lib/keyring';
 import { machineIdFromSearch } from '@/lib/machine-param';
 
 /**
+ * Ports no browser will open a connection to — the Fetch spec's "bad port" set.
+ *
+ * Worth refusing at the point the address is typed, because the failure it
+ * produces downstream is mute: `fetch` rejects with a bare network error, and in
+ * the iOS shell WebKit answers a blocked port by committing an EMPTY DOCUMENT
+ * instead of failing the navigation, so nothing fires and the screen just stays
+ * white (apps/ios/Hermit/AppConfig.swift holds the same 82 numbers and the same
+ * message).
+ *
+ * Read out of a live implementation rather than transcribed: fetch to
+ * `http://127.0.0.1:<p>/` across 1-11000 under Node 26, keeping the ports that
+ * fail with `bad port` rather than `ECONNREFUSED`. Hence the gaps that look like
+ * typos — 105-108 and 112 really are absent while 104 and 109 are in.
+ */
+const BLOCKED_PORTS = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
+  103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465,
+  512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993,
+  995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668,
+  6669, 6679, 6697, 10080,
+]);
+
+/**
  * Normalize a user-typed backend address into `https://host[:port]`, or '' for
  * "this origin". Throws on anything that isn't a plain http(s) origin — a typo
  * that silently became a relative path would send the key to the wrong server.
@@ -40,6 +63,9 @@ export function normalizeBase(raw: string | null | undefined): string {
     throw new Error('backend address must be https (http is only allowed for localhost)');
   }
   if (u.pathname !== '/' || u.search || u.hash) throw new Error('backend address must be a bare origin, no path');
+  if (u.port && BLOCKED_PORTS.has(Number(u.port))) {
+    throw new Error(`backend address port ${u.port} is blocked (browsers refuse to open it)`);
+  }
   return u.origin;
 }
 

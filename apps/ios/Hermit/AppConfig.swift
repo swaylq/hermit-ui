@@ -75,6 +75,31 @@ enum AppConfig {
         var errorDescription: String? { message }
     }
 
+    /// Ports WebKit will not open, so neither will this app.
+    ///
+    /// Rejecting them here is not tidiness. WebKit refuses a blocked port by
+    /// COMMITTING AN EMPTY DOCUMENT rather than by failing the navigation, so
+    /// `didFailProvisionalNavigation` never fires, the offline screen never
+    /// appears, and the user is left looking at white forever with no way back —
+    /// `https://example.com:9` used to pass this function and do exactly that
+    /// (observed on the simulator, docs/ios-native-progress.md).
+    ///
+    /// The list is the Fetch spec's "bad port" set, read out of a live
+    /// implementation rather than transcribed: `fetch('http://127.0.0.1:<p>/')`
+    /// over 1-11000 under Node 26, keeping the ports that fail with `bad port`
+    /// instead of `ECONNREFUSED`. That is also why 105-108 and 112 are absent
+    /// while their neighbours are there — the real list is not the tidy ranges
+    /// it looks like. Keep it sorted; `apps/dashboard/src/lib/api-base.ts` holds
+    /// the same 82 numbers and the same message.
+    static let blockedPorts: Set<Int> = [
+        1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77,
+        79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123,
+        135, 137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526,
+        530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993,
+        995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566,
+        6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+    ]
+
     /// Normalize a typed backend address into `https://host[:port]`.
     ///
     /// Ported from `normalizeBase()` — apps/dashboard/src/lib/api-base.ts:28-44 —
@@ -113,6 +138,9 @@ enum AppConfig {
         }
         if let port = c.port, !(1...65535).contains(port) {
             throw OriginError("backend address is not a URL")
+        }
+        if let port = c.port, blockedPorts.contains(port) {
+            throw OriginError("backend address port \(port) is blocked (browsers refuse to open it)")
         }
 
         // Rebuilt rather than returned: this drops any `user:pass@` (the classic
