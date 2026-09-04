@@ -22,35 +22,9 @@ enum TimelineWindow {
     static let digest = WebContract.timelineDigest
 }
 
-/// What a session is doing right now, as the gateway's runtime reports it.
-///
-/// Mirrors `SessionActivity` in `apps/dashboard/src/lib/session-status.ts`
-/// field for field. It arrives through an opaque JSON column, so every field is
-/// optional there and every field is optional here — a gateway older or newer
-/// than this app must not make the frame undecodable.
-struct SessionActivity: Decodable, Equatable {
-    var kind: String?
-    var label: String?
-    var detail: String?
-    var elapsedSec: Double?
-    var attempt: Int?
-    var maxRetries: Int?
-    var retryInSec: Double?
-    var backgroundCount: Int?
-    /// What each background task IS, oldest first. A gateway older than
-    /// 2026-09-02 sends only the count, which is why an absent list means
-    /// "cannot say" and not "none".
-    var backgroundTasks: [BackgroundTask]?
-
-    struct BackgroundTask: Decodable, Equatable {
-        var id: String?
-        var description: String?
-        var elapsedSec: Double?
-        var kind: String?
-        var command: String?
-        var outputTail: String?
-    }
-}
+// `SessionActivity` — the gateway's activity blob — moved to
+// Hermit/SessionStatus.swift, next to the port of the web function that reads
+// it. The stream only carries it; session-status.ts is what defines it.
 
 /// The `event: status` frame — the session's runtime state, pushed the moment
 /// the gateway writes it instead of waiting for the next 5s poll.

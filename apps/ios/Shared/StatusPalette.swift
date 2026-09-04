@@ -65,4 +65,39 @@ enum StatusPalette {
         if pct >= WebContract.ctxWarnPct { return amber }   // amber-400 is already the 400
         return emerald400
     }
+
+    /// A status dot's Tailwind class, resolved to what SwiftUI draws.
+    ///
+    /// `sessionStatusView` (ported in `Hermit/SessionStatus.swift`) returns the
+    /// web's class string verbatim — `bg-amber-400`, `bg-emerald-500/30` — so
+    /// the fixture can compare it against the browser character for character.
+    /// This is the one place that turns such a string into pixels.
+    ///
+    /// The `/N` suffix is Tailwind's opacity, in PERCENT. It carries meaning in
+    /// two of the five: `bg-amber-400/50` is "something is running but it is not
+    /// moving", `bg-emerald-500/30` is "idle and nothing is up". Dropping the
+    /// suffix would silently merge each with the state above it.
+    ///
+    /// Returns nil for a class this build has never heard of, rather than
+    /// guessing a colour — the caller draws its own "unknown" mark. Web and app
+    /// ship on different schedules, and `ios-contract.test.ts` is what turns a
+    /// new colour on the web into a red test here rather than a blank dot on a
+    /// phone.
+    static func dot(_ cls: String) -> (color: Color, opacity: Double)? {
+        let body = cls.hasPrefix("bg-") ? String(cls.dropFirst(3)) : cls
+        let parts = body.split(separator: "/", maxSplits: 1)
+        var opacity = 1.0
+        if parts.count == 2 {
+            guard let pct = Double(parts[1]) else { return nil }
+            opacity = pct / 100
+        }
+        switch String(parts[0]) {
+        case "amber-400": return (amber, opacity)
+        case "rose-500": return (rose, opacity)
+        case "zinc-400": return (zinc, opacity)
+        case "sky-400": return (sky, opacity)
+        case "emerald-500": return (emerald, opacity)
+        default: return nil
+        }
+    }
 }

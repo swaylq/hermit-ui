@@ -1,0 +1,1069 @@
+{
+  "now": 1788580800000,
+  "snapshotStaleMs": 45000,
+  "backgroundResidentMs": 1800000,
+  "durations": [
+    {
+      "sec": 0,
+      "expected": "0s"
+    },
+    {
+      "sec": 1,
+      "expected": "1s"
+    },
+    {
+      "sec": 47,
+      "expected": "47s"
+    },
+    {
+      "sec": 59,
+      "expected": "59s"
+    },
+    {
+      "sec": 59.5,
+      "expected": "59.5s"
+    },
+    {
+      "sec": 60,
+      "expected": "1m"
+    },
+    {
+      "sec": 61,
+      "expected": "1m 1s"
+    },
+    {
+      "sec": 90,
+      "expected": "1m 30s"
+    },
+    {
+      "sec": 90.5,
+      "expected": "1m 30.5s"
+    },
+    {
+      "sec": 119,
+      "expected": "1m 59s"
+    },
+    {
+      "sec": 120,
+      "expected": "2m"
+    },
+    {
+      "sec": 200,
+      "expected": "3m 20s"
+    },
+    {
+      "sec": 3599,
+      "expected": "59m 59s"
+    },
+    {
+      "sec": 3600,
+      "expected": "1h"
+    },
+    {
+      "sec": 3601,
+      "expected": "1h"
+    },
+    {
+      "sec": 3660,
+      "expected": "1h 1m"
+    },
+    {
+      "sec": 5332,
+      "expected": "1h 28m"
+    },
+    {
+      "sec": 7200,
+      "expected": "2h"
+    },
+    {
+      "sec": 86400,
+      "expected": "24h"
+    },
+    {
+      "sec": 0.5,
+      "expected": "0.5s"
+    }
+  ],
+  "activities": [
+    {
+      "name": "null",
+      "why": "No blob at all — the tmux backend, every row from listSessions.",
+      "activity": null,
+      "label": null,
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "empty",
+      "why": "A blob with no kind: recognised as an object, matched by no branch.",
+      "activity": {},
+      "label": null,
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "unknown-kind",
+      "why": "A gateway newer than this build. Must read as \"cannot say\".",
+      "activity": {
+        "kind": "teleporting",
+        "label": "x"
+      },
+      "label": null,
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "tool",
+      "why": "The common one.",
+      "activity": {
+        "kind": "tool",
+        "label": "Bash",
+        "elapsedSec": 12
+      },
+      "label": {
+        "label": "Bash · 12s"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "tool-fractional",
+      "why": "elapsedSec is NOT floored here, unlike in backgroundTaskList.",
+      "activity": {
+        "kind": "tool",
+        "label": "Bash",
+        "elapsedSec": 12.5
+      },
+      "label": {
+        "label": "Bash · 12.5s"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "tool-no-label",
+      "why": "`a.label || 'tool'` — absent falls back.",
+      "activity": {
+        "kind": "tool",
+        "elapsedSec": 3
+      },
+      "label": {
+        "label": "tool · 3s"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "tool-empty-label",
+      "why": "An EMPTY string is falsy in JS and falls back too.",
+      "activity": {
+        "kind": "tool",
+        "label": "",
+        "elapsedSec": 3
+      },
+      "label": {
+        "label": "tool · 3s"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "tool-zero-elapsed",
+      "why": "0 seconds drops the age suffix entirely.",
+      "activity": {
+        "kind": "tool",
+        "label": "Read",
+        "elapsedSec": 0
+      },
+      "label": {
+        "label": "Read"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "tool-with-bg",
+      "why": "A foreground tool plus background work keeps the tool name.",
+      "activity": {
+        "kind": "tool",
+        "label": "Bash",
+        "elapsedSec": 90,
+        "backgroundCount": 2
+      },
+      "label": {
+        "label": "Bash · 1m 30s +2 bg"
+      },
+      "summary": "working +2 bg",
+      "tasks": []
+    },
+    {
+      "name": "subagent",
+      "why": "",
+      "activity": {
+        "kind": "subagent",
+        "label": "Explore",
+        "detail": "searching"
+      },
+      "label": {
+        "label": "Explore",
+        "detail": "searching"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "subagent-no-label",
+      "why": "",
+      "activity": {
+        "kind": "subagent"
+      },
+      "label": {
+        "label": "subagent"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "compacting",
+      "why": "",
+      "activity": {
+        "kind": "compacting",
+        "backgroundCount": 1
+      },
+      "label": {
+        "label": "compacting +1 bg"
+      },
+      "summary": "working +1 bg",
+      "tasks": []
+    },
+    {
+      "name": "thinking",
+      "why": "",
+      "activity": {
+        "kind": "thinking",
+        "detail": null
+      },
+      "label": {
+        "label": "thinking"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "retrying-full",
+      "why": "Attempt, ceiling and wait all present.",
+      "activity": {
+        "kind": "retrying",
+        "attempt": 2,
+        "maxRetries": 5,
+        "retryInSec": 8
+      },
+      "label": {
+        "label": "retrying 2/5, 8s",
+        "detail": "the API asked us to back off"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "retrying-zeros",
+      "why": "`attempt && maxRetries` — 0 is falsy, so no \"0/0\".",
+      "activity": {
+        "kind": "retrying",
+        "attempt": 0,
+        "maxRetries": 0,
+        "retryInSec": 0
+      },
+      "label": {
+        "label": "retrying",
+        "detail": "the API asked us to back off"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "retrying-detail",
+      "why": "A supplied detail wins over the built-in sentence.",
+      "activity": {
+        "kind": "retrying",
+        "attempt": 1,
+        "maxRetries": 3,
+        "detail": "529 overloaded"
+      },
+      "label": {
+        "label": "retrying 1/3",
+        "detail": "529 overloaded"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "background-one",
+      "why": "One task, named, with an age.",
+      "activity": {
+        "kind": "background",
+        "backgroundCount": 1,
+        "backgroundTasks": [
+          {
+            "id": "t1",
+            "description": "pnpm build",
+            "elapsedSec": 5332
+          }
+        ]
+      },
+      "label": {
+        "label": "background · 1h 28m",
+        "detail": "pnpm build · 1h 28m"
+      },
+      "summary": "background · 1h 28m",
+      "tasks": [
+        {
+          "id": "t1",
+          "description": "pnpm build",
+          "elapsedSec": 5332
+        }
+      ]
+    },
+    {
+      "name": "background-many",
+      "why": "The ×N suffix, and only the OLDEST task decides the age.",
+      "activity": {
+        "kind": "background",
+        "backgroundCount": 3,
+        "backgroundTasks": [
+          {
+            "id": "t1",
+            "description": "watch",
+            "elapsedSec": 7200.9
+          },
+          {
+            "description": "  ",
+            "elapsedSec": 12
+          },
+          {
+            "id": "",
+            "description": "tail -f",
+            "elapsedSec": 0
+          }
+        ]
+      },
+      "label": {
+        "label": "background ×3 · 2h",
+        "detail": "watch · 2h\nbackground task · 12s\ntail -f"
+      },
+      "summary": "background ×3 · 2h",
+      "tasks": [
+        {
+          "id": "t1",
+          "description": "watch",
+          "elapsedSec": 7200
+        },
+        {
+          "id": "bg-1",
+          "description": "background task",
+          "elapsedSec": 12
+        },
+        {
+          "id": "bg-2",
+          "description": "tail -f",
+          "elapsedSec": 0
+        }
+      ]
+    },
+    {
+      "name": "background-count-only",
+      "why": "A gateway from before backgroundTasks existed.",
+      "activity": {
+        "kind": "background",
+        "backgroundCount": 2,
+        "detail": "two things"
+      },
+      "label": {
+        "label": "background ×2",
+        "detail": "two things"
+      },
+      "summary": "background ×2",
+      "tasks": []
+    },
+    {
+      "name": "background-zero-count",
+      "why": "Zero outstanding is not outstanding.",
+      "activity": {
+        "kind": "background",
+        "backgroundCount": 0
+      },
+      "label": {
+        "label": "background"
+      },
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "array",
+      "why": "An array is typeof object; the web rejects it explicitly.",
+      "activity": [],
+      "label": null,
+      "summary": null,
+      "tasks": []
+    },
+    {
+      "name": "string",
+      "why": "A column holding a bare string.",
+      "activity": "working",
+      "label": null,
+      "summary": null,
+      "tasks": []
+    }
+  ],
+  "statuses": [
+    {
+      "name": "no-session",
+      "why": "The row is not there at all.",
+      "session": null,
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "down",
+        "label": "—",
+        "dot": "bg-zinc-400",
+        "pulse": false
+      },
+      "resting": false,
+      "silenceMs": null
+    },
+    {
+      "name": "needs-you-outranks-all",
+      "why": "A parked permission prompt beats every other signal, including closed.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "working",
+        "closedAt": "2026-09-05T04:00:00.000Z",
+        "alive": true
+      },
+      "opts": {
+        "needsYou": true,
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "needs-you",
+        "label": "needs you",
+        "dot": "bg-amber-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "live-working-outranks-closed",
+      "why": "The client's own stream is above everything but needsYou.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "closedAt": "2026-09-05T04:00:00.000Z"
+      },
+      "opts": {
+        "liveWorking": true,
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "working",
+        "label": "working",
+        "dot": "bg-amber-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "live-working-uses-activity",
+      "why": "The label is sharpened even when the verdict came from the client.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "activity": {
+          "kind": "tool",
+          "label": "Grep",
+          "elapsedSec": 4
+        }
+      },
+      "opts": {
+        "liveWorking": true,
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "working",
+        "label": "Grep · 4s",
+        "dot": "bg-amber-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "closed",
+      "why": "Archived mid-turn: closed beats a stale `working`.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "working",
+        "closedAt": "2026-09-05T03:59:00.000Z",
+        "alive": true
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "down",
+        "label": "closed",
+        "dot": "bg-zinc-400",
+        "pulse": false
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "stale",
+      "why": "The gateway has stopped reporting; `state` is a memory.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:14.000Z",
+        "state": "working",
+        "alive": true
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "stale",
+        "label": "stale",
+        "dot": "bg-zinc-400",
+        "pulse": false,
+        "detail": "the gateway has not reported on this session recently — this is the last state it saw"
+      },
+      "resting": false,
+      "silenceMs": 46000
+    },
+    {
+      "name": "stale-boundary-just-under",
+      "why": "45s exactly is NOT stale — the check is a strict >.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:15.000Z",
+        "state": "idle",
+        "alive": true
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "ready",
+        "label": "ready",
+        "dot": "bg-emerald-500",
+        "pulse": false
+      },
+      "resting": true,
+      "silenceMs": 45000
+    },
+    {
+      "name": "stale-boundary-just-over",
+      "why": "One millisecond past it is.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:14.999Z",
+        "state": "idle",
+        "alive": true
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "stale",
+        "label": "stale",
+        "dot": "bg-zinc-400",
+        "pulse": false,
+        "detail": "the gateway has not reported on this session recently — this is the last state it saw"
+      },
+      "resting": false,
+      "silenceMs": 45001
+    },
+    {
+      "name": "never-snapshotted",
+      "why": "A brand-new session has no snapshot, which is not staleness.",
+      "session": {
+        "state": "starting"
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "starting",
+        "label": "starting",
+        "dot": "bg-sky-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": null
+    },
+    {
+      "name": "stale-forgiven-by-reachableSince",
+      "why": "The dashboard was down too; that silence is not the gateway’s fault.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:50:00.000Z",
+        "state": "working",
+        "alive": true
+      },
+      "opts": {
+        "now": 1788580800000,
+        "observedAt": 1788580800000,
+        "reachableSince": 1788580790000
+      },
+      "expected": {
+        "key": "working",
+        "label": "working",
+        "dot": "bg-amber-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": 10000
+    },
+    {
+      "name": "stale-not-charged-when-we-were-blind",
+      "why": "observedAt behind now: we simply have not asked.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:00.000Z",
+        "state": "idle",
+        "alive": true
+      },
+      "opts": {
+        "now": 1788580800000,
+        "observedAt": 1788580760000
+      },
+      "expected": {
+        "key": "ready",
+        "label": "ready",
+        "dot": "bg-emerald-500",
+        "pulse": false
+      },
+      "resting": true,
+      "silenceMs": 20000
+    },
+    {
+      "name": "never-observed",
+      "why": "observedAt 0 — first paint off the local cache, nothing to judge on.",
+      "session": {
+        "snapshotAt": "2026-09-05T01:13:20.000Z",
+        "state": "idle",
+        "alive": true
+      },
+      "opts": {
+        "now": 1788580800000,
+        "observedAt": 0
+      },
+      "expected": {
+        "key": "ready",
+        "label": "ready",
+        "dot": "bg-emerald-500",
+        "pulse": false
+      },
+      "resting": true,
+      "silenceMs": null
+    },
+    {
+      "name": "working-plain",
+      "why": "",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "working",
+        "alive": true
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "working",
+        "label": "working",
+        "dot": "bg-amber-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "working-with-activity",
+      "why": "",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "working",
+        "alive": true,
+        "activity": {
+          "kind": "tool",
+          "label": "WebFetch",
+          "elapsedSec": 61,
+          "detail": "GET /x"
+        }
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "working",
+        "label": "WebFetch · 1m 1s",
+        "dot": "bg-amber-400",
+        "pulse": true,
+        "detail": "GET /x"
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "working-note-fallback",
+      "why": "A sidebar row has no blob, so backgroundNote is the label.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "working",
+        "alive": true,
+        "backgroundNote": "background · 12m"
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "working",
+        "label": "background · 12m",
+        "dot": "bg-amber-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "working-activity-beats-note",
+      "why": "A caller holding the real blob keeps the richer label.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "working",
+        "alive": true,
+        "backgroundNote": "background · 12m",
+        "activity": {
+          "kind": "subagent",
+          "label": "Explore"
+        }
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "working",
+        "label": "Explore",
+        "dot": "bg-amber-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "parked-background-blob",
+      "why": "idle + outstanding background = working, dimmed, not pulsing.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "alive": true,
+        "lastMessageAt": "2026-09-05T03:59:00.000Z",
+        "activity": {
+          "kind": "background",
+          "backgroundCount": 1,
+          "backgroundTasks": [
+            {
+              "id": "a",
+              "description": "pnpm test",
+              "elapsedSec": 300
+            }
+          ]
+        }
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "working",
+        "label": "background · 5m",
+        "dot": "bg-amber-400/50",
+        "pulse": false,
+        "detail": "pnpm test · 5m"
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "parked-background-boolean",
+      "why": "The sidebar row only has the precomputed boolean and note.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "alive": true,
+        "backgroundBusy": true,
+        "backgroundNote": "background · 5m",
+        "lastMessageAt": "2026-09-05T03:59:00.000Z"
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "working",
+        "label": "background · 5m",
+        "dot": "bg-amber-400/50",
+        "pulse": false
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "background-gone-resident",
+      "why": "Half an hour of silence: the task is a resident process, not an answer.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "alive": true,
+        "backgroundBusy": true,
+        "backgroundNote": "background · 9h",
+        "lastMessageAt": "2026-09-05T03:30:00.000Z"
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "ready",
+        "label": "ready",
+        "dot": "bg-emerald-500",
+        "pulse": false
+      },
+      "resting": true,
+      "silenceMs": 5000
+    },
+    {
+      "name": "background-just-inside-resident",
+      "why": "One millisecond under the half hour still counts.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "alive": true,
+        "backgroundBusy": true,
+        "lastMessageAt": "2026-09-05T03:30:00.001Z"
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "working",
+        "label": "working",
+        "dot": "bg-amber-400/50",
+        "pulse": false
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "background-never-messaged",
+      "why": "No lastMessageAt: no silence to measure, nothing expires.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "alive": true,
+        "backgroundBusy": true
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "working",
+        "label": "working",
+        "dot": "bg-amber-400/50",
+        "pulse": false
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "restarting",
+      "why": "Outranks a dead pane — `alive` flips false mid-restart.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "alive": false,
+        "restartRequestedAt": "2026-09-05T03:59:58.000Z"
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "restarting",
+        "label": "restarting",
+        "dot": "bg-sky-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "restarting-beats-unread",
+      "why": "",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "alive": true,
+        "restartRequestedAt": "2026-09-05T03:59:58.000Z"
+      },
+      "opts": {
+        "unread": true,
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "restarting",
+        "label": "restarting",
+        "dot": "bg-sky-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "starting",
+      "why": "",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "starting",
+        "alive": true
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "starting",
+        "label": "starting",
+        "dot": "bg-sky-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "starting-beats-unread",
+      "why": "",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "starting",
+        "alive": true
+      },
+      "opts": {
+        "unread": true,
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "starting",
+        "label": "starting",
+        "dot": "bg-sky-400",
+        "pulse": true
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "unread",
+      "why": "",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "alive": true
+      },
+      "opts": {
+        "unread": true,
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "unread",
+        "label": "unread",
+        "dot": "bg-rose-500",
+        "pulse": false
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "unread-beats-asleep",
+      "why": "The finished work is worth a colour whether or not a process is up.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "alive": false
+      },
+      "opts": {
+        "unread": true,
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "unread",
+        "label": "unread",
+        "dot": "bg-rose-500",
+        "pulse": false
+      },
+      "resting": false,
+      "silenceMs": 5000
+    },
+    {
+      "name": "asleep",
+      "why": "Nothing is running, and nothing is wrong.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "alive": false
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "asleep",
+        "label": "asleep",
+        "dot": "bg-emerald-500/30",
+        "pulse": false,
+        "detail": "nothing is running — your next message wakes it with the conversation intact"
+      },
+      "resting": true,
+      "silenceMs": 5000
+    },
+    {
+      "name": "ready",
+      "why": "",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle",
+        "alive": true
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "ready",
+        "label": "ready",
+        "dot": "bg-emerald-500",
+        "pulse": false
+      },
+      "resting": true,
+      "silenceMs": 5000
+    },
+    {
+      "name": "ready-alive-absent",
+      "why": "`alive` absent is not `alive === false`.",
+      "session": {
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "state": "idle"
+      },
+      "opts": {
+        "now": 1788580800000
+      },
+      "expected": {
+        "key": "ready",
+        "label": "ready",
+        "dot": "bg-emerald-500",
+        "pulse": false
+      },
+      "resting": true,
+      "silenceMs": 5000
+    }
+  ]
+}

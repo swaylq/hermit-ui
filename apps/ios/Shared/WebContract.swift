@@ -67,6 +67,18 @@ enum WebContract {
     /// MAX_MATCHES_PER_ROW — matches counted within one message.
     static let maxMatchesPerRow = 200
 
+    // MARK: - Session status (apps/dashboard/src/lib/session-status.ts)
+    //
+    // Read by the Swift port of `sessionStatusView` (Hermit/SessionStatus.swift).
+    // Milliseconds, because that port keeps the original's clocks.
+
+    /// SNAPSHOT_STALE_MS — past this much gateway silence, `state` is a
+    /// memory rather than an observation and the dot goes grey.
+    static let snapshotStaleMs: Double = 45000
+    /// BACKGROUND_RESIDENT_MS — after this much quiet from the agent, an
+    /// outstanding background task stops counting as part of the answer.
+    static let backgroundResidentMs: Double = 1800000
+
     // MARK: - Palette
     //
     // Exactly the Tailwind classes the two files above name, resolved through

@@ -7,9 +7,25 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
+        // A navigation controller, not the web view itself, even though the web
+        // view is still the only thing in it.
+        //
+        // M3 puts native screens in front of the page — a session list, then the
+        // timeline — and those are pushes, not modals: the back swipe, the title
+        // and the animation all come with the container and none of them are
+        // worth hand-rolling. Making it the root NOW rather than with the first
+        // native screen keeps that change to "insert a view controller", and
+        // means anything that breaks in this rearrangement (a safe-area inset, a
+        // status-bar style, a gesture) surfaces on its own instead of inside a
+        // commit that also draws a new screen.
+        //
+        // The bar is hidden: the page draws its own header. A pushed native
+        // screen turns it on for itself.
         let controller = WebViewController()
+        let nav = UINavigationController(rootViewController: controller)
+        nav.isNavigationBarHidden = true
         let window = UIWindow(windowScene: windowScene)
-        window.rootViewController = controller
+        window.rootViewController = nav
         window.makeKeyAndVisible()
         self.window = window
 
@@ -27,6 +43,22 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if let url = URLContexts.first?.url { open(url) }
     }
 
+    /// The web layer, found in the stack rather than assumed to be the root.
+    ///
+    /// It is the root today. It stops being the root the moment a native session
+    /// list goes under it, and the three call sites that used to reach for
+    /// `rootViewController` would each have gone quietly wrong rather than
+    /// crashed: a deep link that opens nothing, a Live Activity tap that lands
+    /// on the wrong screen, an audio session held after the app leaves the
+    /// foreground (the microphone indicator stays lit). Searching the stack
+    /// costs nothing per call and cannot rot the same way.
+    private var web: WebViewController? {
+        guard let nav = window?.rootViewController as? UINavigationController else {
+            return window?.rootViewController as? WebViewController
+        }
+        return nav.viewControllers.lazy.compactMap({ $0 as? WebViewController }).first
+    }
+
     /// The two `hermit://` URLs this app answers to.
     ///
     /// `hermit://session/<id>` is built by the Live Activity and routed through the
@@ -40,7 +72,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// reach. Carries no address of its own — see `presentOriginEditor`.
     private func open(_ url: URL) {
         guard url.scheme == "hermit" else { return }
-        guard let controller = window?.rootViewController as? WebViewController else { return }
+        guard let controller = web else { return }
         switch url.host {
         case "session":
             let id = url.lastPathComponent
@@ -59,7 +91,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func sceneDidEnterBackground(_ scene: UIScene) {
         // Don't keep ducking other apps' audio (or holding the mic indicator) while
         // we're not on screen.
-        (window?.rootViewController as? WebViewController)?.releaseAudioSession()
+        web?.releaseAudioSession()
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {

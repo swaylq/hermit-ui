@@ -207,6 +207,8 @@ export interface Contract {
   lingerSec: number;
   ctxDangerPct: number;
   ctxWarnPct: number;
+  snapshotStaleMs: number;
+  backgroundResidentMs: number;
   snippetPad: number;
   searchPageSize: number;
   maxMatchesPerRow: number;
@@ -252,6 +254,13 @@ export function readContract(): Contract {
     lingerSec: readNumberConst(SOURCES.liveActivity, 'LINGER_MS') / 1000,
     ctxDangerPct: bands[0],
     ctxWarnPct: bands[1],
+    // Left in MILLISECONDS, unlike every duration above it. Those feed
+    // TimeInterval APIs, which are seconds; these two feed the Swift port of
+    // `sessionStatusView`, which is a line-for-line copy of a function whose
+    // every clock is in ms. Converting here would put the one unit conversion
+    // in the product inside the thing being compared against the original.
+    snapshotStaleMs: readNumberConst(SOURCES.statusDots, 'SNAPSHOT_STALE_MS'),
+    backgroundResidentMs: readNumberConst(SOURCES.statusDots, 'BACKGROUND_RESIDENT_MS'),
     snippetPad: readNumberConst(SOURCES.search, 'SNIPPET_PAD'),
     searchPageSize: readNumberConst(SOURCES.search, 'DEFAULT_PAGE'),
     maxMatchesPerRow: readNumberConst(SOURCES.search, 'MAX_MATCHES_PER_ROW'),
@@ -338,6 +347,18 @@ export function renderWebContractSwift(c: Contract): string {
   L.push(`    static let searchPageSize = ${c.searchPageSize}`);
   L.push('    /// MAX_MATCHES_PER_ROW — matches counted within one message.');
   L.push(`    static let maxMatchesPerRow = ${c.maxMatchesPerRow}`);
+  L.push('');
+  L.push(`    // MARK: - Session status (${SOURCES.statusDots})`);
+  L.push('    //');
+  L.push('    // Read by the Swift port of `sessionStatusView` (Hermit/SessionStatus.swift).');
+  L.push('    // Milliseconds, because that port keeps the original\'s clocks.');
+  L.push('');
+  L.push('    /// SNAPSHOT_STALE_MS — past this much gateway silence, `state` is a');
+  L.push('    /// memory rather than an observation and the dot goes grey.');
+  L.push(`    static let snapshotStaleMs: Double = ${c.snapshotStaleMs}`);
+  L.push('    /// BACKGROUND_RESIDENT_MS — after this much quiet from the agent, an');
+  L.push('    /// outstanding background task stops counting as part of the answer.');
+  L.push(`    static let backgroundResidentMs: Double = ${c.backgroundResidentMs}`);
   L.push('');
   L.push('    // MARK: - Palette');
   L.push('    //');
