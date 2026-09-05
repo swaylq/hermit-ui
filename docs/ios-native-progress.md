@@ -383,16 +383,27 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**一件要 sway 拍板的事还欠着，和上一轮是同一件：**
+**本机现在有 Postgres 了**（2026-09-05 装的 Homebrew `postgresql@17`，起停用
+`asst/scripts/pg.sh start|stop|status`）。第 6 轮那条一直没跑过的迁移**已经在真库上跑通**：
 
-1. **迁移要不要上服务器。** 第 6 轮写的
-   `apps/dashboard/prisma/migrations/20260905090000_chatmessage_client_id/`
-   （`ADD COLUMN "clientId" TEXT` + 一条唯一索引，加完全是 NULL、不用回填）
-   **从没在任何库上跑过**（这台 Mac 没有 Postgres 也没有 Docker）。跑之前，
-   部署上的 `chat.send` 会整个坏掉 —— Prisma 客户端按新 schema 生成，`create` 会
-   SELECT 一列数据库里不存在的 `clientId`，连普通网页发消息都一起挂。
-   **这个提交和 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线。**
-   索引是全表扫，建的时候挡写不挡读，挑个没人聊天的时候。
+- 空库上 `pnpm --filter @hermit-ui/dashboard migrate` 把 **86 个 migration 全部应用**，
+  含 `20260905090000_chatmessage_client_id`；`prisma migrate status` 报 up to date，无漂移。
+- 索引的行为也**真的驱动过**（事务里插完回滚，库里没留数据）：
+  同一 session 下两条 `clientId = NULL` 可以并存；两条 `clientId = 'k1'` 第二条被
+  `ChatMessage_sessionId_clientId_key` 挡下，报 duplicate key。这正是幂等键要的语义。
+- 连接串：`postgresql://znmacserver001@localhost:5432/hermit_dev`，无密码。
+  已写进主检出的 `apps/dashboard/.env`（gitignored）。
+  **worktree 里没有这个文件**，独立检出里跑 Prisma 要显式带
+  `DATABASE_URL=postgresql://znmacserver001@localhost:5432/hermit_dev`。
+
+**仍然成立的部署纪律**：那个提交和 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线，
+先上代码后跑迁移的话，部署上的 `chat.send` 会整个坏掉（Prisma 客户端按新 schema 生成，
+`create` 会 SELECT 一列数据库里不存在的 `clientId`，连普通网页发消息都一起挂）。
+索引是全表扫，建的时候挡写不挡读，挑个没人聊天的时候。
+
+**顺带解锁了一件第 6 轮做不了的事**：`chat.send` 的重复发送行为现在可以真的驱动了
+（那一轮只做到「迁移 SQL 与 `prisma migrate diff` 逐字一致」）。哪一轮顺手，起一个本机
+dashboard、拿同一个 `clientId` 发两次，确认第二次拿回的是第一次那一行、且没有产生副作用。
 
 **第 15 轮把前门做完了**，M3 只剩最后一条（像素比对流程）。这一轮全程在模拟器上驱动过，
 反证也做过（把快照那一行 `if false` 掉，用例正好卡在「the front door drew nothing」）。
