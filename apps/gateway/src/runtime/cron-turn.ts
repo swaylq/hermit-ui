@@ -229,6 +229,8 @@ export async function runRuntimeCronTurn(opts: CronTurnOpts): Promise<CronTurnOu
       // throwaway session id has no ChatSession row for those tools to act on,
       // so they would 404 while the credential sat in every tool subprocess.
       hermitTools: opts.isOrchestrator,
+      // Lets the child's Stop hooks tell a scheduled fire from a conversation.
+      isCron: true,
     },
     collect,
   );

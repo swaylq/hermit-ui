@@ -273,6 +273,11 @@ describe('cronPaneEnv', () => {
     assert.equal(Object.hasOwn(env, 'HERMIT_DASHBOARD_URL'), false);
     assert.equal(Object.hasOwn(env, 'HERMIT_SESSION_ID'), false);
     assert.equal(env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+    // Tells the fleet's Stop hooks this is a scheduled fire. Without it,
+    // memory-check.mjs blocks the turn and its forced follow-up reply becomes
+    // the LAST assistant message — i.e. the cron's report. See
+    // RuntimeSession.isCron.
+    assert.equal(env.HERMIT_CRON, '1');
   });
 
   it('supplies hermit variables only to an orchestrator cron with its MCP', () => {

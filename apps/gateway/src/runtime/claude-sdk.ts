@@ -955,6 +955,9 @@ export class ClaudeSdkRuntime implements AgentRuntime {
             HERMIT_KEY: ASST_KEY,
             HERMIT_SESSION_ID: session.id,
           } : {}),
+          // A cron fire, so the fleet's Stop hooks can skip it. See
+          // RuntimeSession.isCron for what goes wrong when they cannot.
+          ...(session.isCron ? { HERMIT_CRON: '1' } : {}),
           // Built-in auto-memory is retired fleet-wide; agents keep their own
           // <agent>/memory/. Authoritative switch is ~/.claude/settings.json.
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',

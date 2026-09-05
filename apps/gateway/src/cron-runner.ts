@@ -93,6 +93,10 @@ export function cronPaneEnv(isOrchestrator: boolean, runSessionId: string): Reco
       HERMIT_SESSION_ID: runSessionId,
     } : {}),
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+    // A cron fire, not a conversation — read by the fleet's Stop hooks, which
+    // must not force a follow-up reply here: the LAST assistant message is what
+    // this fire reports. See RuntimeSession.isCron.
+    HERMIT_CRON: '1',
   };
 }
 
@@ -233,6 +237,11 @@ export function parseRunMarkers(output: string): {
 // Shared by all three fire paths. It used to be inlined in the pane path's
 // sendKeys, so a codex cron never received it at all — the same hazard, minus
 // the warning, on a backend nobody had thought about.
+// NOTE: ~/.claude/hooks/memory-check.mjs recognises a cron transcript by the
+// literal sentence "Scheduled cron run. This session is torn down right after
+// you reply" below — it is that hook's fallback for gateways too old to set
+// HERMIT_CRON=1. Reword it and the hook goes back to eating cron reports,
+// silently. Drop the fallback (and this note) once every gateway is new enough.
 export function cronPrompt(prompt: string): string {
   return (
     `${prompt}\n\n(Scheduled cron run. This session is torn down right after you reply, so do NOT ` +

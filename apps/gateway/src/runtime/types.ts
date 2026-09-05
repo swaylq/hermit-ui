@@ -93,6 +93,20 @@ export type RuntimeSession = {
    */
   isOrchestrator?: boolean;
   /**
+   * This "session" is one cron fire, not a conversation.
+   *
+   * Only the Claude Code backends act on it, and only to set `HERMIT_CRON=1` in
+   * the child's environment, which is how ~/.claude/hooks/memory-check.mjs
+   * (a fleet-wide Stop hook) knows to leave the turn alone. That hook blocks a
+   * turn that did work without writing a daily log, and the follow-up reply it
+   * forces becomes the LAST assistant message — which is exactly what a cron
+   * reports. It ate two days of macmini002's daily audit before anyone noticed,
+   * because the run still finished `ok` (memory note:
+   * cron-report-eaten-by-stop-hook). A cron fire is torn down on reply, so it
+   * has no future self to write a log for.
+   */
+  isCron?: boolean;
+  /**
    * Pure-chat session: spawn the child with a READ-ONLY tool surface — it may
    * look at files and search the web, but not write, edit, run commands or
    * spawn sub-agents. Defaults to false; only a session the user ticked the box
