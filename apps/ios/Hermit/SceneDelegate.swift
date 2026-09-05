@@ -1,52 +1,74 @@
 import UIKit
 
-/// What the app is: a navigation stack whose ROOT is the native session list,
-/// with the web app pushed on top of it whenever a page is what's wanted.
+/// What the app is: a navigation stack whose ROOT is the web app, with native
+/// screens pushed on top of it whenever one of them is what's wanted.
 ///
-/// ## The list is the front door (M3)
+/// ## Why the page is the root again
 ///
-/// It shipped behind `hermit://sessions` first, pushed in front of the page, so
-/// it could be driven on a real phone without also owning cold start. It owns
-/// cold start now, and with it the offline case, every deep link and
-/// `AppDelegate`'s push callbacks — which is why that URL and the three delivery
-/// paths below all funnel into one method, `presentWeb`.
+/// The dashboard's own front door is a chat. `/` redirects to `/chat`, which
+/// restores `lastSessionId()` — so opening the app on a phone puts you back in
+/// the conversation you were in, and the list of sessions is a DRAWER pulled
+/// over it from the left (`components/app-sidebar.tsx`), not a screen you have
+/// to get past.
 ///
-/// ## Except when nobody is signed in
+/// M3 shipped the native list as the root for four rounds (round 15 through
+/// round 3 of the perfect-goal pass). That made the first thing you see a page
+/// the web app does not have, and it was the first thing sway said about
+/// build 7. The goal since 09-05 is "the same as the web, interaction
+/// included", so this reverts to the web's shape: page at the bottom, list
+/// behind `hermit://sessions` where it lived before it was promoted.
 ///
-/// With an empty keyring the list has nothing to draw and no way to fix that:
-/// the sign-in gate is a web page, and so is the "change server" screen you need
-/// when the address answers nothing. So a launch with no keyring entry pushes
-/// the web layer immediately and unanimated, and the first thing on screen is
-/// still the gate — the same rule the dashboard's own root applies.
+/// **Nothing was deleted in that revert.** `SessionListViewController`,
+/// `SessionListCache` and the per-entry snapshot are all still here and still
+/// driven — they are what the native drawer will be built out of, and the
+/// drawer is a milestone of its own. What changed is only which view controller
+/// the window opens on.
 ///
-/// ## The web view is built at launch either way
+/// ## The left edge belongs to the page
 ///
-/// Even when it stays off screen. `WebViewController.viewDidLoad` is what
-/// creates the WKWebView and starts the load, so building it here and calling
-/// `loadViewIfNeeded()` means the dashboard is already fetched and parsed by the
-/// time a row is tapped, instead of starting from nothing at that moment. It
-/// also gives `AppDelegate` somewhere to deliver a push token that arrives
-/// during launch. (Rendering is a different thing and does not start until it is
-/// on screen; the pre-warm buys the network and the JavaScript, not the pixels.)
+/// Which follows from the same decision. UIKit's interactive pop would eat the
+/// drawer's pull, and the drawer is a navigation surface with no other gesture;
+/// see `gestureRecognizerShouldBegin`.
+///
+/// ## The web view is built at launch and owned here
+///
+/// It is the root, so the stack retains it — but it is held here as well,
+/// because a native screen that ever becomes the root again (or a stack that
+/// gets reset) must not take the loaded document, the scroll position and every
+/// open connection with it. `WebViewController.viewDidLoad` is what creates the
+/// WKWebView and starts the load, so `loadViewIfNeeded()` also gives
+/// `AppDelegate` somewhere to deliver a push token that arrives during launch.
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
 
     /// The web layer. **One instance for the life of the scene, owned here** and
     /// only lent to the navigation stack.
     ///
-    /// Held strongly rather than left to the stack because it comes back OFF the
-    /// stack every time you go back to the list, and a stack is the only thing
-    /// retaining what is in it: the WKWebView, the loaded document, the scroll
-    /// position and every open connection would be deallocated on the way back,
-    /// so the next tapped row would reload the whole dashboard. It goes the
-    /// other way too — two instances would each hold their own web view, their
-    /// own bridge and their own idea of which page is loaded.
-    ///
-    /// Built lazily, and `willConnectTo` builds it immediately. See the type
-    /// comment for why it starts loading before anyone can see it.
+    /// Two instances would each hold their own web view, their own bridge and
+    /// their own idea of which page is loaded; a zero-instance moment (popped
+    /// off the stack with nobody else retaining it) would deallocate the
+    /// document and reload the whole dashboard on the way back.
     private lazy var web: WebViewController = {
         let made = WebViewController()
         made.loadViewIfNeeded()
+        return made
+    }()
+
+    /// The native session list. One instance, for the same reason the web view
+    /// is one instance and for one more of its own: `activeSessionId` — the row
+    /// drawn with `bg-sidebar-accent` because it is the session open behind the
+    /// list — lives on it. A list rebuilt on every `hermit://sessions` would
+    /// come back having forgotten which row you tapped, which is the web's
+    /// `optimisticActiveId` quietly going missing.
+    ///
+    /// Built lazily, unlike the web view: it is not on the launch path any more
+    /// and a cold start that never opens it should not pay for its collection
+    /// view, its cache read or its poll.
+    private lazy var list: SessionListViewController = {
+        let made = SessionListViewController()
+        // The list does not go looking for a web view; it says where it wants to
+        // go and this decides what that means. See `openPath` there.
+        made.openPath = { [weak self] path in self?.openPath(path) }
         return made
     }()
 
@@ -56,19 +78,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
-        let list = SessionListViewController()
-        // The list does not go looking for a web view; it says where it wants to
-        // go and this decides what that means. See `openPath` there.
-        list.openPath = { [weak self] path in self?.openPath(path) }
-        let nav = UINavigationController(rootViewController: list)
-        // Hidden to start with. The list turns it on for itself in
-        // `viewWillAppear` and back off on the way out, so a launch that goes
-        // straight to the page never flashes a bar the page then hides.
+        let nav = UINavigationController(rootViewController: web)
+        // Hidden, because the page draws its own header. Each native screen
+        // turns it on in `viewWillAppear` and back off on the way out.
         nav.isNavigationBarHidden = true
-        // With the bar hidden UIKit stops running the back swipe, and the page
-        // draws its own header so the bar stays hidden on top of it — which
-        // would leave the web screen with no way back to the list at all. See
-        // `gestureRecognizerShouldBegin`.
+        // The bar being hidden is also what stops UIKit running its own back
+        // swipe, and a pushed native screen needs one. See
+        // `gestureRecognizerShouldBegin` for why this cannot simply return true.
         nav.interactivePopGestureRecognizer?.delegate = self
 
         let window = UIWindow(windowScene: windowScene)
@@ -76,13 +92,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.makeKeyAndVisible()
         self.window = window
 
-        // Off screen, but loading. This is also what APNs callbacks — which may
-        // already have fired during launch — get delivered to.
+        // This is also what APNs callbacks — which may already have fired during
+        // launch — get delivered to.
         web.loadViewIfNeeded()
         (UIApplication.shared.delegate as? AppDelegate)?.attach(self)
-
-        // Nothing to list and nowhere to sign in but the page.
-        if KeyStore.active() == nil { presentWeb(animated: false) }
 
         // A tap on the Live Activity that launched us cold. The URL arrives here
         // rather than through `scene(_:openURLContexts:)`, which is only called
@@ -94,32 +107,61 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if let url = URLContexts.first?.url { open(url) }
     }
 
-    // MARK: - The two screens
+    // MARK: - The screens
 
-    /// Put the page on top, wherever it was. Idempotent: a second deep link
-    /// arriving while the page is already up moves nothing.
+    /// Bring the page forward, from wherever the stack happens to be.
+    /// Idempotent: a second deep link arriving while the page is already up
+    /// moves nothing.
+    ///
+    /// The page is the root, so this is a pop — but written as "get to `web`"
+    /// rather than "pop to root", because which view controller is at the bottom
+    /// is exactly the thing that has changed twice now.
     @discardableResult
     private func presentWeb(animated: Bool) -> WebViewController {
         guard let nav else { return web }
         if !nav.viewControllers.contains(web) {
-            nav.pushViewController(web, animated: animated)
+            nav.setViewControllers([web], animated: animated)
         } else if nav.topViewController !== web {
             nav.popToViewController(web, animated: animated)
         }
         return web
     }
 
-    /// Show the session list, whatever is in front of it.
+    /// Put the native session list in front of the page.
+    ///
+    /// Directly in front of it, and never on top of anything else. On the web
+    /// this list is a drawer that opens over whichever chat you are in — it is
+    /// not another floor of a stack — so `hermit://sessions` from a timeline has
+    /// to read as "show me the sessions", not "and now you are three screens
+    /// deep with two backs to press".
+    ///
+    /// Idempotent by identity, because `list` is a single instance: already on
+    /// top is nothing, already in the stack is a pop back to it (which is what
+    /// keeps the row you tapped marked — `activeSessionId` lives on that
+    /// instance).
+    ///
+    /// `setViewControllers` rather than a pop followed by a push: two animated
+    /// navigation transitions started in the same turn of the run loop is where
+    /// UIKit's "unbalanced calls to begin/end appearance transitions" comes
+    /// from, and the state it leaves behind is a stack that no longer matches
+    /// what is on screen.
     private func presentList(animated: Bool) {
-        nav?.popToRootViewController(animated: animated)
+        guard let nav else { return }
+        if nav.topViewController === list { return }
+        if nav.viewControllers.contains(list) {
+            nav.popToViewController(list, animated: animated)
+        } else {
+            nav.setViewControllers([web, list], animated: animated)
+        }
     }
 
     /// Push the native timeline for one session.
     ///
-    /// A fresh instance every time, unlike `web`: it holds a window of decoded
-    /// messages and nothing that is expensive to rebuild or painful to lose —
-    /// no live connection, no scroll position anybody has grown attached to.
-    /// Keeping one around per session is a cache with no eviction policy.
+    /// A fresh instance every time, unlike `web` and `list`: it holds a window of
+    /// decoded messages and nothing that is expensive to rebuild or painful to
+    /// lose — no live connection worth keeping, no scroll position anybody has
+    /// grown attached to. Keeping one around per session is a cache with no
+    /// eviction policy.
     private func presentTimeline(sessionId: String, animated: Bool) {
         guard let nav else { return }
         // Not on top of another timeline: opening two sessions in a row should
@@ -143,15 +185,15 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// offline screen never appears, so its "Change server" button is out of
     /// reach. Carries no address of its own — see `presentOriginEditor`.
     ///
-    /// `hermit://sessions` shows the list. It used to push it in front of the
-    /// page; now that the list is the root it pops back to it, which is the same
-    /// sentence — "show me the sessions" — and the reason the URL stays.
+    /// `hermit://sessions` pushes the native session list. It is a URL and not
+    /// the front door: the list's real home is the sidebar drawer, and until
+    /// that drawer is native this is how the screen gets driven on a real phone
+    /// without also owning cold start.
     ///
     /// `hermit://timeline/<id>` opens the NATIVE timeline for that session.
-    /// Nothing in the product produces this URL: it is how the screen gets
-    /// walked through and screenshotted while it is still a skeleton, the same
-    /// way the session list was introduced before it became the root. A tapped
-    /// row still goes to the web page — see `ChatTimelineViewController`.
+    /// Nothing in the product produces this URL either: it is how the screen
+    /// gets walked through and screenshotted while it is still a skeleton. A
+    /// tapped row still goes to the web page — see `SessionListViewController`.
     private func open(_ url: URL) {
         guard url.scheme == "hermit" else { return }
         switch url.host {
@@ -200,9 +242,8 @@ extension SceneDelegate: AppShell {
     }
 
     /// A path always means "show me this page", so it brings the page forward as
-    /// well as navigating it. Delivering it to a web view sitting off screen —
-    /// which is what happened when the page was the root and nobody had to think
-    /// about it — would leave the tapped notification opening a screen the user
+    /// well as navigating it. Delivering it to a web view buried under a native
+    /// screen would leave the tapped notification opening something the user
     /// never sees.
     func openPath(_ path: String) {
         presentWeb(animated: true).openDeepLink(path)
@@ -212,21 +253,28 @@ extension SceneDelegate: AppShell {
 // MARK: - Back, without a navigation bar to put it in
 
 extension SceneDelegate: UIGestureRecognizerDelegate {
-    /// The edge swipe is the whole way back from the page to the list.
+    /// The edge swipe is how you get back off a native screen — and it must not
+    /// run on the page.
     ///
-    /// UIKit disables its own back gesture whenever the navigation bar is
-    /// hidden, and the bar is hidden over the web view because the page draws
-    /// its own header — so without this, the front door is a one-way door.
-    /// Answering for the root (where there is nothing to pop to) would leave the
-    /// stack mid-transition with no destination, hence the count.
+    /// Two clauses, each for its own failure:
     ///
-    /// This does take the left edge away from the PAGE's own horizontal
-    /// gestures, which on a phone is the drawer that opens the web sidebar. That
-    /// sidebar is the list this screen replaced, so the two are the same
-    /// intention and the native one should win; `setNativeEdgeSwipe`
-    /// (lib/native-bridge.ts) is where that gets negotiated if it should not.
+    /// **`count > 1`** because UIKit disables its own back gesture whenever the
+    /// navigation bar is hidden, and the bar is hidden under the timeline's push
+    /// transition and over the page. Answering for the root, where there is
+    /// nothing to pop to, leaves the stack mid-transition with no destination.
+    ///
+    /// **not over the page** because on a phone the left ~28px is the dashboard's
+    /// sidebar drawer (`components/sidebar/use-drawer-swipe.ts`), and that
+    /// drawer is the same list this screen used to replace. The web is the root
+    /// today, so `count > 1` already covers it; the clause is here because that
+    /// has been true and then false and then true again in eight rounds, and
+    /// each time the symptom was "the drawer stopped opening" rather than
+    /// anything that errors. WebKit's own back/forward swipe is a separate
+    /// gesture and is negotiated separately — `setNativeEdgeSwipe`
+    /// (lib/native-bridge.ts) → `WebViewController`.
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer === nav?.interactivePopGestureRecognizer else { return true }
-        return (nav?.viewControllers.count ?? 0) > 1
+        guard let nav, nav.viewControllers.count > 1 else { return false }
+        return !(nav.topViewController is WebViewController)
     }
 }

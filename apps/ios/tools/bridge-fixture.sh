@@ -34,7 +34,7 @@ TESTS=("$@")
   testTheKeychainKeepsTheKeyring
   testTheNativeListDrawsTheActiveMachinesSessions
   testTheNativeListRefreshesItselfWhileYouWatch
-  testTheSessionListIsTheFrontDoor
+  testTheWebAppIsTheFrontDoorAndTheListIsBehindIt
   testThePageCanProposeAnotherServer
   testTheNativeTimelineStreamsAndPagesBack
 )

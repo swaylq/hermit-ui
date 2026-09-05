@@ -332,7 +332,7 @@ final class SmokeTests: XCTestCase {
         app.webViews.buttons["keychain.setActive — m_two"].tap()
         XCTAssertTrue(fixtureSays("active m_two ok"), "the shell would not record which entry is active")
 
-        backToSessionList()
+        openSessionList()
         XCTAssertTrue(
             screenSays("active key: m_two"),
             "the list is drawn with the wrong machine's key — or did not load at all")
@@ -353,7 +353,7 @@ final class SmokeTests: XCTestCase {
         openPage()
         app.webViews.buttons["keychain.setActive — m_one"].tap()
         XCTAssertTrue(fixtureSays("active m_one ok"), "the shell would not move the active entry")
-        backToSessionList()
+        openSessionList()
         XCTAssertTrue(
             screenSays("active key: m_one"),
             "switching machines on the page did not change what the native list asks for")
@@ -365,7 +365,7 @@ final class SmokeTests: XCTestCase {
         openPage()
         app.webViews.buttons["keychain.clear"].tap()
         XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer the second time")
-        backToSessionList()
+        openSessionList()
         XCTAssertTrue(
             screenSays("No machine key on this device yet"),
             "with no keyring at all the list explained nothing")
@@ -392,7 +392,7 @@ final class SmokeTests: XCTestCase {
         app.webViews.buttons["keychain.set — two machines"].tap()
         XCTAssertTrue(fixtureSays("keyring ok"), "the shell refused to store the keyring")
 
-        backToSessionList()
+        openSessionList()
         XCTAssertTrue(screenSays("poll #"), "the list never drew the fixture's counter row")
         guard let first = pollNumber() else { return XCTFail("could not read the counter row") }
 
@@ -411,7 +411,7 @@ final class SmokeTests: XCTestCase {
         let before = pollNumber() ?? 0
         openPage()
         Thread.sleep(forTimeInterval: 12)
-        backToSessionList()
+        openSessionList()
         XCTAssertTrue(screenSays("poll #"), "the counter row did not come back")
         let after = pollNumber() ?? 0
         XCTAssertGreaterThan(after, before, "coming back to the list did not refetch at all")
@@ -420,23 +420,40 @@ final class SmokeTests: XCTestCase {
             "the list kept polling while it was off screen (#\(before) → #\(after) over 12s)")
     }
 
-    /// The list is what the app opens on — and it opens with rows, not a wait.
+    /// The app opens on the PAGE — and the list is still one URL away, still
+    /// painting from its snapshot before it asks anybody anything.
     ///
-    /// Two claims, and the second one needs arranging. A cold start paints
-    /// `SessionListCache` before it asks the server anything, which against a
-    /// server that answers is invisible: the rows would arrive either way, just
-    /// later. So the second launch uses a keyring whose ENTRY IDS are unchanged
-    /// and whose TOKENS the fixture refuses. The snapshot is keyed by entry id,
-    /// so it is still found; the 401 behind it cannot be what put the rows on
-    /// screen. Without a snapshot that same launch shows the failure sentence
-    /// and nothing else.
-    func testTheSessionListIsTheFrontDoor() throws {
+    /// The first claim is a revert. For four rounds the native list was the
+    /// root, which made the first thing you saw a screen the web app does not
+    /// have: the dashboard's `/` redirects to `/chat` and restores
+    /// `lastSessionId()`, so it opens IN a conversation with the session list as
+    /// a drawer over it. This is the assertion that keeps it that way — the
+    /// shape has flipped twice in eight rounds and both times the symptom was
+    /// something a person noticed before a test did.
+    ///
+    /// The second claim needs arranging, and it is why the list did not simply
+    /// lose its cache in that revert. Opening the list paints `SessionListCache`
+    /// before it asks the server anything, which against a server that answers
+    /// is invisible: the rows would arrive either way, just later. So the second
+    /// launch uses a keyring whose ENTRY IDS are unchanged and whose TOKENS the
+    /// fixture refuses. The snapshot is keyed by entry id, so it is still found;
+    /// the 401 behind it cannot be what put the rows on screen. Without a
+    /// snapshot that same launch shows the failure sentence and nothing else.
+    func testTheWebAppIsTheFrontDoorAndTheListIsBehindIt() throws {
         let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
         guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
 
         app.launchArguments = ["-hermitOrigin", fixture]
         app.launch()
-        openPage()
+
+        // An empty keyring is the easy half of claim one — the sign-in gate is a
+        // web page, so every arrangement of this app has ever opened on the page
+        // here. Asserted anyway, because it is also what says the fixture server
+        // is up before anything below blames the shell for its absence.
+        XCTAssertTrue(
+            app.webViews.buttons["keychain.clear"].waitForExistence(timeout: 30),
+            "a cold start with no keyring did not open on the web app")
+
         app.webViews.buttons["keychain.clear"].tap()
         XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer")
         app.webViews.buttons["keychain.set — two machines"].tap()
@@ -444,24 +461,42 @@ final class SmokeTests: XCTestCase {
         app.webViews.buttons["keychain.setActive — m_two"].tap()
         XCTAssertTrue(fixtureSays("active m_two ok"), "the shell would not record which entry is active")
 
+        // Claim one, on the case that actually distinguishes the two shapes: a
+        // device WITH a keyring. Relaunched right here, and asserted with
+        // nothing between it and `launch()` — no helper, no swipe, no URL — so
+        // that it cannot be masked by something upstream of it failing first.
+        // (It was, the first time this was counter-proved: the old front door
+        // tripped `openPage()` three assertions earlier and the run never
+        // reached the sentence that names the bug.)
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(
+            app.webViews.buttons["keychain.clear"].waitForExistence(timeout: 30),
+            "a cold start with a keyring on the device did not open on the web app — "
+                + "the native list is the front door again")
+        XCTAssertFalse(app.navigationBars["Sessions"].exists,
+                       "a keyring on the device puts the native list in front of the page")
+
         // One good load. It is also the thing that writes the snapshot.
-        backToSessionList()
+        openSessionList()
         XCTAssertTrue(screenSays("active key: m_two"), "the list did not load against a working key")
 
-        // A tapped row is what a front door is FOR, and it is the one path that
-        // changed shape: the list used to find the web view already in the stack
-        // and pop back to it, and there is nothing in the stack to find now. The
-        // fixture has no router, so what this checks is the shell's half — the
-        // page coming forward at all.
+        // A tapped row brings the page forward. The list does not go looking for
+        // a web view — it hands the path to whoever put it up — which is what
+        // makes this survive the page being over it, under it, or (next
+        // milestone) beside it in a drawer. The fixture has no router, so what
+        // this checks is the shell's half.
         app.cells.element(boundBy: 0).tap()
         XCTAssertTrue(
             app.webViews.buttons["keychain.clear"].waitForExistence(timeout: 20),
             "tapping a row did not bring the page up")
-        // And coming back, the row you opened is the one marked — `activeSessionId`,
-        // which nothing set while the list was a screen you pushed.
-        backToSessionList()
+        // And the row you opened is still the one marked when the list comes
+        // back — `activeSessionId`, the web's `optimisticActiveId`. It lives on
+        // the list instance, so this is also the assertion that the shell keeps
+        // ONE of those rather than building a new one per `hermit://sessions`.
+        openSessionList()
         XCTAssertTrue(screenSays("active key: m_two", timeout: 10), "the list did not come back")
-        shoot("21-front-door-row-open")
+        shoot("21-session-list-row-open")
 
         // Same two machines, tokens the fixture refuses.
         openPage()
@@ -470,18 +505,18 @@ final class SmokeTests: XCTestCase {
 
         app.terminate()
         app.launch()
-
-        // Claim one: with a keyring on the device, the app opens on the LIST.
-        // No swipe and no URL — this is what `launch()` on its own produced.
         XCTAssertTrue(
-            app.navigationBars["Sessions"].waitForExistence(timeout: 30),
-            "a cold start with a keyring did not open on the session list")
-        // Claim two: it opened with rows on it.
+            app.webViews.buttons["keychain.clear"].waitForExistence(timeout: 30),
+            "the second cold start did not open on the web app either")
+
+        // Claim two: opened from here, the list has rows on it before the fetch
+        // could have answered — and the fetch behind them really did fail, which
+        // is what makes the rows evidence.
+        openSessionList()
         XCTAssertTrue(
             screenSays("active key: m_two", timeout: 10),
-            "the front door drew nothing — the cold-start snapshot never painted")
-        // And the fetch behind them really did fail, which is what makes the
-        // rows evidence. Dwell rather than sample: the 401 lands a beat later.
+            "the list drew nothing — the snapshot never painted")
+        // Dwell rather than sample: the 401 lands a beat later.
         Thread.sleep(forTimeInterval: 4)
         XCTAssertFalse(
             app.descendants(matching: .any)
@@ -490,7 +525,7 @@ final class SmokeTests: XCTestCase {
             "the launch fetched successfully — this run proves nothing about the snapshot")
         XCTAssertTrue(screenSays("active key: m_two", timeout: 5),
                       "the failed refresh wiped the snapshot it was drawn over")
-        shoot("20-front-door-cold-start")
+        shoot("20-session-list-from-snapshot")
 
         // Leave the install clean for whatever runs next.
         openPage()
@@ -530,7 +565,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(fixtureSays("keyring ok"), "the shell refused to store the keyring")
         app.webViews.buttons["keychain.setActive — m_two"].tap()
         XCTAssertTrue(fixtureSays("active m_two ok"), "the shell would not record which entry is active")
-        backToSessionList()
+        openSessionList()
 
         // `hermit://timeline/<id>` — the only way to this screen today, and one
         // of the URL paths into this app that had never been walked once.
@@ -609,10 +644,10 @@ final class SmokeTests: XCTestCase {
         // person actually gets — parked on the newest message, with the safe
         // area on the ends they can see. It doubles as the check that leaving
         // the screen and coming back rebuilds it from nothing.
-        backToSessionList()
+        openSessionList()
         // A beat before the deep link, unlike the first open above, which fires
-        // it the instant the "Sessions" bar appears — i.e. while the back
-        // swipe's pop is still animating. Both orders have to produce the same
+        // it the instant the "Sessions" bar appears — i.e. while that screen's
+        // own push is still animating. Both orders have to produce the same
         // screen, and having one of each here is cheaper than a test for it.
         settle()
         XCUIDevice.shared.system.open(URL(string: "hermit://timeline/s_timeline")!)
@@ -620,8 +655,8 @@ final class SmokeTests: XCTestCase {
                       "the timeline did not come back on a second open")
         settle(); shoot("26-timeline-tail")
 
-        // Leave the install clean for whatever runs next.
-        backToSessionList()
+        // Leave the install clean for whatever runs next. Two screens deep, so
+        // this is also the one place the edge swipe is asked to run twice.
         openPage()
         app.webViews.buttons["keychain.clear"].tap()
         XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer at the end")
@@ -673,36 +708,46 @@ final class SmokeTests: XCTestCase {
 
     /// The session list, from wherever this test happens to be.
     ///
-    /// It is the ROOT now, so there is no URL to push it and no back button to
-    /// tap: over the page the navigation bar is hidden (the page draws its own
-    /// header), which leaves the edge swipe as the only way back — and that is
-    /// exactly the thing worth checking, so the helper does it rather than
-    /// reaching for `hermit://sessions`.
-    private func backToSessionList() {
+    /// It is not the root — the page is — so this is a URL, the same one a
+    /// person would have no way to type. That is the point of the URL: until
+    /// the sidebar drawer is native there is no gesture into this screen, and a
+    /// screen with no way in cannot be driven on a phone.
+    private func openSessionList() {
         if app.navigationBars["Sessions"].exists { return }
-        // A short press before the drag: an instantaneous one is a flick that
-        // UIKit can read as a scroll rather than a screen-edge pan.
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.002, dy: 0.5))
-            .press(forDuration: 0.05,
-                   thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)))
+        XCUIDevice.shared.system.open(URL(string: "hermit://sessions")!)
         XCTAssertTrue(
             app.navigationBars["Sessions"].waitForExistence(timeout: 15),
-            "the back swipe did not come back to the session list — with the bar hidden over "
-                + "the page it is the only way back, so this is the front door being one-way")
+            "hermit://sessions did not bring the native list up")
     }
 
     /// The fixture page, from wherever this test happens to be.
     ///
-    /// An install that already holds a keyring comes up on the LIST now, so a
-    /// test that wants the page has to ask for it. "New chat" is the one native
-    /// way into the web app, which is half of why the list has it.
+    /// The page is the root again, so a launch lands here on its own and the
+    /// only case with anything to do is "a native screen is in front of it".
+    /// Getting off one is the edge swipe, and doing it that way rather than
+    /// with a URL is deliberate: it is the only assertion anywhere that UIKit's
+    /// back gesture still runs on a pushed native screen after the shell handed
+    /// the left edge back to the page.
     private func openPage() {
-        if app.navigationBars["Sessions"].waitForExistence(timeout: 5) {
-            app.navigationBars["Sessions"].buttons["New chat"].tap()
+        for _ in 0..<3 {
+            if app.webViews.buttons["keychain.clear"].waitForExistence(timeout: 4) { return }
+            edgeSwipeBack()
         }
         XCTAssertTrue(
             app.webViews.buttons["keychain.clear"].waitForExistence(timeout: 30),
-            "the fixture page never came up — is the fixture server still running?")
+            "three edge swipes and the page is still not on screen. Either the fixture "
+                + "server stopped, or the page is not at the bottom of the stack any more "
+                + "— a swipe on the root view controller pops nothing.")
+    }
+
+    /// One interactive pop, driven the way a thumb does it.
+    ///
+    /// A short press before the drag: an instantaneous one is a flick that UIKit
+    /// can read as a scroll rather than a screen-edge pan.
+    private func edgeSwipeBack() {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.002, dy: 0.5))
+            .press(forDuration: 0.05,
+                   thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)))
     }
 
     /// Anything on screen whose label contains this.

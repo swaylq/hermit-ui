@@ -6,8 +6,8 @@ import UserNotifications
 /// Two things, and they are deliberately different. A push TOKEN is bookkeeping
 /// between the shell and the server and changes nothing on screen. A PATH is
 /// somebody tapping a notification, so it has to bring the page forward as well
-/// as navigate it — and since the session list became the root, "the page" may
-/// not be on screen, or even in the navigation stack, when one arrives.
+/// as navigate it — and "the page" may be buried under a native screen when one
+/// arrives, which is a thing the delegate must not have to know about.
 ///
 /// A protocol rather than a `WebViewController` reference because that is the
 /// distinction: this file must not be able to reach a web view directly, or the

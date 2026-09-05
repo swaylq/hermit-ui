@@ -1,7 +1,7 @@
 import Foundation
 
-/// The last session list a machine answered with, kept on disk so the front door
-/// paints rows instead of a skeleton.
+/// The last session list a machine answered with, kept on disk so the list
+/// paints rows instead of a skeleton the moment it is opened.
 ///
 /// A port of `apps/dashboard/src/lib/session-list-cache.ts`, including the three
 /// parts of it that look like details and are not:
@@ -25,8 +25,8 @@ import Foundation
 /// That database is scoped by WORKSPACE (a machine id, plus the agent name for a
 /// share key) while this is keyed by keyring ENTRY, and opening it runs a
 /// migration plus a `CREATE VIRTUAL TABLE … USING fts5`. This path runs before
-/// the first frame, and on a phone old enough for that CREATE to fail it would
-/// take the front door down with it. Reading a small file is the whole job.
+/// this screen's first frame, and on a phone old enough for that CREATE to fail
+/// it would take the screen down with it. Reading a small file is the whole job.
 enum SessionListCache {
     /// The web's `MIN_WRITE_MS`, in seconds.
     static let minWriteInterval: TimeInterval = 20

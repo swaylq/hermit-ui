@@ -18,15 +18,19 @@
 
 ### 这条一改，已经落地的四件要跟着回退或改形
 
-1. **前门必须退回网页的形状。** 网页 `/` → `/chat` 会恢复 `lastSessionId()` ——
-   **打开就在上次那个会话里**，会话列表是盖在它上面的左抽屉（`app-sidebar.tsx:181`：
-   `w-[280px]`、`transition-transform duration-200 ease-out`，遮罩 `bg-foreground/20`
-   `duration-150`）。第 15 轮把全屏原生列表当成根，那是**网页上根本不存在的一页**；
-   sway 装上 build 7 第一次看见就提了。怎么退见「下一项」第 1 条。
-2. **左边缘归抽屉，不归返回手势** —— 三条待拍板里的第一条就此定案，方向和第 15 轮
-   「同一个意图，原生的赢」相反。开关是 `lib/native-bridge.ts` 的 `setNativeEdgeSwipe`；
-   手势的数在 `components/sidebar/use-drawer-swipe.ts`：`W=280`、`EDGE=28`、`SLOP=10`、
-   `EDGE_SLOP=5`、`FLICK=0.3 px/ms`、`STALE_MS=80`。将来原生那份要吃同一组数
+1. ~~**前门必须退回网页的形状。**~~ **第 4 轮 perfect-goal 做掉了。** 网页 `/` → `/chat`
+   会恢复 `lastSessionId()` —— **打开就在上次那个会话里**，会话列表是盖在它上面的左抽屉
+   （`app-sidebar.tsx:181`：`w-[280px]`、`transition-transform duration-200 ease-out`，
+   遮罩 `bg-foreground/20` `duration-150`）。第 15 轮把全屏原生列表当成根，那是**网页上
+   根本不存在的一页**；sway 装上 build 7 第一次看见就提了。
+   现在网页又是栈底，列表退回 `hermit://sessions` 后面，一行都没删 —— 它就是原生抽屉的内容。
+2. ~~**左边缘归抽屉，不归返回手势**~~ **第 4 轮一起做掉了，而且不需要改任何一行网页代码。**
+   偷走左边缘的从来不是 `setNativeEdgeSwipe`（那管的是 WKWebView 自己的前进/后退手势，
+   默认就是关的、由页面按需打开），是 `UINavigationController` 的 `interactivePopGestureRecognizer`
+   —— 网页回到栈底之后它在那一屏栈深为 1，UIKit 自己就不放行了。
+   `gestureRecognizerShouldBegin` 里那条「当前这屏是网页就不放行」是第二道锁，
+   不是修法本身。手势的数在 `components/sidebar/use-drawer-swipe.ts`：`W=280`、`EDGE=28`、
+   `SLOP=10`、`EDGE_SLOP=5`、`FLICK=0.3 px/ms`、`STALE_MS=80`。将来原生那份要吃同一组数
    （照 status / blocks / fold 那个共享夹具的老套路导出来）。
 3. **等宽字体塞进包里** —— 第二条待拍板定案。网页用的是 **Geist Mono**
    （`globals.css:11` `--font-mono: var(--font-geist-mono)`），不是系统等宽；
@@ -332,8 +336,10 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       空态和错误文案改成网页的排版（`px-2 py-2 text-xs text-muted-foreground`、
       左对齐贴在标题下，不是居中），空列表的句子也换成网页原文
       `no chats yet — start a New chat.`
-- [x] 冷启动先画本地快照，同时后台预热 WebView —— 第 15 轮，**列表成了前门**。
-      `SceneDelegate` 的根现在是 `SessionListViewController`，网页按需 push 到它上面。
+- [x] 冷启动先画本地快照，同时后台预热 WebView —— 第 15 轮做的，
+      **第 4 轮 perfect-goal 把「列表当根」那半退回去了**：网页重新是栈底，
+      列表退回 `hermit://sessions` 后面（见本节最后一条）。快照、预热、`AppShell.openPath`
+      三件都留着，改的只是 window 打开在哪个 view controller 上。
       快照不在 App Group 也不在 `ChatCache`，是 `Hermit/SessionListCache.swift`：
       Application Support 里**每个 keyring 条目一个 JSON 文件**，20 秒写一次节流，
       空列表读回来当没有 —— 逐条对着 `lib/session-list-cache.ts` 移的。
@@ -366,6 +372,29 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       行与行之间补上 `space-y-px` 的 1pt、选中行的圆角从 `.continuous` 换成 `.circular`。
       顺带给 `render-web-list.sh` 加了 `HERMIT_MEASURE=1` —— 打印 Chrome 自己量出来的
       每个元素的盒子，M6 每一屏都会先用它
+- [x] **前门退回网页的形状** —— 第 4 轮 perfect-goal。`SceneDelegate` 的根改回
+      `WebViewController`，`hermit://sessions` 从 `popToRootViewController` 变回一次 push。
+      第 15 轮那三样一样没丢：网页实例由 `SceneDelegate` 强持有、深链接/通知/Live Activity
+      仍走 `AppShell.openPath`、`SessionListCache` 照旧。
+      **列表也改成 `SceneDelegate` 持有的单实例**（原来是每次 `hermit://sessions` 新建一个）
+      —— `activeSessionId` 长在它身上，重建一个就等于每次回来都忘了你点的是哪一行，
+      而那正是网页的 `optimisticActiveId`。
+      `presentList` 是 `setViewControllers([web, list])` 而不是「先 pop 再 push」：
+      列表在网页上是盖在会话上的抽屉，不是栈里的第三层，所以从时间线开它读作
+      「给我看会话列表」而不是「你现在三屏深」；一个 runloop 里起两次带动画的导航转场
+      正是 UIKit 那句 unbalanced begin/end appearance transitions 的来处。
+      UI 用例 `testTheSessionListIsTheFrontDoor` 改写成
+      `testTheWebAppIsTheFrontDoorAndTheListIsBehindIt`，反证过（见「踩过的坑」）
+- [ ] **原生抽屉**：整个侧栏 —— 机器选择器、市场入口、NAV 4 项、brain 6 项、
+      最近会话 / agent / cron 三列、footer（`components/sidebar/**` + `app-sidebar.tsx`
+      4,258 行，加约 1,400 行被它用到的通用组件，全仓第二热）。
+      `SessionListViewController` 就是它「最近会话」那一列的内容，已经写好了。
+- [ ] **抽屉的手势吃网页那组数**：`W=280`、`EDGE=28`、`SLOP=10`、`EDGE_SLOP=5`、
+      `FLICK=0.3 px/ms`、`STALE_MS=80`，照 status / blocks / fold 的老套路从
+      `use-drawer-swipe.ts` 导出成共享夹具，别手抄。
+- [ ] **网页那半的抽屉要能被壳关掉**（native-bridge 再加一个开关）：
+      否则两个抽屉同时存在、边缘手势打架。**在它完整之前不要切换** ——
+      半个抽屉比今天这个 URL 后面的全屏列表更不像网页。
 
 ## M4 — 时间线（最贵的一块）
 
@@ -495,42 +524,27 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 > 2026-09-05 16:35 起，这个清单由 `perfect-goal` 的轮次驱动，轮次日志在
 > `~/agents/asst/projects/ios-native/goal/ROUNDS.md`，目标与验收标准在同目录的 `GOAL.md`。
-> 目标未变：把这个清单清空。**清单 31/47**（第 3 轮没勾掉任何一条：
-> 那一轮花在把时间线真的跑起来，和它跑出来的四个 bug 上）。
+> 目标未变：把这个清单清空。**清单 32/51** —— 分母涨了 4：第 4 轮把前门退回网页
+> （勾掉一条），并把原来只写在散文里的**原生抽屉**拆成三条明写的清单项。
+> 那三条本来就是「全部复刻网页」要付的，藏在段落里只会让清单先清空、活后干完。
 
-**第 1 条：前门退回网页。**
-（2026-09-05 17:30 由另一条会话提到最前：sway 在等它落地，落地当天就会有人构建并
-Wi-Fi 推到他手机上，所以这条是唯一一条「做完立刻有人看得见」的。第 1、2 轮各自把它
-往后放了一次，第 3 轮又放了一次 —— 别再放第四次。下面那几条都排在它后面。）
-目标那节第 1 条的落地，是现在屏幕上唯一一处和网页不一样的地方，sway 装上 build 7
-第一次看见就提了。
-- `SceneDelegate` 冷启动改回「网页在栈底」；原生列表退回 `hermit://sessions` 深链接后面。
-  **一行代码都不要删**：它就是将来那个原生抽屉的内容。
-- `setNativeEdgeSwipe` 把左边缘交还网页；`interactivePopGestureRecognizer` 的 delegate
-  改成「栈深 > 1 **且当前这屏不是网页**」才放行。
-- 第 15 轮那三样别丢：网页实例由 `SceneDelegate` 强持有、深链接/通知/Live Activity 仍走
-  `AppShell.openPath`、`SessionListCache` 留着。
-- UI 用例的 `backToSessionList()` 要跟着改写（第 15 轮那五条会再动一次，这次是往回动）。
-
-**第 2 条：给时间线一个和网页一致的头。**
+**第 1 条：给时间线一个和网页一致的头。**
 第 3 轮关掉了 iOS 26 那层 scroll edge effect（它被翻转带反了，整屏冲淡到读不了），
 代价是导航栏底下没有任何遮挡，最老的一行会和「Chat」标题、返回键叠在一起。
 **不要把模糊加回来** —— 网页 chat 页的 header 是不透明的，正解是照它做一个，
 顺带把标题、状态、右侧那几个按钮一起挪过来（今天标题是写死的 "Chat"）。
 
-**第 3 条：M5 输入框。** `GOAL.md` 验收标准 2 里只剩这一块没做：
-读得到、会自己长、翻得动都验过了，发不出去。做完了列表点一行才该换成进原生时间线，
-上面第 1 条那个前门形状也才有得谈。
+**第 2 条：M5 输入框。** `GOAL.md` 验收标准 2 里只剩这一块没做：
+读得到、会自己长、翻得动都验过了，发不出去。做完了列表点一行才该换成进原生时间线。
 
-**第 4 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
+**第 3 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
 所以翻页每一页都问服务端，而网页读过一遍的历史是零网络的。加 `full` / `digest` 两个行存储
 （带 `nextId`），`pageBefore` 才有调用方，`ChatCache` 欠的「两级保真」也一起解掉。
 
-**抽屉原生化是一个独立里程碑，不是 M6 的边角**（跟着第 1 条走，但比它大得多）。
-范围是整个侧栏 —— 机器选择器、市场入口、NAV 4 项、brain 6 项、最近会话 / agent / cron
-三列、footer；几何与手势照目标那节第 2 条的数；并且**网页那半要能被壳关掉**
-（多加一个 native-bridge 开关），否则两个抽屉会同时存在、边缘手势打架。
-在它完整之前不要切换 —— 半个抽屉比现在这个全屏列表更不像网页。
+**抽屉原生化现在是 M3 末尾三条明写的清单项**，不再只是这里的一段话 ——
+第 4 轮把前门退回网页之后，它就是「会话列表在原生里该长成什么样」的唯一答案，
+藏在散文里会让清单清空而活没干完。比时间线那几条大得多，但排在它们后面：
+时间线是 `GOAL.md` 验收标准 2 点名的那一屏。
 
 **markdown 那一条随时可以开**（M4 第三条）：sway 已经点头可以引第三方依赖，
 两条候选路要**先各画一屏逐像素比再定**。骨架把位置留好了：换掉 `TimelineRowView` 里
@@ -558,8 +572,9 @@ Wi-Fi 推到他手机上，所以这条是唯一一条「做完立刻有人看�
 
 **仍然欠着的小事**
 
-1. **地址填错、但设备上还留着 keyring 时，前门是一张加载失败的列表。** 够用但不好发现。
-2. **`hermit://sessions` 的语义变了**：现在是 `popToRootViewController`。
+1. ~~地址填错、但设备上还留着 keyring 时，前门是一张加载失败的列表。~~
+   第 4 轮消失了：前门又是网页，地址答不出东西就是离线屏，上面有 "Change server"。
+2. ~~`hermit://sessions` 的语义变了：现在是 `popToRootViewController`。~~ 第 4 轮变回 push。
 3. 相对时间不会自己走（列表和时间线都是）；浅色模式下骨架屏几乎看不见，见「踩过的坑」。
 4. `chat.send` 的幂等键现在可以真的驱动了（本机有 Postgres 了）。
 
@@ -575,6 +590,25 @@ Wi-Fi 推到他手机上，所以这条是唯一一条「做完立刻有人看�
 16:5x 那句「全部复刻网页，做完再评审，反复改到完美」把范围定死成全量，见 `GOAL.md`。
 
 ## 踩过的坑
+
+### 一次反证会停在第一个红的断言上，而那多半不是你想验的那条（第 4 轮 perfect-goal）
+
+把 `SceneDelegate` 换回「列表当根」跑新写的前门用例，它确实红了 —— 红在
+`openPage()` 那个辅助函数的「页面没出来」上，位置在**头条断言下游三个断言**。
+原因很朴素：老形状下网页是 push 在列表上面的，从根那一屏边缘划手势什么也 pop 不掉，
+于是辅助函数先失败，用例根本没走到「装着 keyring 冷启动应该看见网页」那句。
+
+看起来还是红的，所以很容易就此收工。**但那次运行证明的是「这个用例能区分两种形状」，
+不是「那条断言有牙齿」** —— 而写这条断言的全部理由，就是让将来某个人改错了以后，
+失败信息里印着的是「原生列表又变成前门了」而不是「fixture 服务器是不是没起」。
+
+改法是把头条断言挪到**只依赖 `app.launch()` 的位置**：先在空 keyring 的页面上把
+keyring 存进去，然后 `terminate()` + `launch()`，紧接着就断言。中间没有辅助函数、
+没有手势、没有 URL，没有任何东西能抢在它前面失败。再反证一次，红在第 473 行，
+印的是那句话。
+
+**规矩**：反证不是「看它红没红」，是**看它红在哪一行、印的是不是你写的那句**。
+不是的话，先把断言挪到没有上游能挡住它的地方，再反证一次。
 
 ### 翻转的 collection view 把三样 UIKit 的东西一起弄反了（第 3 轮 perfect-goal）
 

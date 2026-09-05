@@ -1,7 +1,14 @@
 import UIKit
 import SwiftUI
 
-/// The session list, drawn natively — and, as of M3, the app's front door.
+/// The session list, drawn natively.
+///
+/// **Not the front door.** It was, for four rounds; the web app's own front
+/// door is a chat with the session list as a drawer over it, so the page is the
+/// root again and this screen lives behind `hermit://sessions` — see
+/// `SceneDelegate`. What it is really waiting to become is the CONTENT of a
+/// native drawer, which is a milestone of its own; nothing here changes when
+/// that happens except who pushes it.
 ///
 /// The first screen in this app that is not a web view, and the first place the
 /// shell makes an authenticated request of its own — `README.md` and
@@ -19,9 +26,9 @@ import SwiftUI
 ///
 /// ## The first frame is not blank
 ///
-/// A cold start paints `SessionListCache` — the last answer this machine gave —
-/// before it asks for anything, which is the web sidebar's `placeholderData`.
-/// With no snapshot it paints the skeleton instead. Neither is an answer: the
+/// Opening this screen paints `SessionListCache` — the last answer this machine
+/// gave — before it asks for anything, which is the web sidebar's
+/// `placeholderData`. With no snapshot it paints the skeleton instead. Neither is an answer: the
 /// fetch started in `viewWillAppear` replaces whichever it was, and the empty
 /// state and the error sentence still get their turn.
 ///
@@ -64,10 +71,12 @@ final class SessionListViewController: UIViewController {
     /// Where a tap goes. Set by whoever put this screen up — `SceneDelegate`,
     /// which owns the web layer.
     ///
-    /// NOT a search of the navigation stack, which is what this did while the
-    /// list was pushed in front of the page: the list is the root now, and on a
-    /// cold start there is no web view in the stack at all. Reaching for one and
-    /// finding nil would make a tapped row do nothing, silently.
+    /// NOT a search of the navigation stack, which is what this did originally.
+    /// The web view happens to be under this screen again today, but that has
+    /// flipped twice in eight rounds and it flips once more when the drawer goes
+    /// native — and a stack search that finds nil makes a tapped row do nothing,
+    /// silently. Saying where you want to go and letting the container decide
+    /// what that means survives all three arrangements.
     var openPath: ((String) -> Void)?
 
     private var order: [String] = []
@@ -198,8 +207,8 @@ final class SessionListViewController: UIViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         // The container hides the bar for the web view, which draws its own
-        // header. A native screen wants it back — and has to put it away again,
-        // because the web view is still in this stack.
+        // header. A native screen wants it back — and has to put it away again
+        // on the way out, because the web view is right underneath.
         navigationController?.setNavigationBarHidden(false, animated: animated)
         load(.appear)
         startPolling()
