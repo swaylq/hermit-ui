@@ -101,6 +101,13 @@ enum TimelineMetrics {
     /// A CSS `1px` hairline. Not `1 / displayScale`: the web draws one CSS
     /// pixel and so does this.
     static let hairline: CGFloat = 1
+
+    /// `pb-3` under the "load earlier" pill — the gap between it and the oldest
+    /// message. Hosts subtract whatever spacing they already put between rows.
+    static let earlierGap: CGFloat = 12
+    /// `px-3 py-1` on the pill itself.
+    static let pillPadH: CGFloat = 12
+    static let pillPadV: CGFloat = 4
 }
 
 /// `SwiftUI` sizes a line from the font's own metrics; CSS sizes it from the
@@ -631,5 +638,52 @@ enum RunLabel {
         let whole = Int(tenths) / 10
         let frac = Int(tenths) % 10
         return "\(whole).\(frac)k"
+    }
+}
+
+
+// MARK: - Load earlier
+
+/// The "↑ load earlier" pill that sits above the oldest message on screen.
+///
+/// `chat/page.tsx`: `flex justify-center` around an `inline-flex … rounded-full
+/// border border-border bg-background px-3 py-1 text-xs text-muted-foreground`,
+/// reading `loading…` while a page is in flight and dimmed to
+/// `disabled:opacity-50` while it is.
+///
+/// Carries no vertical gap of its own — the web's `pb-3` is
+/// `TimelineMetrics.earlierGap`, and the host applies whatever part of it its
+/// own row spacing has not already paid. In the collection view each row cell
+/// already carries half a `gap-3`; in the still-frame renderer the VStack
+/// carries a whole one.
+struct LoadEarlierPill: View {
+    let loading: Bool
+    var action: () -> Void = {}
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            Button(action: action) {
+                Text(loading ? "loading…" : "↑ load earlier")
+                    .font(.system(size: TimelineMetrics.noticeFont))
+                    .webLine(font: TimelineMetrics.noticeFont, box: TimelineMetrics.noticeLine)
+                    .foregroundStyle(WebContract.mutedForeground.resolve(scheme))
+                    .padding(.horizontal, TimelineMetrics.pillPadH)
+                    .padding(.vertical, TimelineMetrics.pillPadV)
+                    .background(WebContract.background.resolve(scheme), in: Capsule())
+                    .overlay {
+                        Capsule().strokeBorder(WebContract.border.resolve(scheme),
+                                               lineWidth: TimelineMetrics.hairline)
+                    }
+            }
+            .buttonStyle(.plain)
+            .disabled(loading)
+            // `disabled:opacity-50`. Applied to the whole pill, border included,
+            // which is what the CSS does.
+            .opacity(loading ? 0.5 : 1)
+            Spacer(minLength: 0)
+        }
     }
 }

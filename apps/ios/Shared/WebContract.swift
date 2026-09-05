@@ -26,6 +26,14 @@ enum WebContract {
     /// TIMELINE_DIGEST — ask for the window as the collapsed timeline renders it.
     static let timelineDigest = true
 
+    // MARK: - Load earlier (apps/dashboard/src/components/chat/use-older-pages.ts)
+
+    /// OLDER_PAGE — messages per "load earlier". Deliberately small: the web
+    /// measured a bigger page blocking its main thread past the point where the
+    /// prepend anchor gave up. The phone has no such deadline, but the two have
+    /// to page in the same steps or the same scroll lands on different rows.
+    static let olderPage = 60
+
     // MARK: - Stream reconnect (apps/dashboard/src/app/chat/page.tsx)
 
     /// BACKOFFS, in seconds.

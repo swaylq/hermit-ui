@@ -41,6 +41,17 @@ import SwiftUI
 /// The two racing is the whole subtlety, and `TimelineMerge.fold` is the answer:
 /// a push that lands before the query answers is HELD, not applied, because a
 /// delta applied to an empty list looks exactly like a complete window.
+///
+/// ## Two lists, and the seam between them
+///
+/// The live window above is a fixed `WebContract.timelineLimit` rows that slides
+/// forward; history is paged in separately, `WebContract.olderPage` rows at a
+/// time, and the screen draws the concatenation. Nothing checks that the two
+/// meet — and they stop meeting on their own, because every row the window sheds
+/// off its old end belongs to neither list afterwards. The web measured what
+/// that costs: 162 messages and fifteen minutes closed over silently, with the
+/// compaction notice the reader was looking for inside the gap. `TimelinePager`
+/// is the half that keeps them meeting.
 final class ChatTimelineViewController: UIViewController {
     private enum Section { case main }
 
@@ -53,10 +64,17 @@ final class ChatTimelineViewController: UIViewController {
     private let spinner = UIActivityIndicatorView(style: .medium)
     private var inFlight: Task<Void, Never>?
 
-    /// The window as merged so far, oldest-first — the fold's input, kept apart
-    /// from its output so a push re-folds from the same rows the server sent
-    /// rather than from something already grouped into capsules.
-    private var inputs: [FoldInput] = []
+    /// The LIVE window, oldest-first — the newest `WebContract.timelineLimit`
+    /// rows, and the only rows the stream carries. Kept apart from the fold's
+    /// output so a push re-folds from the same rows the server sent rather than
+    /// from something already grouped into capsules.
+    private var window: [FoldInput] = []
+    /// History paged in below the window, oldest-first. Grows upwards, one
+    /// `chat.listMessagesBefore` page at a time, and absorbs whatever the window
+    /// sheds while it is on screen.
+    private var older: [FoldInput] = []
+    /// Window + history, which is the conversation the fold is run over.
+    private var allInputs: [FoldInput] { older + window }
     private var stream: HermitStream<WireMessage>?
     private var streamTask: Task<Void, Never>?
     /// Frames that arrived before `chat.listMessages` answered. See
@@ -68,6 +86,36 @@ final class ChatTimelineViewController: UIViewController {
     /// because the diffable data source carries `FoldedRow.key`, not the row.
     private var order: [String] = []
     private var rowsByKey: [String: FoldedRow] = [:]
+
+    // MARK: Paging state
+    //
+    // `hasMore` is two facts, exactly as the web splits them: a SEED (the window
+    // came back full, so there is probably history behind it) and an ANSWER (a
+    // server page said so). Only a server page may set the answer — routing it
+    // into a field nobody reads is what once left the web's button pulling
+    // forever at the beginning of a session.
+
+    /// Set only by a server page. Nil until one has been served.
+    private var saysMore: Bool?
+    /// The seed: `chat.listMessages` came back at its limit.
+    private var windowFull = false
+    private var hasMore: Bool { saysMore ?? windowFull }
+    private var loadingOlder = false
+    private var olderTask: Task<Void, Never>?
+    /// The `loading` the pill cell was last configured with, or nil when there
+    /// is no pill. Diffable will not redraw a cell whose identifier is unchanged.
+    private var pillShows: Bool?
+
+    /// The one identifier in the snapshot that is not a `FoldedRow.key`. Starts
+    /// with a NUL, which no key the fold produces can contain.
+    private static let earlierKey = "\u{0000}load-earlier"
+
+    /// Within this much of the newest row, the reader is following the tail.
+    /// `BOTTOM_SLACK` in `components/chat/use-prepend-anchor.ts`, which answers
+    /// the same question there. Hand-copied: `WebContract` is rendered from
+    /// `const NAME = <number>` declarations and this one means points here, CSS
+    /// pixels there.
+    private static let tailSlack: CGFloat = 60
 
     /// `px-4 py-4` on the web's scroller. The column it wraps is `max-w-3xl`
     /// centred, which on a phone never binds.
@@ -110,6 +158,7 @@ final class ChatTimelineViewController: UIViewController {
         // With the collection flipped, the indicator would run down the LEFT
         // edge and its inset would be measured from the wrong end.
         collection.showsVerticalScrollIndicator = false
+        collection.delegate = self
         view.addSubview(collection)
 
         message.numberOfLines = 0
@@ -159,8 +208,27 @@ final class ChatTimelineViewController: UIViewController {
             // Undo the collection's flip so the row itself reads normally.
             cell.transform = CGAffineTransform(scaleX: 1, y: -1)
         }
+        let earlier = UICollectionView.CellRegistration<UICollectionViewListCell, String> {
+            [weak self] cell, _, _ in
+            guard let self else { return }
+            let loading = self.loadingOlder
+            cell.contentConfiguration = UIHostingConfiguration {
+                LoadEarlierPill(loading: loading) { [weak self] in self?.loadEarlier() }
+                    // `pb-3`, less the half-gap every row cell already carries on
+                    // the side facing this one.
+                    .padding(.bottom, TimelineMetrics.earlierGap - TimelineMetrics.rowGap / 2)
+            }
+            .margins(.horizontal, Self.padH)
+            .margins(.vertical, 0)
+            var background = UIBackgroundConfiguration.clear()
+            background.backgroundColor = .clear
+            cell.backgroundConfiguration = background
+            cell.transform = CGAffineTransform(scaleX: 1, y: -1)
+        }
         source = UICollectionViewDiffableDataSource(collectionView: collection) { view, indexPath, key in
-            view.dequeueConfiguredReusableCell(using: cell, for: indexPath, item: key)
+            key == Self.earlierKey
+                ? view.dequeueConfiguredReusableCell(using: earlier, for: indexPath, item: key)
+                : view.dequeueConfiguredReusableCell(using: cell, for: indexPath, item: key)
         }
 
         observeAppState()
@@ -279,6 +347,9 @@ final class ChatTimelineViewController: UIViewController {
     private func teardown() {
         inFlight?.cancel()
         inFlight = nil
+        olderTask?.cancel()
+        olderTask = nil
+        loadingOlder = false
         streamTask?.cancel()
         streamTask = nil
         stream?.stop()
@@ -314,7 +385,7 @@ final class ChatTimelineViewController: UIViewController {
                 pending.append(frame)
                 return
             }
-            inputs = TimelineMerge.apply(inputs, frame.rows, gone: frame.gone)
+            adopt(window: TimelineMerge.apply(window, frame.rows, gone: frame.gone))
             refold()
         case .status, .connected, .frameDropped:
             // Status drives the header (not built yet); a dropped frame is one
@@ -342,13 +413,18 @@ final class ChatTimelineViewController: UIViewController {
                     guard let self else { return }
                     self.inFlight = nil
                     self.spinner.stopAnimating()
-                    // Merged, not assigned. On a foreground refresh this screen
-                    // may already hold rows older than the window (paged-in
-                    // history), and assigning would silently throw them away.
-                    self.inputs = TimelineMerge.apply(self.inputs, wire.map(\.asInput))
-                    self.inputs = TimelineMerge.fold(self.inputs, self.pending)
+                    // The query's rows ARE the window — it is the newest N and
+                    // nothing else. Merging into what the screen already held
+                    // would let the window grow without bound across foreground
+                    // refreshes, and would hide the shed rows from `adopt`,
+                    // which is the one place that can still save them.
+                    self.adopt(window: TimelineMerge.fold(wire.map(\.asInput), self.pending))
                     self.pending = []
                     self.windowLanded = true
+                    // The seed for "is there history behind this?": a window
+                    // that came back at its limit probably has some. Only a
+                    // server page may overrule it — see `saysMore`.
+                    self.windowFull = wire.count >= WebContract.timelineLimit
                     self.refold()
                 }
             } catch {
@@ -367,6 +443,96 @@ final class ChatTimelineViewController: UIViewController {
         }
     }
 
+    /// Move the live window forward, keeping whatever it shed.
+    ///
+    /// The rows that leave the window — slid off by newer ones, or named in the
+    /// stream's `gone` — are handed to the history list rather than dropped,
+    /// whenever losing them would be visible. `TimelinePager.shouldKeepShed`
+    /// decides; this method is the only place `window` is assigned, so there is
+    /// no path that can skip it.
+    @MainActor
+    private func adopt(window next: [FoldInput]) {
+        let shed = TimelinePager.shed(window, next)
+        if !shed.isEmpty,
+           TimelinePager.shouldKeepShed(historyOnScreen: !older.isEmpty,
+                                        followingTail: isFollowingTail) {
+            older = TimelinePager.absorb(older, shed)
+        }
+        window = next
+    }
+
+    /// Is the reader parked on the newest row?
+    ///
+    /// The list is upside down, so "at the tail" is contentOffset zero — plus
+    /// the inset the collection adds, which is not zero at rest.
+    private var isFollowingTail: Bool {
+        collection.contentOffset.y + collection.adjustedContentInset.top <= Self.tailSlack
+    }
+
+    private struct PageInput: Encodable {
+        let sessionId: String
+        let beforeId: String
+        let limit: Int
+        let digest: Bool
+    }
+
+    private struct OlderPage: Decodable {
+        let rows: [WireMessage]
+        let hasMore: Bool
+    }
+
+    /// One page of history older than the oldest row on screen.
+    ///
+    /// Server only, for now: the web serves a page straight out of IndexedDB
+    /// when the store can PROVE it holds one unbroken run reaching the anchor
+    /// (`pageBefore`, walking the `nextId` each row was written with). `ChatCache`
+    /// here has the prose layer but not the row layer that proof reads, so this
+    /// screen always asks. Adding the store is what makes the proof portable;
+    /// porting the proof first would be a function with nothing to check.
+    ///
+    /// Appending rather than prepending, because the list is flipped. This is
+    /// the trade the flip was taken for: the web spends `use-prepend-anchor.ts`
+    /// (514 lines) holding the reader's position while history lands above them,
+    /// and here the same page lands below the fold and moves nothing.
+    private func loadEarlier() {
+        guard !loadingOlder, hasMore, let entry = KeyStore.active() else { return }
+        // The oldest row held, whichever list it is in. Nil only before the
+        // first window lands, which `hasMore` has already ruled out.
+        guard let anchor = older.first ?? window.first else { return }
+        loadingOlder = true
+        refold()
+
+        let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+        // Digested, like the web's pager: the collapsed timeline shows tool names
+        // and first lines, and about two thirds of an undigested page is
+        // tool_result nobody paints. Opening a capsule fetches the real bodies.
+        let input = PageInput(sessionId: sessionId, beforeId: anchor.id,
+                              limit: WebContract.olderPage, digest: true)
+        olderTask = Task { [weak self] in
+            let page = try? await api.query("chat.listMessagesBefore", input: input, as: OlderPage.self)
+            if Task.isCancelled { return }
+            await MainActor.run {
+                guard let self else { return }
+                self.olderTask = nil
+                self.loadingOlder = false
+                guard let page else {
+                    // Leave `saysMore` alone: a failed request says nothing about
+                    // whether history exists, and writing `false` here would
+                    // retire the pill over one dropped connection.
+                    self.refold()
+                    return
+                }
+                // A page that came back empty is the beginning of the session,
+                // whatever the flag claims. Trusting the flag alone is how a
+                // button ends up pulling forever: it stays offered, every scroll
+                // at the far end fires another pull, each returns nothing.
+                self.saysMore = page.hasMore && !page.rows.isEmpty
+                if !page.rows.isEmpty { self.older = page.rows.map(\.asInput) + self.older }
+                self.refold()
+            }
+        }
+    }
+
     /// Re-fold the whole window and redraw whatever changed.
     ///
     /// Folding the lot on every frame is the blunt option and it is the right
@@ -375,9 +541,10 @@ final class ChatTimelineViewController: UIViewController {
     /// exactly where a seam would land. Sixty rows of pure-function work per
     /// push is not the cost worth being clever about.
     private func refold() {
-        show(rows: FoldRuns.fold(inputs))
-        message.isHidden = !inputs.isEmpty
-        if inputs.isEmpty { message.text = "Nothing in this conversation yet." }
+        let all = allInputs
+        show(rows: FoldRuns.fold(all))
+        message.isHidden = !all.isEmpty
+        if all.isEmpty { message.text = "Nothing in this conversation yet." }
     }
 
     /// `rows` arrives oldest-first, the way the fold produces it and the way the
@@ -395,10 +562,38 @@ final class ChatTimelineViewController: UIViewController {
         }
         order = newestFirst.map(\.key)
         rowsByKey = Dictionary(newestFirst.map { ($0.key, $0) }, uniquingKeysWith: { _, last in last })
+        // LAST, because the list is upside down: the item after the oldest row
+        // is the one drawn above it.
+        let showPill = hasMore && !newestFirst.isEmpty
+        var items = order
+        if showPill { items.append(Self.earlierKey) }
+        var reconfigure = changed
+        // Same problem as a row whose content changed under an unchanged key:
+        // `loading…` and `↑ load earlier` are one identifier.
+        if showPill, pillShows != loadingOlder { reconfigure.append(Self.earlierKey) }
+        pillShows = showPill ? loadingOlder : nil
         var snapshot = NSDiffableDataSourceSnapshot<Section, String>()
         snapshot.appendSections([.main])
-        snapshot.appendItems(order, toSection: .main)
-        if !changed.isEmpty { snapshot.reconfigureItems(changed) }
+        snapshot.appendItems(items, toSection: .main)
+        if !reconfigure.isEmpty { snapshot.reconfigureItems(reconfigure) }
         source.apply(snapshot, animatingDifferences: false)
+    }
+}
+
+// MARK: - Pulling history in
+
+extension ChatTimelineViewController: UICollectionViewDelegate {
+    /// Infinite scroll-up, which on a flipped list is scrolling towards the END.
+    ///
+    /// `pullMargin` in `chat/page.tsx`: fire while there is less than two
+    /// screens of runway left, floored so a short viewport still gets a useful
+    /// lead. `loadEarlier` is the one that decides whether a pull is legal, so a
+    /// fling that crosses the line on twenty consecutive frames still costs one
+    /// request.
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView.bounds.height > 0 else { return }
+        let runway = scrollView.contentSize.height - (scrollView.contentOffset.y + scrollView.bounds.height)
+        guard runway < TimelinePager.pullMargin(viewportHeight: scrollView.bounds.height) else { return }
+        loadEarlier()
     }
 }

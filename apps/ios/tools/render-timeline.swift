@@ -65,12 +65,32 @@ struct TimelineMock: View {
     let scheme: ColorScheme
     var body: some View {
         VStack(alignment: .leading, spacing: TimelineMetrics.rowGap) {
+            // Drawn at the top, where the collection view puts it: the item
+            // after the oldest row in a list that is upside down. Its `pb-3` is
+            // already paid by this VStack's `gap-3`, so it adds nothing here.
+            LoadEarlierPill(loading: false)
             ForEach(Array(ROWS.enumerated()), id: \.offset) { _, row in
                 TimelineRowView(row: row, width: CONTENT_WIDTH, now: now)
             }
         }
         .padding(.horizontal, PAD_H)
         .padding(.vertical, 16)                  // py-4
+        .frame(width: CANVAS_WIDTH, alignment: .topLeading)
+        .background(WebContract.background.resolve(scheme))
+        .environment(\.colorScheme, scheme)
+    }
+}
+
+/// The "load earlier" pill in both states, on the page background.
+struct PillStates: View {
+    let scheme: ColorScheme
+    var body: some View {
+        VStack(alignment: .leading, spacing: TimelineMetrics.rowGap) {
+            LoadEarlierPill(loading: false)
+            LoadEarlierPill(loading: true)
+        }
+        .padding(.horizontal, PAD_H)
+        .padding(.vertical, 16)
         .frame(width: CANVAS_WIDTH, alignment: .topLeading)
         .background(WebContract.background.resolve(scheme))
         .environment(\.colorScheme, scheme)
@@ -93,6 +113,10 @@ enum Main {
         let outDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "."
         shoot(TimelineMock(scheme: .dark), "timeline-dark", outDir)
         shoot(TimelineMock(scheme: .light), "timeline-light", outDir)
+        // Both pill states, larger than they appear above, because the only
+        // difference between them is a word and `disabled:opacity-50`.
+        shoot(PillStates(scheme: .dark), "timeline-earlier-dark", outDir)
+        shoot(PillStates(scheme: .light), "timeline-earlier-light", outDir)
 
         // What the fold made of the fixture, so a wrong row can be NAMED rather
         // than squinted at — the same reason render-list.swift prints its

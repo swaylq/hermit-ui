@@ -39,6 +39,7 @@ export const CONTRACT_SWIFT = 'apps/ios/Shared/WebContract.swift';
 /** The web files whose numbers the phone has to agree with. */
 export const SOURCES = {
   window: 'apps/dashboard/src/lib/chat-window.ts',
+  pager: 'apps/dashboard/src/components/chat/use-older-pages.ts',
   stream: 'apps/dashboard/src/app/chat/page.tsx',
   liveActivity: 'apps/dashboard/src/server/push/live-activity.ts',
   statusDots: 'apps/dashboard/src/lib/session-status.ts',
@@ -278,6 +279,7 @@ export interface ThemeEntry {
 export interface Contract {
   timelineLimit: number;
   timelineDigest: boolean;
+  olderPage: number;
   streamBackoffsSec: number[];
   streamIdleDeadlineSec: number;
   workingStaleSec: number;
@@ -356,6 +358,7 @@ export function readContract(): Contract {
   return {
     timelineLimit: INITIAL_WINDOW,
     timelineDigest: TIMELINE_DIGEST,
+    olderPage: readNumberConst(SOURCES.pager, 'OLDER_PAGE'),
     streamBackoffsSec: readNumberArrayConst(SOURCES.stream, 'BACKOFFS').map((ms) => ms / 1000),
     streamIdleDeadlineSec: readNumberConst(SOURCES.stream, 'IDLE_DEAD_MS') / 1000,
     workingStaleSec: readNumberConst(SOURCES.liveActivity, 'WORKING_STALE_MS') / 1000,
@@ -421,6 +424,14 @@ export function renderWebContractSwift(c: Contract): string {
   L.push(`    static let timelineLimit = ${c.timelineLimit}`);
   L.push('    /// TIMELINE_DIGEST — ask for the window as the collapsed timeline renders it.');
   L.push(`    static let timelineDigest = ${c.timelineDigest}`);
+  L.push('');
+  L.push(`    // MARK: - Load earlier (${SOURCES.pager})`);
+  L.push('');
+  L.push('    /// OLDER_PAGE — messages per "load earlier". Deliberately small: the web');
+  L.push('    /// measured a bigger page blocking its main thread past the point where the');
+  L.push('    /// prepend anchor gave up. The phone has no such deadline, but the two have');
+  L.push('    /// to page in the same steps or the same scroll lands on different rows.');
+  L.push(`    static let olderPage = ${c.olderPage}`);
   L.push('');
   L.push(`    // MARK: - Stream reconnect (${SOURCES.stream})`);
   L.push('');

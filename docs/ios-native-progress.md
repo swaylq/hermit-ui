@@ -422,8 +422,20 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       网页为「在顶部插入而不跳动」花掉的是 `use-prepend-anchor.ts` 整整 514 行。
       **还挂在 URL 上、不是前门**：`hermit://timeline/<id>`，和当初引入原生列表同一个做法；
       列表里点一行仍然进网页 chat 页，要等 M5 有输入框才该换
-- [ ] 分页 + `nextId` 空洞证明（`lib/chat-cache/types.ts:47-68`）—— 骨架只取最新那一窗，
-      没有「更早」这条路
+- [x] **「更早」这条路通了** —— 第 2 轮（perfect-goal）。`chat.listMessagesBefore` 一页
+      `WebContract.olderPage` 行，`LoadEarlierPill` 是网页那颗 `↑ load earlier` 药丸
+      （连 `loading…` 和 `disabled:opacity-50` 一起），滚到离尽头不足两屏自动拉
+      （`pullMargin`，两屏跑道、有下限）。倒置之后这是 append：网页为「顶部插入不跳位」
+      写了 `use-prepend-anchor.ts` 514 行，这边一行都不用。
+      屏幕现在拿着**两个列表** —— 直播窗口和它下面的历史 —— 而两者会自己不再接壤，
+      所以 `Hermit/TimelinePager.swift` 把 `shedRows` / `shouldKeepShed` / `absorbShed`
+      也移植了（同一张夹具，`tools/merge-fixture.sh`）。**没有移植 `chunksBottomFirst`**，
+      理由写在文件头：它买的两件事在倒置的 collection view 上都不存在
+- [ ] `nextId` 空洞证明 + 本地缓存直接供页（`lib/chat-cache/types.ts:47-68`、
+      `use-older-pages.ts` 的 `pageBefore`）—— 翻页现在每一页都问服务端。网页在本地存储
+      **能证明**自己握着一段没断过的链时直接供页；那个证明读的是 `full` / `digest` 两个行存储，
+      而 `ChatCache` 今天只有 prose 那一层。**先加存储，再移植证明** —— 反过来做，
+      就是一个没有调用方的纯函数
 - [ ] 两级保真：digest / full，展开胶囊时 `chat.getMessages` 取真实体
 - [ ] 交互卡片：`kind: permission | question`，`status`、`decision`、`answeredBy`
 - [ ] 图片 / 文件块 + lightbox（`QLPreviewController`）
@@ -473,83 +485,68 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**第 0 条：前门退回网页，排在时间线骨架之前。** 目标那节第 1 条的落地，
-是现在屏幕上唯一一处和网页不一样的地方，sway 已经看见了。
+> 2026-09-05 16:35 起，这个清单由 `perfect-goal` 的轮次驱动，轮次日志在
+> `~/agents/asst/projects/ios-native/goal/ROUNDS.md`，目标与验收标准在同目录的 `GOAL.md`。
+> 目标未变：把这个清单清空。**清单 31/47。**
 
-- `SceneDelegate` 冷启动改回「网页在栈底」；原生列表退回第 12 轮的位置 ——
-  `hermit://sessions` 深链接后面。**一行代码都不要删**：它就是将来那个原生抽屉的内容。
+**第 1 条：给时间线搭一个能翻页的假服务端，然后走一次端到端。**
+第 2 轮把「更早」接上了，但只有纯函数有夹具 —— 药丸、滚动触发、把掉出窗口的行 shed 进历史，
+这三样只过了编译。`tools/bridge-fixture/server.py` 今天只答 `chat.listSessions`，
+要加 `chat.listMessages`、`chat.listMessagesBefore` 和那条 SSE，才写得出 UI 用例。
+做完顺带把 M7 那条「装到模拟器上从头到尾走一遍」一次走完：列表 → 时间线 → 往上翻 → 流回来。
+**同一趟里把三条一直没走过的路一起验掉**：`hermit://session/<id>`、`hermit://timeline/<id>`
+（`XCUIDevice.shared.system.open` 就够），以及通知点击那条。
+
+**第 2 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
+所以翻页每一页都问服务端，而网页读过一遍的历史是零网络的。加 `full` / `digest` 两个行存储
+（带 `nextId`），`pageBefore` 才有调用方，`ChatCache` 欠的「两级保真」也一起解掉。
+
+**第 0 条仍然欠着：前门退回网页。** 目标那节第 1 条的落地，是现在屏幕上唯一一处
+和网页不一样的地方，sway 装上 build 7 第一次看见就提了。
+- `SceneDelegate` 冷启动改回「网页在栈底」；原生列表退回 `hermit://sessions` 深链接后面。
+  **一行代码都不要删**：它就是将来那个原生抽屉的内容。
 - `setNativeEdgeSwipe` 把左边缘交还网页；`interactivePopGestureRecognizer` 的 delegate
-  改成「栈深 > 1 **且当前这屏不是网页**」才放行，否则边缘又被抢走。
-- 第 15 轮那三样别丢：网页实例由 `SceneDelegate` 强持有（pop 掉等于销毁，
-  见「踩过的坑」）、深链接/通知/Live Activity 仍走 `AppShell.openPath`、
-  `SessionListCache` 留着（冷启动快照暂时没有地方画，但抽屉原生化时立刻要用）。
-- 验收：模拟器冷启动落在 `/chat` 的上次那个会话上；左边缘划出来的是**网页的**抽屉；
-  `hermit://sessions` 还能开出那一屏。UI 用例的 `backToSessionList()` 要跟着改写
-  （第 15 轮那五条会再动一次，这次是往回动）。
+  改成「栈深 > 1 **且当前这屏不是网页**」才放行。
+- 第 15 轮那三样别丢：网页实例由 `SceneDelegate` 强持有、深链接/通知/Live Activity 仍走
+  `AppShell.openPath`、`SessionListCache` 留着。
+- UI 用例的 `backToSessionList()` 要跟着改写（第 15 轮那五条会再动一次，这次是往回动）。
 
-**第 0.5 条（不急，但方向定了）：抽屉原生化是一个独立里程碑，不是 M6 的边角。**
+**第 0.5 条：抽屉原生化是一个独立里程碑，不是 M6 的边角。**
 范围是整个侧栏 —— 机器选择器、市场入口、NAV 4 项、brain 6 项、最近会话 / agent / cron
 三列、footer；几何与手势照目标那节第 2 条的数；并且**网页那半要能被壳关掉**
 （多加一个 native-bridge 开关），否则两个抽屉会同时存在、边缘手势打架。
 在它完整之前不要切换 —— 半个抽屉比现在这个全屏列表更不像网页。
 
-**第 20 轮做完时间线骨架，M4 的第四条前半和最后一条都勾掉了。清单 30/46。**
-`TimelineRowView.swift`（纯 SwiftUI，一个 `FoldedRow` 进、一行像素出）+
-`ChatTimelineViewController.swift`（倒置 collection view）+ `tools/render-timeline.sh`
-（几秒，不用模拟器）。**三个纯函数（`SessionStatus`、`ContentBlock`、`FoldRuns`）
-到这一轮才第一次有调用方**，也是第一次有东西可以看：`shots/timeline-dark.png` /
-`timeline-light.png` 亲眼看过，用户气泡、运行胶囊（`▸ Read · Bash · Edit  1 error 3 步 · 1m`）、
-思考胶囊、Brain 虚线框、系统药丸、ask 卡、图片/文件 chip、`sink_deliverable` 灰卡片、
-「turn ended without a reply」十一种行都画对了。
+**markdown 那一条随时可以开**（M4 第三条）：sway 已经点头可以引第三方依赖，
+两条候选路要**先各画一屏逐像素比再定**。骨架把位置留好了：换掉 `TimelineRowView` 里
+`ProseText` 那一个 `Text` 即可。
 
-**下一轮建议做两件小的，都在骨架上，不要开新面**：
-
-1. **接上 `HermitStream`，让这一屏会自己动。** 现在是 `viewWillAppear` 拉一次就不管了 ——
-   一条正在写的回复不会长，胶囊不会转。`HermitStream` 已经存在并且验过（第 8 轮），
-   缺的只是「一帧到了怎么并进 `[FoldedRow]`」：按 id 覆盖 `FoldInput` 再整段重折是最笨也最对的，
-   因为 `safeSplitIndex` 保证了接缝处分段折 == 整体折，先这么做，慢了再说。
-2. **把「更早」那条路补上**（M4 第四条剩下的半条）：`chat.listMessagesBefore` +
-   `nextId` 空洞证明。倒置之后这是 append，代价比网页那边小一个数量级，值得趁着还记得就做。
-
-**做完这两条，时间线才值得考虑接成前门**；在那之前 `hermit://timeline/<id>` 是唯一入口，
-列表点一行还是进网页。**接前门这件事要等 M5 有输入框** —— 一个回不了话的时间线不是替代品。
-
-**骨架自己欠的三件（都写在代码注释里，不急）**：
+**时间线骨架自己欠的三件（都写在代码注释里，不急）**
 
 1. **胶囊点不开。** `▸` 画着，但没有展开态，也就没有 `chat.getMessages` 那条取全量的路
-   （M4 第五条）。这不挡任何事，展开态是往 `RunCapsuleView` 底下加一段。
-2. **图片/文件是一行 chip，不是 `file-preview.tsx`。** 只保证「说出它是什么」，
-   真的缩略图和 lightbox 是 M4 第七条。
+   （M4 第五条）。展开态是往 `RunCapsuleView` 底下加一段。
+2. **图片/文件是一行 chip，不是 `file-preview.tsx`。** 真的缩略图和 lightbox 是 M4 第七条。
 3. **行距用的是 `.lineSpacing`，不是真的 CSS 行盒。** `TimelineMetrics` 记着网页每一档的
-   `line-height`（`text-sm` 是 20 不是 21 —— Tailwind v4 给它配了 `calc(1.25/0.875)`，
-   不是 preflight 那个 1.5），但 SwiftUI 只能调行间距、调不了首行的行盒高度。
-   第 17 轮在会话行上踩过一模一样的坑，那次是靠 `.frame(height:)` 逐行钉死的。
-   **M6 给这一屏跑第一次像素比对之前，得先决定这里用哪种做法** —— 会话行是一行文字所以钉得住，
-   一段可换行的正文钉不住。
+   `line-height`，但 SwiftUI 只能调行间距、调不了首行的行盒高度。
+   **M6 给这一屏跑第一次像素比对之前，得先决定这里用哪种做法** —— 会话行是一行文字所以
+   能用 `.frame(height:)` 钉死，一段可换行的正文钉不住。
 
-**接着处理的两件（第 18 轮量出来的，原样有效）**：
+**比对流程自己的两件（第 18 轮量出来的，原样有效）**
 
 1. **真列表的行距是 52.33pt，像素比对画的那张是 49.5pt** —— 差 2.83pt，11 行完全均匀不累积。
    `tools/pixel-compare.sh` 结构上看不见这一段（它画孤立的一行，真列表是
-   `UIHostingConfiguration` 里的一个 cell）。**新屏也吃这个亏**：`render-timeline.sh` 画的
-   同样是脱离 cell 的一列。M6 开工前值得花十分钟定位。
+   `UIHostingConfiguration` 里的一个 cell）。`render-timeline.sh` 画的同样是脱离 cell 的一列。
+   M6 开工前值得花十分钟定位。
 2. `gen-ios-contract.ts` 直接生成混好的半透明色（Tailwind v4 的 `/50` 走
    `color-mix(in oklab, …, transparent)`，Swift 这边是 `.opacity(0.5)` 直接混，差 9–12/255）。
-   一次生成器改动。**这一轮顺手给生成器加了 alpha 支持**（`--border` 在 `.dark` 里是
-   `oklch(1 0 0 / 10%)`），那条路已经通了，剩下的是把 `color-mix` 也算进去。
+   alpha 那条路第 20 轮已经通了，剩下的是把 `color-mix` 也算进去。
 
-**仍然欠着的（顺序不变，都不大）**：
+**仍然欠着的小事**
 
-1. **通知点击那条路没有被真的走过。** `AppDelegate` 收到 APNs 的 `path` 交给
-   `AppShell.openPath`，而模拟器没有 APNs、UI 用例也没覆盖。
-   `XCUIDevice.shared.system.open` 开一次 `hermit://session/<id>` 就能覆盖大半 ——
-   **现在多了一个同样没走过的 `hermit://timeline/<id>`，两个一起验最省事**。
-2. **地址填错、但设备上还留着 keyring 时，前门是一张加载失败的列表。** 够用但不好发现。
-3. **`hermit://sessions` 的语义变了**：现在是 `popToRootViewController`。
-4. 相对时间不会自己走（列表和时间线都是）；浅色模式下骨架屏几乎看不见，见「踩过的坑」。
-5. `chat.send` 的幂等键现在可以真的驱动了（本机有 Postgres 了）。
-6. **M7 那条「装到模拟器上从头到尾走一遍」仍然没做过。** 现在有第二屏可看了，
-   等第 21 轮把流接上再走，一次走完列表 + 时间线两屏。
+1. **地址填错、但设备上还留着 keyring 时，前门是一张加载失败的列表。** 够用但不好发现。
+2. **`hermit://sessions` 的语义变了**：现在是 `popToRootViewController`。
+3. 相对时间不会自己走（列表和时间线都是）；浅色模式下骨架屏几乎看不见，见「踩过的坑」。
+4. `chat.send` 的幂等键现在可以真的驱动了（本机有 Postgres 了）。
 
 **部署纪律不变**：`20260905090000_chatmessage_client_id` 那个提交和
 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线，先上代码后跑迁移会让部署上的
@@ -557,18 +554,32 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 连接串 `postgresql://znmacserver001@localhost:5432/hermit_dev`，**worktree 里没有 `.env`**，
 独立检出里跑 Prisma 要显式带上它。
 
-**要 sway 拍板的：一件都不剩了。** 09-05 15:05 那句「要和网页交互和 UI 保持完全一致」
-定了三件——左边缘**归网页抽屉**（推翻第 15 轮的处理）、`/chat/terminal` **保持网页**、
-等宽字体**把 Geist Mono 塞进包里**（出处见文件最上面「这条一改，已经落地的四件」）；
-15:40 那句「可以装第三方依赖」定了第四件——**markdown 可以引依赖，「零第三方依赖」这条性质
-到此结束**。选型准绳和两条候选路写在 M4 那一条里，**要先各画一屏逐像素比再定**。
-骨架已经把位置留好了：换掉 `ProseText` 里那一个 `Text` 就行。
-
-`ChatCache` 欠的两件仍然要等 M4 有调用方：`full`/`digest` 两层，以及真机上的 FTS5
-（`ChatCache.open` 建表时就 `CREATE VIRTUAL TABLE`，旧系统缺 FTS5 会在**开库**时炸）。
-`HermitStream` 的前后台切换同理 —— 上面第 1 条会同时解掉它。
+**要 sway 拍板的：一件都不剩。** 09-05 15:05 那句「要和网页交互和 UI 保持完全一致」定了三件
+（左边缘归网页抽屉、`/chat/terminal` 保持网页、Geist Mono 塞进包里），
+15:40 那句「可以装第三方依赖」定了第四件（markdown 可以引依赖）。
+16:5x 那句「全部复刻网页，做完再评审，反复改到完美」把范围定死成全量，见 `GOAL.md`。
 
 ## 踩过的坑
+
+### 网页自己有两套排序，而且它们不一致（第 2 轮 perfect-goal）
+
+`lib/chat-cache/merge-messages.ts` 的 `order` 把 ISO 解析成时刻再比；
+`components/chat/use-older-pages.ts` 的 `isOlder` 直接比 ISO 字符串。
+今天服务端只发三位毫秒的形状（superjson 一律 `toISOString()`），两者答案一样，
+**所以这是隐患不是活 bug**。一旦出现不带毫秒的时间戳，`…:00Z` 在字节序里排在
+`…:00.500Z` **后面**（`.` 0x2E < `Z` 0x5A），`isOlder` 就会认为一行不比窗口边缘旧、
+于是把它丢掉而不是交给 pager —— 正是 `shedRows` 存在要防的那个洞。
+**Swift 那半照抄了，两个都照抄**，并在 `merge-cases.json` 的 `orderSkew` 一节把分歧钉死：
+两边都必须复现它，谁也不能「顺手把两个排序统一一下」。
+移植的准绳是「和网页一致」，不是「和自己一致」；要改就改网页，那是另一轮的事。
+
+### 「Merged, not assigned」在多一个列表之后就反过来了（第 2 轮 perfect-goal）
+
+第 1 轮给窗口查询写的是「合并进 `inputs` 不是覆盖」，理由是屏幕上可能已经有翻页拿到的
+更早的行。等历史真的搬进自己的 `older` 列表之后，这句话就成了 bug 的来源：合并会让
+直播窗口跨每一次前台刷新只增不减，也会让掉出窗口的行**根本不出现在 prev/next 的差里** ——
+而那个差是唯一还能把它们救进历史列表的地方。改成「查询结果就是窗口」，
+掉出去的交给 `TimelinePager.shed`。**一条注释写得越有道理，越要在结构变了之后重读一遍。**
 
 ### SwiftUI 说不出「最多占父容器的 85%」，宽度只能从外面喂进去（第 20 轮）
 
