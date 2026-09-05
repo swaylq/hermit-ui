@@ -79,6 +79,12 @@ const HAND_CONVERTED: Record<string, [number, number, number]> = {
   // transfer function is 0.0905, and a neutral is the same number in P3.
   'neutral-800': [0.1494, 0.1494, 0.1494],
   'neutral-900': [0.0905, 0.0905, 0.0905],
+  // The archived header's Restore tint. Same independent path again, and it
+  // reproduced amber-400 and rose-600 above to the last printed digit on the
+  // way in — which is the only reason these two count as a second opinion
+  // rather than a transcription of the generator's output.
+  'amber-500': [0.9399, 0.6206, 0.0585],
+  'amber-700': [0.6799, 0.3277, 0.0521],
 };
 
 test('oklch → Display P3 lands where the hand conversion landed', () => {

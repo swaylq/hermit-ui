@@ -58,6 +58,7 @@ import { dropLanded, stopPill, turnInFlight } from '@/components/chat/composer-c
 import { useCachedTimeline, useTimelineWriteThrough } from '@/lib/chat-cache/use-chat-cache';
 import { applyMessagePush, foldPushes, type PushFrame } from '@/lib/chat-cache/merge-messages';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
+import { headerActions, type HeaderActionId } from '@/components/chat/header-actions-core';
 import { EmptyChat } from '@/components/chat/empty-chat';
 import { TypingIndicator } from '@/components/chat/message-bits';
 import { MessageTimeline } from '@/components/chat/message-timeline';
@@ -1985,6 +1986,24 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     return () => window.removeEventListener('keydown', onKey);
   }, [livePreviewUrl, previewOpenUrl, openPreview, closePreview]);
 
+  // Which buttons the cluster has, and which are disabled. Lifted out of this
+  // JSX into `header-actions-core.ts` so the iOS header can run the SAME rules
+  // (apps/ios/tools/actions-fixture.sh compares the two over one table) — an
+  // action that does not apply is ABSENT from the list rather than greyed out,
+  // which is what this file always did by hand.
+  const headerActs = headerActions({
+    session: session ?? null,
+    scoped: scope.scoped,
+    creatingChat,
+    deleting: deleteSession.isPending,
+    restarting: restartSession.isPending,
+    reopening: reopenSession.isPending,
+    findOpen,
+    moreOpen,
+    hasTmuxPane: hasTmuxPane(session?.runtime),
+  });
+  const act = (id: HeaderActionId) => headerActs.find((a) => a.id === id);
+
   const secondaryActions = (
     <>
       {/* Pure chat. In THIS group, not beside the new-chat button, because this
@@ -1999,10 +2018,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           which is also why it is not a toggle. */}
       <ConfirmIconButton
         icon={Eye}
-        confirmLabel="pure chat"
+        confirmLabel={act('pureChat')?.confirmLabel}
         title="pure chat — start a NEW read-only session with this agent. It can look at files, search the web and add to its own memory, but cannot write, edit, run commands or spawn sub-agents. This conversation is untouched."
-        busy={creatingChat}
-        disabled={!session?.agentName}
+        busy={!!act('pureChat')?.busy}
+        disabled={!!act('pureChat')?.disabled}
         onConfirm={startPureChat}
       />
       <button
@@ -2017,7 +2036,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       <button
         type="button"
         onClick={() => setFindOpen((v) => !v)}
-        aria-pressed={findOpen}
+        aria-pressed={!!act('find')?.pressed}
         aria-label="find in conversation"
         title="Find in this conversation (⌘F)"
         className={cn(
@@ -2030,14 +2049,14 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
       <ConfirmIconButton
         icon={FoldVertical}
         title="compact — summarize the conversation so the agent's context window shrinks (runs /compact, keeps continuity). THIS is what reduces a large context; restart only reloads the whole history via --resume."
-        disabled={!session || !!session?.closedAt}
+        disabled={!!act('compact')?.disabled}
         onConfirm={() => send.mutate({ sessionId, text: '/compact', images: [], files: [] })}
       />
       <ConfirmIconButton
         icon={RotateCw}
         title="restart — kill this session's tmux pane; the next message respawns claude with --resume (history preserved; context NOT reduced — use compact ⌄ for that)"
-        busy={!!session?.restartRequestedAt || restartSession.isPending}
-        disabled={!session}
+        busy={!!act('restart')?.busy}
+        disabled={!!act('restart')?.disabled}
         onConfirm={() => { restartSession.mutate({ id: sessionId }); }}
       />
     </>
@@ -2060,7 +2079,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
         if (!session?.agentName || newAgentChat.isPending) return;
         newAgentChat.mutate({ agentName: session.agentName });
       }}
-      disabled={!session?.agentName || newAgentChat.isPending}
+      disabled={!!act('newChat')?.disabled}
       aria-label="new chat with this agent"
       title={session?.agentName ? `New chat with ${session.agentName}` : 'New chat with this agent'}
       className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground disabled:cursor-wait disabled:opacity-50"
@@ -2323,11 +2342,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               overflow tray) and tinted, because for a closed session it is the only
               action that does anything — everything else here is disabled, and the
               composer just says "session is closed". */}
-          {session?.closedAt && (
+          {act('restore') && (
             <button
               type="button"
               onClick={() => reopenSession.mutate({ id: sessionId })}
-              disabled={reopenSession.isPending}
+              disabled={!!act('restore')?.disabled}
               aria-label="restore from archive"
               title="Restore from archive — bring this chat back into the sidebar. It stays asleep until your next message, which wakes it with full history (--resume)."
               className="inline-flex items-center justify-center h-7 w-7 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-400 transition-colors cursor-pointer animate-in fade-in-0 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-wait"
@@ -2368,7 +2387,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           <button
             type="button"
             onClick={() => setMoreOpen((v) => !v)}
-            aria-expanded={moreOpen}
+            aria-expanded={!!act('more')?.pressed}
             aria-label={moreOpen ? 'hide more actions' : 'more actions'}
             title="More actions"
             className={cn(
@@ -2383,7 +2402,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
               the terminal link would attach to a pane that does not exist.
               `session.runtime` is the RESOLVED backend (getSession/listSessions
               spread it over the row), so an inherited default counts too. */}
-          {!scope.scoped && hasTmuxPane(session?.runtime) && (
+          {act('terminal') && (
             <Link
               href={`/chat/terminal?session=${encodeURIComponent(sessionId)}`}
               title="attach to this session's tmux pane"
@@ -2395,10 +2414,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
           )}
           <ConfirmIconButton
             icon={Trash2}
-            danger
+            danger={!!act('delete')?.danger}
             title="move this session to the recycle bin"
-            busy={deleteSession.isPending}
-            disabled={!session}
+            busy={!!act('delete')?.busy}
+            disabled={!!act('delete')?.disabled}
             onConfirm={() => deleteSession.mutate({ ids: [sessionId], reason: 'manual' })}
           />
         </div>

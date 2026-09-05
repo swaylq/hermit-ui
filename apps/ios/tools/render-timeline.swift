@@ -107,6 +107,30 @@ struct HeaderStates: View {
         ]
     }
 
+    /// A live claude-tmux session with nothing in flight.
+    private var liveState: HeaderActionState {
+        HeaderActionState(session: .init(agentName: "asst"), hasTmuxPane: true)
+    }
+    /// The same session archived: Restore appears, compact goes dead.
+    private var archivedState: HeaderActionState {
+        HeaderActionState(session: .init(agentName: "asst", closed: true), hasTmuxPane: true)
+    }
+    /// The overflow tray open, which is the only way to see the five that fold.
+    private var trayState: HeaderActionState {
+        var s = liveState
+        s.moreOpen = true
+        s.findOpen = true
+        return s
+    }
+    /// A create in flight — one flag, two treatments: pure chat goes "…" and
+    /// new chat goes flat.
+    private var busyState: HeaderActionState {
+        var s = trayState
+        s.creatingChat = true
+        s.restarting = true
+        return s
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(models.enumerated()), id: \.offset) { _, pair in
@@ -115,7 +139,29 @@ struct HeaderStates: View {
                     .foregroundStyle(WebContract.mutedForeground.resolve(scheme).opacity(0.6))
                     .padding(.horizontal, PAD_H)
                     .padding(.top, 8)
-                ChatHeaderView(model: pair.1, onBack: {})
+                ChatHeaderView(model: pair.1, onBack: {},
+                               actions: pair.1.closed ? archivedState : liveState,
+                               onAction: { _ in })
+            }
+            // The tray, which nothing above can show: it is drawn OVER the
+            // title, so it needs a header of its own to float on.
+            ForEach(Array([("the overflow tray, open", trayState),
+                           ("a create and a restart in flight", busyState),
+                           ("a share link (no terminal) with no agent name",
+                            HeaderActionState(session: .init(agentName: nil), scoped: true)),
+                           ("nothing loaded yet",
+                            HeaderActionState(session: nil))].enumerated()), id: \.offset) { _, pair in
+                Text(pair.0)
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(WebContract.mutedForeground.resolve(scheme).opacity(0.6))
+                    .padding(.horizontal, PAD_H)
+                    .padding(.top, 8)
+                ChatHeaderView(
+                    model: ChatHeaderModel(title: "a long enough title that the row has to yield",
+                                           agentName: "asst", status: working("Bash"),
+                                           backend: "Claude", contextTokens: 120_000,
+                                           contextWindow: 1_000_000, closed: false),
+                    onBack: {}, actions: pair.1, onAction: { _ in })
             }
         }
         .frame(width: CANVAS_WIDTH, alignment: .topLeading)

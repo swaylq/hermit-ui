@@ -312,6 +312,8 @@ export const THEME_VARS: ReadonlyArray<{ cssVar: string; note: string }> = [
   { cssVar: 'foreground', note: 'body text, and the user bubble it is knocked out of' },
   { cssVar: 'muted', note: 'the fill behind a system row and an unknown block' },
   { cssVar: 'border', note: 'a run capsule\'s hairline' },
+  { cssVar: 'accent', note: 'a lit header toggle, and the pressed fill under every header button' },
+  { cssVar: 'popover', note: 'the phone header\'s overflow tray, floated over the title' },
 ] as const;
 
 /** `muted-foreground` → `mutedForeground` */
@@ -332,6 +334,8 @@ export const EXTRA_CLASSES: ReadonlyArray<{ cls: string; note: string }> = [
   { cls: 'emerald-600', note: "a finished attachment's dimensions under its chip (components/chat/composer.tsx)" },
   { cls: 'neutral-800', note: 'the label on the lit send dome (components/chat/hold-to-talk.tsx)' },
   { cls: 'neutral-900', note: 'the transcript in the hold bubble, and a lit arc label (components/chat/hold-to-talk.tsx)' },
+  { cls: 'amber-500', note: "the archived header's Restore tint (app/chat/page.tsx)" },
+  { cls: 'amber-700', note: "the archived header's Restore glyph in the light scheme (app/chat/page.tsx)" },
 ] as const;
 
 const SHADE = (cls: string) => Number(cls.split('-')[1]);

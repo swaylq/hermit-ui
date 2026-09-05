@@ -171,7 +171,17 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if nav.topViewController is ChatTimelineViewController {
             nav.popViewController(animated: false)
         }
-        nav.pushViewController(ChatTimelineViewController(sessionId: sessionId), animated: animated)
+        let vc = ChatTimelineViewController(sessionId: sessionId)
+        // A session the header's new-chat (or pure chat) button just created.
+        // Same closure the list's rows use, so "opened from a row" and "opened
+        // from the header" land on one code path — including the pop that keeps
+        // two chats from stacking.
+        vc.onOpenSession = { [weak self] id in self?.presentTimeline(sessionId: id, animated: true) }
+        // Deleted: the session is gone, so go back to whatever was under it
+        // rather than leaving a timeline polling a trashed id.
+        vc.onSessionGone = { [weak self] in self?.nav?.popViewController(animated: true) }
+        vc.onOpenPath = { [weak self] path in self?.openPath(path) }
+        nav.pushViewController(vc, animated: animated)
     }
 
     /// The `hermit://` URLs this app answers to.

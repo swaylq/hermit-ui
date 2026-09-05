@@ -1,24 +1,16 @@
 'use client';
 
-import { useRef, useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Check, X, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import {
+  AUTO_DISARM_MS, DISARMED, confirmStep, type ConfirmState,
+} from './header-actions-core';
 
-// How long the armed pill waits before it will accept a click.
+// The timings, the arm guard and the ordering rationale all live in
+// `header-actions-core.ts` now — the iOS port runs that same state machine over
+// the same table, so this file holds the pixels and nothing else.
 //
-// The tap that ARMS this button and the tap that confirms it land on the same
-// pixels (see the ordering note below), so without a dead time a double-tap —
-// or a double-click, or an impatient second tap while the pill is still
-// animating in — would confirm a destructive action the user only pointed at
-// once. 350ms is just past iOS's ~300ms double-tap window. A click inside it is
-// ignored and the pill STAYS ARMED, so the user's next tap still works; nothing
-// is silently swallowed.
-const ARM_GUARD_MS = 350;
-
-// How long the pill stays armed with no input. Long enough to read it on a
-// phone, short enough that a stray confirm can't be collected minutes later.
-const AUTO_DISARM_MS = 5_000;
-
 // Icon button with an inline two-step confirm (click → ✗ cancel / ✓ confirm),
 // auto-disarming after a few seconds. Used for destructive/disruptive session
 // actions (restart, delete) per "删除/restart 前都需要确认".
@@ -64,24 +56,35 @@ export function ConfirmIconButton({
    */
   confirmLabel?: string;
 }) {
-  const [armed, setArmed] = useState(false);
-  const armedAt = useRef(0);
+  const [confirm, setConfirm] = useState<ConfirmState>(DISARMED);
+  const armed = confirm.armed;
+  const armedAt = confirm.armed ? confirm.armedAt : 0;
   useEffect(() => {
     if (!armed) return;
-    const t = setTimeout(() => setArmed(false), AUTO_DISARM_MS);
+    // Fires at the deadline, and the reducer re-checks the clock: a timer that
+    // lands early (a suspended tab catching up) leaves the pill armed instead of
+    // yanking it out from under a finger.
+    const t = setTimeout(
+      () => setConfirm((s) => confirmStep(s, 'timeout', Date.now()).state),
+      AUTO_DISARM_MS,
+    );
     return () => clearTimeout(t);
-  }, [armed]);
+  }, [armed, armedAt]);
 
-  if (armed) {
-    // Shared by both halves of the pill: a click that arrives inside the guard
-    // window is the arming tap bouncing, not an answer — drop it and leave the
-    // pill up.
-    const settled = () => Date.now() - armedAt.current >= ARM_GUARD_MS;
+  if (confirm.armed) {
+    // Both halves go through the same reducer: a click that arrives inside the
+    // guard window is the arming tap bouncing, not an answer — it is dropped and
+    // the pill stays up.
+    const step = (event: 'cancel' | 'confirm') => {
+      const out = confirmStep(confirm, event, Date.now());
+      setConfirm(out.state);
+      if (out.fire) onConfirm();
+    };
     return (
       <span className="inline-flex items-center gap-0.5 rounded-md border border-border bg-background px-0.5">
         <button
           type="button"
-          onClick={() => { if (settled()) setArmed(false); }}
+          onClick={() => step('cancel')}
           title="cancel"
           aria-label="cancel"
           className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground transition-colors hover:bg-accent cursor-pointer"
@@ -90,7 +93,7 @@ export function ConfirmIconButton({
         </button>
         <button
           type="button"
-          onClick={() => { if (!settled()) return; setArmed(false); onConfirm(); }}
+          onClick={() => step('confirm')}
           title={`confirm — ${title}`}
           aria-label={`confirm — ${title}`}
           className={cn(
@@ -117,7 +120,7 @@ export function ConfirmIconButton({
   return (
     <button
       type="button"
-      onClick={() => { armedAt.current = Date.now(); setArmed(true); }}
+      onClick={() => setConfirm(confirmStep(confirm, 'press', Date.now()).state)}
       disabled={disabled || busy}
       title={title}
       aria-label={title}

@@ -681,6 +681,216 @@ final class ChatTimelineViewController: UIViewController {
         startQueuePoll(origin: base)
     }
 
+    // MARK: - The header's action cluster
+
+    /// The phone's overflow tray. Local, like the web's `moreOpen`.
+    private var moreOpen = false
+    /// One in-flight flag per mutation, exactly the four `isPending`s the web
+    /// reads. They are separate because the cluster treats them differently:
+    /// a create BUSIES pure chat (its own icon becomes "…") and DISABLES new
+    /// chat, which is one flag and two treatments.
+    private var creatingChat = false
+    private var deleting = false
+    private var restarting = false
+    private var reopening = false
+
+    /// Open a session this screen created. Set by the scene, and the same
+    /// closure the list uses — a new chat is a push, not a URL.
+    var onOpenSession: ((String) -> Void)?
+    /// Leave this screen because its session is gone.
+    var onSessionGone: (() -> Void)?
+    /// The one action in the cluster that is still the web page: the terminal
+    /// is xterm.js over a bare WebSocket, and is the standing candidate for a
+    /// written-down WebView exception (see goal/GOAL.md).
+    var onOpenPath: ((String) -> Void)?
+
+    private var headerActionState: HeaderActionState {
+        var s = HeaderActionState.of(meta: meta)
+        s.creatingChat = creatingChat
+        s.deleting = deleting
+        s.restarting = restarting
+        s.reopening = reopening
+        s.moreOpen = moreOpen
+        // `findOpen` stays false: this screen has no find bar yet, and `find`
+        // is filtered out of the cluster for that reason (see
+        // `ChatHeaderView.availableActions`).
+        return s
+    }
+
+    /// One tap on the cluster.
+    ///
+    /// Every branch that mutates does the same three things: flip its in-flight
+    /// flag, redraw the header so the button reports it, and clear the flag on
+    /// BOTH paths out. A flag left set is a permanently dead button, which is
+    /// worse than the failure it is reporting.
+    @MainActor
+    private func runHeaderAction(_ id: HeaderAction) {
+        switch id {
+        case .more:
+            moreOpen.toggle()
+            refreshHeader()
+        case .newChat:
+            createChat(pure: false)
+        case .pureChat:
+            createChat(pure: true)
+        case .terminal:
+            // Deliberately the web page. It is the only member of this cluster
+            // that is not a mutation, and the native VT100 it would need is
+            // weeks of work for a screen with three commits in ninety days.
+            onOpenPath?("/chat/terminal?session=\(HermitAPI.percentEncoded(sessionId))")
+        case .compact:
+            // The web sends the literal text, so the gateway sees exactly what a
+            // typed `/compact` would be. Going through `send` rather than a
+            // dedicated route also means the optimistic bubble, the queue strip
+            // and the status dot all behave as if it had been typed — because
+            // as far as everything downstream is concerned, it was.
+            sendSlashCommand("/compact")
+        case .restart:
+            mutateSession("chat.requestSessionRestart", flag: \.restarting)
+        case .delete:
+            deleteSession()
+        case .restore:
+            reopenSession()
+        case .find, .detail:
+            // Filtered out of the cluster — see `ChatHeaderView.availableActions`.
+            break
+        }
+    }
+
+    private struct IdInput: Encodable { let id: String }
+    private struct TrashInput: Encodable { let ids: [String]; let reason: String }
+    private struct CreateSessionInput: Encodable {
+        let agentName: String
+        /// Pure chat: spawn the child with a read-only tool surface.
+        let chatOnly: Bool?
+        /// The backend the conversation you are in runs on — including "no pin
+        /// at all". A null column means "inherit the agent's default", and
+        /// omitting the field inherits the same way, so a session that never
+        /// pinned a backend does not acquire one on the way out.
+        let runtime: String?
+    }
+    private struct CreatedSession: Decodable { let id: String }
+    private struct OkResult: Decodable { let ok: Bool? }
+
+    /// `chat.createSession` — the header's new chat, and pure chat, which are
+    /// the same call with one flag. No model, deliberately: the same call the
+    /// new-chat form makes, so the model comes from the backend's own default
+    /// and then its credential's.
+    @MainActor
+    private func createChat(pure: Bool) {
+        guard let entry = KeyStore.active(), let agent = meta?.agentName, !agent.isEmpty else { return }
+        guard !creatingChat else { return }
+        creatingChat = true
+        refreshHeader()
+        let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+        let input = CreateSessionInput(agentName: agent, chatOnly: pure ? true : nil,
+                                       runtime: meta?.runtime)
+        Task { [weak self] in
+            let made = try? await api.mutate("chat.createSession", input: input, as: CreatedSession.self)
+            await MainActor.run {
+                guard let self else { return }
+                self.creatingChat = false
+                self.refreshHeader()
+                guard let made else { return }
+                self.onOpenSession?(made.id)
+            }
+        }
+    }
+
+    /// The two `{ id }` mutations that leave this screen where it is.
+    @MainActor
+    private func mutateSession(_ path: String, flag: ReferenceWritableKeyPath<ChatTimelineViewController, Bool>) {
+        guard let entry = KeyStore.active(), self[keyPath: flag] == false else { return }
+        self[keyPath: flag] = true
+        refreshHeader()
+        let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+        let input = IdInput(id: sessionId)
+        Task { [weak self] in
+            _ = try? await api.mutate(path, input: input, as: OkResult.self)
+            await MainActor.run {
+                guard let self else { return }
+                self[keyPath: flag] = false
+                // Re-read rather than trust: `requestSessionRestart` writes
+                // `restartRequestedAt`, and that column is what keeps the button
+                // reporting itself as busy after the mutation itself returns.
+                self.refreshHeader()
+                if let base = KeyStore.active().map({ KeyStore.base(for: $0) }) {
+                    self.loadMeta(origin: base)
+                }
+            }
+        }
+    }
+
+    /// The header's `/compact`: `chat.send` with the literal text the web sends.
+    ///
+    /// NOT routed through `sendDraft`. The web's compact button calls the send
+    /// mutation directly — it does not touch the composer, does not clear the
+    /// draft, and puts up no optimistic bubble — and a version that borrowed the
+    /// draft would drop whatever the reader had half-typed.
+    @MainActor
+    private func sendSlashCommand(_ text: String) {
+        guard let entry = KeyStore.active() else { return }
+        let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+        let input = SendInput(sessionId: sessionId, clientId: ComposerCore.newClientId(),
+                              text: text, images: [], files: [])
+        Task { [weak self] in
+            _ = try? await api.mutate("chat.send", input: input, as: SentMessage.self)
+            await MainActor.run { self?.refreshQueue() }
+        }
+    }
+
+    /// `chat.reopenSession` — the way out of an archived chat.
+    ///
+    /// Writes `closedAt` locally before the refetch lands, because the header
+    /// AND the composer both read it: a refetch-only path would leave the
+    /// composer saying "session is closed" for most of a second after the tap.
+    @MainActor
+    private func reopenSession() {
+        guard let entry = KeyStore.active(), !reopening else { return }
+        reopening = true
+        refreshHeader()
+        let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+        let input = IdInput(id: sessionId)
+        Task { [weak self] in
+            let ok = (try? await api.mutate("chat.reopenSession", input: input, as: SessionMeta.self)) != nil
+            await MainActor.run {
+                guard let self else { return }
+                self.reopening = false
+                if ok { self.meta?.closedAt = nil }
+                self.refreshHeader()
+                self.refreshComposer()
+                if let base = KeyStore.active().map({ KeyStore.base(for: $0) }) {
+                    self.loadMeta(origin: base)
+                }
+            }
+        }
+    }
+
+    /// `chat.trashSessions` — the recycle bin, not a hard delete.
+    ///
+    /// Leaves the screen on success: the session this view controller is about
+    /// no longer exists, and a timeline polling a trashed id is a screen that
+    /// reports a broken connection about a session the user deleted on purpose.
+    @MainActor
+    private func deleteSession() {
+        guard let entry = KeyStore.active(), !deleting else { return }
+        deleting = true
+        refreshHeader()
+        let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+        let input = TrashInput(ids: [sessionId], reason: "manual")
+        Task { [weak self] in
+            let ok = (try? await api.mutate("chat.trashSessions", input: input, as: OkResult.self)) != nil
+            await MainActor.run {
+                guard let self else { return }
+                self.deleting = false
+                self.refreshHeader()
+                guard ok else { return }
+                if let onSessionGone = self.onSessionGone { onSessionGone() }
+                else { self.navigationController?.popViewController(animated: true) }
+            }
+        }
+    }
+
     // MARK: - The header's own query
 
     /// What the header shows before `chat.getSession` has answered.
@@ -759,7 +969,9 @@ final class ChatTimelineViewController: UIViewController {
         let canPop = (navigationController?.viewControllers.count ?? 0) > 1
         headerHost.rootView = ChatHeaderView(
             model: model,
-            onBack: canPop ? { [weak self] in self?.navigationController?.popViewController(animated: true) } : nil
+            onBack: canPop ? { [weak self] in self?.navigationController?.popViewController(animated: true) } : nil,
+            actions: headerActionState,
+            onAction: { [weak self] id in self?.runHeaderAction(id) }
         )
     }
 

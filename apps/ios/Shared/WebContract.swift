@@ -96,6 +96,10 @@ enum WebContract {
 
     /// `amber-400` — oklch(82.8% 0.189 84.429)
     static let amber400 = Color(.displayP3, red: 0.9592, green: 0.7385, blue: 0.1183)
+    /// `amber-500` — oklch(76.9% 0.188 70.08)
+    static let amber500 = Color(.displayP3, red: 0.9399, green: 0.6206, blue: 0.0585)
+    /// `amber-700` — oklch(55.5% 0.163 48.998)
+    static let amber700 = Color(.displayP3, red: 0.6799, green: 0.3277, blue: 0.0521)
     /// `emerald-400` — oklch(76.5% 0.177 163.223)
     static let emerald400 = Color(.displayP3, red: 0.3347, green: 0.8196, blue: 0.5916)
     /// `emerald-500` — oklch(69.6% 0.17 162.48)
@@ -175,6 +179,18 @@ enum WebContract {
     static let border = ThemeColor(
         light: Color(.displayP3, red: 0.8982, green: 0.8982, blue: 0.8982),
         dark: Color(.displayP3, red: 1.0000, green: 1.0000, blue: 1.0000, opacity: 0.1000)
+    )
+    /// `--accent` — a lit header toggle, and the pressed fill under every header button.
+    /// light oklch(0.97 0 0) · dark oklch(0.269 0 0)
+    static let accent = ThemeColor(
+        light: Color(.displayP3, red: 0.9606, green: 0.9606, blue: 0.9606),
+        dark: Color(.displayP3, red: 0.1494, green: 0.1494, blue: 0.1494)
+    )
+    /// `--popover` — the phone header's overflow tray, floated over the title.
+    /// light oklch(1 0 0) · dark oklch(0.205 0 0)
+    static let popover = ThemeColor(
+        light: Color(.displayP3, red: 1.0000, green: 1.0000, blue: 1.0000),
+        dark: Color(.displayP3, red: 0.0905, green: 0.0905, blue: 0.0905)
     )
 }
 

@@ -18,12 +18,17 @@ import SwiftUI
 ///
 /// ## What is not here yet
 ///
-/// The right-hand action cluster (new chat, terminal, delete, and the five in
-/// the phone's overflow tray), the model chip, tapping the title to rename, and
-/// the two chips that open the session detail sheet. Every one of those is a
-/// mutation or a second query rather than a piece of layout, and they are
-/// written down as their own checklist lines in `docs/ios-native-progress.md`
-/// rather than left implied by this comment.
+/// The model chip, tapping the title to rename, and the two chips that open the
+/// session detail sheet. Each is a mutation or a second query rather than a
+/// piece of layout, and each is its own checklist line in
+/// `docs/ios-native-progress.md` rather than being left implied by this comment.
+///
+/// The right-hand action cluster IS here — `ChatHeaderActionsView`, minus the
+/// two members of the overflow tray that are panels rather than actions
+/// (`find`, `detail`). Those two have no destination on this screen yet, and a
+/// button that leads nowhere is worse than one that is honestly absent, so the
+/// screen names what it can do (`ChatHeaderView.availableActions`) instead of
+/// drawing a dead control.
 enum ChatHeaderMetrics {
     /// `h-12`.
     static let height: CGFloat = 48
@@ -128,15 +133,37 @@ struct ChatHeaderView: View {
     let model: ChatHeaderModel
     /// Nil when there is nowhere to go back to.
     var onBack: (() -> Void)?
+    /// What the right-hand cluster should look like. Nil draws no cluster,
+    /// which is what the Mac render tool and the pending state want.
+    var actions: HeaderActionState?
+    var onAction: ((HeaderAction) -> Void)?
+
+    /// The cluster members this screen has somewhere to send.
+    ///
+    /// `find` and `detail` open PANELS the native chat screen does not have
+    /// yet; every other member is a mutation or a navigation that does. The
+    /// shared core still answers for all ten — `tools/actions-fixture.sh` holds
+    /// it against the web, which has all ten — and this line is the one the
+    /// round that builds those two panels deletes.
+    static let availableActions: Set<HeaderAction> = [
+        .restore, .pureChat, .compact, .restart, .more, .newChat, .terminal, .delete,
+    ]
 
     @Environment(\.colorScheme) private var scheme
+    /// The header's own width, for the tray's fold. Zero until the first
+    /// layout pass, and `secondaryFolds(0)` is `true` — which is the phone,
+    /// so the one frame before it lands is right anyway.
+    @State private var width: CGFloat = 0
 
     private var muted: Color { WebContract.mutedForeground.resolve(scheme) }
     private var fg: Color { WebContract.foreground.resolve(scheme) }
 
     var body: some View {
-        HStack(spacing: ChatHeaderMetrics.leadingGap) {
+        HeaderRowLayout(spacing: ChatHeaderMetrics.leadingGap,
+                        hasControl: onBack != nil,
+                        hasCluster: actions != nil && onAction != nil) {
             if let onBack { control(onBack) }
+            ClipToProposedWidth {
             VStack(alignment: .leading, spacing: ChatHeaderMetrics.lineGap) {
                 Text(model.title)
                     .font(.system(size: ChatHeaderMetrics.titleFont, weight: .semibold))
@@ -149,11 +176,48 @@ struct ChatHeaderView: View {
                     .frame(height: ChatHeaderMetrics.titleLine, alignment: .leading)
                 meta
             }
-            Spacer(minLength: 0)
+            }
+            // `min-w-0`, in the only spelling SwiftUI has.
+            //
+            // The web's title column carries that class, so the browser may
+            // squeeze it below its content's minimum and clip the overflow. The
+            // meta line's tail is fixed-size — the backend name, the ctx bar,
+            // "closed" — so on an archived 390pt header its minimum is wider
+            // than the room `HeaderRowLayout` leaves, and something has to give.
+            //
+            // `.frame(maxWidth: .infinity)` does NOT give: a frame with only a
+            // max reports the CHILD's width when the child is the bigger one, so
+            // `.clipped()` then clips to the overflowing size and clips nothing
+            // — which is how "closed" ended up drawn on top of the Restore
+            // button (shots/timeline-header-dark.png, third pass). The layout
+            // below reports the PROPOSAL instead, which is the bit that was
+            // missing.
+            .clipped()
+
+            if let actions, let onAction {
+                ChatHeaderActionsView(
+                    state: actions,
+                    run: onAction,
+                    available: Self.availableActions,
+                    width: width
+                )
+                // `shrink-0` — and it means it: `HeaderRowLayout` gives this
+                // its ideal width before the column gets anything.
+                .fixedSize()
+            }
         }
         .padding(.horizontal, ChatHeaderMetrics.padH)
         .frame(height: ChatHeaderMetrics.height)
         .frame(maxWidth: .infinity)
+        // The fold is a CONTAINER query on the web — the chat COLUMN, which the
+        // live-preview split narrows without narrowing the window. So it is
+        // measured here, off the header's own box, and not read off the screen.
+        .background {
+            GeometryReader { geo in
+                Color.clear.onAppear { width = geo.size.width }
+                    .onChange(of: geo.size.width) { _, w in width = w }
+            }
+        }
         .background(WebContract.background.resolve(scheme))
         // `border-b`: a hairline INSIDE the 48pt box, the way a CSS border sits
         // inside a fixed height.
@@ -272,5 +336,84 @@ struct ChatHeaderView: View {
             .accessibilityHidden(true)
         }
         .fixedSize()
+    }
+}
+
+/// The header row: `[back] [title column] [action cluster]`.
+///
+/// A `Layout` and not an `HStack`, for one reason: `min-w-0`.
+///
+/// The web's title column carries it, so the browser may squeeze that column
+/// below its content's minimum and clip what does not fit. A SwiftUI stack has
+/// no such setting — a subview's minimum is not negotiable — and the meta
+/// line's tail is fixed-size (the backend name, the ctx bar, "closed"), so on
+/// an archived 390pt header the column's minimum is wider than the room left
+/// over. `HStack` answers by growing the row, which pushed the delete button
+/// off the right edge; `.clipped()` does not help, because clipping is drawing
+/// and this is layout; `.layoutPriority` does not help either, because it
+/// reorders who is asked first and a minimum still wins. Measuring the cluster
+/// into `@State` and computing a `.frame(maxWidth:)` is the third thing that
+/// did not work — that write lands a pass late, and the render tool captures
+/// the frame before it. (All three are in shots/timeline-header-light.png's
+/// history.)
+///
+/// Here the arithmetic is done directly: both ends are placed at the width they
+/// ask for, and the column is HANDED the remainder, which is exactly what
+/// `min-w-0` buys.
+struct HeaderRowLayout: Layout {
+    var spacing: CGFloat
+    /// Whether the first subview is the back control.
+    var hasControl: Bool
+    /// Whether the last subview is the action cluster.
+    var hasCluster: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        CGSize(width: proposal.width ?? 0,
+               height: proposal.height ?? ChatHeaderMetrics.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize,
+                       subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let last = subviews.count - 1
+        let controlW = hasControl ? subviews[0].sizeThatFits(.unspecified).width : 0
+        let clusterW = hasCluster && last >= 0 ? subviews[last].sizeThatFits(.unspecified).width : 0
+        let gaps = spacing * CGFloat(subviews.count - 1)
+        let columnW = max(0, bounds.width - controlW - clusterW - gaps)
+
+        var x = bounds.minX
+        for (i, sub) in subviews.enumerated() {
+            let w: CGFloat
+            if hasControl && i == 0 { w = controlW }
+            else if hasCluster && i == last { w = clusterW }
+            else { w = columnW }
+            sub.place(at: CGPoint(x: x, y: bounds.midY),
+                      anchor: .leading,
+                      proposal: ProposedViewSize(width: w, height: bounds.height))
+            x += w + spacing
+        }
+    }
+}
+
+/// Reports exactly the width it was proposed, whatever its child does with it.
+///
+/// The missing half of `min-w-0`: a `.frame(maxWidth:)` grows to fit a child
+/// that overflows, so `.clipped()` after it has nothing to clip. This hands the
+/// child the same proposal — so text still truncates with an ellipsis, exactly
+/// as `truncate` does — and then tells the parent the proposed width regardless
+/// of what came back.
+struct ClipToProposedWidth: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let inner = subviews.map { $0.sizeThatFits(proposal) }
+        return CGSize(width: proposal.width ?? (inner.map(\.width).max() ?? 0),
+                      height: proposal.height ?? (inner.map(\.height).max() ?? 0))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize,
+                       subviews: Subviews, cache: inout ()) {
+        for sub in subviews {
+            sub.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+                      proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+        }
     }
 }

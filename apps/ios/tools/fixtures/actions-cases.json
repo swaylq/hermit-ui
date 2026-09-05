@@ -1,0 +1,1873 @@
+{
+  "armGuardMs": 350,
+  "autoDisarmMs": 5000,
+  "secondaryFoldPx": 640,
+  "shape": [
+    {
+      "why": "a live tmux session — everything but restore",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "claude-tmux",
+          "closedAt": null,
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "nothing loaded yet: the actions that need a target are disabled, but they are still THERE",
+      "state": {
+        "session": null,
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": true,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": true,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": true,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": true,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": true,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "archived: restore appears, and compact (which sends a message) goes dead while restart does not",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "claude-tmux",
+          "closedAt": "2026-09-01T00:00:00.000Z",
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "restore",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": true,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "archived + the reopen already in flight",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "claude-tmux",
+          "closedAt": "2026-09-01T00:00:00.000Z",
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": true,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "restore",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": true,
+          "busy": true
+        },
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": true,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "codex-exec is a child process: no pane, so no terminal",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "codex-exec",
+          "closedAt": null,
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": false
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "claude-sdk is the other paneless one, and it is the DEFAULT backend",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "claude-sdk",
+          "closedAt": null,
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": false
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "an unknown runtime is assumed to have a pane — the web list is a deny-list",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "some-backend-shipped-next-week",
+          "closedAt": null,
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "a share link: machine procedures would 403, so the terminal goes even with a pane",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "claude-tmux",
+          "closedAt": null,
+          "restartRequestedAt": null
+        },
+        "scoped": true,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "no agent name (a share-scoped row): pure chat and new chat have nothing to spawn",
+      "state": {
+        "session": {
+          "agentName": null,
+          "runtime": "claude-tmux",
+          "closedAt": null,
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": true,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": true,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "an empty agent name is the same as none — JS falsiness, and Swift must agree",
+      "state": {
+        "session": {
+          "agentName": "",
+          "runtime": "claude-tmux",
+          "closedAt": null,
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": true,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": true,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "a restart the server has already accepted: busy comes off the SESSION, not the mutation",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "claude-tmux",
+          "closedAt": null,
+          "restartRequestedAt": "2026-09-01T00:00:00.000Z"
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": true
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "a create in flight busies pure chat and disables new chat — two different treatments of one flag",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "claude-tmux",
+          "closedAt": null,
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": true,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": true
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": true,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "delete in flight",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "claude-tmux",
+          "closedAt": null,
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": true,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": true
+        }
+      ]
+    },
+    {
+      "why": "restart in flight",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "claude-tmux",
+          "closedAt": null,
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": true,
+        "reopening": false,
+        "findOpen": false,
+        "moreOpen": false,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": true
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": false
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    },
+    {
+      "why": "find open and the tray open — the two toggles are pressed together",
+      "state": {
+        "session": {
+          "agentName": "asst",
+          "runtime": "claude-tmux",
+          "closedAt": null,
+          "restartRequestedAt": null
+        },
+        "scoped": false,
+        "creatingChat": false,
+        "deleting": false,
+        "restarting": false,
+        "reopening": false,
+        "findOpen": true,
+        "moreOpen": true,
+        "hasTmuxPane": true
+      },
+      "expected": [
+        {
+          "id": "pureChat",
+          "group": "secondary",
+          "confirm": true,
+          "confirmLabel": "pure chat",
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "detail",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "find",
+          "group": "secondary",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": true
+        },
+        {
+          "id": "compact",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "restart",
+          "group": "secondary",
+          "confirm": true,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "more",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false,
+          "pressed": true
+        },
+        {
+          "id": "newChat",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "terminal",
+          "group": "persistent",
+          "confirm": false,
+          "danger": false,
+          "disabled": false,
+          "busy": false
+        },
+        {
+          "id": "delete",
+          "group": "persistent",
+          "confirm": true,
+          "danger": true,
+          "disabled": false,
+          "busy": false
+        }
+      ]
+    }
+  ],
+  "folds": [
+    {
+      "width": 390,
+      "expected": true
+    },
+    {
+      "width": 430,
+      "expected": true
+    },
+    {
+      "width": 639,
+      "expected": true
+    },
+    {
+      "width": 640,
+      "expected": false
+    },
+    {
+      "width": 641,
+      "expected": false
+    },
+    {
+      "width": 834,
+      "expected": false
+    },
+    {
+      "width": 1024,
+      "expected": false
+    }
+  ],
+  "steps": [
+    {
+      "why": "press arms it and fires nothing",
+      "start": {
+        "armed": false,
+        "armedAt": null
+      },
+      "steps": [
+        {
+          "event": "press",
+          "now": 1757000000000
+        }
+      ],
+      "trace": [
+        {
+          "event": "press",
+          "now": 1757000000000,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        }
+      ]
+    },
+    {
+      "why": "the bounce: a confirm inside the guard is DROPPED and the pill stays armed",
+      "start": {
+        "armed": false,
+        "armedAt": null
+      },
+      "steps": [
+        {
+          "event": "press",
+          "now": 1757000000000
+        },
+        {
+          "event": "confirm",
+          "now": 1757000000349
+        }
+      ],
+      "trace": [
+        {
+          "event": "press",
+          "now": 1757000000000,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        },
+        {
+          "event": "confirm",
+          "now": 1757000000349,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        }
+      ]
+    },
+    {
+      "why": "one millisecond later it fires — the guard boundary is >=, not >",
+      "start": {
+        "armed": false,
+        "armedAt": null
+      },
+      "steps": [
+        {
+          "event": "press",
+          "now": 1757000000000
+        },
+        {
+          "event": "confirm",
+          "now": 1757000000350
+        }
+      ],
+      "trace": [
+        {
+          "event": "press",
+          "now": 1757000000000,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        },
+        {
+          "event": "confirm",
+          "now": 1757000000350,
+          "armed": false,
+          "armedAt": null,
+          "fire": true
+        }
+      ]
+    },
+    {
+      "why": "a swallowed confirm leaves the pill up, so the NEXT tap still works",
+      "start": {
+        "armed": false,
+        "armedAt": null
+      },
+      "steps": [
+        {
+          "event": "press",
+          "now": 1757000000000
+        },
+        {
+          "event": "confirm",
+          "now": 1757000000100
+        },
+        {
+          "event": "confirm",
+          "now": 1757000000400
+        }
+      ],
+      "trace": [
+        {
+          "event": "press",
+          "now": 1757000000000,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        },
+        {
+          "event": "confirm",
+          "now": 1757000000100,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        },
+        {
+          "event": "confirm",
+          "now": 1757000000400,
+          "armed": false,
+          "armedAt": null,
+          "fire": true
+        }
+      ]
+    },
+    {
+      "why": "cancel is guarded the same way, for the same reason",
+      "start": {
+        "armed": false,
+        "armedAt": null
+      },
+      "steps": [
+        {
+          "event": "press",
+          "now": 1757000000000
+        },
+        {
+          "event": "cancel",
+          "now": 1757000000349
+        },
+        {
+          "event": "cancel",
+          "now": 1757000000350
+        }
+      ],
+      "trace": [
+        {
+          "event": "press",
+          "now": 1757000000000,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        },
+        {
+          "event": "cancel",
+          "now": 1757000000349,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        },
+        {
+          "event": "cancel",
+          "now": 1757000000350,
+          "armed": false,
+          "armedAt": null,
+          "fire": false
+        }
+      ]
+    },
+    {
+      "why": "a confirm after cancel does nothing: the pill is gone, and a stray tap must not fire",
+      "start": {
+        "armed": false,
+        "armedAt": null
+      },
+      "steps": [
+        {
+          "event": "press",
+          "now": 1757000000000
+        },
+        {
+          "event": "cancel",
+          "now": 1757000000400
+        },
+        {
+          "event": "confirm",
+          "now": 1757000000500
+        }
+      ],
+      "trace": [
+        {
+          "event": "press",
+          "now": 1757000000000,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        },
+        {
+          "event": "cancel",
+          "now": 1757000000400,
+          "armed": false,
+          "armedAt": null,
+          "fire": false
+        },
+        {
+          "event": "confirm",
+          "now": 1757000000500,
+          "armed": false,
+          "armedAt": null,
+          "fire": false
+        }
+      ]
+    },
+    {
+      "why": "the timer landing early leaves it armed rather than yanking it out from under a finger",
+      "start": {
+        "armed": false,
+        "armedAt": null
+      },
+      "steps": [
+        {
+          "event": "press",
+          "now": 1757000000000
+        },
+        {
+          "event": "timeout",
+          "now": 1757000004999
+        }
+      ],
+      "trace": [
+        {
+          "event": "press",
+          "now": 1757000000000,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        },
+        {
+          "event": "timeout",
+          "now": 1757000004999,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        }
+      ]
+    },
+    {
+      "why": "at the deadline it disarms, and fires nothing",
+      "start": {
+        "armed": false,
+        "armedAt": null
+      },
+      "steps": [
+        {
+          "event": "press",
+          "now": 1757000000000
+        },
+        {
+          "event": "timeout",
+          "now": 1757000005000
+        }
+      ],
+      "trace": [
+        {
+          "event": "press",
+          "now": 1757000000000,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        },
+        {
+          "event": "timeout",
+          "now": 1757000005000,
+          "armed": false,
+          "armedAt": null,
+          "fire": false
+        }
+      ]
+    },
+    {
+      "why": "a confirm collected after the auto-disarm is not a confirm",
+      "start": {
+        "armed": false,
+        "armedAt": null
+      },
+      "steps": [
+        {
+          "event": "press",
+          "now": 1757000000000
+        },
+        {
+          "event": "timeout",
+          "now": 1757000005000
+        },
+        {
+          "event": "confirm",
+          "now": 1757000005010
+        }
+      ],
+      "trace": [
+        {
+          "event": "press",
+          "now": 1757000000000,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        },
+        {
+          "event": "timeout",
+          "now": 1757000005000,
+          "armed": false,
+          "armedAt": null,
+          "fire": false
+        },
+        {
+          "event": "confirm",
+          "now": 1757000005010,
+          "armed": false,
+          "armedAt": null,
+          "fire": false
+        }
+      ]
+    },
+    {
+      "why": "re-pressing an armed control RE-ARMS it (restarts the guard) instead of toggling off",
+      "start": {
+        "armed": false,
+        "armedAt": null
+      },
+      "steps": [
+        {
+          "event": "press",
+          "now": 1757000000000
+        },
+        {
+          "event": "press",
+          "now": 1757000004000
+        },
+        {
+          "event": "confirm",
+          "now": 1757000004100
+        },
+        {
+          "event": "confirm",
+          "now": 1757000004400
+        }
+      ],
+      "trace": [
+        {
+          "event": "press",
+          "now": 1757000000000,
+          "armed": true,
+          "armedAt": 1757000000000,
+          "fire": false
+        },
+        {
+          "event": "press",
+          "now": 1757000004000,
+          "armed": true,
+          "armedAt": 1757000004000,
+          "fire": false
+        },
+        {
+          "event": "confirm",
+          "now": 1757000004100,
+          "armed": true,
+          "armedAt": 1757000004000,
+          "fire": false
+        },
+        {
+          "event": "confirm",
+          "now": 1757000004400,
+          "armed": false,
+          "armedAt": null,
+          "fire": true
+        }
+      ]
+    },
+    {
+      "why": "timeout on a disarmed pill is a no-op, not a re-entry",
+      "start": {
+        "armed": false,
+        "armedAt": null
+      },
+      "steps": [
+        {
+          "event": "timeout",
+          "now": 1757000099999
+        }
+      ],
+      "trace": [
+        {
+          "event": "timeout",
+          "now": 1757000099999,
+          "armed": false,
+          "armedAt": null,
+          "fire": false
+        }
+      ]
+    }
+  ]
+}

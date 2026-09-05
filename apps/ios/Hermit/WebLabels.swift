@@ -218,4 +218,20 @@ enum WebLabels {
         set.insert(charactersIn: "\u{FEFF}")
         return s.trimmingCharacters(in: set)
     }
+
+    /// `runtime-labels.ts:hasTmuxPane` — the harnesses that run as a child
+    /// process on pipes instead of inside a tmux pane. The header hides its
+    /// terminal button for them, because `tmux attach` on a pane that does not
+    /// exist exits 1 and the xterm dies on open.
+    ///
+    /// A DENY-list, exactly like the web's: an unknown runtime is assumed to
+    /// have a pane, so a backend added on the server does not silently lose its
+    /// terminal here until someone remembers to update the app.
+    private static let panelessRuntimes: Set<String> = [
+        "claude-sdk", "pi-rpc", "prime-rpc", "omp-rpc", "codex-exec", "dsh-exec", "kimi-code",
+    ]
+
+    static func hasTmuxPane(_ runtime: String?) -> Bool {
+        !panelessRuntimes.contains(runtime ?? "")
+    }
 }
