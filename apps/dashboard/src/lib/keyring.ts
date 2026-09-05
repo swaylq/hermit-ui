@@ -133,8 +133,17 @@ function pushActiveToShell(id: string) {
  * throw, would sign the user out of every machine they have if the Keychain
  * refused the item.
  */
-export async function hydrateKeyring(): Promise<void> {
-  if (typeof window === 'undefined' || secure !== null) return;
+let hydrating: Promise<void> | null = null;
+
+export function hydrateKeyring(): Promise<void> {
+  if (typeof window === 'undefined' || secure !== null) return Promise.resolve();
+  // Providers and the auth gate both await this on mount: one Keychain read,
+  // shared, rather than two racing migrations.
+  if (!hydrating) hydrating = hydrateOnce().finally(() => { hydrating = null; });
+  return hydrating;
+}
+
+async function hydrateOnce(): Promise<void> {
   let stored: string | null;
   try {
     const got = await askShell<{ value?: unknown }>('keychain.get');

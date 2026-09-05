@@ -504,6 +504,34 @@ export function installNativeBridge(): () => void {
   if (isNativeShell()) document.documentElement.classList.add('native-shell');
 
   window.__hermitNative = api;
+  // `ready`, and everything the shell learns from the keyring, are sent by
+  // announceReady() once the keyring is in memory — see there.
+
+  return () => {
+    if (window.__hermitNative === api) delete window.__hermitNative;
+    // A question asked through a bridge that is being torn down has no route
+    // left for its answer, so settle it here rather than let it time out.
+    const inflight = [...pendingReplies.values()];
+    pendingReplies.clear();
+    for (const p of inflight) {
+      clearTimeout(p.timer);
+      p.reject(new Error(`native ${p.method} was cancelled`));
+    }
+  };
+}
+
+/**
+ * Tell the shell the page is live, and what it needs to know from the keyring.
+ *
+ * Called by Providers once `hydrateKeyring()` has settled — NOT from
+ * installNativeBridge, which runs on mount, before the Keychain has answered.
+ * Everything here reads the keyring: `ready` makes the shell replay an APNs
+ * token that arrived while the page was loading, and onPushToken registers it
+ * against every entry (an empty ring registered nothing); `origins` is the list
+ * of deployments the device holds keys for; the push ask needs a key to
+ * subscribe. Outside the shell every send is a no-op.
+ */
+export function announceReady(): void {
   // Tell the shell the page is live so it can replay a token or a tap that
   // arrived while the webview was still loading.
   postToNative({ type: 'ready' });
@@ -531,16 +559,4 @@ export function installNativeBridge(): () => void {
   // No prompt behind this one — Live Activities are a Settings switch, not a
   // permission — so it is asked unconditionally and answered immediately.
   requestLiveActivitySupport();
-
-  return () => {
-    if (window.__hermitNative === api) delete window.__hermitNative;
-    // A question asked through a bridge that is being torn down has no route
-    // left for its answer, so settle it here rather than let it time out.
-    const inflight = [...pendingReplies.values()];
-    pendingReplies.clear();
-    for (const p of inflight) {
-      clearTimeout(p.timer);
-      p.reject(new Error(`native ${p.method} was cancelled`));
-    }
-  };
 }

@@ -6,12 +6,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { httpBatchLink, httpLink, loggerLink, splitLink } from '@trpc/client';
 import superjson from 'superjson';
 import { trpc } from '@/lib/trpc';
-import { getActiveKey } from '@/lib/keyring';
+import { getActiveKey, hydrateKeyring } from '@/lib/keyring';
 import { apiUrl, adoptMachineFromUrl } from '@/lib/api-base';
+import { AppShellSkeleton } from '@/components/app-shell-skeleton';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { KeyboardShortcuts } from '@/components/keyboard-shortcuts';
 import { ChatCacheRoot } from '@/components/chat-cache-root';
-import { installNativeBridge, isNativeShell } from '@/lib/native-bridge';
+import { announceReady, installNativeBridge, isNativeShell } from '@/lib/native-bridge';
 import { isStandalone } from '@/lib/shortcuts';
 import { installImeDebug } from '@/lib/ime-debug';
 import { watchDashboardReach } from '@/lib/dashboard-reach';
@@ -19,6 +20,45 @@ import { watchDashboardReach } from '@/lib/dashboard-reach';
 // Key storage moved to lib/keyring (multi-machine browser keyring). Re-export
 // the active-key getter so any importer of `@/app/providers` keeps working.
 export { getActiveKey } from '@/lib/keyring';
+
+type TrpcClient = ReturnType<typeof trpc.createClient>;
+
+function makeTrpcClient(): TrpcClient {
+  // A notification tap can name the workspace it came from (`?m=<machineId>`).
+  // Apply it HERE — before the client below reads the backend — so the whole
+  // tab comes up on the right deployment instead of switching after paint.
+  adoptMachineFromUrl();
+  // Both ends of the split share the transport config — only the batching
+  // differs.
+  const http = {
+    // The active keyring entry decides WHICH deployment this tab talks to —
+    // '' (this origin) for a local machine, `https://other-host` for one on a
+    // second dashboard. Read once here rather than per request because
+    // switching entries is a full page reload, so it cannot change under a
+    // live client.
+    url: apiUrl('/api/trpc'),
+    transformer: superjson,
+    headers() {
+      return { 'x-asst-key': getActiveKey() };
+    },
+  };
+  return trpc.createClient({
+    links: [
+      loggerLink({ enabled: () => false }),
+      // Batching shares one HTTP response across the queries that happen to
+      // land in the same tick, so every query in the batch waits for the
+      // SLOWEST one. chat.getSession (single-row PK lookup, tens of ms) was
+      // routinely held hostage by a same-batch listSessions / listMessages
+      // (~240 KB). Those two (plus chat.queue, the small poll next to it) go
+      // out unbatched and return on their own; everything else keeps batching.
+      splitLink({
+        condition: (op) => op.path === 'chat.getSession' || op.path === 'chat.queue',
+        true: httpLink(http),
+        false: httpBatchLink(http),
+      }),
+    ],
+  });
+}
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => {
@@ -36,46 +76,40 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     return client;
   });
 
-  const [trpcClient] = useState(() => {
-    // A notification tap can name the workspace it came from (`?m=<machineId>`).
-    // Apply it HERE — before the client below reads the backend — so the whole
-    // tab comes up on the right deployment instead of switching after paint.
-    adoptMachineFromUrl();
-    // Both ends of the split share the transport config — only the batching
-    // differs.
-    const http = {
-      // The active keyring entry decides WHICH deployment this tab talks to —
-      // '' (this origin) for a local machine, `https://other-host` for one on a
-      // second dashboard. Read once here rather than per request because
-      // switching entries is a full page reload, so it cannot change under a
-      // live client. On the server this is always '/api/trpc'.
-      url: apiUrl('/api/trpc'),
-      transformer: superjson,
-      headers() {
-        return { 'x-asst-key': getActiveKey() };
-      },
-    };
-    return trpc.createClient({
-      links: [
-        loggerLink({ enabled: () => false }),
-        // Batching shares one HTTP response across the queries that happen to
-        // land in the same tick, so every query in the batch waits for the
-        // SLOWEST one. chat.getSession (single-row PK lookup, tens of ms) was
-        // routinely held hostage by a same-batch listSessions / listMessages
-        // (~240 KB). Those two (plus chat.queue, the small poll next to it) go
-        // out unbatched and return on their own; everything else keeps batching.
-        splitLink({
-          condition: (op) => op.path === 'chat.getSession' || op.path === 'chat.queue',
-          true: httpLink(http),
-          false: httpBatchLink(http),
-        }),
-      ],
-    });
-  });
+  // The keyring decides WHICH deployment this tab talks to, and inside the iOS
+  // shell the keyring lives in the device Keychain, which answers asynchronously.
+  // So the client is built only once `hydrateKeyring()` has settled, and until
+  // then the page shows the same empty frame the auth gate shows — on the server
+  // and on the client's first commit alike, so the two agree.
+  //
+  // Building it in the first render (a `useState` initialiser) read the keyring
+  // before the Keychain had answered: on the second launch of TestFlight build 7
+  // — keyring in the Keychain, localStorage empty — the client was pinned to
+  // THIS origin, sent the other deployment's key here, and every request came
+  // back "invalid key" (2026-09-05).
+  const [trpcClient, setTrpcClient] = useState<TrpcClient | null>(null);
 
   // Expose the native-shell API (APNs token intake + deep links). No-op in a
-  // browser — it just parks an object the shell would have called.
+  // browser — it just parks an object the shell would have called. Declared
+  // before the effect below on purpose: effects run in this order, and the
+  // Keychain's answer arrives through the API this one installs.
   useEffect(() => installNativeBridge(), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void hydrateKeyring().finally(() => {
+      if (cancelled) return;
+      // Updater form on purpose: the client is a callable proxy, and a bare
+      // `setTrpcClient(client)` would be taken for an updater and called.
+      setTrpcClient(() => makeTrpcClient());
+      // Everything the shell learns from the keyring — including the `ready`
+      // that makes it replay a push token — goes out only now that it is read.
+      announceReady();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Opt-in IME probe for the "stuck typing English" bug class — zero cost
   // unless localStorage['hermit:ime-debug']='1'. See lib/ime-debug.ts.
@@ -166,17 +200,21 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     // Theme: follows the OS by default; the Settings → Appearance tab can pin
     // light/dark. next-themes toggles the `.dark` class on <html> (no flash).
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-      <trpc.Provider client={trpcClient} queryClient={queryClient}>
-        <QueryClientProvider client={queryClient}>
-          <ConfirmProvider>
-            {children}
-            <KeyboardShortcuts />
-            {/* Chat cache: one background sync for the whole app, and the global
-                search overlay it feeds. Both are singletons behind these mounts. */}
-            <ChatCacheRoot />
-          </ConfirmProvider>
-        </QueryClientProvider>
-      </trpc.Provider>
+      {trpcClient ? (
+        <trpc.Provider client={trpcClient} queryClient={queryClient}>
+          <QueryClientProvider client={queryClient}>
+            <ConfirmProvider>
+              {children}
+              <KeyboardShortcuts />
+              {/* Chat cache: one background sync for the whole app, and the global
+                  search overlay it feeds. Both are singletons behind these mounts. */}
+              <ChatCacheRoot />
+            </ConfirmProvider>
+          </QueryClientProvider>
+        </trpc.Provider>
+      ) : (
+        <AppShellSkeleton />
+      )}
     </ThemeProvider>
   );
 }
