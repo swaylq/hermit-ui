@@ -481,15 +481,19 @@ final class SmokeTests: XCTestCase {
         openSessionList()
         XCTAssertTrue(screenSays("active key: m_two"), "the list did not load against a working key")
 
-        // A tapped row brings the page forward. The list does not go looking for
-        // a web view — it hands the path to whoever put it up — which is what
-        // makes this survive the page being over it, under it, or (next
-        // milestone) beside it in a drawer. The fixture has no router, so what
-        // this checks is the shell's half.
-        app.cells.element(boundBy: 0).tap()
-        XCTAssertTrue(
-            app.webViews.buttons["keychain.clear"].waitForExistence(timeout: 20),
-            "tapping a row did not bring the page up")
+        // A tapped row opens the NATIVE chat screen. Until round 10 it handed a
+        // `/chat?session=<id>` path to the web view, because the timeline had no
+        // composer, no `+` and no microphone and opening it from here would have
+        // taken things away. The list still does not go looking for a view
+        // controller — it says "open this session" and whoever put it up decides
+        // what that means, which is what makes this survive the page being over
+        // it, under it, or beside it in a drawer.
+        tapSessionRow(titled: "s_timeline")
+        XCTAssertTrue(screenSays("window · key m_two", timeout: 30),
+                      "tapping a row did not open the native chat screen")
+        XCTAssertEqual(app.webViews.count, 0,
+                       "the tapped row landed on a screen with a web view in it")
+        settle(); shoot("43-row-tap-opens-native-chat")
         // And the row you opened is still the one marked when the list comes
         // back — `activeSessionId`, the web's `optimisticActiveId`. It lives on
         // the list instance, so this is also the assertion that the shell keeps
@@ -526,6 +530,148 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(screenSays("active key: m_two", timeout: 5),
                       "the failed refresh wiped the snapshot it was drawn over")
         shoot("20-session-list-from-snapshot")
+
+        // Leave the install clean for whatever runs next.
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer at the end")
+    }
+
+    /// Acceptance criterion 2, walked in one go: a row on the native list opens
+    /// the native chat screen, it reads, a reply grows on it while nobody
+    /// touches the screen, paging back does not cost the reader their place, the
+    /// box sends, and the answer comes back — with no web view anywhere in it.
+    ///
+    /// Every link has a dedicated test above and each of those is stricter than
+    /// what is asserted here. What none of them covers is the CHAIN: all four
+    /// open the timeline with `hermit://timeline/<id>`, which until round 10 was
+    /// the only way in and is a URL nothing in the product produces. So the two
+    /// claims that are this test's own are the first line and the last: the
+    /// screen you arrive at by tapping a row is the working screen, and nothing
+    /// along the way falls back to the page.
+    ///
+    /// One assertion per link, deliberately. A second copy of the timeline
+    /// test's twenty would go red in two places for every one bug and neither
+    /// message would say which link broke.
+    func testTheWholeChatScreenOpensFromATappedRow() throws {
+        let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
+        guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
+
+        app.launchArguments = ["-hermitOrigin", fixture]
+        app.launch()
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer")
+        app.webViews.buttons["keychain.set — two machines"].tap()
+        XCTAssertTrue(fixtureSays("keyring ok"), "the shell refused to store the keyring")
+        app.webViews.buttons["keychain.setActive — m_two"].tap()
+        XCTAssertTrue(fixtureSays("active m_two ok"), "the shell would not record which entry is active")
+
+        // ── the front door ───────────────────────────────────────────────────
+        openSessionList()
+        settle(); shoot("44-chain-list")
+        tapSessionRow(titled: "s_timeline")
+
+        // Reads. The row carries the key the request went out with and the
+        // window it asked for, so a shell that reached for the wrong entry or
+        // asked for the wrong limit draws a plausible conversation and fails
+        // here rather than looking fine.
+        XCTAssertTrue(screenSays("window · key m_two · limit 60 · digest 1", timeout: 40),
+                      "the tapped row opened a chat screen that never drew its window")
+        // The header is a SECOND query, `chat.getSession`. `Bash · 47s` comes
+        // out of the `activity` blob, which `chat.listSessions` never carries —
+        // so a header filled in from the list row this screen was opened from
+        // could show a title and a dot but never this string.
+        XCTAssertTrue(screenSays("Bash · 47s", timeout: 25),
+                      "the chat screen's header never ran its own query")
+        XCTAssertEqual(app.webViews.count, 0, "there is a web view on the chat screen")
+        settle(); shoot("45-chain-window")
+
+        // ── it grows on its own ──────────────────────────────────────────────
+        //
+        // Nothing between here and the assertion touches the screen. The row
+        // arrives on the stream and is then REWRITTEN under the same id, which
+        // is what a turn being written looks like; the fixture leaves fifteen
+        // seconds between the two, hence the timeout.
+        XCTAssertTrue(screenSays("rewritten in place · key m_two", timeout: 60),
+                      "no reply grew on the screen by itself — the stream, or the redraw")
+        settle(); shoot("46-chain-live-push")
+
+        // ── earlier, without losing your place ───────────────────────────────
+        let list = app.collectionViews.firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 5), "the chat screen is not a collection view")
+        XCTAssertTrue(
+            scroll(list, until: "history page 1 · row 90", swipes: 14, towardsOlder: true),
+            "reading towards the beginning never pulled a page of history")
+        // The seam, both sides of it on screen together: `row 90` is the newest
+        // row of the page that just arrived and `row 91` the oldest row of the
+        // live window. A page that landed in the wrong place, or a list that
+        // threw the reader somewhere else when it landed, cannot show both.
+        XCTAssertTrue(
+            scroll(list, until: "window · row 91", swipes: 6, towardsOlder: false),
+            "the oldest row of the window is not above the page that was just fetched")
+        XCTAssertTrue(screenSays("history page 1 · row 90", timeout: 3),
+                      "the two sides of the seam are not on screen together")
+        settle(); shoot("47-chain-earlier")
+
+        // And it stays put. Weaker than it looks and labelled so: what this
+        // catches is drift — a list that keeps settling, re-anchoring or
+        // re-applying its way somewhere else after the reader stops. The
+        // structural claim underneath it is that on a list drawn upside down an
+        // older page is an APPEND, which is why the web's 514-line prepend
+        // anchor has no counterpart here.
+        let anchor = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'window · row 91'")).firstMatch
+        XCTAssertTrue(anchor.exists, "the row being read went away before it could be measured")
+        let restingY = anchor.frame.minY
+        Thread.sleep(forTimeInterval: 6)
+        XCTAssertTrue(anchor.exists, "the row being read left the screen on its own")
+        XCTAssertEqual(anchor.frame.minY, restingY, accuracy: 1,
+                       "the list moved under a reader who was not touching it "
+                           + "(\(restingY) → \(anchor.frame.minY))")
+
+        // ── it sends, and the answer comes back ──────────────────────────────
+        //
+        // ASCII, because `typeText` drives the simulator's keyboard and a CJK
+        // string through it depends on the host having a hardware keyboard
+        // attached. What the box does with 中文 is checked where it can be:
+        // `tools/render-composer.sh` and `tools/composer-fixture.sh`.
+        // Back to the newest end first. A bubble posted while the reader is deep
+        // in history lands off screen, and a collection view cell that is not
+        // rendered is not in the accessibility tree at all — the assertion below
+        // would go red about the send when the send was fine.
+        XCTAssertTrue(
+            scroll(list, until: "rewritten in place · key m_two", swipes: 24, towardsOlder: false),
+            "scrolling back towards the newest message never got there")
+
+        let typed = "sent from the row I tapped"
+        let box = composerField()
+        XCTAssertTrue(box.waitForExistence(timeout: 10), "the chat screen has no composer")
+        box.tap()
+        box.typeText(typed)
+        let send = app.buttons["composer.send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "the composer has no send button")
+        send.tap()
+        XCTAssertTrue(screenSays(typed, timeout: 10),
+                      "the bubble never appeared — the send is waiting on the network")
+        // The row the server wrote says something DIFFERENT from what was typed,
+        // so this is the handover happening by id. Matched on the separator, not
+        // on the fixture's row number: that counter belongs to the whole suite
+        // and this test did not produce it.
+        XCTAssertTrue(screenSays("· " + typed, timeout: 30),
+                      "the row chat.send wrote never arrived on the stream")
+        // The last of the two claims this test owns. Nothing in the whole chain
+        // — list, chat screen, paging, sending — put a web view on screen.
+        XCTAssertEqual(app.webViews.count, 0, "a web view appeared somewhere along the chain")
+        settle(); shoot("48-chain-sent")
+
+        // ── and back out the way you came in ─────────────────────────────────
+        let back = app.buttons["back"]
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "the chat screen has no back control")
+        back.tap()
+        XCTAssertTrue(app.navigationBars["Sessions"].waitForExistence(timeout: 20),
+                      "back from a chat opened off a row did not land on the list")
+        settle(); shoot("49-chain-back-on-the-list")
 
         // Leave the install clean for whatever runs next.
         openPage()
@@ -1347,6 +1493,30 @@ final class SmokeTests: XCTestCase {
             return Int(label[r].dropFirst("getSession #".count))
         }
         return nil
+    }
+
+    /// Tap the row on the session list whose title says this.
+    ///
+    /// Not `cells.element(boundBy: 0)`, which is what this used to be: every row
+    /// but one in the fixture is a status branch with no conversation behind it,
+    /// so an index picks a session whose window is legitimately empty — and an
+    /// empty chat screen is indistinguishable from a port that dropped the
+    /// window.
+    ///
+    /// Cells first, then anything. A `UIHostingConfiguration` row usually merges
+    /// into ONE accessibility element and the label lands on the cell, but round
+    /// 13 saw it come back both ways on different builds; tapping a text inside
+    /// the row hits the same cell. Neither branch may fall through silently — a
+    /// helper that returns without tapping makes every assertion after it a lie
+    /// about a screen nobody left.
+    private func tapSessionRow(titled needle: String) {
+        let p = NSPredicate(format: "label CONTAINS %@", needle)
+        let cell = app.cells.matching(p).firstMatch
+        if cell.waitForExistence(timeout: 10) { return cell.tap() }
+        let any = app.descendants(matching: .any).matching(p).firstMatch
+        XCTAssertTrue(any.waitForExistence(timeout: 10),
+                      "no row on the session list says '\(needle)'")
+        any.tap()
     }
 
     /// The session list, from wherever this test happens to be.

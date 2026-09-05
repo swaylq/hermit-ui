@@ -96,6 +96,14 @@ def rows(name):
         # the assertion.
         row(id="s_active", title="active key: " + name, state="working",
             lastMessageAt=ago(40), lastReadAt=None),
+        # The one row with a conversation behind it. Every other row here is a
+        # status branch and nothing else — `chat.listMessages` answers them with
+        # an empty list — so a tap on one of those opens a real screen showing a
+        # real empty session, which is indistinguishable from the port having
+        # dropped the window. This row is what a tapped row is driven through.
+        # Named after its own id so a screenshot says which one it was.
+        row(id=TIMELINE_SESSION, title="s_timeline · 时间线那一场", state="working",
+            agentName="asst", lastMessageAt=ago(3), lastReadAt=ago(3)),
         # `idle` + background work outstanding: the same amber, dimmed and not
         # pulsing, and the label comes from `backgroundNote` because a sidebar
         # row never carries the `activity` blob.

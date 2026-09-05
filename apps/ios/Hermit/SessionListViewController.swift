@@ -68,7 +68,7 @@ final class SessionListViewController: UIViewController {
     /// to the list shows where you were.
     var activeSessionId: String?
 
-    /// Where a tap goes. Set by whoever put this screen up — `SceneDelegate`,
+    /// Where a page goes. Set by whoever put this screen up — `SceneDelegate`,
     /// which owns the web layer.
     ///
     /// NOT a search of the navigation stack, which is what this did originally.
@@ -77,7 +77,18 @@ final class SessionListViewController: UIViewController {
     /// native — and a stack search that finds nil makes a tapped row do nothing,
     /// silently. Saying where you want to go and letting the container decide
     /// what that means survives all three arrangements.
+    ///
+    /// Only `New chat` uses it now. A tapped ROW goes to `openSession`.
     var openPath: ((String) -> Void)?
+
+    /// Where a tapped row goes: the native chat screen for that session.
+    ///
+    /// Separate from `openPath` rather than a path string this screen builds,
+    /// because the two destinations are no longer the same kind of thing —
+    /// `/chat?new=1` is a page, and a session is a native view controller. The
+    /// list still does not know which; it says "open this session" and the
+    /// container decides, exactly as before.
+    var openSession: ((String) -> Void)?
 
     private var order: [String] = []
     private var itemsById: [String: SessionListItem] = [:]
@@ -387,9 +398,18 @@ extension SessionListViewController: UICollectionViewDelegate {
         // (`optimisticActiveId`, recent-lists.tsx): this row is the one that
         // should be marked when you come back, and nothing else will say so.
         markActive(id)
-        // Hand it to the page, the same route a Live Activity tap takes. The
-        // timeline is M4; until it exists this list is a faster way onto the
-        // same web screen, not a replacement for it.
-        openPath?("/chat?session=\(id)")
+        // Into the NATIVE chat screen. Until round 10 this handed a
+        // `/chat?session=<id>` path to the web view, because the timeline was a
+        // skeleton reachable only from `hermit://timeline/<id>` — a list that
+        // opened it would have dropped the composer, the `+`, the microphone
+        // and the queue strip on the floor. All four landed in rounds 6–9, so
+        // the row goes where the screen is.
+        //
+        // A Live Activity or notification tap (`hermit://session/<id>`) still
+        // opens the page. That is written down as its own checklist line rather
+        // than changed here: it is the one path this suite cannot drive, and it
+        // carries web-side behaviour (marking read, the router's own restore)
+        // that nothing native replaces yet.
+        openSession?(id)
     }
 }

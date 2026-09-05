@@ -543,10 +543,14 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       兜底（最多晚一次 5 秒轮询）—— **是晚，不是错**，但不是「完全一致」
 - [ ] ↑↓ 走历史、Enter 发送 / Shift+Enter 换行 —— **都是桌面键盘的行为**，
       网页在触屏上自己就 `return`（`isTouchPrimary()`）。装了硬件键盘的 iPad 才用得上
-- [ ] **把会话列表那一行点进原生时间线**（今天还是进网页 chat 页）。
-      一行代码。第 9 轮之后**拦路的几件全没了**：`+` 有了（第 8 轮）、
-      麦克风和按住说话有了（第 9 轮）。剩下的差是听写在这台 Mac 上验不了音频，
-      以及降级路径 —— 都不是「点过去会丢掉一个能点的东西」那种差了
+- [x] **把会话列表那一行点进原生时间线** —— 第 10 轮。`didSelectItemAt` 从
+      `openPath("/chat?session=<id>")` 换成一个新的 `openSession` 闭包，
+      `SceneDelegate` 把它接到 `presentTimeline`。列表仍然不去翻导航栈找视图控制器，
+      它只说「打开这个会话」，由容器决定那是什么 —— 抽屉原生化之后这条不用再改
+- [ ] **通知和 Live Activity 点开的还是网页**（`hermit://session/<id>`，`SceneDelegate.open`）。
+      列表那一行第 10 轮进了原生，这一条**故意没跟着改**：它是这套用例唯一驱动不了的入口
+      （要真的推一条通知），而且网页那半还捎带着已读标记和路由自己的恢复，原生没有对应物。
+      改之前先想清楚这两件谁来做
 - [x] **输入框右边那一格：麦克风** —— 第 9 轮。空框上是麦克风、有草稿时是 ✕、
       听写中麦克风变玫瑰色并呼吸（`HoldCore.micSlot`，六个输入三种答案）。
       **发送圈从此和网页在同一个位置**，两个状态都是
@@ -610,27 +614,26 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 > 2026-09-05 16:35 起，这个清单由 `perfect-goal` 的轮次驱动，轮次日志在
 > `~/agents/asst/projects/ios-native/goal/ROUNDS.md`，目标与验收标准在同目录的 `GOAL.md`。
-> 目标未变：把这个清单清空。**清单 39/69** —— 第 9 轮勾掉三条（麦克风那一格、
-> 按住说话、听写），分母涨 4：**这台 Mac 没有音频输入设备**所以音频链路没有证据、
-> 听写的降级路径（批量转写 + 收尾整段校正）、以及网页气泡 `line-clamp` 裁在头上
-> 这个要 sway 定的小差。留在散文里的活只会让清单先清空、活后干完。
+> 目标未变：把这个清单清空。**清单 40/70** —— 第 10 轮勾掉一条（会话列表那一行
+> 点进原生时间线），加一条：通知和 Live Activity 的 `hermit://session/<id>` 故意还留在网页。
+> 留在散文里的活只会让清单先清空、活后干完。
 
-**第 1 条：把会话列表那一行点进原生时间线。** 一行代码，而拦路的东西第 9 轮之后
-**全没了** —— `+` 第 8 轮做掉，麦克风那一格、按住说话、听写第 9 轮做掉。
-点过去不再会丢掉任何一个网页上能点的东西。做完之后验收标准 2（「聊天那一屏是真能用的」）
-第一次可以整条走一遍。
+**第 1 条：头部右侧的动作簇。** 排到第一位是因为第 10 轮改了这一屏的地位：
+点一行进来的就是它，人在原生 App 里看到的聊天屏只有这一个，而它的头部右边现在是空的
+—— 网页那边是新建会话、终端、删除，加手机上折进溢出盘的另外五个。
+做它等于把 `chat.createSession` / `deleteSession` / `reopenSession` 一次性接进原生
+（`chat.send` / `cancelTurn` 第 6 轮已经接了，所以它不再是「第一条会写服务端的活」）。
 
 **第 2 条：`streamingTailId`。** `turnInFlight(streamingTail:)` 在原生恒为 false，
 靠网关的 `working` 兜底 —— 最多晚一次 5 秒轮询，是晚不是错。做掉它，
 `composerCore` 五个纯函数的输入才第一次全部到齐。
 
-**第 3 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
+**第 3 条：听写的降级路径**（第 9 轮欠的）。socket 拿不到时退化成整段录、松手走
+`/api/transcribe`，外加收尾的整段校正 —— `worthRefining` 已经移植进夹具表，还没有人调用它。
+
+**第 4 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
 所以翻页每一页都问服务端，而网页读过一遍的历史是零网络的。加 `full` / `digest` 两个行存储
 （带 `nextId`），`pageBefore` 才有调用方，`ChatCache` 欠的「两级保真」也一起解掉。
-
-**第 4 条：头部右侧的动作簇。** 现在右边是空的。做它等于把 `chat.createSession` /
-`deleteSession` / `reopenSession` 这几条 mutation 一次性接进原生。
-（`chat.send` / `cancelTurn` 第 6 轮已经接了，所以它不再是「第一条会写服务端的活」。）
 
 **抽屉原生化是 M3 末尾三条明写的清单项**，比上面几条都大，排在它们后面：
 时间线是 `GOAL.md` 验收标准 2 点名的那一屏。
@@ -692,6 +695,15 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 16:5x 那句「全部复刻网页，做完再评审，反复改到完美」把范围定死成全量，见 `GOAL.md`。
 
 ## 踩过的坑
+
+### 夹具里按下标挑一行点开，挑中的多半是那条什么都证明不了的（第 10 轮）
+
+前门用例原来是 `app.cells.element(boundBy: 0).tap()`。会话列表的假数据里十二行有十一行
+只是状态阶梯的一个分支，背后**没有对话** —— `chat.listMessages` 对它们答空数组。
+把这一行接进原生时间线之后，同一句代码打开的就是一屏合法的空会话，
+而**一屏空会话和「移植把窗口丢了」在截图上是同一张图**：断言全过，屏幕全白。
+改成按标题找那一行，并给假数据补了一行 `s_timeline`（那条真有 150 条消息的会话）。
+查找**不许静默落空** —— 找不到就断言失败，否则后面每一句都在描述一屏没人离开过的屏幕。
 
 ### SwiftUI 的 `.opacity` 和 `.shadow` 是逐个子视图生效的，CSS 的不是（第 9 轮，同一天两次）
 
@@ -990,6 +1002,14 @@ keyring 存进去，然后 `terminate()` + `launch()`，紧接着就断言。中
 
 **规矩**：反证不是「看它红没红」，是**看它红在哪一行、印的是不是你写的那句**。
 不是的话，先把断言挪到没有上游能挡住它的地方，再反证一次。
+
+**第 10 轮又撞了一次，形状不同。** 这一轮的「这一屏上没有 WebView」
+（`app.webViews.count == 0`）写在「窗口画出来了」下面。把 `didSelectItemAt` 改回去反证，
+两条用例确实都红了，红在各自的窗口断言上 —— 而 `continueAfterFailure = false`，
+所以**那句 WebView 断言从头到尾一次都没执行过**。它当时可能是一条永远为真的空话，我不知道。
+临时删掉它上游的两条再反证一次，才看见 `("3") is not equal to ("0")`：网页那三个 WebView
+它真的数得出来。**所以规矩再加一句**：一次反证只证明了红的那一行有牙齿，
+同一次运行里排在它下面的每一条，都还没被证过 —— 想证就得让它自己第一个红。
 
 ### 翻转的 collection view 把三样 UIKit 的东西一起弄反了（第 3 轮 perfect-goal）
 
@@ -1631,6 +1651,7 @@ Oklab→线性 sRGB 那一步会塌成三个通道都等于 L³，Display P3 和
 
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
+| 10p | 2026-09-06 | **`perfect-goal` 第 10 轮 —— 前门：会话列表那一行点进原生时间线。** `SessionListViewController.didSelectItemAt` 从 `openPath("/chat?session=<id>")` 换成新的 `openSession` 闭包，`SceneDelegate` 接到 `presentTimeline`；`openPath` 只剩 `New chat` 在用。列表仍然不去翻导航栈找视图控制器（那是第 12 轮就写下的纪律，抽屉原生化时还要再翻一次身）。假服务端 `bridge-fixture/server.py` 补了一行 `s_timeline`：原来十二行里十一行背后没有对话，按下标点开的是一屏合法的空会话（写进「踩过的坑」）。**通知与 Live Activity 的 `hermit://session/<id>` 故意没跟着改**，写成清单上明写的一条 | `xcodegen` + `swiftc -typecheck` **exit 0**。模拟器：新用例 `testTheWholeChatScreenOpensFromATappedRow` 把验收标准 2 整条走了一遍（点一行 → 窗口 → 头部自己的 `chat.getSession` → 不碰屏幕等到回复被原地重写 →翻到历史第一页、接缝两侧同屏 → 停手 6 秒行不动 → 回到最新 → 发送 → 交接给服务端那一行 →返回落在列表上），**全程 `app.webViews.count == 0`**；改了共享夹具，两条列表用例回归重跑也过。**反证做过三次**：`openSession` 改回 `openPath` → 两条用例分别红在「tapping a row did not open the native chat screen」和「the tapped row opened a chat screen that never drew its window」；临时删掉上游两条再反证 → WebView 那句红成 `("3") != ("0")`；在两次读位置之间插一次小拖动 → 「不跳位」那句红成 `364.33 → 246.33`。图 `goal/shots/43..49` 逐张看过。dashboard 未改动，未跑它的 typecheck。收工 `simctl list devices booted` 为空 |
 | 8p | 2026-09-05 | **`perfect-goal` 第 8 轮 —— `+` 附件。** `Hermit/AttachCore.swift`（十个纯函数）+ `AttachmentChipView.swift`（chip、计数说明、`ChipFlow`=flex-wrap、`MaxWidthBox`=CSS max-width、`WebLineBox`=CSS 行盒）+ `AttachUploader.swift`（multipart POST /api/upload，本工程唯一一条非 tRPC 的路由）+ `AttachPicker.swift`（Safari 在 iPhone 上给 `<input type=file>` 的那张动作单：图库 / 拍照 / 选取文件；HEIC→JPEG 只在图库那道门转，因为 Safari 就是在那里转的）。接进 `ChatTimelineViewController`：上传中/完成/失败三种 chip、`uploadingCount` 和 `readyAttachments` 第一次拿到真数、`chat.send` 带 `images`/`files`、发失败把 chip 一并放回去（url 不变，不重传）。网页那边把扩展名白名单、上限、chip 副标题、计数说明抬进 `components/chat/attach-core.ts`，`/api/upload/route.ts` 改成 import 它（原来是两份手抄的 87 项清单），并把 `AttachmentStrip` 从 JSX 里抬成导出组件供比对用 | `xcodegen` + `swiftc -typecheck` **exit 0**；dashboard `tsc --noEmit` **exit 0**、单测 **877/878**（唯一那条红是这台 Mac 的 `sips` 环境问题，第 7 轮记过，不是这轮的）；`tools/attach-fixture.sh` **150/150**，反证十次每次只红该红的；`tools/attach-compare.sh` **23.10% → 6.59%**，八个用例的高度和 Chrome 报的**逐个相同**；**`tools/bridge-fixture.sh` 全量 9 个用例 0 failures（456 秒）**，新用例`testTheNativeComposerAttachesAPhoto` 反证两次都红在该红那行。收工 `simctl list devices booted` 为空 |
 | 20 | 2026-09-05 | **M4 时间线骨架：这三个纯函数第一次有调用方，也第一次有东西可看。** 新增 `apps/ios/Hermit/TimelineRowView.swift`（纯 SwiftUI，一个 `FoldedRow` 进；气泡 / 运行胶囊 / 思考胶囊 / 系统药丸 / Brain 虚线框 / ask 卡 / 图片文件 chip / **不认识的块画成写着 type 的灰卡片** / turn-ended 标记）、`apps/ios/Hermit/ChatTimelineViewController.swift`（collection view 竖向翻转、cell 翻回来、diffable 按 `FoldedRow.key`、`chat.listMessages` 取 `WebContract` 那个窗口）、`tools/render-timeline.sh` + `tools/fixtures/timeline-cases.json`（几秒出图，不用模拟器）。`SceneDelegate` 加 `hermit://timeline/<id>`，**没动前门**。生成器 `gen-ios-contract.ts` 加了四个主题色（`background`/`foreground`/`muted`/`border`）和 alpha 支持 —— `--border` 在 `.dark` 里是 `oklch(1 0 0 / 10%)`，老正则解不了 | `xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0**；`src/lib/ios-contract.test.ts` 单独跑 **11/11 过**（含新加的半透明主题色）。三个胶囊标签函数和网页那三个**逐输入对过 30 个，全等** —— 其中 `1250` 一例本来会差（`1.3k` vs `1.2k`，见「踩过的坑」）。**画出来看过两张**：`shots/timeline-dark.png` / `timeline-light.png`，十一种行都对，并且当场看出「发送侧气泡整块右对齐」是错的、改掉了。**没起过模拟器** |
 | 19 | 2026-09-05 | **M4 第二条：`foldRuns` 移植成 Swift。** 新增 `apps/ios/Hermit/FoldRuns.swift`（只依赖 Foundation，500 行，含 `isMachineryBlock`/`stepFor`/`closesRunUnconditionally`/`safeSplitIndex`/`summarizeRun`/`isHarnessTerminator` 和「运行块按下面那行取名」的第二遍）、生成器 `scripts/gen-fold-fixture.ts` → `tools/fixtures/fold-cases.json`、驱动 `tools/fold-fixture.sh`。**明确不按上一轮的打算做**：折叠的依据是原始块而不是 `parseBlocks()` 的结果，否则没有 `id` 的 `tool_use` 在手机上可见、在网页上被折走（写进「踩过的坑」）；`FoldedMessage` 因此同时带 `rawBlocks` 和 `blocks`。JS 的三处强制转换（`String(x)`、`??`、`is_error`/`__d` 的真值判断）照抄而不是「顺手改好」。**顺带修掉第 18 轮就上线的一个真 bug**：`ContentBlock.swift` 的 `chars` 用 `body.count` 数字素，网页数的是 UTF-16 码元 | `tools/fold-fixture.sh` **97/97 过**，**反证做过五次**（去掉 ask 豁免 → 只红 3 条 `isMachineryBlock[ask/*]` + `ask-stays-visible` + `digestInvariance`；运行块改按上面那行取名 → 红 20 条折叠；`chars` 改数字素 → 只红 `coercions`；`is_error` 改成只认字面 `true` → 只红 `coercions`；关掉跨天断开 → 只红 `run-never-spans-a-date-divider` 和 `unparseable-timestamp-closes-the-run`），逐个恢复后全绿。夹具里两条性质**真的验过**：11 个接缝逐个分两半折 == 整体折；摘要后的内容折出的折叠态与网页用完整内容折出的逐字段相同。块夹具加了 `好👍` / `é` 两例后 `tools/blocks-fixture.sh` 先红后绿（**73/73 → 75/75**）。`xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0 无输出**（先补 `src/generated/prisma` 软链，见「踩过的坑」）。无界面改动，未截图；**没起过模拟器** |

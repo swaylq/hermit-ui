@@ -69,6 +69,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // The list does not go looking for a web view; it says where it wants to
         // go and this decides what that means. See `openPath` there.
         made.openPath = { [weak self] path in self?.openPath(path) }
+        // A tapped row is a session, and a session is now a native screen.
+        made.openSession = { [weak self] id in self?.presentTimeline(sessionId: id, animated: true) }
         return made
     }()
 
@@ -191,9 +193,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// without also owning cold start.
     ///
     /// `hermit://timeline/<id>` opens the NATIVE timeline for that session.
-    /// Nothing in the product produces this URL either: it is how the screen
-    /// gets walked through and screenshotted while it is still a skeleton. A
-    /// tapped row still goes to the web page — see `SessionListViewController`.
+    /// A tapped row in the list goes there too as of round 10 — this URL is
+    /// what lets a test open one session in particular, and what opens the
+    /// screen from a cold start with no list in between.
+    ///
+    /// `hermit://session/<id>` above is deliberately NOT that: it is the Live
+    /// Activity's and a notification's URL, and it still opens the page. See
+    /// `SessionListViewController.didSelectItemAt`.
     private func open(_ url: URL) {
         guard url.scheme == "hermit" else { return }
         switch url.host {
