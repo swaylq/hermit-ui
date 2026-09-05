@@ -421,7 +421,11 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       「贴着最新一条」就是 contentOffset 0，而**加载更早的历史变成了 append** ——
       网页为「在顶部插入而不跳动」花掉的是 `use-prepend-anchor.ts` 整整 514 行。
       **还挂在 URL 上、不是前门**：`hermit://timeline/<id>`，和当初引入原生列表同一个做法；
-      列表里点一行仍然进网页 chat 页，要等 M5 有输入框才该换
+      列表里点一行仍然进网页 chat 页，要等 M5 有输入框才该换。
+      **第 3 轮（perfect-goal）第一次把它装到模拟器上，四个只有真机能看见的 bug 全在那一次里**：
+      cell 的翻转被 `apply(_:)` 覆盖（整屏上下镜像）、安全区插在反的一端、
+      `scrollViewDidScroll` 里同步 apply 快照会崩、iOS 26 的 scroll edge effect 被翻转带反
+      （整屏冲淡到读不了）。四条都写在「踩过的坑」里
 - [x] **「更早」这条路通了** —— 第 2 轮（perfect-goal）。`chat.listMessagesBefore` 一页
       `WebContract.olderPage` 行，`LoadEarlierPill` 是网页那颗 `↑ load earlier` 药丸
       （连 `loading…` 和 `disabled:opacity-50` 一起），滚到离尽头不足两屏自动拉
@@ -478,6 +482,10 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 ## M7 — 收尾
 
 - [ ] 装到模拟器上从头到尾走一遍，每屏截图存 `apps/ios/shots/`
+      —— **时间线那一段第 3 轮走完了**（`tools/bridge-fixture.sh` 的
+      `testTheNativeTimelineStreamsAndPagesBack`：深链接 → 窗口 → 流回来 → 往回翻两页 →
+      药丸退休，六个用例一起 0 failures）。剩下的是网页那几屏和输入框，
+      所以这条不勾
 - [ ] 文档更新：`apps/ios/README.md` 的「Everything else is the existing web app,
       unmodified」、`docs/ios-shell-design.md:5` 的 non-goals
 
@@ -487,17 +495,20 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 > 2026-09-05 16:35 起，这个清单由 `perfect-goal` 的轮次驱动，轮次日志在
 > `~/agents/asst/projects/ios-native/goal/ROUNDS.md`，目标与验收标准在同目录的 `GOAL.md`。
-> 目标未变：把这个清单清空。**清单 31/47。**
+> 目标未变：把这个清单清空。**清单 31/47**（第 3 轮没勾掉任何一条：
+> 那一轮花在把时间线真的跑起来，和它跑出来的四个 bug 上）。
 
-**第 1 条：给时间线搭一个能翻页的假服务端，然后走一次端到端。**
-第 2 轮把「更早」接上了，但只有纯函数有夹具 —— 药丸、滚动触发、把掉出窗口的行 shed 进历史，
-这三样只过了编译。`tools/bridge-fixture/server.py` 今天只答 `chat.listSessions`，
-要加 `chat.listMessages`、`chat.listMessagesBefore` 和那条 SSE，才写得出 UI 用例。
-做完顺带把 M7 那条「装到模拟器上从头到尾走一遍」一次走完：列表 → 时间线 → 往上翻 → 流回来。
-**同一趟里把三条一直没走过的路一起验掉**：`hermit://session/<id>`、`hermit://timeline/<id>`
-（`XCUIDevice.shared.system.open` 就够），以及通知点击那条。
+**第 1 条：给时间线一个和网页一致的头。**
+第 3 轮关掉了 iOS 26 那层 scroll edge effect（它被翻转带反了，整屏冲淡到读不了），
+代价是导航栏底下没有任何遮挡，最老的一行会和「Chat」标题、返回键叠在一起。
+**不要把模糊加回来** —— 网页 chat 页的 header 是不透明的，正解是照它做一个，
+顺带把标题、状态、右侧那几个按钮一起挪过来（今天标题是写死的 "Chat"）。
 
-**第 2 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
+**第 2 条：M5 输入框。** `GOAL.md` 验收标准 2 里只剩这一块没做：
+读得到、会自己长、翻得动都验过了，发不出去。做完了列表点一行才该换成进原生时间线，
+「第 0 条」的前门形状也才有得谈。
+
+**第 3 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
 所以翻页每一页都问服务端，而网页读过一遍的历史是零网络的。加 `full` / `digest` 两个行存储
 （带 `nextId`），`pageBefore` 才有调用方，`ChatCache` 欠的「两级保真」也一起解掉。
 
@@ -563,6 +574,42 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 16:5x 那句「全部复刻网页，做完再评审，反复改到完美」把范围定死成全量，见 `GOAL.md`。
 
 ## 踩过的坑
+
+### 翻转的 collection view 把三样 UIKit 的东西一起弄反了（第 3 轮 perfect-goal）
+
+第一次把时间线装进模拟器，一次跑出四个 bug，**四个在 Mac 上都看不见** ——
+`tools/render-timeline.sh` 画的是一个 `VStack`，整条路上根本没有 collection view。
+
+1. **cell 的翻转活不过一次布局。** `cell.transform` 在 `CellRegistration` 的闭包里设，
+   而 `UICollectionViewLayoutAttributes` 自带一个 identity transform，`apply(_:)` 会原样赋上去。
+   于是 dequeue 时设的变换在下一次布局被**无声地**抹掉，整屏会话上下镜像。
+   修法：`FlippedListCell` 重写 `apply(_:)`，`super` 之后再设一遍。
+   **推广**：任何在 cell 配置闭包里写 `transform` / `frame` / `center` 的代码都是同一个坑，
+   属于布局的属性只能在 `apply(_:)` 里守。
+2. **安全区插在反的一端。** 翻转之后 content-space 的 top 就是屏幕底部，
+   UIKit 把导航栏那一百多点加在「content top」，也就是最新一条消息**下面**，
+   而最老的行贴着状态栏滑过去。**把 UIKit 贡献的那份算掉**就够了
+   （`adjustedContentInset = safeAreaInsets + contentInset`，所以
+   `top = safe.bottom + padV - safe.top`，在手机上是个负数，合法）。
+   **别用 `contentInsetAdjustmentBehavior = .never`** —— 关掉之后静止位置得自己写
+   `contentOffset`，而那正好是下面第 3 条；实测那一版还会在最新一条和它上面那条之间
+   多出约 97pt 的洞。
+3. **在 `scrollViewDidScroll` 里同步 apply 快照会把进程弄没。**
+   `loadEarlier` 一进去就 `refold()`（药丸要变 `loading…`），而 `scrollViewDidScroll`
+   是 collection view 自己布局过程里的回调。`_updateVisibleCellsNow` 重入七层、UIKit 断言、
+   SIGTRAP。**第一次翻页崩、上一次同样的代码没崩** —— 重入 bug 从外面看就是这样。
+   改成 `DispatchQueue.main.async`，合并交给 `loadEarlier` 自己的 `loadingOlder` 闸门。
+4. **iOS 26 的 scroll edge effect 被翻转带反，整屏内容读不了。**
+   系统在滚动视图边缘做一层模糊加提亮、离边缘越远越淡，好让半透明导航栏后面有东西可读；
+   翻转把这张遮罩里外翻了：全屏满强度，**唯独真正躲在导航栏后面那一条是清楚的**。
+   `collection.topEdgeEffect.isHidden = true`（iOS 26+，要 `#available`）关掉。
+
+**第 4 条的判据值得单独记：截图必须读像素，不能只用眼睛看。**
+所有断言都过，accessibility 树完整，截图看着「有点糊」——
+而实际是背景 252（该是 255）、最深的气泡 215（该是 10）。关掉之后精确回到
+`WebContract.background` / `.foreground` 的数：255 和 10。
+另外还猜错过一次：先按「深链接触发的 push 动画没跑完」解释，把 `SceneDelegate.open(_:)`
+改成不带动画 —— 像素一点没变，改动和那段言之凿凿的注释一起回退了。
 
 ### 网页自己有两套排序，而且它们不一致（第 2 轮 perfect-goal）
 

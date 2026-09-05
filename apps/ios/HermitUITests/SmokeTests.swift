@@ -498,7 +498,162 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer at the end")
     }
 
+    /// The native timeline, driven end to end on a phone: the window, a turn
+    /// arriving while nobody touches the screen, and paging back to the
+    /// beginning of the conversation.
+    ///
+    /// Everything below the view controller already had a fixture on the Mac —
+    /// `TimelineMerge` and `TimelinePager` share a 39-case table with the web,
+    /// `FoldRuns` a 97-case one, and `tools/render-timeline.sh` draws the rows in
+    /// five seconds. What none of that touches is the wiring: whether the pill
+    /// is ever offered, whether scrolling towards the far end actually fires a
+    /// pull, whether a page lands in the right order, and whether the two
+    /// transports are describing the same window. Those only exist on a device.
+    ///
+    /// The fixture answers `chat.listMessages`, `chat.listMessagesBefore` and
+    /// `/api/chat/stream` for one 150-message session, and NAMES each row after
+    /// the list it has to come out of — `window · row 91`, `history page 1 · row
+    /// 90` — so the seam between the live window and paged history is readable
+    /// in a screenshot instead of being a claim.
+    ///
+    /// Needs `HERMIT_BRIDGE_ORIGIN`; `tools/bridge-fixture.sh` provides it.
+    func testTheNativeTimelineStreamsAndPagesBack() throws {
+        let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
+        guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
+
+        app.launchArguments = ["-hermitOrigin", fixture]
+        app.launch()
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer")
+        app.webViews.buttons["keychain.set — two machines"].tap()
+        XCTAssertTrue(fixtureSays("keyring ok"), "the shell refused to store the keyring")
+        app.webViews.buttons["keychain.setActive — m_two"].tap()
+        XCTAssertTrue(fixtureSays("active m_two ok"), "the shell would not record which entry is active")
+        backToSessionList()
+
+        // `hermit://timeline/<id>` — the only way to this screen today, and one
+        // of the URL paths into this app that had never been walked once.
+        XCUIDevice.shared.system.open(URL(string: "hermit://timeline/s_timeline")!)
+
+        // The window landed, with the right key on the request and the window
+        // the contract describes. A shell that reached for `list[0]`, asked for
+        // the wrong limit, or dropped `digest` would draw a full and entirely
+        // plausible conversation with nothing erroring anywhere.
+        XCTAssertTrue(
+            screenSays("window · key m_two · limit 60 · digest 1", timeout: 40),
+            "the native timeline never drew its window — the deep link, the query or the key")
+        // Acceptance criterion 2: no web view anywhere on this screen. The one
+        // the scene owns is off the stack, so nothing of it should be in the
+        // hierarchy.
+        XCTAssertEqual(app.webViews.count, 0, "the native timeline has a web view in it")
+        settle(); shoot("22-timeline-window")
+
+        // It moves on its own. Nothing between here and the next screenshot
+        // touches the screen — a timeline that only changes when you scroll it
+        // would satisfy every other assertion in this test. Asserted straight
+        // after the window on purpose: the fixture rewrites this row, so it is a
+        // state to catch rather than one to come back to.
+        let opening = "stream · key m_two · limit 60 · digest 1 · skipInitial 1 · delta 1"
+        XCTAssertTrue(screenSays(opening, timeout: 30),
+                      "nothing arrived on the stream — or it asked for a different window than the query did")
+        settle(); shoot("23-timeline-live-push")
+        // The fold really ran over these rows: `m147` is thinking + a tool call
+        // + its result, which has to read as one capsule named after the tool.
+        XCTAssertTrue(screenSays("Bash", timeout: 10),
+                      "the tool run in the window did not fold into a capsule")
+        // The same id, rewritten. This is what a turn being written looks like,
+        // and a diffable data source will not redraw a cell whose identifier did
+        // not change — the bug the session list shipped in round 14.
+        XCTAssertTrue(screenSays("rewritten in place · key m_two", timeout: 40),
+                      "the second push never reached the screen")
+        XCTAssertFalse(screenSays("stream · key", timeout: 3),
+                       "the second push was drawn as a SECOND row instead of replacing the first")
+
+        let list = app.collectionViews.firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 5), "the timeline is not a collection view")
+
+        // Scroll back through the window. The list is upside down, so a
+        // downward swipe walks towards OLDER rows, and crossing into the last
+        // two screens of runway is what has to fire the pull — nobody taps the
+        // pill in normal use.
+        XCTAssertTrue(
+            scroll(list, until: "history page 1 · row 90", swipes: 14, towardsOlder: true),
+            "reaching the far end of the window never pulled a page of history")
+        settle(); shoot("24-timeline-history-page")
+
+        // The rows the live window shed while the reader was in history. The
+        // fixture drops `m091`/`m092` out of the window a beat after serving
+        // that page; if `adopt` did not hand them to the history list they are
+        // gone from both lists, no amount of paging brings them back, and the
+        // screen looks perfectly healthy. `window · row 91` is the row directly
+        // above the seam, so this is a short scroll, not a hunt.
+        XCTAssertTrue(
+            scroll(list, until: "window · row 91", swipes: 6, towardsOlder: false),
+            "the rows the stream dropped from the window never reached the history list")
+
+        // All the way to the beginning of the session — a second page, served
+        // short, which is what retires the pill. A pager that trusts only the
+        // server's flag keeps offering it forever and fires a pull on every
+        // scroll at the far end.
+        XCTAssertTrue(
+            scroll(list, until: "history page 2 · row 1", swipes: 24, towardsOlder: true),
+            "the second page of history never arrived")
+        XCTAssertFalse(
+            screenSays("load earlier", timeout: 3),
+            "the pill is still offered at the beginning of the conversation")
+        settle(); shoot("25-timeline-beginning")
+
+        // Open it a second time and photograph the resting position. Every shot
+        // above is taken somewhere the reader was steered to; this is the one a
+        // person actually gets — parked on the newest message, with the safe
+        // area on the ends they can see. It doubles as the check that leaving
+        // the screen and coming back rebuilds it from nothing.
+        backToSessionList()
+        // A beat before the deep link, unlike the first open above, which fires
+        // it the instant the "Sessions" bar appears — i.e. while the back
+        // swipe's pop is still animating. Both orders have to produce the same
+        // screen, and having one of each here is cheaper than a test for it.
+        settle()
+        XCUIDevice.shared.system.open(URL(string: "hermit://timeline/s_timeline")!)
+        XCTAssertTrue(screenSays("window · key m_two · limit 60 · digest 1", timeout: 30),
+                      "the timeline did not come back on a second open")
+        settle(); shoot("26-timeline-tail")
+
+        // Leave the install clean for whatever runs next.
+        backToSessionList()
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer at the end")
+    }
+
     // MARK: - helpers
+    /// Let the list stop moving before a screenshot.
+    ///
+    /// Every shot in this test is taken the instant an assertion passed, which
+    /// is mid-push-transition for the first one and mid-deceleration for the
+    /// rest. A collection view with self-sizing cells is genuinely still moving
+    /// then — cells recycling, heights being corrected — and a screenshot of it
+    /// shows holes that are not in the finished layout. These images are the
+    /// evidence a reviewer looks at, so they are taken of a settled screen.
+    private func settle() { Thread.sleep(forTimeInterval: 3) }
+
+    /// Swipe until something shows up, or give up and say so.
+    ///
+    /// `towardsOlder` is a downward swipe, because the collection view is
+    /// flipped: the finger moves the way it does in any chat app, and the
+    /// scroll view underneath is walking towards the END of its content.
+    private func scroll(_ list: XCUIElement, until needle: String,
+                        swipes: Int, towardsOlder: Bool) -> Bool {
+        for _ in 0..<swipes {
+            if screenSays(needle, timeout: 0.5) { return true }
+            if towardsOlder { list.swipeDown() } else { list.swipeUp() }
+        }
+        // One last look with a real timeout: the final swipe may still be
+        // settling, and a page requested by it may still be in flight.
+        return screenSays(needle, timeout: 6)
+    }
+
 
     /// The number the fixture stamped on the answer this screen is showing.
     ///

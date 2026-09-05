@@ -52,6 +52,30 @@ import SwiftUI
 /// that costs: 162 messages and fifteen minutes closed over silently, with the
 /// compaction notice the reader was looking for inside the gap. `TimelinePager`
 /// is the half that keeps them meeting.
+/// A list cell that stays flipped.
+///
+/// The collection view below is upside down and every cell is flipped back, so
+/// each row reads the right way up inside a list that grows downwards from the
+/// newest message. The flip has to be re-applied HERE and not only where the
+/// cell is configured: `UICollectionViewLayoutAttributes` carries a transform of
+/// its own — identity — and `apply(_:)` assigns it over whatever the cell was
+/// holding. A transform set at dequeue time therefore survives exactly until the
+/// next layout pass and then silently goes away.
+///
+/// The symptom is the entire conversation drawn mirrored top to bottom, with
+/// the navigation bar the right way up above it. Nothing on the Mac can show it:
+/// `tools/render-timeline.sh` draws the rows in a plain `VStack` and there is no
+/// collection view anywhere in that path, so this shipped in round 20 and was
+/// found the first time the screen ran on a phone.
+private final class FlippedListCell: UICollectionViewListCell {
+    static let flip = CGAffineTransform(scaleX: 1, y: -1)
+
+    override func apply(_ layoutAttributes: UICollectionViewLayoutAttributes) {
+        super.apply(layoutAttributes)
+        transform = Self.flip
+    }
+}
+
 final class ChatTimelineViewController: UIViewController {
     private enum Section { case main }
 
@@ -149,7 +173,8 @@ final class ChatTimelineViewController: UIViewController {
         )
         collection.backgroundColor = .clear
         collection.translatesAutoresizingMaskIntoConstraints = false
-        collection.contentInset = UIEdgeInsets(top: Self.padV, left: 0, bottom: Self.padV, right: 0)
+        // `contentInset` is set in `applyInsets`, which has to know the safe
+        // area first.
         collection.keyboardDismissMode = .interactive
         // Upside down. The cells are flipped back in the registration below, so
         // each row draws the right way up inside a list that grows downwards
@@ -158,6 +183,22 @@ final class ChatTimelineViewController: UIViewController {
         // With the collection flipped, the indicator would run down the LEFT
         // edge and its inset would be measured from the wrong end.
         collection.showsVerticalScrollIndicator = false
+        // iOS 26 blurs and lightens scroll content near a scroll view's edges,
+        // fading the effect out with distance so a translucent navigation bar
+        // has something legible behind it. The flip turns the mask inside out:
+        // full strength across the whole visible conversation, and NOTHING in
+        // the strip actually behind the bar. On a phone the timeline came out
+        // soft and washed to about 15% contrast — every message still there,
+        // every assertion still passing, and unreadable. Only reading the pixels
+        // out of a screenshot says so; on the Mac `render-timeline.sh` never
+        // touches a scroll view and cannot show it at all.
+        //
+        // Turned off rather than restyled. The web draws no such effect, and
+        // "the same as the web" is the standard this screen is held to.
+        if #available(iOS 26.0, *) {
+            collection.topEdgeEffect.isHidden = true
+            collection.bottomEdgeEffect.isHidden = true
+        }
         collection.delegate = self
         view.addSubview(collection)
 
@@ -187,7 +228,7 @@ final class ChatTimelineViewController: UIViewController {
             spinner.centerYAnchor.constraint(equalTo: view.centerYAnchor),
         ])
 
-        let cell = UICollectionView.CellRegistration<UICollectionViewListCell, String> {
+        let cell = UICollectionView.CellRegistration<FlippedListCell, String> {
             [weak self] cell, _, key in
             guard let self, let row = self.rowsByKey[key] else { return }
             let width = self.contentWidth
@@ -206,9 +247,11 @@ final class ChatTimelineViewController: UIViewController {
             background.backgroundColor = .clear
             cell.backgroundConfiguration = background
             // Undo the collection's flip so the row itself reads normally.
-            cell.transform = CGAffineTransform(scaleX: 1, y: -1)
+            // Belt and braces with `FlippedListCell.apply`: this covers the
+            // frames before the layout has applied any attributes.
+            cell.transform = FlippedListCell.flip
         }
-        let earlier = UICollectionView.CellRegistration<UICollectionViewListCell, String> {
+        let earlier = UICollectionView.CellRegistration<FlippedListCell, String> {
             [weak self] cell, _, _ in
             guard let self else { return }
             let loading = self.loadingOlder
@@ -223,7 +266,7 @@ final class ChatTimelineViewController: UIViewController {
             var background = UIBackgroundConfiguration.clear()
             background.backgroundColor = .clear
             cell.backgroundConfiguration = background
-            cell.transform = CGAffineTransform(scaleX: 1, y: -1)
+            cell.transform = FlippedListCell.flip
         }
         source = UICollectionViewDiffableDataSource(collectionView: collection) { view, indexPath, key in
             key == Self.earlierKey
@@ -232,6 +275,39 @@ final class ChatTimelineViewController: UIViewController {
         }
 
         observeAppState()
+        applyInsets()
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        applyInsets()
+    }
+
+    /// Put the safe area on the ends of the list a reader actually sees it on.
+    ///
+    /// The collection is flipped, so its content-space TOP is the BOTTOM of the
+    /// screen — and UIKit's own safe-area adjustment does not know that. Left
+    /// alone it adds the navigation bar's inset at content-top, which lands as a
+    /// hundred points of dead space under the newest message, while the oldest
+    /// rows scroll under the status bar with `padV` and nothing else. That is
+    /// what the first simulator run of this screen looked like.
+    ///
+    /// Fixed by cancelling out what UIKit contributes rather than by turning the
+    /// adjustment off: `adjustedContentInset = safeAreaInsets + contentInset`, so
+    /// asking for the two ends swapped is arithmetic. The alternative —
+    /// `contentInsetAdjustmentBehavior = .never` — also means owning the resting
+    /// content offset by hand, and writing `contentOffset` from inside a layout
+    /// pass is exactly the re-entrancy that killed `scrollViewDidScroll`.
+    ///
+    /// A negative component is fine and expected: on a phone the status bar plus
+    /// the navigation bar is taller than the home indicator, so `top` here is
+    /// normally below zero.
+    private func applyInsets() {
+        let safe = view.safeAreaInsets
+        let wanted = UIEdgeInsets(top: safe.bottom + Self.padV - safe.top, left: 0,
+                                  bottom: safe.top + Self.padV - safe.bottom, right: 0)
+        guard collection.contentInset != wanted else { return }
+        collection.contentInset = wanted
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -594,6 +670,18 @@ extension ChatTimelineViewController: UICollectionViewDelegate {
         guard scrollView.bounds.height > 0 else { return }
         let runway = scrollView.contentSize.height - (scrollView.contentOffset.y + scrollView.bounds.height)
         guard runway < TimelinePager.pullMargin(viewportHeight: scrollView.bounds.height) else { return }
-        loadEarlier()
+        // NOT synchronously. This runs inside the collection view's own layout
+        // pass, and `loadEarlier` applies a snapshot immediately — the pill
+        // turning into `loading…`. Mutating a collection view from inside its
+        // layout re-enters `_updateVisibleCellsNow`, and with self-sizing cells
+        // the nesting does not settle: UIKit trips an assertion several levels
+        // down and the app is gone. It killed a run on the first pull and let
+        // the next one through, which is what a re-entrancy bug looks like from
+        // the outside.
+        //
+        // Coalescing is `loadEarlier`'s own guard: several blocks may be queued
+        // before the first runs, and the first sets `loadingOlder` before
+        // returning, so the rest are no-ops.
+        DispatchQueue.main.async { [weak self] in self?.loadEarlier() }
     }
 }

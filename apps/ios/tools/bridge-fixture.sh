@@ -4,11 +4,12 @@
 #
 #   apps/ios/tools/bridge-fixture.sh [test-name ...]
 #
-# Runs tools/bridge-fixture/server.py over loopback — the fixture page, plus a
-# `chat.listSessions` that answers per key — points the shell at it, and runs the
-# UI tests that use it (all of them by default). Simulator processes run natively
-# on this Mac, so 127.0.0.1 inside the simulator is this Mac's loopback — no port
-# forwarding.
+# Runs tools/bridge-fixture/server.py over loopback — the fixture page, a
+# `chat.listSessions` that answers per key, and one 150-message chat session
+# behind `chat.listMessages` / `chat.listMessagesBefore` / `/api/chat/stream` —
+# points the shell at it, and runs the UI tests that use it (all of them by
+# default). Simulator processes run natively on this Mac, so 127.0.0.1 inside the
+# simulator is this Mac's loopback — no port forwarding.
 #
 # Knobs: HERMIT_SIM_DEVICE  HERMIT_SHOT_DIR  HERMIT_FIXTURE_PORT
 #        HERMIT_DERIVED_DATA (also stops the cleanup from deleting it)
@@ -35,6 +36,7 @@ TESTS=("$@")
   testTheNativeListRefreshesItselfWhileYouWatch
   testTheSessionListIsTheFrontDoor
   testThePageCanProposeAnotherServer
+  testTheNativeTimelineStreamsAndPagesBack
 )
 
 command -v xcodegen >/dev/null || { echo "need xcodegen: brew install xcodegen" >&2; exit 1; }
