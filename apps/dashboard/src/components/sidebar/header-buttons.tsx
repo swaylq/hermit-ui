@@ -1,16 +1,19 @@
 'use client';
 
-// The three icon buttons in the sidebar header: Brain (the hermit-crab → the
-// /brain orchestrator panel), Settings (→ the Settings area), and Notifications
-// (the bell → /notifications, with an unread badge). Extracted verbatim from
-// app-sidebar.tsx (P2-4); behaviour identical. All three are rendered by AppSidebar.
+// The two icon buttons in the sidebar header: Brain (the hermit-crab → the /brain
+// orchestrator panel) and Settings (→ the Settings area). Both are rendered by
+// AppSidebar.
+//
+// A third used to sit here — a bell with an unread badge, opening an in-dashboard
+// notifications inbox. Real push (Web Push · APNs · Bark) reaches the phone now,
+// so the inbox was removed on 2026-09-05 rather than kept as a second, weaker
+// copy of the same information.
 
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
-import { Settings, Bell } from 'lucide-react';
+import { Settings } from 'lucide-react';
 import { SETTINGS_HREFS, SETTINGS_ENTRY_HREF } from '@/lib/settings-nav';
-import { useNotifCounts } from './notifications-nav';
 // The hermit-crab button in the sidebar header → the dedicated 义脑 / Brain panel
 // (/brain). The orchestrator lives there, kept out of the worker agent lists. The
 // icon is the monochrome woodcut crab (CSS mask, bg-current) so it tints like the
@@ -69,40 +72,6 @@ export function SettingsButton({ collapsed }: { collapsed: boolean }) {
       )}
     >
       <Settings className="h-4 w-4" />
-    </Link>
-  );
-}
-
-// The bell button in the sidebar header → the Notifications inbox (/notifications).
-// Sits right beside the Brain button. Carries a small rose badge with the total
-// unread roll-up (chat sessions + cron runs) so the user sees pending items
-// without entering. Mirrors BrainButton's active/hover treatment.
-export function NotificationsButton({ collapsed }: { collapsed: boolean }) {
-  const pathname = usePathname();
-  const active = pathname.startsWith('/notifications');
-  // Subscribe to the unread roll-up HERE (leaf) rather than in AppSidebar, so a
-  // count tick re-renders just this badge, not the whole sidebar subtree (P1-2).
-  const { total: count } = useNotifCounts();
-  return (
-    <Link
-      href="/notifications"
-      title="Notifications"
-      aria-label="Notifications"
-      className={cn(
-        'group relative inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer shrink-0',
-        active ? 'bg-sidebar-accent text-sidebar-foreground' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground',
-        collapsed && 'lg:hidden',
-      )}
-    >
-      <Bell className="h-4 w-4" />
-      {count > 0 && (
-        <span
-          aria-hidden="true"
-          className="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-rose-500 text-white text-[8px] font-mono tabular-nums leading-none animate-in fade-in-0 zoom-in-50 duration-150"
-        >
-          {count > 99 ? '99+' : count}
-        </span>
-      )}
     </Link>
   );
 }

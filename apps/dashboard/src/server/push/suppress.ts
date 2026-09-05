@@ -170,7 +170,7 @@ export interface TurnInput {
  * A session whose `state` is stuck at 'working' for ever — a bug in the working
  * signal, not in this rule — holds its push indefinitely. That is survivable and
  * on purpose: the message itself is not lost, it still marks the session unread
- * in the sidebar and in the notifications inbox. Adding a clock ceiling here
+ * in the sidebar. Adding a clock ceiling here
  * would mean a long enough task gets its preamble pushed anyway, which is the
  * exact complaint this exists to answer.
  */

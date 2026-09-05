@@ -13,7 +13,6 @@ import { globalMemoryRouter } from './globalMemory';
 import { knowledgeRouter } from './knowledge';
 import { secretsRouter } from './secrets';
 import { shareRouter } from './share';
-import { notificationsRouter } from './notifications';
 import { hostsRouter } from './hosts';
 import { alertsRouter } from './alerts';
 import { watchdogsRouter } from './watchdogs';
@@ -35,7 +34,6 @@ export const appRouter = router({
   knowledge: knowledgeRouter,
   secrets: secretsRouter,
   share: shareRouter,
-  notifications: notificationsRouter,
   hosts: hostsRouter,
   alerts: alertsRouter,
   watchdogs: watchdogsRouter,

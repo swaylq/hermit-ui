@@ -52,7 +52,7 @@ export const machineProcedure = withScope.use(async ({ ctx, next }) => {
 // keys, ctx.machine intact) — this is a NAMED alias so "gateway plumbing" reads
 // distinctly from a browser-facing full-access endpoint, and gives one seam to add
 // gateway-only policy later. NOT for browser-driven machine actions (e.g.
-// chat.cleanupApply, or hosts.ackAlert) — those stay machineProcedure.
+// chat.cleanupApply) — those stay machineProcedure.
 export const gatewayProcedure = machineProcedure;
 
 // Agent-scoped: accepts machine keys (full access) AND scoped share tokens, but a

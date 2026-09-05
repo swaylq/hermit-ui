@@ -1,8 +1,12 @@
 // hosts router — host-resource observability for the Host-health panel.
-// Both procedures are machineProcedure (owner-only; scoped share keys rejected)
-// and return data for the caller's authenticated machine.
+// Every procedure is machineProcedure (owner-only; scoped share keys rejected)
+// and returns data for the caller's authenticated machine.
+//
+// `ackAlert` used to live here, stamping HostStat.alertReadAt so a red-pressure
+// item dropped out of the notifications inbox. The inbox is gone (2026-09-05) and
+// a red crossing already both pushes (api/sync/host-stat) and shows on
+// /watchdogs, so there is nothing left to dismiss.
 
-import { z } from 'zod';
 import { router, machineProcedure } from '../trpc';
 import { prisma } from '../db';
 import { watchdogConfigOf } from '@/lib/watchdog-config';
@@ -19,16 +23,6 @@ export const hostsRouter = router({
       prisma.machine.findUnique({ where: { id: ctx.machine.id }, select: { watchdogConfig: true } }),
     ]);
     return { stat, thresholds: watchdogConfigOf(m).hostRed };
-  }),
-
-  // Read (dismiss) a pending red-pressure alert from the notifications inbox —
-  // stamps alertReadAt so the host item drops until the next red crossing.
-  ackAlert: machineProcedure.mutation(async ({ ctx }) => {
-    await prisma.hostStat.updateMany({
-      where: { machineId: ctx.machine.id, redAlertAt: { not: null } },
-      data: { alertReadAt: new Date() },
-    });
-    return { ok: true };
   }),
 
   // This machine's open chat sessions, heaviest first — the panel's "Top memory

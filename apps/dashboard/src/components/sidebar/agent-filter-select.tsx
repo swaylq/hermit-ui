@@ -8,7 +8,7 @@
 // chunk every route downloads before first paint. This one dropdown was the only
 // `@base-ui/react/select` user in that graph, and base-ui's Select carries the
 // combobox + floating-ui positioning engine with it — a six-figure byte count that
-// /usage, /help, /skills, /notifications and friends were parsing for a control
+// /usage, /help, /skills and friends were parsing for a control
 // they never render. Behind React.lazy it becomes its own chunk, fetched only when
 // the sessions list actually mounts with >1 agent.
 //

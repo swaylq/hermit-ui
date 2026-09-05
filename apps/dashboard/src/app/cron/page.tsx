@@ -228,7 +228,9 @@ function CronDetail({ id }: { id: string }) {
   const confirm = useConfirm();
   const router = useRouter();
   const q = trpc.cron.get.useQuery({ id }, { refetchInterval: 5_000 });
-  // ?run=<id> deep-link (from the notifications inbox) → auto-expand that run.
+  // ?run=<id> deep-link → auto-expand that run. Built by push/events.ts for cron
+  // pushes, so this stays load-bearing even though the inbox that first needed it
+  // is gone.
   const autoRunId = useSearchParams().get('run');
   const update = trpc.cron.update.useMutation({
     onSuccess: () => { utils.cron.get.invalidate({ id }); utils.cron.list.invalidate(); setEditing(false); },

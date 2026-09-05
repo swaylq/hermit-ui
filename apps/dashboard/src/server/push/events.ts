@@ -13,7 +13,6 @@ const PREVIEW_LEN = 140;
 /**
  * First text block of an Anthropic content array, flattened to one line. Returns
  * null for a turn that is pure tool traffic — nothing a human would want pushed.
- * (Mirrors firstText() in routers/notifications.ts, which reads the same column.)
  */
 export function previewText(content: unknown): string | null {
   if (typeof content === 'string') {
@@ -137,7 +136,7 @@ export function cronEvent(args: {
     machineId: args.machineId,
     title: 'Scheduled task',
     body: `${args.cronName} ${label}`,
-    // Same shape the notifications inbox opens (id + run auto-expands that run).
+    // `run` auto-expands that run on the cron page (see app/cron/page.tsx).
     path: args.runId
       ? `/cron?id=${encodeURIComponent(args.cronId)}&run=${encodeURIComponent(args.runId)}`
       : `/cron?id=${encodeURIComponent(args.cronId)}`,

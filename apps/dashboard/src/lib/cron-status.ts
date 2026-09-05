@@ -3,12 +3,13 @@
 // The gateway's cron-runner settle loop writes these values into Cron.lastStatus /
 // CronRun.status as a free-form String (no DB enum — see memory
 // hermit-ui-cron-status-semantics), and the dashboard reads them back to render a
-// status light in four places: the /cron badge, the agent-detail dot, the sidebar
-// recents dot, and the notifications inbox. Those four sites each map a status to
-// their OWN classes (a badge triple vs a dot bg vs a boolean), but they all share
-// ONE grouping — which is what used to be copy-pasted (and had to be kept in sync)
-// across all four. That grouping now lives here exactly once, so adding a status or
-// re-grouping one is a single-file change instead of a four-site hunt.
+// status light in three places: the /cron badge, the agent-detail dot, and the
+// sidebar recents dot. (A fourth, the notifications inbox, was removed on
+// 2026-09-05.) Each site maps a status to its OWN classes (a badge triple vs a dot
+// bg vs a boolean), but they all share ONE grouping — which is what used to be
+// copy-pasted, and had to be kept in sync, across all of them. That grouping now
+// lives here exactly once, so adding a status or re-grouping one is a single-file
+// change instead of a multi-site hunt.
 //
 // NOTE: the gateway is the *producer* and keeps its own inline union in
 // apps/gateway/src/cron-runner.ts (a different package — the dashboard never imports

@@ -162,11 +162,14 @@ model HostStat {
   sampledAt   DateTime?
 
   // Red-pressure alert (A4). redAlertAt is stamped when the host CROSSES into red
-  // (set once, not every tick) and cleared on recovery to ≤amber; alertReadAt is
-  // stamped when the user reads the inbox. The notifications feed shows a host
-  // alert iff redAlertAt != null AND (alertReadAt == null OR alertReadAt <
-  // redAlertAt) — so a sustained red shows once, a new episode re-alerts.
+  // (set once, not every tick) and cleared on recovery to ≤amber, so a sustained
+  // red alerts once and a new episode re-alerts. api/sync/host-stat pushes on that
+  // crossing and /watchdogs renders "red since …" from it.
   redAlertAt  DateTime?
+  // DEAD since 2026-09-05 — kept only because dropping a column needs a migration
+  // for no gain. It recorded that the user had seen the alert in the notifications
+  // inbox; that inbox is gone and push has no read state, so nothing writes or
+  // reads this. Do not build on it without giving it a writer first.
   alertReadAt DateTime?
 
   machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
@@ -717,9 +720,10 @@ model ChatSession {
   // sitting stalled for hours pushes once. A follow-up message has a different id,
   // which re-arms the clock — which is right, since it's a second unanswered ask.
   unansweredMsgId      String?
-  // What "mark all read" acknowledged, so the inbox item can be dismissed without
-  // the next sweep instantly re-raising it (unansweredMsgId itself must survive —
-  // clearing it would re-fire the push). Mirrors HostStat.redAlertAt/alertReadAt.
+  // DEAD since 2026-09-05, same story as HostStat.alertReadAt — it recorded what
+  // the notifications inbox's "mark all read" had acknowledged. Only server/
+  // unanswered.ts touches it now, and only to reset it to null. Kept because
+  // dropping a column needs a migration for no gain.
   unansweredAckedMsgId String?
 
   messages     ChatMessage[]
@@ -737,10 +741,10 @@ model ChatSession {
   // Resolve a session by its Claude uuid — the interaction-sync fallback lookup
   // (app/api/sync/interaction/route.ts) findFirst WHERE claudeSessionId + machineId.
   @@index([machineId, claudeSessionId])
-  // Back the `WHERE machineId ORDER BY lastMessageAt DESC` scans in the always-on
-  // sidebar's notifications.counts / notifications.feed (5s, every page) — without it
-  // Postgres filesorts the machine's whole session set to take the top 300. See
-  // docs/perf-backlog.md P0-1.
+  // Back the `WHERE machineId ORDER BY lastMessageAt DESC` scans — added for the
+  // notifications inbox (removed 2026-09-05) but chat.listSessions orders the same
+  // way on every page, so it still earns its keep. Without it Postgres filesorts
+  // the machine's whole session set. See docs/perf-backlog.md P0-1.
   @@index([machineId, lastMessageAt])
   // Four PARTIAL indexes for the sparse request-flag columns — cancelRequestedAt /
   // restartRequestedAt / hibernateRequestedAt / (dispatchedBySessionId + closedAt) —

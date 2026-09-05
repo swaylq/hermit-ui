@@ -13,9 +13,8 @@ import { isNativeShell, setNativeEdgeSwipe } from '@/lib/native-bridge';
 import { cn } from '@/lib/utils';
 import { SETTINGS_HREFS, SETTINGS_TABS } from '@/lib/settings-nav';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
-import { BrainButton, SettingsButton, NotificationsButton } from '@/components/sidebar/header-buttons';
+import { BrainButton, SettingsButton } from '@/components/sidebar/header-buttons';
 import { openGlobalSearch } from '@/lib/chat-cache/search-bus';
-import { NotificationsFilters } from '@/components/sidebar/notifications-nav';
 import { BrainSidebar, RecentDispatchSessions } from '@/components/sidebar/brain-sidebar';
 import { KnowledgeSidebarList } from '@/components/sidebar/knowledge-sidebar-list';
 import { useDrawerSwipe } from '@/components/sidebar/use-drawer-swipe';
@@ -95,10 +94,6 @@ export function AppSidebar() {
   const onBrain = pathname.startsWith('/brain');
   const onBrainChat = pathname === '/brain'; // the Chat view (no sub-route; ?session= keeps this path)
   const onBrainDispatch = pathname.startsWith('/brain/dispatch'); // dispatch list lives in the sidebar too
-  const onNotifications = pathname.startsWith('/notifications');
-  // The unread roll-up (bell badge) + the notifications-mode filter counts each
-  // subscribe inside their own leaf now (useNotifCounts) so a count tick re-renders
-  // just that leaf, not this whole sidebar — see components/sidebar/notifications-nav.tsx (P1-2).
   // When viewing a chat session, point the Agents nav at THAT session's agent, so
   // entering Agents from a session lands on its agent instead of the default
   // first-agent. Reuses RecentSessions' listSessions query (same key → deduped).
@@ -226,20 +221,6 @@ export function AppSidebar() {
                 <span className="text-sm font-semibold text-sidebar-foreground">Brain</span>
               </Link>
             </>
-          ) : onNotifications ? (
-            <>
-              <Link
-                href="/chat"
-                title="Back to dashboard"
-                aria-label="back to dashboard"
-                className="inline-flex items-center justify-center p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors cursor-pointer shrink-0"
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </Link>
-              <div className={cn('flex-1 min-w-0', collapsed && 'lg:hidden')}>
-                <span className="px-1 text-sm font-semibold text-sidebar-foreground">Notifications</span>
-              </div>
-            </>
           ) : onSettings ? (
             <>
               <Link
@@ -279,7 +260,6 @@ export function AppSidebar() {
                 />
               </Link>
               <BrainButton collapsed={collapsed} />
-              <NotificationsButton collapsed={collapsed} />
               <Link
                 href="/market/skills"
                 title="Public marketplace"
@@ -368,11 +348,6 @@ export function AppSidebar() {
               <div className="flex-1" />
             )}
           </>
-        ) : onNotifications ? (
-          /* Notifications mode: All / Chat / Cron source filters. The counts
-             subscription lives in the leaf so a count tick re-renders only the
-             strip, not this sidebar (P1-2). */
-          <NotificationsFilters collapsed={collapsed} />
         ) : onSettings ? (
           /* Settings mode: the settings tabs as a vertical nav (back in the header). */
           <>

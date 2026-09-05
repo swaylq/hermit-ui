@@ -41,7 +41,7 @@ const GUIDE: { title: string; points: string[] }[] = [
     points: [
       'Settings → System shows the machine RAM, swap, load, and the memory each session uses.',
       'Long-idle sessions are archived automatically — Settings → System → Session cleanup sets the threshold, and archiving is what frees their memory.',
-      'A red-pressure alert lands in Notifications when a machine runs critically low on memory.',
+      'A machine running critically low on memory pushes an alert to your phone and shows as red on Settings → Watchdogs.',
     ],
   },
   {

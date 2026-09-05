@@ -170,12 +170,14 @@ is safe here: the chat pane stamps `lastReadAt` on an effect keyed to the messag
 count, and a stalled session's message count is by definition frozen — so it stamps
 once when you open it and never again. It can't hold its own alert down.
 
-⚠️ **The push transport is currently dark.** `APNS_KEY_ID` / `APNS_TEAM_ID` /
-`APNS_TOPIC` / `APNS_PRIVATE_KEY` are unset on the VPS and `PushDevice` has zero
-rows, so `enqueuePush` no-ops for *every* kind — `blocked`, `chat`, `cron` and `host`
-included. This feature is wired into that pipeline and lights up the moment it is
-configured; until then its live surface is the notifications inbox (bell badge +
-`/notifications`), which works today.
+**Update 2026-09-05 — push is live and is now the only surface.** APNs and Web
+Push are both configured on the VPS and `PushDevice` has real rows, so
+`enqueuePush` delivers for every kind (`blocked`, `chat`, `cron`, `host`). The
+warning that used to sit here — transport dark, inbox as the stand-in surface —
+is obsolete twice over: the notifications inbox (bell badge + `/notifications`)
+was removed the same day, precisely because push had made it a weaker duplicate.
+What remains of this feature outside push is the `/watchdogs` counter of
+conversations still owing a reply.
 
 ## Verified
 

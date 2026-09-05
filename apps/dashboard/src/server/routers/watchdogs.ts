@@ -44,8 +44,14 @@ export const watchdogsRouter = router({
           OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
         },
       }),
+      // Conversations still owing a reply. `unansweredAckedMsgId` used to narrow
+      // this — the notifications inbox stamped it on "Mark all read" — but the
+      // inbox is gone (2026-09-05) and nothing writes that column any more, so
+      // the term was always true and only looked meaningful. The count clears on
+      // its own: server/unanswered.ts nulls unansweredMsgId as soon as the
+      // flagged message stops being the last word.
       prisma.chatSession.count({
-        where: { machineId: ctx.machine.id, unansweredMsgId: { not: null }, unansweredAckedMsgId: null, trashedAt: null },
+        where: { machineId: ctx.machine.id, unansweredMsgId: { not: null }, trashedAt: null },
       }),
     ]);
 
