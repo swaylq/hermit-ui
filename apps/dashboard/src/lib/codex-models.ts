@@ -28,6 +28,17 @@ export type CodexCatalogue = {
   /** What an unpinned session on this machine runs. Never empty. */
   default: string;
   models: CodexModel[];
+  /**
+   * Whether that default came from the machine or from the guess below.
+   *
+   * Load-bearing, because the chip's whole point is naming the model a session
+   * is really on. A gateway one restart behind still runs the PREVIOUS fleet
+   * default — every box in this fleet was on gpt-5.6-sol until 2026-09-05 — so
+   * writing "6-Astra" on a machine that has never reported would be a confident
+   * lie in exactly the case the reader cannot check. Unreported machines get
+   * "Default", the same thing claude says, until their gateway speaks up.
+   */
+  reported: boolean;
 };
 
 /**
@@ -36,7 +47,10 @@ export type CodexCatalogue = {
  * The authority is `DEFAULT_MODEL` in apps/gateway/src/runtime/codex-exec.ts,
  * and the gateway reports it the first time any codex session takes a turn.
  * This copy only covers the machine that has never run one; if the two ever
- * disagree, the gateway is right and this is stale.
+ * disagree, the gateway is right and this is stale. Which is why an unreported
+ * machine marks itself `reported: false` and the chip declines to name it —
+ * this value picks the menu's highlighted row, it does not get to claim what a
+ * session is running.
  */
 export const FALLBACK_CODEX_DEFAULT = 'gpt-6-astra';
 
@@ -78,9 +92,12 @@ export function codexCatalogueOf(row: { codexModels?: unknown } | null | undefin
   }
   const reported = typeof obj?.default === 'string' ? obj.default.trim() : '';
   if (models.length === 0) {
-    return { default: reported || FALLBACK_CODEX_DEFAULT, models: FALLBACK_CODEX_MODELS };
+    return { default: reported || FALLBACK_CODEX_DEFAULT, models: FALLBACK_CODEX_MODELS, reported: !!reported };
   }
-  return { default: reported || models[0].value, models };
+  // A catalogue with no default is a gateway one release behind: it knows the
+  // machine's models, not which one an unpinned session lands on. Best guess is
+  // codex's own priority order, and it is still a guess.
+  return { default: reported || models[0].value, models, reported: !!reported };
 }
 
 /**
@@ -108,7 +125,9 @@ export function codexShortLabel(model: string, models: CodexModel[]): string {
  * running a model it is not.
  */
 export function codexChipLabel(pin: string | null | undefined, cat: CodexCatalogue): string {
-  return codexShortLabel((pin ?? '').trim() || cat.default, cat.models);
+  const v = (pin ?? '').trim();
+  if (v) return codexShortLabel(v, cat.models);
+  return cat.reported ? codexShortLabel(cat.default, cat.models) : 'Default';
 }
 
 /**
@@ -126,7 +145,9 @@ export function codexMenuModels(cat: CodexCatalogue): CodexModel[] {
     {
       value: DEFAULT_MODEL_VALUE,
       displayName: 'Default',
-      description: `Follows this machine — currently ${current?.displayName ?? cat.default}`,
+      description: cat.reported
+        ? `Follows this machine — currently ${current?.displayName ?? cat.default}`
+        : 'Follows this machine',
     },
     ...cat.models,
   ];

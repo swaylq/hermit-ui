@@ -164,9 +164,9 @@ export function ModelChip({
         title={
           current
             ? `model: ${current} — click to switch (applied to the next message; the conversation is kept)`
-            : isCodex
-              ? `model: ${codex?.default ?? '…'} — this machine's codex default, click to switch`
-              : "model: this machine's Claude Code default — click to switch"
+            : isCodex && codex?.reported
+              ? `model: ${codex.default} — this machine's codex default, click to switch`
+              : `model: this machine's ${isCodex ? 'codex' : 'Claude Code'} default — click to switch`
         }
         className={cn(
           'shrink-0 font-mono rounded px-1 -mx-1 transition-colors',
