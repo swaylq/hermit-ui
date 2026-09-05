@@ -515,9 +515,19 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       **停止胶囊**（独立一颗、有标签、`ARM_MS=400`，`chat.cancelTurn`）、
       失败把原文一字不差放回去 + 琥珀条说明原因。第 6 轮，
       `Hermit/Composer{Core,View}.swift`，五个纯函数配 `tools/composer-fixture.sh`
-- [ ] **输入框左边那颗 `+`（附件）**：`/api/upload` multipart，20 图 / 10 文件上限，
-      用返回的 **safe** url。**今天那一格是空的** —— 画一颗点不动的 `+` 比不画更坏，
-      但空着就意味着输入框比网页少一格、发送圈往左挪了 36pt，这是看得见的差
+- [x] **输入框左边那颗 `+`（附件）** —— 第 8 轮。`/api/upload` multipart（`AttachUploader`）、
+      20 图 / 10 文件上限、用返回的 **safe** url。`Hermit/AttachCore.swift`（十个纯函数配
+      `tools/attach-fixture.sh`，150 项）+ `AttachmentChipView.swift`（纯 SwiftUI）+
+      `AttachPicker.swift`（Safari 那张动作单：图库 / 拍照 / 选取文件）。网页那边把允许的
+      扩展名、上限、chip 的副标题、计数说明抬进 `components/chat/attach-core.ts`，
+      `/api/upload/route.ts` 改成 import 它（原来是两份一模一样的手抄清单）
+- [ ] **大文件要边读边传，不要整个读进内存**：`AttachUploader` 现在把 `Data` 一次性交给
+      `URLSession`，浏览器交给 `FormData` 的是个惰性 `File`。服务端上限 200MB，
+      一段 190MB 的视频在手机上就是一次 190MB 的分配。改成 `uploadTask(with:fromFile:)`
+- [ ] **附件的粘贴与拖放**：网页 `onPaste` 收剪贴板里的图、`onDrop` 收拖进来的文件。
+      iOS 上对应的是输入框的粘贴菜单和 `UIDropInteraction`，两条都没做
+- [ ] **chip 上的图点开看大图**：网页 `AttachmentChip` 的缩略图是个按钮，开
+      `ImageLightbox`。原生这颗缩略图今天不接触摸
 - [x] **队列条**（`QUEUE_LIMIT=5`）+ `chat.queue` / `dequeue` / `clearQueue` —— 第 7 轮。
       `Hermit/QueueCore.swift`（七个纯函数配 `tools/queue-fixture.sh`）+
       `Hermit/QueueBarView.swift`（纯 SwiftUI）。`composerPlaceholder` 的 `queue full`
@@ -534,7 +544,8 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
 - [ ] ↑↓ 走历史、Enter 发送 / Shift+Enter 换行 —— **都是桌面键盘的行为**，
       网页在触屏上自己就 `return`（`isTouchPrimary()`）。装了硬件键盘的 iPad 才用得上
 - [ ] **把会话列表那一行点进原生时间线**（今天还是进网页 chat 页）。
-      一行代码，但要等 M5 做完：今天点进来会丢掉附件、按住说话、听写
+      一行代码。第 8 轮之后**附件不再是拦路的那件**（`+` 有了），
+      剩下按住说话和听写 —— 点过去仍然会丢掉这两条
 - [ ] 按住说话：`HOLD_MS=260`、`BAIL_PX=10`、`SLIDE_PX=64`，三个区是
       发送 / 左划取消 / 右划落回输入框（**没有「转文字」这个区**）
 - [ ] 听写：`/api/asr/<sid>` WebSocket，鉴权走 `Sec-WebSocket-Protocol: hermit-key.<token>`
@@ -574,14 +585,14 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 > 2026-09-05 16:35 起，这个清单由 `perfect-goal` 的轮次驱动，轮次日志在
 > `~/agents/asst/projects/ios-native/goal/ROUNDS.md`，目标与验收标准在同目录的 `GOAL.md`。
-> 目标未变：把这个清单清空。**清单 35/62** —— 第 7 轮勾掉队列条，分母涨 1：
-> 队列条那一行的预览文字在网页上会先过一遍「把译出去的英文显示回你打的中文」，
-> 原生一整条翻译都没有，所以把**出站自动翻译**写成明写的一条。
+> 目标未变：把这个清单清空。**清单 36/65** —— 第 8 轮勾掉 `+` 附件，分母涨 3：
+> 把它**没做的三件**写成明写的条（大文件流式上传、粘贴与拖放、缩略图点开看大图）。
 > 留在散文里的活只会让清单先清空、活后干完。
 
-**第 1 条：`+` 附件。** 输入框左边那一格今天是空的 —— 网页那颗 `+` 在，原生不在，
-整排控件因此比网页少一格、发送圈往左挪了 36pt。`/api/upload` multipart，20 图 / 10 文件，
-用返回的 **safe** url。这是「看得见的差」里最后一件挡在「把会话列表点进原生时间线」前面的。
+**第 1 条：麦克风那一格。** `+` 第 8 轮做掉了，右边那格还是空的 —— 网页上框空着的时候
+它是麦克风、有草稿的时候是 ✕，原生只有 ✕。所以**发送圈在空框上仍然比网页靠左一格**。
+按住说话（`HOLD_MS=260`、`BAIL_PX=10`、`SLIDE_PX=64`）和听写是它背后的两条，
+但先把那一格占上、把排布对齐，是「看得见的差」里现在最大的一件。
 
 **第 2 条：`streamingTailId`。** `turnInFlight(streamingTail:)` 在原生恒为 false，
 靠网关的 `working` 兜底 —— 最多晚一次 5 秒轮询，是晚不是错。做掉它，
@@ -607,10 +618,23 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 1. **胶囊点不开。** `▸` 画着，但没有展开态，也就没有 `chat.getMessages` 那条取全量的路
    （M4 第五条）。展开态是往 `RunCapsuleView` 底下加一段。
 2. **图片/文件是一行 chip，不是 `file-preview.tsx`。** 真的缩略图和 lightbox 是 M4 第七条。
-3. **行距用的是 `.lineSpacing`，不是真的 CSS 行盒。** `TimelineMetrics` 记着网页每一档的
-   `line-height`，但 SwiftUI 只能调行间距、调不了首行的行盒高度。
-   **M6 给这一屏跑第一次像素比对之前，得先决定这里用哪种做法** —— 会话行是一行文字所以
-   能用 `.frame(height:)` 钉死，一段可换行的正文钉不住。
+3. ~~**行距用的是 `.lineSpacing`，不是真的 CSS 行盒。**~~ **第 8 轮有答案了**：
+   `AttachmentChipView.swift` 的 `WebLineBox`（一个 `Layout`）**量出**文字实际换了几行
+   —— `一行的高 = 无限宽时的高`，`总高 = 给定宽度下的高`，`n = (总高-一行)/(一行+间距)+1`
+   —— 再把整块钉成 `n × 行盒`，文字在里面居中（CSS 的半行距就是这么放的）。
+   和字体自己的度量无关，所以猜错 `natural` 只差块内的行间距，不会一行一行累积。
+   时间线可以整个拿过去用。
+
+**第 8 轮量出来的、attach-compare 剩下的 6.59%（逐项，都不是新问题）**
+
+1. **等宽字体宽 3%** —— `.system(design:.monospaced)` 的步进 6.1816，浏览器的 SF Mono 是 6.0。
+   一个 12 字的文件名因此宽 2.5pt，chip 跟着宽 2.5pt。第 17 轮在会话列表上量到同一个数，
+   办法也是同一个：**把 Geist Mono 塞进包里**（M3 第 3 条，已拍板）。
+2. **SwiftUI 的 `Text` 宽度向上取整到整点** —— chip 上那颗 `×` 因此是 16.00，
+   浏览器量出来 15.23，每颗 chip 差 0.77pt。这一条**修不掉**（除非把宽度写死成
+   一个浏览器量出来的数），只能记着。
+3. 剩下的是字形栅格化，中文那几行尤其明显。竖直方向**逐点对齐**：八个用例的高度
+   80.5 / 80.5 / 80.5 / 64.5 / 79.5 / 80.5 / 138.5 / 602.5 和 Chrome 报的一样。
 
 **比对流程自己的两件（第 18 轮量出来的，原样有效）**
 
@@ -642,6 +666,49 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 16:5x 那句「全部复刻网页，做完再评审，反复改到完美」把范围定死成全量，见 `GOAL.md`。
 
 ## 踩过的坑
+
+### 自己保留自己的对象，要等活干完才放手（第 8 轮）
+
+`AttachPicker` 是 UIKit 那套 delegate 里典型的一次性对象：调用方不留引用，
+UIKit 只弱持有 delegate，所以它**自己持有自己**（`alive = self`），干完放手。
+第一版在 `didFinishPicking` 里先 `alive = nil` 再开 `Task { [weak self] … }` 去读字节。
+于是：选完照片 → 对象释放 → Task 里的 `self?` 是 nil → **什么都不发生**。
+没有崩溃、没有报错、没有 chip，看上去就是「点了照片，然后没反应」。
+Mac 上的渲染永远看不见这个（那里没有 picker），模拟器用例一跑就红在
+「chip 从来没报出服务端的尺寸」。**规矩：`alive = nil` 放在活真的干完之后，
+异步就放进那个 `MainActor.run` 里，同步就 `defer`。**
+
+### `.frame(maxWidth:)` 不是 CSS 的 `max-width`，两个方向都不是（第 8 轮）
+
+第 5 轮记过一半：SwiftUI 的柔性 frame 是贪婪的，`max-w-[9rem]` 照抄成
+`.frame(maxWidth: 144)` 会把短文字后面撑出一大片空。第 8 轮踩到的是**另一半**：
+给外面套一层 `.fixedSize(horizontal: true)` 把贪婪按住之后，frame 确实只到 120 了，
+**但里面的 `Text` 还是按「一行」的理想宽度排的版**，于是长错误信息画到 chip 外面去、
+盖在下一行上，而 chip 自己还是 50pt 高。断言全过，热力图上是整块错位。
+办法是自己写一个 `MaxWidthBox: Layout`，问 CSS 问的那两个问题：
+**你想多宽**（`sizeThatFits(.unspecified)`），以及**在你真拿到的宽度下你多高**
+（`sizeThatFits(width:)`）。二十行，没有别的写法。
+
+### 用例不能断言一个不是自己造出来的数 —— 反过来也算（第 8 轮，第二次）
+
+第 7 轮记过：夹具服务器活得比一个用例长，所以开头要先把自己要数的东西清干净。
+第 8 轮从**另一边**踩到同一件事：新用例
+`testTheNativeComposerAttachesAPhoto` 按字母序排在
+`testTheNativeComposerSendsAndHandsTheBubbleOver` **前面**，抢走了 `server #1`，
+于是那条一直绿着的用例开始红。它没改一行，是**它的前提被别人改掉了**。
+改法不是给新用例改名字（那是把独立性押在字母序上），是把老用例里的
+`"server #1 · …"` 换成 `"· …"` —— 分隔符已经足够把服务端那行和乐观气泡分开，
+而「第二次发送用了新的幂等键」靠的是**第二条消息自己的文字**：复用了键，
+服务端回放的是第一行，那句话就永远不会出现。牙齿一点没少。
+
+### Foundation 的 JSONDecoder 会因为一个落单代理项拒掉整张表（第 8 轮）
+
+`chipSubLabel` 把错误信息截到 40 个 **UTF-16 码元**（JS 的 `slice` 就是这么数的）。
+想给共享夹具加一条「正好切在代理对的中间」的用例：JS 切出一个落单的高位代理，
+`JSON.stringify` 写成裸的 `\ud83d`，然后 **Swift 这边整个文件都解不开**
+（`Missing low code point in surrogate pair`）—— 一条用例赔上其余 149 条。
+能区分「按字符切」和「按码元切」而又不带落单代理的是**组合记号**：
+39 个 `a` + `e` + U+0301，按码元切丢掉那一撇，按字符切留着。反证过，只红那一条。
 
 ### `UIHostingController` 的 view 不会自己重新量高，多出来的部分不接触摸（第 7 轮）
 
@@ -1474,6 +1541,7 @@ Oklab→线性 sRGB 那一步会塌成三个通道都等于 L³，Display P3 和
 
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
+| 8p | 2026-09-05 | **`perfect-goal` 第 8 轮 —— `+` 附件。** `Hermit/AttachCore.swift`（十个纯函数）+ `AttachmentChipView.swift`（chip、计数说明、`ChipFlow`=flex-wrap、`MaxWidthBox`=CSS max-width、`WebLineBox`=CSS 行盒）+ `AttachUploader.swift`（multipart POST /api/upload，本工程唯一一条非 tRPC 的路由）+ `AttachPicker.swift`（Safari 在 iPhone 上给 `<input type=file>` 的那张动作单：图库 / 拍照 / 选取文件；HEIC→JPEG 只在图库那道门转，因为 Safari 就是在那里转的）。接进 `ChatTimelineViewController`：上传中/完成/失败三种 chip、`uploadingCount` 和 `readyAttachments` 第一次拿到真数、`chat.send` 带 `images`/`files`、发失败把 chip 一并放回去（url 不变，不重传）。网页那边把扩展名白名单、上限、chip 副标题、计数说明抬进 `components/chat/attach-core.ts`，`/api/upload/route.ts` 改成 import 它（原来是两份手抄的 87 项清单），并把 `AttachmentStrip` 从 JSX 里抬成导出组件供比对用 | `xcodegen` + `swiftc -typecheck` **exit 0**；dashboard `tsc --noEmit` **exit 0**、单测 **877/878**（唯一那条红是这台 Mac 的 `sips` 环境问题，第 7 轮记过，不是这轮的）；`tools/attach-fixture.sh` **150/150**，反证十次每次只红该红的；`tools/attach-compare.sh` **23.10% → 6.59%**，八个用例的高度和 Chrome 报的**逐个相同**；**`tools/bridge-fixture.sh` 全量 9 个用例 0 failures（456 秒）**，新用例`testTheNativeComposerAttachesAPhoto` 反证两次都红在该红那行。收工 `simctl list devices booted` 为空 |
 | 20 | 2026-09-05 | **M4 时间线骨架：这三个纯函数第一次有调用方，也第一次有东西可看。** 新增 `apps/ios/Hermit/TimelineRowView.swift`（纯 SwiftUI，一个 `FoldedRow` 进；气泡 / 运行胶囊 / 思考胶囊 / 系统药丸 / Brain 虚线框 / ask 卡 / 图片文件 chip / **不认识的块画成写着 type 的灰卡片** / turn-ended 标记）、`apps/ios/Hermit/ChatTimelineViewController.swift`（collection view 竖向翻转、cell 翻回来、diffable 按 `FoldedRow.key`、`chat.listMessages` 取 `WebContract` 那个窗口）、`tools/render-timeline.sh` + `tools/fixtures/timeline-cases.json`（几秒出图，不用模拟器）。`SceneDelegate` 加 `hermit://timeline/<id>`，**没动前门**。生成器 `gen-ios-contract.ts` 加了四个主题色（`background`/`foreground`/`muted`/`border`）和 alpha 支持 —— `--border` 在 `.dark` 里是 `oklch(1 0 0 / 10%)`，老正则解不了 | `xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0**；`src/lib/ios-contract.test.ts` 单独跑 **11/11 过**（含新加的半透明主题色）。三个胶囊标签函数和网页那三个**逐输入对过 30 个，全等** —— 其中 `1250` 一例本来会差（`1.3k` vs `1.2k`，见「踩过的坑」）。**画出来看过两张**：`shots/timeline-dark.png` / `timeline-light.png`，十一种行都对，并且当场看出「发送侧气泡整块右对齐」是错的、改掉了。**没起过模拟器** |
 | 19 | 2026-09-05 | **M4 第二条：`foldRuns` 移植成 Swift。** 新增 `apps/ios/Hermit/FoldRuns.swift`（只依赖 Foundation，500 行，含 `isMachineryBlock`/`stepFor`/`closesRunUnconditionally`/`safeSplitIndex`/`summarizeRun`/`isHarnessTerminator` 和「运行块按下面那行取名」的第二遍）、生成器 `scripts/gen-fold-fixture.ts` → `tools/fixtures/fold-cases.json`、驱动 `tools/fold-fixture.sh`。**明确不按上一轮的打算做**：折叠的依据是原始块而不是 `parseBlocks()` 的结果，否则没有 `id` 的 `tool_use` 在手机上可见、在网页上被折走（写进「踩过的坑」）；`FoldedMessage` 因此同时带 `rawBlocks` 和 `blocks`。JS 的三处强制转换（`String(x)`、`??`、`is_error`/`__d` 的真值判断）照抄而不是「顺手改好」。**顺带修掉第 18 轮就上线的一个真 bug**：`ContentBlock.swift` 的 `chars` 用 `body.count` 数字素，网页数的是 UTF-16 码元 | `tools/fold-fixture.sh` **97/97 过**，**反证做过五次**（去掉 ask 豁免 → 只红 3 条 `isMachineryBlock[ask/*]` + `ask-stays-visible` + `digestInvariance`；运行块改按上面那行取名 → 红 20 条折叠；`chars` 改数字素 → 只红 `coercions`；`is_error` 改成只认字面 `true` → 只红 `coercions`；关掉跨天断开 → 只红 `run-never-spans-a-date-divider` 和 `unparseable-timestamp-closes-the-run`），逐个恢复后全绿。夹具里两条性质**真的验过**：11 个接缝逐个分两半折 == 整体折；摘要后的内容折出的折叠态与网页用完整内容折出的逐字段相同。块夹具加了 `好👍` / `é` 两例后 `tools/blocks-fixture.sh` 先红后绿（**73/73 → 75/75**）。`xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0 无输出**（先补 `src/generated/prisma` 软链，见「踩过的坑」）。无界面改动，未截图；**没起过模拟器** |
 | 18 | 2026-09-05 | **开 M4：消息块有定义了。** 新增 `apps/dashboard/src/lib/chat-blocks.ts`（`WireContentBlock` 只校验、原样交还，给写入口；`parseBlocks()` 是读的那一面，判别联合，unknown 一支显式）、`apps/ios/Hermit/ContentBlock.swift`（只依赖 Foundation，含一个 `JSONValue` 给 `input`/`content`/`payload` 这三个谁都不约束的字段）、生成器 `scripts/gen-blocks-fixture.ts` → `tools/fixtures/block-cases.json`（53 块 + 9 个整列）、驱动 `tools/blocks-fixture.sh`。联合**不可能失败**：匹配不上就是 `unknown` 并带着生产者自己那个 type 字符串，这正是 M4 最后一条的灰卡片要的。网页端接了三处：`chat.send` 以 `WireContentBlock` 拼块、`extractSearchText` 和 `msgText` 换成共用读法；时间线组件仍留宽松 `Block`，理由写在注释里。**发现 `routers/chat.ts:41` 的块级联合是死代码**（零引用） | `tools/blocks-fixture.sh` **73/73 过**，反证做过（塞三处偏差 → 正好红在对应用例上，恢复后全绿）；`xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0 无输出**（先 `prisma generate`）；改到的两个纯函数各自驱动过 —— `chat-text.test.ts` **8/8 过**，`msgText` 与被它替换掉的那份实现在 20 种真实形状上**逐条相同**。另跑了一次模拟器补第 17 轮欠的确认：`testTheNativeListDrawsTheActiveMachinesSessions` 过，`shots/16`、`17`、`18` **亲眼看过**，真列表行距 **52.33pt 完全均匀**（比对那张是 49.5，差 2.83 写进「踩过的坑」）。收工 `simctl list devices booted` 为空 |

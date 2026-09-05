@@ -3,11 +3,13 @@
 // The chat composer and its queue strip. Extracted verbatim from chat/page.tsx
 // (P2-3); behaviour identical. ComposeBar (textarea + send + attachments) and
 // QueueBar (the waiting-dispatch strip) are the two exports, both consumed by
-// SessionPane; AttachmentChip / readyLabel / getExt / readImageDims and the
-// SAFE_FILE_* / MAX_* file constants are module-private, used only within this
-// cluster.
+// SessionPane; AttachmentChip and readImageDims are module-private, used only
+// within this cluster. Everything about WHAT may be attached and how many —
+// the extension allowlist, the caps, the chip's sub-label, the caption's
+// arithmetic — moved to `attach-core.ts`, which the iOS composer is held
+// against file-by-file (apps/ios/tools/attach-fixture.sh).
 
-import { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImperativeHandle, type ChangeEvent, type ClipboardEvent, type DragEvent } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImperativeHandle, Fragment, type ChangeEvent, type ClipboardEvent, type DragEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
@@ -15,6 +17,17 @@ import { foldTail, newClaim, replaceTail, type DictationClaim } from '@/lib/dict
 import dynamic from 'next/dynamic';
 import { Plus, ArrowUp, FileText, Loader2, Mic, X } from 'lucide-react';
 import { msgText, type Attachment } from '@/components/chat/lib';
+import {
+  CAPS_SEPARATOR,
+  FILE_ACCEPT,
+  admitFiles,
+  attachName,
+  capsCaption,
+  chipSubLabel,
+  isSafeFileName,
+  occupiedSlots,
+  unsupportedTypeError,
+} from '@/components/chat/attach-core';
 import { composerCanSend, composerPlaceholder } from '@/components/chat/composer-core';
 import { QUEUE_CLEAR_LABEL, queueItemLabel, queueSummary } from '@/components/chat/queue-core';
 import { Collapse } from '@/components/chat/collapse';
@@ -450,44 +463,25 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     if (incoming.length === 0) return;
     // Enforce the per-message caps up front so extras are skipped with a visible
     // notice — instead of being accepted and then silently sinking the whole send
-    // (chat.send rejects if images > MAX_IMAGES or files > MAX_FILES). Count slots
-    // already taken (ready or still uploading; error chips don't occupy one).
-    const liveImg = attachments.filter((a) => (a.kind === 'ready' || a.kind === 'uploading') && a.isImage).length;
-    const liveFile = attachments.filter((a) => (a.kind === 'ready' || a.kind === 'uploading') && !a.isImage).length;
-    let imgSlots = MAX_IMAGES - liveImg;
-    let fileSlots = MAX_FILES - liveFile;
-    const accepted: File[] = [];
-    let droppedImg = 0;
-    let droppedFile = 0;
-    for (const file of incoming) {
-      if (file.type.startsWith('image/')) {
-        if (imgSlots > 0) { accepted.push(file); imgSlots -= 1; } else droppedImg += 1;
-      } else if (fileSlots > 0) { accepted.push(file); fileSlots -= 1; } else {
-        droppedFile += 1;
-      }
-    }
-    if (droppedImg || droppedFile) {
-      const parts: string[] = [];
-      if (droppedImg) parts.push(`${droppedImg} image${droppedImg > 1 ? 's' : ''} (max ${MAX_IMAGES} per message)`);
-      if (droppedFile) parts.push(`${droppedFile} file${droppedFile > 1 ? 's' : ''} (max ${MAX_FILES} per message)`);
-      setNotice(`Skipped ${parts.join(' and ')}.`);
-    } else {
-      setNotice(null);
-    }
+    // (chat.send rejects if images > MAX_IMAGES or files > MAX_FILES). The
+    // arithmetic, including which chips hold a slot, is in `attach-core`.
+    const verdict = admitFiles(
+      incoming.map((f) => ({ isImage: f.type.startsWith('image/') })),
+      attachments,
+    );
+    setNotice(verdict.notice);
+    const accepted = verdict.accepted.map((i) => incoming[i]);
     if (accepted.length === 0) return;
     for (const file of accepted) {
       const isImage = file.type.startsWith('image/');
       const id = (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
-      const name = file.name || (isImage ? 'pasted-image' : 'file');
+      const name = attachName(file.name, isImage);
       // Whitelist non-image extensions client-side so we surface a friendly
       // error chip without a useless upload roundtrip. Server-side
       // /api/upload enforces the same set as defense-in-depth.
-      if (!isImage) {
-        const ext = getExt(name);
-        if (!SAFE_FILE_EXT_SET.has(ext)) {
-          setAttachments((prev) => [...prev, { id, kind: 'error', name, error: `unsupported file type${ext ? ` (.${ext})` : ''}` }]);
-          continue;
-        }
+      if (!isImage && !isSafeFileName(name)) {
+        setAttachments((prev) => [...prev, { id, kind: 'error', name, error: unsupportedTypeError(name) }]);
+        continue;
       }
       const previewUrl = isImage ? URL.createObjectURL(file) : null;
       setAttachments((prev) => [...prev, { id, kind: 'uploading', name, isImage, previewUrl }]);
@@ -562,9 +556,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     [attachments],
   );
   const uploadingCount = attachments.filter((a) => a.kind === 'uploading').length;
-  // Occupied slots (ready or uploading; error chips don't count) for the caps caption.
-  const imgCount = attachments.filter((a) => (a.kind === 'ready' || a.kind === 'uploading') && a.isImage).length;
-  const fileCount = attachments.filter((a) => (a.kind === 'ready' || a.kind === 'uploading') && !a.isImage).length;
+
 
   // `override` exists for the press-and-hold send, which fires from an effect a
   // beat after the last word lands: reading the textarea's own value there is
@@ -945,24 +937,7 @@ export const ComposeBar = forwardRef<ComposerHandle, {
           </button>
         </Collapse>
         {attachments.length > 0 && (
-          <div className="mb-2 space-y-1.5">
-            <div className="flex flex-wrap gap-2">
-              {attachments.map((a) => (
-                <AttachmentChip key={a.id} attachment={a} onRemove={() => removeAttachment(a.id)} />
-              ))}
-            </div>
-            {(imgCount > 0 || fileCount > 0) && (
-              <div className="px-0.5 text-[11px] tabular-nums text-muted-foreground/60">
-                {imgCount > 0 && (
-                  <span className={cn(imgCount >= MAX_IMAGES && 'text-amber-600 dark:text-amber-400')}>{imgCount}/{MAX_IMAGES} images</span>
-                )}
-                {imgCount > 0 && fileCount > 0 && <span> · </span>}
-                {fileCount > 0 && (
-                  <span className={cn(fileCount >= MAX_FILES && 'text-amber-600 dark:text-amber-400')}>{fileCount}/{MAX_FILES} files</span>
-                )}
-              </div>
-            )}
-          </div>
+          <AttachmentStrip attachments={attachments} onRemove={removeAttachment} />
         )}
         <div
           className={cn(
@@ -1183,45 +1158,6 @@ export const ComposeBar = forwardRef<ComposerHandle, {
 // Resolves null on any failure (non-image, decode error) so callers can fall
 // back without a try/catch. Independent of server-side sips/identify, which
 // may be missing on the deploy box.
-// Non-image file extensions accepted by /api/upload. Anything outside this
-// list is rejected before the upload roundtrip (and again on the server) —
-// keeps loose binaries / executables out (gibberish in context / a security
-// concern). Archives ARE allowed: stored as-is, the gateway hands the agent an
-// "extract via Bash" instruction instead of Read'ing them. Mirror of
-// `SAFE_FILE_EXT_SET` in apps/dashboard/src/app/api/upload/route.ts.
-const SAFE_FILE_EXTS = [
-  // text & docs
-  'txt','md','markdown','rtf','log','pdf',
-  // data / config
-  'json','yaml','yml','toml','ini','conf','env','xml','html','svg','csv','tsv','sql',
-  // source
-  'ts','tsx','js','jsx','mjs','cjs','py','rb','php','go','rs',
-  'c','cpp','cc','cxx','h','hpp','java','kt','swift','scala','clj','ex','exs',
-  'sh','bash','zsh','fish','ps1','dart','lua','r',
-  // archives — stored as-is; the agent extracts them via Bash (never Read'd)
-  'zip','tar','gz','tgz','bz2','tbz2','xz','txz','7z','rar','zst',
-  // office docs — converted agent-side via Bash (textutil / python / unzip)
-  'docx','xlsx','pptx','doc','xls','ppt','odt','ods','odp',
-  // audio — stored as-is; the agent transcribes / inspects via Bash (whisper / ffmpeg)
-  'mp3','m4a','wav','ogg','flac','aac',
-  // video — stored as-is; the agent inspects / extracts frames / transcribes via Bash (ffmpeg / ffprobe)
-  'mp4','mov','m4v','webm','mkv','avi','mpeg','mpg','3gp','wmv',
-] as const;
-const SAFE_FILE_EXT_SET = new Set<string>(SAFE_FILE_EXTS);
-// `<input accept>` value: `image/*` + every whitelisted file extension.
-const FILE_ACCEPT = 'image/*,' + SAFE_FILE_EXTS.map((e) => '.' + e).join(',');
-
-// Per-message attachment caps — MUST match the server's chat.send zod .max(...).
-// The composer enforces them so extras are skipped with a visible notice instead of
-// silently failing the send (chat.send rejects the whole message if either is over).
-const MAX_IMAGES = 20;
-const MAX_FILES = 10;
-
-function getExt(name: string): string {
-  const i = name.lastIndexOf('.');
-  return i >= 0 ? name.slice(i + 1).toLowerCase() : '';
-}
-
 function readImageDims(file: File): Promise<{ width: number; height: number } | null> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
@@ -1236,16 +1172,43 @@ function readImageDims(file: File): Promise<{ width: number; height: number } | 
   });
 }
 
-// Sub-label under an attachment's filename. Real pixel dims for images (read
-// client-side, so it survives a server without sips/identify); a type hint for
-// everything else — never a bogus "?×?".
-function readyLabel(a: Extract<Attachment, { kind: 'ready' }>): string {
-  if (a.data.width && a.data.height) return `${a.data.width}×${a.data.height}`;
-  if (a.isImage) return 'image';
-  const sub = a.data.mimeType.split('/')[1];
-  if (sub && sub !== 'octet-stream') return sub;
-  const ext = a.name.includes('.') ? a.name.split('.').pop()! : '';
-  return ext || 'file';
+/**
+ * The chips above the box, and the caption that counts them.
+ *
+ * Exported — and a component at all — for the same reason `QueueBar` is: the
+ * iOS composer draws its own version of this block, and
+ * `apps/ios/tools/attach-compare.sh` puts the two side by side pixel for pixel.
+ * That comparison is only worth anything if the web half is THE component the
+ * app ships, so this cannot go back to being JSX inline in ComposeBar.
+ */
+export function AttachmentStrip({
+  attachments,
+  onRemove,
+}: {
+  attachments: Attachment[];
+  onRemove: (id: string) => void;
+}) {
+  const live = occupiedSlots(attachments);
+  const caps = capsCaption(live.images, live.files);
+  return (
+    <div className="mb-2 space-y-1.5">
+      <div className="flex flex-wrap gap-2">
+        {attachments.map((a) => (
+          <AttachmentChip key={a.id} attachment={a} onRemove={() => onRemove(a.id)} />
+        ))}
+      </div>
+      {caps.length > 0 && (
+        <div className="px-0.5 text-[11px] tabular-nums text-muted-foreground/60">
+          {caps.map((seg, i) => (
+            <Fragment key={seg.text}>
+              {i > 0 && <span>{CAPS_SEPARATOR}</span>}
+              <span className={cn(seg.atCap && 'text-amber-600 dark:text-amber-400')}>{seg.text}</span>
+            </Fragment>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function AttachmentChip({ attachment: a, onRemove }: { attachment: Attachment; onRemove: () => void }) {
@@ -1275,7 +1238,7 @@ function AttachmentChip({ attachment: a, onRemove }: { attachment: Attachment; o
           a.kind === 'ready' && 'text-emerald-600',
           a.kind === 'error' && 'text-rose-500',
         )}>
-          {a.kind === 'uploading' ? 'uploading…' : a.kind === 'error' ? a.error.slice(0, 40) : readyLabel(a)}
+          {chipSubLabel(a.kind === 'ready' ? { ...a, ...a.data } : a)}
         </div>
       </div>
       <button

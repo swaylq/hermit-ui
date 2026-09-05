@@ -136,6 +136,26 @@ final class ChatTimelineViewController: UIViewController {
     /// stacked — the web's `pwa-pb-safe` does the same.
     private var composerBottomInset: CGFloat = 0
 
+    // MARK: Attachments
+    //
+    // `AttachCore` decides what may be attached and how many; `AttachPicker`
+    // turns the platform's three doors into bytes; `AttachUploader` posts them.
+    // This controller holds the chips and does nothing clever with them.
+
+    /// The chips above the box, in the order they were picked. The single source
+    /// of truth for the caps, the caption, `uploadingCount` and what a send
+    /// carries — mirrored into `composer.attachments` for drawing.
+    private var attachments: [ComposerAttachment] = []
+    /// What each finished upload came back with, by chip id. Kept apart from the
+    /// chip so `ComposerAttachment` stays a drawing concern and this stays the
+    /// wire's.
+    private var uploaded: [String: AttachUploader.Uploaded] = [:]
+    /// The uploads still in the air, so leaving the screen cancels them.
+    private var uploadTasks: [String: Task<Void, Never>] = [:]
+    /// What the LAST send carried, kept only until that send answers: a refused
+    /// send puts the chips back, and they have to point at the same urls.
+    private var uploadedByChip: [String: AttachUploader.Uploaded] = [:]
+
     // MARK: The waiting queue
     //
     // Messages sent behind a running turn. `QueueCore` decides what the strip
@@ -296,6 +316,8 @@ final class ChatTimelineViewController: UIViewController {
             onStop: { [weak self] in self?.stopTurn() },
             onClear: { [weak self] in self?.setDraft("") },
             onDismissNotice: { [weak self] in self?.setNotice(nil) },
+            onAttach: { [weak self] in self?.presentAttachPicker() },
+            onRemoveAttachment: { [weak self] id in self?.removeAttachment(id) },
             onDraftChange: { [weak self] value in self?.draftChanged(value) },
             onCancelQueued: { [weak self] id in self?.cancelQueued(id) },
             onClearQueue: { [weak self] in self?.clearQueue() }
@@ -947,7 +969,9 @@ final class ChatTimelineViewController: UIViewController {
             awaitingInput: false,
             queueFull: queueFull,
             working: stop.turnRunning,
-            uploadingCount: 0,
+            // Real since round 8. `uploading N…` is a rung the web has always
+            // had and the port could never reach.
+            uploadingCount: uploadingCount,
             dictating: false,
             // A phone is always touch-primary, which is the branch the web takes
             // when `isTouchPrimary()` is true.
@@ -956,10 +980,22 @@ final class ChatTimelineViewController: UIViewController {
         ))
         model.canSend = ComposerCore.canSend(
             disabled: closed, awaitingInput: false, queueFull: queueFull,
-            uploadingCount: 0, draft: composer.draft, readyAttachments: 0
+            uploadingCount: uploadingCount, draft: composer.draft,
+            readyAttachments: readyAttachments.count
         )
         guard model != composer.model else { return }
         composer.model = model
+    }
+
+    /// Chips still in the air. `composerCanSend` refuses while this is non-zero,
+    /// which is what stops a send from silently dropping the files it was for.
+    private var uploadingCount: Int {
+        attachments.filter { $0.kind == .uploading }.count
+    }
+
+    /// The chips a send would actually carry.
+    private var readyAttachments: [ComposerAttachment] {
+        attachments.filter(\.isReady)
     }
 
     /// The status key the header is showing. Read from the same merge the header
@@ -1010,8 +1046,8 @@ final class ChatTimelineViewController: UIViewController {
     private func sendDraft() {
         let typed = composer.draft
         guard ComposerCore.canSend(disabled: composer.model.disabled, awaitingInput: false,
-                                   queueFull: false, uploadingCount: 0,
-                                   draft: typed, readyAttachments: 0) else { return }
+                                   queueFull: false, uploadingCount: uploadingCount,
+                                   draft: typed, readyAttachments: readyAttachments.count) else { return }
         guard let entry = KeyStore.active() else {
             setNotice("No machine key on this device yet.")
             return
@@ -1032,16 +1068,28 @@ final class ChatTimelineViewController: UIViewController {
         // stuttered through the strip.
         let wasIdle = !ComposerCore.turnInFlight(turnSignals).waitingAssistant
         let content = JSONValue.array([.object(["type": .string("text"), "text": .string(text)])])
+        // What the chips became on the wire. Read off the SAME `Ready` the chip
+        // is drawing, so the dimensions under a thumbnail and the dimensions the
+        // model is told are one value, not two that agree today.
+        let (images, files) = outgoingAttachments()
+        let carried = attachments
 
         scrollToTail()
         setNotice(nil)
-        outgoing.append(ComposerCore.Optimistic(id: clientId, realId: nil, content: content))
-        // A send made DURING a running turn is a queue item, and the strip shows
-        // it now rather than on the next 2s poll.
-        if !wasIdle {
-            queueOptimistic.append(ComposerCore.Optimistic(id: clientId, realId: nil, content: content))
+        // `if (text.trim())` on the web: a send that is attachments and nothing
+        // else puts up NO bubble. There is nothing to draw — the timeline's
+        // image rows are M4's seventh line — and a blank bubble would be worse
+        // than the half-second of nothing.
+        if !text.isEmpty {
+            outgoing.append(ComposerCore.Optimistic(id: clientId, realId: nil, content: content))
+            // A send made DURING a running turn is a queue item, and the strip
+            // shows it now rather than on the next 2s poll.
+            if !wasIdle {
+                queueOptimistic.append(ComposerCore.Optimistic(id: clientId, realId: nil, content: content))
+            }
         }
         setDraft("")
+        clearAttachments()
         sending += 1
         refold()
         refreshQueue()
@@ -1049,7 +1097,8 @@ final class ChatTimelineViewController: UIViewController {
         refreshHeader()
 
         let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
-        let input = SendInput(sessionId: sessionId, clientId: clientId, text: text)
+        let input = SendInput(sessionId: sessionId, clientId: clientId, text: text,
+                              images: images, files: files)
         let previous = sendChain
         sendChain = Task { [weak self] in
             // Serial: the gateway delivers in insert order, so two messages
@@ -1059,7 +1108,10 @@ final class ChatTimelineViewController: UIViewController {
                 let sent = try await api.mutate("chat.send", input: input, as: SentMessage.self)
                 await MainActor.run { self?.sendLanded(clientId: clientId, realId: sent.id, wasIdle: wasIdle) }
             } catch {
-                await MainActor.run { self?.sendFailed(clientId: clientId, typed: typed, error: error) }
+                await MainActor.run {
+                    self?.sendFailed(clientId: clientId, typed: typed,
+                                     attachments: carried, error: error)
+                }
             }
         }
     }
@@ -1090,13 +1142,23 @@ final class ChatTimelineViewController: UIViewController {
     }
 
     @MainActor
-    private func sendFailed(clientId: String, typed: String, error: Error) {
+    private func sendFailed(clientId: String, typed: String,
+                           attachments carried: [ComposerAttachment], error: Error) {
         sending = max(0, sending - 1)
         outgoing.removeAll { $0.id == clientId }
         queueOptimistic.removeAll { $0.id == clientId }
         // Put back what was typed, untrimmed, exactly as it was — including a
         // trailing newline someone was in the middle of writing after.
         if composer.draft.isEmpty { setDraft(typed) }
+        // …and the chips with it (`setAttachments(prevAttachments)`). The files
+        // are still on the server: the same urls go out again on the retry, so
+        // this costs no second upload. Only if nothing was picked in the
+        // meantime — otherwise the retry would carry someone else's pick too.
+        if attachments.isEmpty && !carried.isEmpty {
+            attachments = carried
+            for a in carried { uploaded[a.id] = uploadedByChip[a.id] }
+            refreshAttachments()
+        }
         // Say WHY. Silently restoring the draft is what once read as "send is
         // dead"; the server's own sentence ("queue_full", "session is closed")
         // is the useful half.
@@ -1104,6 +1166,146 @@ final class ChatTimelineViewController: UIViewController {
         refold()
         refreshQueue()
         refreshComposer()
+    }
+
+    // MARK: - Attachments
+
+    /// The `+`. Safari's sheet, then whatever comes back through it.
+    private func presentAttachPicker() {
+        // No reference kept: `AttachPicker` retains itself for exactly as long
+        // as one pick takes, and lets go when the bytes are in hand. A property
+        // here would either leak it or — the version this replaced — be nilled
+        // out one line later and guard nothing.
+        AttachPicker(
+            host: self,
+            onPicked: { [weak self] files in self?.addFiles(files) },
+            onRefused: { [weak self] name, why in self?.addRefusedChip(name: name, why: why) }
+        )
+        // Anchored on the `+` itself for the iPad popover. The button lives
+        // inside a SwiftUI hierarchy, so the host's view is the closest thing
+        // UIKit can point at; on a phone this is never read.
+        .present(from: composerHost.view)
+    }
+
+    /// Put chips up for a batch, respecting the caps, and start each upload.
+    ///
+    /// The order is the web's `addFiles`: decide admissions against the CURRENT
+    /// list, say what was skipped, then walk the accepted ones — an extension
+    /// check first (a friendly chip beats a useless round trip), an `uploading`
+    /// chip, and the post.
+    @MainActor
+    private func addFiles(_ files: [PickedFile]) {
+        guard !files.isEmpty else { return }
+        let verdict = AttachCore.admit(files.map(\.isImage), existing: attachments.map(\.slot))
+        setNotice(verdict.notice)
+        guard let entry = KeyStore.active() else {
+            setNotice("No machine key on this device yet.")
+            return
+        }
+        let api = AttachUploader(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+        for index in verdict.accepted {
+            let file = files[index]
+            let id = UUID().uuidString
+            if !file.isImage && !AttachCore.isSafeFileName(file.name) {
+                attachments.append(ComposerAttachment(
+                    id: id, name: file.name, isImage: false,
+                    state: .failed(AttachCore.unsupportedTypeError(file.name)),
+                    previewToken: nil, preview: nil))
+                continue
+            }
+            let preview = Self.thumbnail(for: file)
+            attachments.append(ComposerAttachment(
+                id: id, name: file.name, isImage: file.isImage, state: .uploading,
+                previewToken: preview == nil ? nil : id, preview: preview))
+            let sid = sessionId
+            uploadTasks[id] = Task { [weak self] in
+                do {
+                    let answer = try await api.upload(sessionId: sid, file: file)
+                    await MainActor.run { self?.uploadLanded(id: id, file: file, answer: answer) }
+                } catch {
+                    await MainActor.run { self?.uploadFailed(id: id, error: error) }
+                }
+            }
+        }
+        refreshAttachments()
+    }
+
+    /// A file the picker itself refused — too large, or unreadable. A chip
+    /// rather than a notice: the reader picked something specific and has to be
+    /// told WHICH one did not make it.
+    @MainActor
+    private func addRefusedChip(name: String, why: String) {
+        attachments.append(ComposerAttachment(
+            id: UUID().uuidString, name: AttachCore.name(name, isImage: false),
+            isImage: false, state: .failed(why), previewToken: nil, preview: nil))
+        refreshAttachments()
+    }
+
+    @MainActor
+    private func uploadLanded(id: String, file: PickedFile, answer: AttachUploader.Uploaded) {
+        uploadTasks[id] = nil
+        guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+        uploaded[id] = answer
+        attachments[i].state = .ready(AttachCore.Ready(
+            isImage: file.isImage,
+            name: attachments[i].name,
+            mimeType: answer.mimeType,
+            // The server measures with `sips`/`identify` and may have neither;
+            // the device read is the fallback, exactly as the browser's is.
+            width: answer.width ?? file.width,
+            height: answer.height ?? file.height
+        ))
+        refreshAttachments()
+    }
+
+    @MainActor
+    private func uploadFailed(id: String, error: Error) {
+        uploadTasks[id] = nil
+        guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+        attachments[i].state = .failed(error.localizedDescription)
+        // …and the thumbnail goes with it. On the web an `error` attachment is a
+        // DIFFERENT SHAPE — `{ id, kind, name, error }`, with no `previewUrl`
+        // and no `isImage` — so a photo whose upload failed shows the `!` plate,
+        // never a greyed picture. The `opacity-30 grayscale` rule in
+        // `AttachmentChip` is written for a case that cannot occur; keeping the
+        // picture here would have been a nicer chip than the one that ships, and
+        // therefore the wrong one.
+        attachments[i].preview = nil
+        attachments[i].previewToken = nil
+        refreshAttachments()
+    }
+
+    /// A chip's `×`. Cancels the upload if it is still in the air — the web
+    /// cannot do that (it has no handle on the fetch) and the difference is in
+    /// the reader's favour: a removed chip stops costing bandwidth.
+    @MainActor
+    private func removeAttachment(_ id: String) {
+        uploadTasks[id]?.cancel()
+        uploadTasks[id] = nil
+        uploaded[id] = nil
+        attachments.removeAll { $0.id == id }
+        refreshAttachments()
+    }
+
+    /// Push the chips at the view, and re-decide the circle: an upload finishing
+    /// is what lights it when the box itself is empty.
+    @MainActor
+    private func refreshAttachments() {
+        guard composerHost != nil else { return }
+        if composer.attachments != attachments { composer.attachments = attachments }
+        refreshComposer()
+    }
+
+    /// A 40-point square for the chip, decoded once at the size it is drawn.
+    ///
+    /// `preparingThumbnail` rather than handing the full image to SwiftUI: a
+    /// 12-megapixel photo behind a 40-point box is forty megabytes of decoded
+    /// bitmap per chip, and twenty of them is the whole app.
+    private static func thumbnail(for file: PickedFile) -> Image? {
+        guard file.isImage, let full = UIImage(data: file.data) else { return nil }
+        let side = AttachMetrics.thumb * UIScreen.main.scale
+        let small = full.preparingThumbnail(of: CGSize(width: side, height: side)) ?? full
+        return Image(uiImage: small)
     }
 
     /// Kill the running turn.
@@ -1152,6 +1354,57 @@ final class ChatTimelineViewController: UIViewController {
         /// actually loses its connection mid-send.
         let clientId: String
         let text: String
+        /// Always present, even empty — the web passes `images: []` rather than
+        /// omitting the key, and `chat.send`'s zod takes either.
+        let images: [ImageRef]
+        let files: [FileRef]
+    }
+
+    /// `{ url, mimeType, width, height }` — and the url is the **safe** one the
+    /// upload route answered with. Never the original: reading an oversized
+    /// image wedges the model's session (evolution/lessons.md L4).
+    private struct ImageRef: Encodable {
+        let url: String
+        let mimeType: String
+        let width: Int?
+        let height: Int?
+    }
+
+    /// `{ url, mimeType, name }`. The name is the reader's, not the stored
+    /// uuid — it is what the agent is told the file is called.
+    private struct FileRef: Encodable {
+        let url: String
+        let mimeType: String
+        let name: String
+    }
+
+    /// The ready chips, split the way `chat.send` wants them.
+    private func outgoingAttachments() -> ([ImageRef], [FileRef]) {
+        var images: [ImageRef] = []
+        var files: [FileRef] = []
+        for chip in readyAttachments {
+            guard let answer = uploaded[chip.id] else { continue }
+            guard case .ready(let ready) = chip.state else { continue }
+            if chip.isImage {
+                images.append(ImageRef(url: answer.url, mimeType: ready.mimeType,
+                                       width: ready.width, height: ready.height))
+            } else {
+                files.append(FileRef(url: answer.url, mimeType: ready.mimeType, name: chip.name))
+            }
+        }
+        return (images, files)
+    }
+
+    /// Empty the strip on a send. The uploads themselves are finished by
+    /// definition (`composerCanSend` refuses while any is in the air), so there
+    /// is nothing to cancel — but the answers are kept, so a failed send can put
+    /// the same chips back without re-uploading a byte.
+    @MainActor
+    private func clearAttachments() {
+        uploadedByChip = uploaded
+        attachments = []
+        uploaded = [:]
+        refreshAttachments()
     }
 
     /// `chat.send` answers with the whole row it wrote. Only the id is read: it
@@ -1161,6 +1414,8 @@ final class ChatTimelineViewController: UIViewController {
     private struct CancelResult: Decodable { let ok: Bool }
 
     private func teardown() {
+        for (_, task) in uploadTasks { task.cancel() }
+        uploadTasks = [:]
         inFlight?.cancel()
         inFlight = nil
         olderTask?.cancel()

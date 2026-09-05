@@ -5,12 +5,16 @@ import SwiftUI
 /// ## What is here, and what is not
 ///
 /// The half a conversation cannot happen without: a box that grows, a draft that
-/// survives the app being killed, a send circle, and the Stop pill beside it.
-/// The attach `+`, the microphone and press-and-hold are deliberately absent
-/// rather than drawn dead — each is its own line in `docs/ios-native-progress.md`
-/// (M5), and a control that promises an action it cannot perform is worse than a
-/// control that is not there yet. The gap that leaves on the left of the box is
-/// real and it is visible; it closes when attachments land.
+/// survives the app being killed, a send circle, the Stop pill beside it, and —
+/// since round 8 — the `+` that attaches an image or a file, with its chips
+/// above the box.
+///
+/// The microphone and press-and-hold are still deliberately absent rather than
+/// drawn dead: each is its own line in `docs/ios-native-progress.md` (M5), and a
+/// control that promises an action it cannot perform is worse than a control
+/// that is not there yet. Which means the send circle still sits ONE SLOT
+/// further left than the web's on an empty box; the `+` closed the gap on the
+/// left, the mic will close the one on the right.
 ///
 /// ## Pure SwiftUI, on purpose
 ///
@@ -106,6 +110,14 @@ struct ComposerModel: Equatable {
     var stopping: Bool
     /// The session is closed: the box will not take text.
     var disabled: Bool
+    /// An interaction card upstream is waiting on a tap. It greys the `+` on the
+    /// web as well as the box, which is why it is carried here and not only
+    /// resolved into `placeholder`/`canSend` upstream.
+    ///
+    /// Fed `false` today: interaction cards are M4's last line and the native
+    /// timeline cannot draw one yet. The field exists so that when they land,
+    /// the `+` is already wired to them.
+    var awaitingInput: Bool = false
     /// The amber strip above the row — why the last send did not land, mostly.
     var notice: String?
     /// Extra room under the row: the home indicator's safe area while the
@@ -141,15 +153,22 @@ private enum ComposerAmber {
 final class ComposerState: ObservableObject {
     @Published var draft: String
     @Published var model: ComposerModel
+    /// The chips above the box. Published on the same clock as the draft
+    /// because they move together: a paste puts a chip up and an upload
+    /// finishing lights the send circle, both mid-keystroke.
     /// The waiting-dispatch strip above the row. Here rather than in its own
     /// object because it is published on the same clock as everything else the
     /// bottom of this screen shows, and because the two are one unit to the
     /// reader: a message leaves the box and appears in the strip.
+    @Published var attachments: [ComposerAttachment]
     @Published var queue: QueueBarModel
 
-    init(draft: String = "", model: ComposerModel, queue: QueueBarModel = QueueBarModel()) {
+    init(draft: String = "", model: ComposerModel,
+         attachments: [ComposerAttachment] = [],
+         queue: QueueBarModel = QueueBarModel()) {
         self.draft = draft
         self.model = model
+        self.attachments = attachments
         self.queue = queue
     }
 }
@@ -162,6 +181,10 @@ struct ComposerView: View {
     var onStop: () -> Void
     var onClear: () -> Void
     var onDismissNotice: () -> Void
+    /// The `+`. The host owns the picker, because a picker is a view controller.
+    var onAttach: () -> Void
+    /// A chip's `×`.
+    var onRemoveAttachment: (String) -> Void
     /// Every keystroke. The web persists the draft on exactly the same trigger
     /// (`useEffect(… , [sessionId, draft])`), because a draft that is only
     /// written on blur is a draft the app loses when iOS kills it.
@@ -191,6 +214,12 @@ struct ComposerView: View {
                 noticeStrip(notice)
                     .padding(.bottom, ComposerMetrics.noticeGap)
             }
+            // Above the box, below the notice — the web's order, and the one
+            // that matters: "Skipped 3 images" has to sit above the chips it is
+            // explaining, not below them.
+            if !state.attachments.isEmpty {
+                AttachmentStripView(attachments: state.attachments, onRemove: onRemoveAttachment)
+            }
             row
         }
         .padding(.horizontal, ComposerMetrics.padH)
@@ -215,6 +244,7 @@ struct ComposerView: View {
     /// grows upward, rather than drifting to the middle of a six-line draft.
     private var row: some View {
         HStack(alignment: .bottom, spacing: ComposerMetrics.gap) {
+            attachButton
             field
             if !state.draft.isEmpty && !model.disabled { clearButton }
             if model.showStop {
@@ -296,11 +326,39 @@ struct ComposerView: View {
             .foregroundColor(muted.opacity(0.7))
     }
 
+    /// `+` — one affordance for images and files alike, exactly as the web has
+    /// one `<input type="file">` and no menu of kinds. `pb-0.5` on the wrapper
+    /// is why it sits two points above the bottom of the row.
+    ///
+    /// The glyph is drawn rather than borrowed: see `AttachMetrics.plusArm` for
+    /// why an SF Symbol is the wrong size here.
+    private var attachButton: some View {
+        Button(action: onAttach) {
+            ZStack {
+                Capsule()
+                    .frame(width: AttachMetrics.plusArm, height: AttachMetrics.plusStroke)
+                Capsule()
+                    .frame(width: AttachMetrics.plusStroke, height: AttachMetrics.plusArm)
+            }
+            .foregroundStyle(muted)
+            .frame(width: ComposerMetrics.control, height: ComposerMetrics.control)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.disabled || model.awaitingInput)
+        // `disabled:opacity-40`.
+        .opacity(model.disabled || model.awaitingInput ? 0.4 : 1)
+        .padding(.bottom, AttachMetrics.plusBottomPad)
+        .accessibilityLabel("attach image or file")
+        .accessibilityIdentifier("composer.attach")
+    }
+
     /// The `✕` that empties the box. On the web this slot holds the microphone
     /// while the box is empty and the ✕ once it is not; here there is no
     /// microphone yet, so the slot is empty until you type. Which means the send
-    /// circle sits one slot further left on an empty box than it does on the web
-    /// — visible, and it goes away with the mic (M5).
+    /// circle sits one slot further right than it should on a box with a draft,
+    /// and one further left on an empty one — visible, and it goes away with the
+    /// mic (M5).
     private var clearButton: some View {
         Button(action: onClear) {
             Image(systemName: "xmark")

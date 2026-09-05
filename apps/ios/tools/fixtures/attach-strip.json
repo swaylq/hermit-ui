@@ -1,0 +1,335 @@
+{
+  "width": 366,
+  "gap": 12,
+  "preview": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAWElEQVR42u3PMQ0AMAgAMBRNyGwiARGzMhlo4CRpUgONk2+1EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAYB37d1QQEBAQEBAQEBAQEBAQEBAQEBAQEBAQExhqZpOmWJyNK8gAAAABJRU5ErkJggg==",
+  "cases": [
+    {
+      "why": "one photo, still uploading",
+      "chips": [
+        {
+          "id": "a1",
+          "name": "IMG_4021.jpg",
+          "isImage": true,
+          "kind": "uploading",
+          "preview": true
+        }
+      ]
+    },
+    {
+      "why": "landed: the dimensions arrive",
+      "chips": [
+        {
+          "id": "a1",
+          "name": "IMG_4021.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 3024,
+          "height": 4032,
+          "preview": true
+        }
+      ]
+    },
+    {
+      "why": "a file: the plate and the glyph, no thumbnail",
+      "chips": [
+        {
+          "id": "f1",
+          "name": "report.pdf",
+          "isImage": false,
+          "kind": "ready",
+          "mimeType": "application/pdf",
+          "width": null,
+          "height": null,
+          "preview": false
+        }
+      ]
+    },
+    {
+      "why": "refused before it was uploaded",
+      "chips": [
+        {
+          "id": "f2",
+          "name": "payload.exe",
+          "isImage": false,
+          "kind": "error",
+          "error": "unsupported file type (.exe)"
+        }
+      ]
+    },
+    {
+      "why": "the server said no — an error chip keeps no picture",
+      "chips": [
+        {
+          "id": "a2",
+          "name": "IMG_4022.heic",
+          "isImage": true,
+          "kind": "error",
+          "error": "upload failed (415): unsupported file type"
+        }
+      ]
+    },
+    {
+      "why": "a name too long for max-w-[120px]",
+      "chips": [
+        {
+          "id": "f3",
+          "name": "2026-09-05-会议纪要-第三次修订-final-v2.markdown",
+          "isImage": false,
+          "kind": "ready",
+          "mimeType": "text/markdown",
+          "width": null,
+          "height": null,
+          "preview": false
+        }
+      ]
+    },
+    {
+      "why": "four of them wrap, and the caption counts both kinds",
+      "chips": [
+        {
+          "id": "b1",
+          "name": "one.png",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/png",
+          "width": 1290,
+          "height": 2796,
+          "preview": true
+        },
+        {
+          "id": "b2",
+          "name": "two.png",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/png",
+          "width": 800,
+          "height": 600,
+          "preview": true
+        },
+        {
+          "id": "b3",
+          "name": "notes.md",
+          "isImage": false,
+          "kind": "ready",
+          "mimeType": "text/markdown",
+          "width": null,
+          "height": null,
+          "preview": false
+        },
+        {
+          "id": "b4",
+          "name": "three.png",
+          "isImage": true,
+          "kind": "uploading",
+          "preview": true
+        }
+      ]
+    },
+    {
+      "why": "at the cap: 20/20 goes amber",
+      "chips": [
+        {
+          "id": "c1",
+          "name": "IMG_401.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c2",
+          "name": "IMG_402.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c3",
+          "name": "IMG_403.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c4",
+          "name": "IMG_404.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c5",
+          "name": "IMG_405.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c6",
+          "name": "IMG_406.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c7",
+          "name": "IMG_407.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c8",
+          "name": "IMG_408.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c9",
+          "name": "IMG_409.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c10",
+          "name": "IMG_4010.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c11",
+          "name": "IMG_4011.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c12",
+          "name": "IMG_4012.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c13",
+          "name": "IMG_4013.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c14",
+          "name": "IMG_4014.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c15",
+          "name": "IMG_4015.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c16",
+          "name": "IMG_4016.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c17",
+          "name": "IMG_4017.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c18",
+          "name": "IMG_4018.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c19",
+          "name": "IMG_4019.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        },
+        {
+          "id": "c20",
+          "name": "IMG_4020.jpg",
+          "isImage": true,
+          "kind": "ready",
+          "mimeType": "image/jpeg",
+          "width": 1200,
+          "height": 1600,
+          "preview": true
+        }
+      ]
+    }
+  ]
+}

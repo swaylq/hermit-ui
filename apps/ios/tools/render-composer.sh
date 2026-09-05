@@ -16,6 +16,7 @@ BIN="$(mktemp -d)/render-composer"
 swiftc -O -o "$BIN" \
   Shared/WebContract.swift \
   Hermit/ContentBlock.swift Hermit/ComposerCore.swift Hermit/ComposerView.swift \
+  Hermit/AttachCore.swift Hermit/AttachmentChipView.swift \
   Hermit/QueueCore.swift Hermit/QueueBarView.swift \
   Hermit/SessionRowView.swift Hermit/SessionListItem.swift Hermit/SessionStatus.swift \
   Hermit/WebLabels.swift Shared/StatusPalette.swift \

@@ -235,6 +235,8 @@ struct ComposerStack: View {
     var onStop: () -> Void
     var onClear: () -> Void
     var onDismissNotice: () -> Void
+    var onAttach: () -> Void
+    var onRemoveAttachment: (String) -> Void
     var onDraftChange: (String) -> Void
     var onCancelQueued: (String) -> Void
     var onClearQueue: () -> Void
@@ -248,7 +250,9 @@ struct ComposerStack: View {
             ComposerView(
                 state: state,
                 onSend: onSend, onStop: onStop, onClear: onClear,
-                onDismissNotice: onDismissNotice, onDraftChange: onDraftChange
+                onDismissNotice: onDismissNotice,
+                onAttach: onAttach, onRemoveAttachment: onRemoveAttachment,
+                onDraftChange: onDraftChange
             )
         }
         .frame(maxWidth: .infinity)

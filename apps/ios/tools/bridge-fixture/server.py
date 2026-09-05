@@ -351,6 +351,17 @@ QUEUE = [{
 }]
 DEQUEUED = []        # every chat.dequeue messageId we were asked for
 CLEARS = []          # how many rows each chat.clearQueue took
+# Every /api/upload we answered: {name, mime, bytes, url}. The test reads this
+# back to prove the bytes left the phone, and `SENT_ATTACHMENTS` to prove the
+# url the composer then handed to chat.send is the one this route returned —
+# two different claims, and only the pair rules out a chip that looks right.
+UPLOADS = []
+SENT_ATTACHMENTS = []
+# A handful of the route's allowlist — enough to answer both ways. The real set
+# lives in `components/chat/attach-core.ts` and is 87 entries; a fixture that
+# copied all 87 would be a second place to keep them in step, and the pair that
+# matters here is "one it takes, one it does not".
+SAFE_FILE_EXTS = {"txt", "md", "markdown", "pdf", "json", "csv", "swift", "ts", "zip", "png"}
 
 
 def sent_row(client_id, text):
@@ -407,11 +418,14 @@ class Handler(SimpleHTTPRequestHandler):
             # mistakes it for one.
             return self.reply(200, {"clientIds": SENT_ORDER, "cancels": CANCELS,
                                     "dequeued": DEQUEUED, "clears": CLEARS,
-                                    "queue": [r["id"] for r in QUEUE]})
+                                    "queue": [r["id"] for r in QUEUE],
+                                    "uploads": UPLOADS, "attached": SENT_ATTACHMENTS})
         super().do_GET()
 
     def do_POST(self):
         route = self.path.split("?")[0]
+        if route == "/api/upload":
+            return self.upload()
         if route == "/api/trpc/chat.send":
             return self.send_message()
         if route == "/api/trpc/chat.cancelTurn":
@@ -463,6 +477,76 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError, AttributeError, TypeError):
             return {}
 
+    # ── attachments ──────────────────────────────────────────────────────────
+
+    def upload(self):
+        """`/api/upload` — the one route the app posts that is not tRPC.
+
+        Multipart, two parts: `sessionId` and `file`. Answers the way the real
+        route does, INCLUDING the thing that matters most about it: the `url` is
+        the `.safe.` one. A client that reached for a full-size original would
+        find no such field here, exactly as it would find none there.
+
+        The parse is deliberately literal rather than `cgi.FieldStorage` (gone in
+        3.13) or `email` (which rewrites CRLF in binary parts): split on the
+        boundary, take everything after the blank line, drop the trailing CRLF.
+        A fixture that mangled the bytes would report a size the phone did not
+        send, and the test asserts on that size.
+        """
+        name = self.identity()
+        if not name:
+            return self.reply(401, {"error": "unauthorized"})
+        ctype = self.headers.get("content-type") or ""
+        m = re.search(r'boundary=([^;]+)', ctype)
+        if not m:
+            return self.reply(400, {"error": "no multipart boundary in %r" % ctype})
+        boundary = ("--" + m.group(1).strip('"')).encode()
+        body = self.rfile.read(int(self.headers.get("content-length") or 0))
+        fields, filename, filemime, filebytes = {}, "", "", b""
+        for part in body.split(boundary):
+            if b"\r\n\r\n" not in part:
+                continue
+            head, data = part.split(b"\r\n\r\n", 1)
+            if data.endswith(b"\r\n"):
+                data = data[:-2]
+            head_s = head.decode("utf8", "replace")
+            fn = re.search(r'filename="([^"]*)"', head_s)
+            nm = re.search(r'name="([^"]*)"', head_s)
+            if fn:
+                filename = fn.group(1)
+                cm = re.search(r'Content-Type:\s*([^\r\n]+)', head_s, re.I)
+                filemime = cm.group(1).strip() if cm else ""
+                filebytes = data
+            elif nm:
+                fields[nm.group(1)] = data.decode("utf8", "replace")
+        sid = fields.get("sessionId") or ""
+        if not sid:
+            return self.reply(400, {"error": "sessionId required"})
+        if not filebytes:
+            return self.reply(400, {"error": "empty file"})
+        is_image = filemime.lower() in ("image/png", "image/jpeg", "image/gif", "image/webp")
+        ext = {"image/png": "png", "image/jpeg": "jpg",
+               "image/gif": "gif", "image/webp": "webp"}.get(filemime.lower(), "")
+        uid = "u%03d" % (len(UPLOADS) + 1)
+        if is_image:
+            url = "/uploads/%s/%s.safe.%s" % (sid, uid, ext)
+            answer = {"ok": True, "kind": "image", "url": url, "originalUrl": None,
+                      "thumbUrl": None, "mimeType": filemime,
+                      "width": 640, "height": 480, "bytes": len(filebytes),
+                      "resized": True}
+        else:
+            raw_ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            if raw_ext not in SAFE_FILE_EXTS:
+                return self.reply(415, {"error": "unsupported file type (.%s)" % raw_ext})
+            url = "/uploads/%s/%s.%s" % (sid, uid, raw_ext)
+            answer = {"ok": True, "kind": "file", "url": url,
+                      "mimeType": filemime or "application/octet-stream",
+                      "name": filename, "width": None, "height": None,
+                      "bytes": len(filebytes)}
+        UPLOADS.append({"name": filename, "mime": filemime,
+                        "bytes": len(filebytes), "url": url})
+        self.reply(200, answer)
+
     # ── the composer ─────────────────────────────────────────────────────────
 
     def send_message(self):
@@ -485,11 +569,30 @@ class Handler(SimpleHTTPRequestHandler):
                 "code": -32600,
                 "data": {"code": "BAD_REQUEST", "httpStatus": 400, "path": "chat.send"}}}}])
         text = (arg.get("text") or "").strip()
-        if not text:
+        images = arg.get("images") or []
+        files = arg.get("files") or []
+        # The real router's rule: text OR an attachment, never neither. An
+        # attachments-only send is a real send and must not be refused here —
+        # that was the first thing this fixture got wrong about the `+`.
+        if not text and not images and not files:
             return self.reply(200, [{"error": {"json": {
                 "message": "empty message", "code": -32600,
                 "data": {"code": "BAD_REQUEST", "httpStatus": 400, "path": "chat.send"}}}}])
-        row, replayed = sent_row(cid, text)
+        for img in images:
+            SENT_ATTACHMENTS.append({"kind": "image", "url": img.get("url"),
+                                     "mimeType": img.get("mimeType"),
+                                     "width": img.get("width"), "height": img.get("height")})
+        for f in files:
+            SENT_ATTACHMENTS.append({"kind": "file", "url": f.get("url"),
+                                     "mimeType": f.get("mimeType"), "name": f.get("name")})
+        # The row's own text says what came with it, so "the send carried an
+        # image" is visible ON SCREEN and not only in a readback.
+        label = text or ""
+        for img in images:
+            label = (label + " " if label else "") + "[img %s]" % (img.get("url") or "?")
+        for f in files:
+            label = (label + " " if label else "") + "[file %s]" % (f.get("url") or "?")
+        row, replayed = sent_row(cid, label)
         # The stream carries the row a beat later, exactly as the gateway's does:
         # the mutation answers first, and the delta is what retires the bubble.
         # Not on a replay — the frame for that row has already been sent, and a

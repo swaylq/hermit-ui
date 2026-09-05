@@ -803,21 +803,29 @@ final class SmokeTests: XCTestCase {
         // dashboard's outgoing auto-translate rewrites a message exactly this
         // way). The bubble has to be handed over by the id `chat.send` answered
         // with. If it were matched by text, both rows would be on screen now.
-        XCTAssertTrue(screenSays("server #1 · " + typed, timeout: 25),
+        // Matched on the SEPARATOR, not on "server #1". The fixture numbers its
+        // rows across the whole suite and this test does not own that counter —
+        // it broke the moment a second test started sending, which is round 7's
+        // lesson arriving from the other direction: a case may not assert on a
+        // number it did not produce. The separator is enough, because the
+        // optimistic bubble carries the typed text ALONE.
+        XCTAssertTrue(screenSays("· " + typed, timeout: 25),
                       "the row chat.send wrote never arrived on the stream")
         XCTAssertFalse(screenStillHas(typed, excluding: "server #"),
                        "the optimistic bubble is still there beside its real row — dropLanded matched on text, not on the id")
         settle(); shoot("30-composer-handed-over")
 
         // A second send, so the two idempotency keys have to differ: the fixture
-        // mints `server #N` once per NEW clientId and replays the stored row for
-        // a repeat, so a shell that reused one key would draw `server #1` twice.
+        // mints a row once per NEW clientId and REPLAYS the stored one for a
+        // repeat. A shell that reused the first key would get the first row
+        // back — text and all — so this second message's own words are what
+        // prove the key was fresh.
         let box3 = composerField()
         box3.tap()
         box3.typeText("second")
         app.buttons["composer.send"].tap()
-        XCTAssertTrue(screenSays("server #2 · second", timeout: 25),
-                      "the second send reused the first send's clientId — the server replayed row #1")
+        XCTAssertTrue(screenSays("· second", timeout: 25),
+                      "the second send reused the first send's clientId — the server replayed the first row")
 
         // ── Stop ─────────────────────────────────────────────────────────────
         //
@@ -974,7 +982,151 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer at the end")
     }
 
+    /// The `+`: pick a photo, watch it upload, send it, and prove the url that
+    /// left the phone is the one the upload route answered with.
+    ///
+    /// Three claims, and each needs the one before it:
+    ///   1. the bytes reached `/api/upload` — the chip says `640×480`, and those
+    ///      numbers exist NOWHERE on the device. The picture is 24×24; the
+    ///      fixture answers 640×480 for every image. A chip drawn from the local
+    ///      file would say 24×24, and a chip drawn from nothing would say
+    ///      `image`.
+    ///   2. the send carried it — the server writes the url INTO the row's text,
+    ///      so `.safe.` appearing in the timeline is the server's own account of
+    ///      what it was handed, not this client's.
+    ///   3. an attachments-only send is a real send — the box stays empty
+    ///      throughout, and the circle has to light anyway.
+    func testTheNativeComposerAttachesAPhoto() throws {
+        let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
+        guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
+
+        app.launchArguments = ["-hermitOrigin", fixture]
+        app.launch()
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer")
+        app.webViews.buttons["keychain.set — two machines"].tap()
+        XCTAssertTrue(fixtureSays("keyring ok"), "the shell refused to store the keyring")
+        app.webViews.buttons["keychain.setActive — m_two"].tap()
+        XCTAssertTrue(fixtureSays("active m_two ok"), "the shell would not record which entry is active")
+
+        openTimeline()
+
+        // ── the sheet ────────────────────────────────────────────────────────
+        //
+        // Safari's own answer to `<input type=file accept="image/*,…">` on this
+        // device, in Safari's order. "Take Photo" is absent because a simulator
+        // has no camera, which is also what Safari does.
+        let plus = app.buttons["composer.attach"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 15), "the composer has no + button")
+        plus.tap()
+        let library = app.sheets.buttons["Photo Library"]
+        XCTAssertTrue(library.waitForExistence(timeout: 10),
+                      "the + opened no sheet, or the sheet has no Photo Library row")
+        XCTAssertTrue(app.sheets.buttons["Choose File"].exists, "the sheet has no Choose File row")
+        settle(); shoot("36-attach-sheet")
+        library.tap()
+
+        // ── the picker ───────────────────────────────────────────────────────
+        //
+        // PHPicker runs out of process, so this is the one place in this file
+        // that reaches for a control nobody here wrote. The photo is the one
+        // `bridge-fixture.sh` put in the library with `simctl addmedia`.
+        // Give the picker a moment to draw, then take the first photo. Which
+        // photo does not matter: the fixture answers 640×480 for any image, and
+        // that is the whole assertion.
+        Thread.sleep(forTimeInterval: 4)
+        shoot("37-attach-picker")
+        if let photo = firstPickerPhoto(timeout: 6) {
+            photo.tap()
+            let add = app.buttons["Add"]
+            if add.waitForExistence(timeout: 4) { add.tap() }
+        } else {
+            pickFirstPhotoByTouch()
+        }
+
+        // ── it uploaded ──────────────────────────────────────────────────────
+        //
+        // A picture first, unconditionally: when this assertion fails it fails
+        // as "no chip", and no chip and a chip that says the wrong thing look
+        // the same in a log.
+        //
+        // 640×480 is the FIXTURE's answer for every image. The file on the
+        // device is 24×24, so this number cannot have been read locally.
+        Thread.sleep(forTimeInterval: 6); shoot("38-attach-after-pick")
+        XCTAssertTrue(screenSays("640×480", timeout: 40),
+                      "the chip never reported the server's dimensions — /api/upload was not reached")
+        XCTAssertTrue(screenSays("1/20 images", timeout: 10),
+                      "the caps caption did not count the attachment")
+        settle(); shoot("38b-attach-chip-ready")
+
+        // ── an attachments-only send is a send ───────────────────────────────
+        //
+        // Nothing has been typed. `composerCanSend` allows this and `chat.send`
+        // takes it; the first version of this fixture's `chat.send` refused an
+        // empty text and that is exactly the bug this catches.
+        let send = app.buttons["composer.send"]
+        XCTAssertTrue(send.isEnabled, "the send circle is dead with an attachment and no text")
+        send.tap()
+
+        // The server writes the url it was given into the row it answers with,
+        // so this string is the SERVER's account of what the composer sent.
+        // `.safe.` is the whole point: the full-size original wedges the model.
+        XCTAssertTrue(screenSays(".safe.png]", timeout: 30),
+                      "chat.send never carried the image, or carried a url that is not the safe one")
+        XCTAssertTrue(screenStops("640×480", timeout: 15),
+                      "the chip is still there after the send — the strip did not empty")
+        settle(); shoot("39-attach-sent")
+
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer at the end")
+    }
+
     // MARK: - helpers
+
+    /// The first photograph inside PHPicker, whatever it is calling itself
+    /// today. Four queries rather than one because the picker is a remote view
+    /// whose tree has changed shape across iOS versions, and a test that fails
+    /// because Apple renamed a cell is a test that says nothing about this app.
+    private func firstPickerPhoto(timeout: TimeInterval) -> XCUIElement? {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            for candidate in [app.cells.firstMatch,
+                              app.collectionViews.cells.firstMatch,
+                              app.images.matching(NSPredicate(format: "identifier BEGINSWITH 'Photo'")).firstMatch] {
+                if candidate.exists && candidate.isHittable { return candidate }
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        } while Date() < deadline
+        return nil
+    }
+
+    /// Drive PHPicker by touching the screen where its first thumbnail is.
+    ///
+    /// Not the first choice, and not a shortcut: on this simulator (iOS 26) the
+    /// picker's grid is a remote view that surfaces NO cells, images or
+    /// collection views to any query — `app.cells.count` is zero while nine
+    /// photographs are plainly on screen, and `com.apple.PhotosUIService`, which
+    /// hosted it on older versions, is not even running. A screenshot is the
+    /// only thing that says the grid is there.
+    ///
+    /// This cannot produce a false pass. It taps two points; if either misses,
+    /// no chip appears and the assertions below fail. What it costs is a test
+    /// that has to be re-aimed if Apple moves the picker's furniture — which is
+    /// why the query path above is tried first and left in.
+    ///
+    /// The two points, as fractions of the screen: the first thumbnail of the
+    /// grid, and the ✓ that confirms. Read off `shots/37-attach-picker.png`.
+    private func pickFirstPhotoByTouch() {
+        func tap(_ x: CGFloat, _ y: CGFloat) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
+        }
+        tap(0.165, 0.412)          // first thumbnail
+        Thread.sleep(forTimeInterval: 1.0)
+        tap(0.906, 0.126)          // the ✓
+    }
+
     /// Deep-link into the fixture's chat session and wait for it to draw.
     ///
     /// The newest row carries the key and the window the request was made with,

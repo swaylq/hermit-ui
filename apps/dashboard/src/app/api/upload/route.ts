@@ -29,13 +29,13 @@ import { prisma } from '@/server/db';
 import { resolveKey } from '@/server/auth';
 import { makeThumb } from '@/server/image-thumb';
 import { THUMB_SUFFIX } from '@/lib/thumb-url';
+import { SAFE_FILE_EXT_SET } from '@/components/chat/attach-core';
 
 // Upload size ceiling for ALL file types (image / doc / archive / audio / video
 // alike). This route buffers the whole upload in memory before writing it to disk,
 // so this is a deliberate cap — 200 MB is comfortable on the deploy box (15 GB RAM,
 // ~11 GB free) and there's no proxy-level body limit in front of it.
 const MAX_BYTES = 200 * 1024 * 1024;
-const VIDEO_EXTS = ['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'mpeg', 'mpg', '3gp', 'wmv'];
 const SAFE_LONG_EDGE = 2000;
 const ALLOWED_MIME = new Set([
   'image/png',
@@ -50,28 +50,15 @@ const EXT_BY_MIME: Record<string, string> = {
   'image/webp': 'webp',
 };
 
-// Non-image extensions we accept. Mirrors `SAFE_FILE_EXTS` on the client.
-// Anything outside → 415; keeps loose binaries / executables out. Archives are
-// allowed (stored as-is) — the gateway hands the agent an "extract via Bash"
-// instruction rather than Read'ing them.
-const SAFE_FILE_EXT_SET = new Set<string>([
-  'txt','md','markdown','rtf','log','pdf',
-  'json','yaml','yml','toml','ini','conf','env','xml','html','svg','csv','tsv','sql',
-  'ts','tsx','js','jsx','mjs','cjs','py','rb','php','go','rs',
-  'c','cpp','cc','cxx','h','hpp','java','kt','swift','scala','clj','ex','exs',
-  'sh','bash','zsh','fish','ps1','dart','lua','r',
-  // archives — extracted by the agent via Bash (see image-relay / chat-runner)
-  'zip','tar','gz','tgz','bz2','tbz2','xz','txz','7z','rar','zst',
-  // office docs — binary; the gateway relay hands the agent a "convert via Bash"
-  // instruction (textutil / python+pandas / unzip), never a raw Read.
-  'docx','xlsx','pptx','doc','xls','ppt','odt','ods','odp',
-  // audio — binary; the gateway relay hands the agent a "transcribe via Bash"
-  // instruction (whisper / ffmpeg), never a raw Read.
-  'mp3','m4a','wav','ogg','flac','aac',
-  // video — binary; the gateway relay hands the agent an "ffmpeg/ffprobe via
-  // Bash" instruction (extract frames → Read as images, or transcribe), not a Read.
-  ...VIDEO_EXTS,
-]);
+// Non-image extensions we accept — the SAME set the composer filters with,
+// imported rather than copied. This route is the trust boundary; the client
+// check is only there to save a useless roundtrip. Archives are allowed (stored
+// as-is) — the gateway hands the agent an "extract via Bash" instruction rather
+// than Read'ing them.
+//
+// It used to be a second literal list here with a comment on each copy asking
+// the reader to keep the two in step. They were in step, and nothing would have
+// noticed if they stopped being.
 
 function uploadRoot(): string {
   const fromEnv = process.env.HERMIT_UPLOAD_DIR;

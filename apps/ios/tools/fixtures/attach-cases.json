@@ -1,0 +1,1370 @@
+{
+  "maxImages": 20,
+  "maxFiles": 10,
+  "capsSeparator": " · ",
+  "safeFileExts": [
+    "txt",
+    "md",
+    "markdown",
+    "rtf",
+    "log",
+    "pdf",
+    "json",
+    "yaml",
+    "yml",
+    "toml",
+    "ini",
+    "conf",
+    "env",
+    "xml",
+    "html",
+    "svg",
+    "csv",
+    "tsv",
+    "sql",
+    "ts",
+    "tsx",
+    "js",
+    "jsx",
+    "mjs",
+    "cjs",
+    "py",
+    "rb",
+    "php",
+    "go",
+    "rs",
+    "c",
+    "cpp",
+    "cc",
+    "cxx",
+    "h",
+    "hpp",
+    "java",
+    "kt",
+    "swift",
+    "scala",
+    "clj",
+    "ex",
+    "exs",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "ps1",
+    "dart",
+    "lua",
+    "r",
+    "zip",
+    "tar",
+    "gz",
+    "tgz",
+    "bz2",
+    "tbz2",
+    "xz",
+    "txz",
+    "7z",
+    "rar",
+    "zst",
+    "docx",
+    "xlsx",
+    "pptx",
+    "doc",
+    "xls",
+    "ppt",
+    "odt",
+    "ods",
+    "odp",
+    "mp3",
+    "m4a",
+    "wav",
+    "ogg",
+    "flac",
+    "aac",
+    "mp4",
+    "mov",
+    "m4v",
+    "webm",
+    "mkv",
+    "avi",
+    "mpeg",
+    "mpg",
+    "3gp",
+    "wmv"
+  ],
+  "fileAccept": "image/*,.txt,.md,.markdown,.rtf,.log,.pdf,.json,.yaml,.yml,.toml,.ini,.conf,.env,.xml,.html,.svg,.csv,.tsv,.sql,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.rb,.php,.go,.rs,.c,.cpp,.cc,.cxx,.h,.hpp,.java,.kt,.swift,.scala,.clj,.ex,.exs,.sh,.bash,.zsh,.fish,.ps1,.dart,.lua,.r,.zip,.tar,.gz,.tgz,.bz2,.tbz2,.xz,.txz,.7z,.rar,.zst,.docx,.xlsx,.pptx,.doc,.xls,.ppt,.odt,.ods,.odp,.mp3,.m4a,.wav,.ogg,.flac,.aac,.mp4,.mov,.m4v,.webm,.mkv,.avi,.mpeg,.mpg,.3gp,.wmv",
+  "uploadingLabel": "uploading…",
+  "names": [
+    {
+      "why": "ordinary",
+      "name": "report.pdf",
+      "ext": "pdf",
+      "safe": true,
+      "error": "unsupported file type (.pdf)",
+      "asImage": "report.pdf",
+      "asFile": "report.pdf"
+    },
+    {
+      "why": "uppercase extension is lowercased",
+      "name": "REPORT.PDF",
+      "ext": "pdf",
+      "safe": true,
+      "error": "unsupported file type (.pdf)",
+      "asImage": "REPORT.PDF",
+      "asFile": "REPORT.PDF"
+    },
+    {
+      "why": "two dots — the LAST one wins",
+      "name": "archive.tar.gz",
+      "ext": "gz",
+      "safe": true,
+      "error": "unsupported file type (.gz)",
+      "asImage": "archive.tar.gz",
+      "asFile": "archive.tar.gz"
+    },
+    {
+      "why": "no dot at all",
+      "name": "Makefile",
+      "ext": "",
+      "safe": false,
+      "error": "unsupported file type",
+      "asImage": "Makefile",
+      "asFile": "Makefile"
+    },
+    {
+      "why": "a dotfile: the leading dot IS the last dot, so the whole name is the ext",
+      "name": ".bashrc",
+      "ext": "bashrc",
+      "safe": false,
+      "error": "unsupported file type (.bashrc)",
+      "asImage": ".bashrc",
+      "asFile": ".bashrc"
+    },
+    {
+      "why": "a trailing dot leaves an empty extension",
+      "name": "weird.",
+      "ext": "",
+      "safe": false,
+      "error": "unsupported file type",
+      "asImage": "weird.",
+      "asFile": "weird."
+    },
+    {
+      "why": "an extension nobody allows",
+      "name": "payload.exe",
+      "ext": "exe",
+      "safe": false,
+      "error": "unsupported file type (.exe)",
+      "asImage": "payload.exe",
+      "asFile": "payload.exe"
+    },
+    {
+      "why": "a path-looking name — no directory handling anywhere in here",
+      "name": "src/lib/util.ts",
+      "ext": "ts",
+      "safe": true,
+      "error": "unsupported file type (.ts)",
+      "asImage": "src/lib/util.ts",
+      "asFile": "src/lib/util.ts"
+    },
+    {
+      "why": "empty",
+      "name": "",
+      "ext": "",
+      "safe": false,
+      "error": "unsupported file type",
+      "asImage": "pasted-image",
+      "asFile": "file"
+    },
+    {
+      "why": "unicode name, allowed extension",
+      "name": "会议纪要.md",
+      "ext": "md",
+      "safe": true,
+      "error": "unsupported file type (.md)",
+      "asImage": "会议纪要.md",
+      "asFile": "会议纪要.md"
+    },
+    {
+      "why": "unicode extension",
+      "name": "file.文档",
+      "ext": "文档",
+      "safe": false,
+      "error": "unsupported file type (.文档)",
+      "asImage": "file.文档",
+      "asFile": "file.文档"
+    },
+    {
+      "why": "a space before the extension",
+      "name": "my file.txt",
+      "ext": "txt",
+      "safe": true,
+      "error": "unsupported file type (.txt)",
+      "asImage": "my file.txt",
+      "asFile": "my file.txt"
+    },
+    {
+      "why": "the dot is the whole name",
+      "name": ".",
+      "ext": "",
+      "safe": false,
+      "error": "unsupported file type",
+      "asImage": ".",
+      "asFile": "."
+    },
+    {
+      "why": "an allowed archive",
+      "name": "bundle.ZIP",
+      "ext": "zip",
+      "safe": true,
+      "error": "unsupported file type (.zip)",
+      "asImage": "bundle.ZIP",
+      "asFile": "bundle.ZIP"
+    },
+    {
+      "why": "video",
+      "name": "clip.mov",
+      "ext": "mov",
+      "safe": true,
+      "error": "unsupported file type (.mov)",
+      "asImage": "clip.mov",
+      "asFile": "clip.mov"
+    }
+  ],
+  "admit": [
+    {
+      "why": "nothing anywhere",
+      "incoming": [],
+      "existing": [],
+      "occupied": {
+        "images": 0,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [],
+        "notice": null
+      }
+    },
+    {
+      "why": "one image into an empty composer",
+      "incoming": [
+        true
+      ],
+      "existing": [],
+      "occupied": {
+        "images": 0,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [
+          0
+        ],
+        "notice": null
+      }
+    },
+    {
+      "why": "one file into an empty composer",
+      "incoming": [
+        false
+      ],
+      "existing": [],
+      "occupied": {
+        "images": 0,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [
+          0
+        ],
+        "notice": null
+      }
+    },
+    {
+      "why": "an error chip holds NO slot — a rejected file must not cost an image",
+      "incoming": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "existing": [
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        },
+        {
+          "kind": "error",
+          "isImage": true
+        }
+      ],
+      "occupied": {
+        "images": 0,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19
+        ],
+        "notice": null
+      }
+    },
+    {
+      "why": "uploading chips DO hold a slot",
+      "incoming": [
+        true,
+        true
+      ],
+      "existing": [
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": true
+        }
+      ],
+      "occupied": {
+        "images": 19,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [
+          0
+        ],
+        "notice": "Skipped 1 image (max 20 per message)."
+      }
+    },
+    {
+      "why": "the image cap, exactly reached",
+      "incoming": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "existing": [],
+      "occupied": {
+        "images": 0,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19
+        ],
+        "notice": null
+      }
+    },
+    {
+      "why": "one image over the cap",
+      "incoming": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "existing": [],
+      "occupied": {
+        "images": 0,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19
+        ],
+        "notice": "Skipped 1 image (max 20 per message)."
+      }
+    },
+    {
+      "why": "ten over — plural, and the count is of the DROPPED ones",
+      "incoming": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "existing": [],
+      "occupied": {
+        "images": 0,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19
+        ],
+        "notice": "Skipped 10 images (max 20 per message)."
+      }
+    },
+    {
+      "why": "one file over the cap",
+      "incoming": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "existing": [],
+      "occupied": {
+        "images": 0,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "notice": "Skipped 1 file (max 10 per message)."
+      }
+    },
+    {
+      "why": "both over: two clauses joined with \"and\", images first",
+      "incoming": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "existing": [],
+      "occupied": {
+        "images": 0,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ],
+        "notice": "Skipped 2 images (max 20 per message) and 3 files (max 10 per message)."
+      }
+    },
+    {
+      "why": "the budgets are INDEPENDENT — a full image list still takes the pdf",
+      "incoming": [
+        true,
+        false
+      ],
+      "existing": [
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        }
+      ],
+      "occupied": {
+        "images": 20,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [
+          1
+        ],
+        "notice": "Skipped 1 image (max 20 per message)."
+      }
+    },
+    {
+      "why": "order is kept: the first twenty photos, not an arbitrary twenty",
+      "incoming": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false
+      ],
+      "existing": [],
+      "occupied": {
+        "images": 0,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          25
+        ],
+        "notice": "Skipped 5 images (max 20 per message)."
+      }
+    },
+    {
+      "why": "already over the cap (a stale state): no slots, nothing accepted",
+      "incoming": [
+        true
+      ],
+      "existing": [
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "ready",
+          "isImage": true
+        }
+      ],
+      "occupied": {
+        "images": 23,
+        "files": 0
+      },
+      "expected": {
+        "accepted": [],
+        "notice": "Skipped 1 image (max 20 per message)."
+      }
+    },
+    {
+      "why": "a mixed existing list",
+      "incoming": [
+        true,
+        false,
+        true
+      ],
+      "existing": [
+        {
+          "kind": "ready",
+          "isImage": true
+        },
+        {
+          "kind": "uploading",
+          "isImage": false
+        },
+        {
+          "kind": "error",
+          "isImage": false
+        },
+        {
+          "kind": "ready",
+          "isImage": false
+        }
+      ],
+      "occupied": {
+        "images": 1,
+        "files": 2
+      },
+      "expected": {
+        "accepted": [
+          0,
+          1,
+          2
+        ],
+        "notice": null
+      }
+    }
+  ],
+  "caps": [
+    {
+      "images": 0,
+      "files": 0,
+      "expected": []
+    },
+    {
+      "images": 1,
+      "files": 0,
+      "expected": [
+        {
+          "text": "1/20 images",
+          "atCap": false
+        }
+      ]
+    },
+    {
+      "images": 0,
+      "files": 1,
+      "expected": [
+        {
+          "text": "1/10 files",
+          "atCap": false
+        }
+      ]
+    },
+    {
+      "images": 3,
+      "files": 2,
+      "expected": [
+        {
+          "text": "3/20 images",
+          "atCap": false
+        },
+        {
+          "text": "2/10 files",
+          "atCap": false
+        }
+      ]
+    },
+    {
+      "images": 20,
+      "files": 0,
+      "expected": [
+        {
+          "text": "20/20 images",
+          "atCap": true
+        }
+      ]
+    },
+    {
+      "images": 20,
+      "files": 10,
+      "expected": [
+        {
+          "text": "20/20 images",
+          "atCap": true
+        },
+        {
+          "text": "10/10 files",
+          "atCap": true
+        }
+      ]
+    },
+    {
+      "images": 0,
+      "files": 10,
+      "expected": [
+        {
+          "text": "10/10 files",
+          "atCap": true
+        }
+      ]
+    },
+    {
+      "images": 21,
+      "files": 11,
+      "expected": [
+        {
+          "text": "21/20 images",
+          "atCap": true
+        },
+        {
+          "text": "11/10 files",
+          "atCap": true
+        }
+      ]
+    }
+  ],
+  "labels": [
+    {
+      "why": "an image with dimensions",
+      "isImage": true,
+      "name": "shot.png",
+      "mimeType": "image/png",
+      "width": 1290,
+      "height": 2796,
+      "expected": "1290×2796",
+      "chip": "1290×2796"
+    },
+    {
+      "why": "an image the server could not measure",
+      "isImage": true,
+      "name": "shot.png",
+      "mimeType": "image/png",
+      "width": null,
+      "height": null,
+      "expected": "image",
+      "chip": "image"
+    },
+    {
+      "why": "half-measured is not measured",
+      "isImage": true,
+      "name": "shot.png",
+      "mimeType": "image/png",
+      "width": 100,
+      "height": null,
+      "expected": "image",
+      "chip": "image"
+    },
+    {
+      "why": "ZERO is falsy on the web — a failed decode says \"image\", not 0×0",
+      "isImage": true,
+      "name": "shot.png",
+      "mimeType": "image/png",
+      "width": 0,
+      "height": 0,
+      "expected": "image",
+      "chip": "image"
+    },
+    {
+      "why": "a file with a usable mime subtype",
+      "isImage": false,
+      "name": "report.pdf",
+      "mimeType": "application/pdf",
+      "width": null,
+      "height": null,
+      "expected": "pdf",
+      "chip": "pdf"
+    },
+    {
+      "why": "octet-stream is refused, so the NAME answers",
+      "isImage": false,
+      "name": "notes.md",
+      "mimeType": "application/octet-stream",
+      "width": null,
+      "height": null,
+      "expected": "md",
+      "chip": "md"
+    },
+    {
+      "why": "octet-stream and no dot in the name",
+      "isImage": false,
+      "name": "Makefile",
+      "mimeType": "application/octet-stream",
+      "width": null,
+      "height": null,
+      "expected": "file",
+      "chip": "file"
+    },
+    {
+      "why": "no slash in the mime type at all",
+      "isImage": false,
+      "name": "x.zip",
+      "mimeType": "zip",
+      "width": null,
+      "height": null,
+      "expected": "zip",
+      "chip": "zip"
+    },
+    {
+      "why": "nothing after the slash",
+      "isImage": false,
+      "name": "x.zip",
+      "mimeType": "application/",
+      "width": null,
+      "height": null,
+      "expected": "zip",
+      "chip": "zip"
+    },
+    {
+      "why": "the name ends in a dot — the last segment is empty",
+      "isImage": false,
+      "name": "weird.",
+      "mimeType": "application/octet-stream",
+      "width": null,
+      "height": null,
+      "expected": "file",
+      "chip": "file"
+    },
+    {
+      "why": "the label is NOT lowercased, unlike the allowlist lookup",
+      "isImage": false,
+      "name": "DECK.PPTX",
+      "mimeType": "application/octet-stream",
+      "width": null,
+      "height": null,
+      "expected": "PPTX",
+      "chip": "PPTX"
+    },
+    {
+      "why": "a non-image that DOES carry dimensions still prints them",
+      "isImage": false,
+      "name": "clip.mov",
+      "mimeType": "video/quicktime",
+      "width": 1920,
+      "height": 1080,
+      "expected": "1920×1080",
+      "chip": "1920×1080"
+    },
+    {
+      "why": "a mime type with two slashes",
+      "isImage": false,
+      "name": "x.txt",
+      "mimeType": "a/b/c",
+      "width": null,
+      "height": null,
+      "expected": "b",
+      "chip": "b"
+    }
+  ],
+  "errors": [
+    {
+      "why": "short",
+      "error": "upload failed (413)",
+      "expected": "upload failed (413)"
+    },
+    {
+      "why": "exactly forty",
+      "error": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expected": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "why": "forty-one — cut",
+      "error": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+      "expected": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+    },
+    {
+      "why": "a long server sentence",
+      "error": "upload failed (415): {\"error\":\"unsupported file type (.exe)\"}",
+      "expected": "upload failed (415): {\"error\":\"unsupport"
+    },
+    {
+      "why": "CJK past the cut — 40 UTF-16 units is 40 of these",
+      "error": "上传失败上传失败上传失败上传失败上传失败上传失败上传失败上传失败上传失败上传失败上传失败上传失败上传失败上传失败上传失败",
+      "expected": "上传失败上传失败上传失败上传失败上传失败上传失败上传失败上传失败上传失败上传失败"
+    },
+    {
+      "why": "a combining mark straddles the cut — 40 units keeps the base and drops the accent",
+      "error": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaézzzzz",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaae"
+    },
+    {
+      "why": "empty",
+      "error": "",
+      "expected": ""
+    }
+  ]
+}

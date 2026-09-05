@@ -71,6 +71,7 @@ const HAND_CONVERTED: Record<string, [number, number, number]> = {
   'emerald-400': [0.3349, 0.8196, 0.5913],
   'rose-400': [0.943, 0.4307, 0.5029],
   'rose-600': [0.8488, 0.102, 0.2693],
+  'emerald-600': [0.2066, 0.5891, 0.414],
 };
 
 test('oklch → Display P3 lands where the hand conversion landed', () => {
