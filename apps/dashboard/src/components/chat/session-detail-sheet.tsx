@@ -15,6 +15,11 @@
 // codex session does show which model it runs, because those two are switchable
 // now — from the chip in the chat header, which is the only control
 // (chat/model-chip.tsx).
+//
+// Every rule below — which card is selected, whether Apply is live, what the
+// confirm says, what the mutation sends, and every row in the read-only
+// sections — lives in `session-detail-core.ts`, which the iOS port is held
+// against (apps/ios/tools/detail-fixture.sh). This file is the widgets.
 
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
@@ -26,18 +31,16 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { relTime } from '@/lib/format';
 import { copyText } from '@/lib/copy-text';
 import { CtxBar } from '@/components/ctx-bar';
-import { contextWindowFor } from '@/lib/context-window';
 import { BackendPicker } from './backend-picker';
 import { useScope } from '@/lib/use-scope';
+import { piModeLabel, PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, isPiMode, type PiMode } from '@/lib/pi-modes';
 import {
-  runtimeLabel, sharesConversation,
-} from '@/lib/runtime-labels';
-import { availableBackends, backendById, DEFAULT_BACKEND_ID } from '@/lib/backends';
-import { isPiMode, piModeLabel, PI_MODE_CHOICES, PI_MODE_META, DEFAULT_PI_MODE, type PiMode } from '@/lib/pi-modes';
-import { backgroundTaskList, backgroundOutstanding, shortDuration } from '@/lib/session-status';
+  detailHeading, detailPickerView, detailSavePayload, detailSections, detailStamp,
+  detailSwitchPrompt, sessionUrl, backendLabelOf,
+  type DetailRow, type DetailSnapshot,
+} from './session-detail-core';
 
 function Row({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
   return (
@@ -61,10 +64,37 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 const DASH = <span className="text-muted-foreground/50">—</span>;
 
-/** How many background tasks a snapshot claims, for the "cannot say which" line. */
-function bgCount(activity: unknown): number {
-  const n = (activity as { backgroundCount?: unknown } | null)?.backgroundCount;
-  return typeof n === 'number' && n > 0 ? n : 0;
+/** One row of a read-only section, drawn from the core's answer. */
+function DetailRowView({ r, agentName }: { r: DetailRow; agentName: string }) {
+  if (r.kind === 'task') {
+    // Not `Row`, whose label is uppercased — see the core's note.
+    return (
+      <div className="flex items-start gap-3 py-1.5 border-b border-border/40 last:border-0">
+        <span className="w-20 shrink-0 pt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+          {r.label}
+        </span>
+        <span className="min-w-0 flex-1 font-mono text-xs break-words text-foreground/90">{r.value}</span>
+      </div>
+    );
+  }
+  const body =
+    r.kind === 'ctx' ? <CtxBar tokens={r.ctxTokens ?? null} total={r.ctxTotal ?? 0} />
+    : r.kind === 'agent' ? (
+      <Link
+        href={`/agents?name=${encodeURIComponent(agentName)}`}
+        className="font-mono text-xs hover:underline underline-offset-2"
+      >
+        {r.value}
+      </Link>
+    )
+    : r.value === null ? DASH
+    : <>{r.value}</>;
+  return (
+    <Row label={r.label} mono={r.mono && r.kind !== 'agent'}>
+      {body}
+      {r.note && <span className={cn('ml-2 font-sans text-[11px] text-muted-foreground')}>{r.note}</span>}
+    </Row>
+  );
 }
 
 export function SessionDetailSheet({
@@ -85,22 +115,19 @@ export function SessionDetailSheet({
     { sessionId },
     { enabled: open, refetchInterval: open ? 10_000 : false },
   );
-  const d = q.data;
+  const d = q.data as DetailSnapshot | null | undefined;
 
   // The header shows the LINK to this session, not the bare id: the id on its
   // own was only ever a step towards a url someone had to assemble by hand.
   // Reading `window` during render is safe here — AuthGate mounts the app only
   // after hydration — and the '' fallback keeps a server render from throwing.
-  const sessionUrl =
-    typeof window === 'undefined'
-      ? ''
-      : `${window.location.origin}/chat?session=${encodeURIComponent(sessionId)}`;
+  const url = typeof window === 'undefined' ? '' : sessionUrl(window.location.origin, sessionId);
   // copyText falls back to execCommand when navigator.clipboard is missing
   // (plain http on the LAN) or rejects, and returns a boolean so a failure shows
   // on the button instead of being swallowed into a tap that does nothing.
   const [copied, setCopied] = useState<'idle' | 'ok' | 'fail'>('idle');
   async function copyUrl() {
-    const ok = await copyText(sessionUrl);
+    const ok = await copyText(url);
     setCopied(ok ? 'ok' : 'fail');
     setTimeout(() => setCopied('idle'), 1400);
   }
@@ -111,14 +138,11 @@ export function SessionDetailSheet({
   // whether a Mode select belongs on screen.
   const cfg = trpc.machines.getBackendsConfig.useQuery(undefined, { staleTime: 60_000 });
 
-
   // The form holds only what the user has CHANGED; null means "whatever the
   // server says". So there is nothing to seed on load, an in-flight edit is
   // never clobbered by the 10s refetch, and a successful save snaps back to the
   // truth by clearing the override rather than by racing a re-seed.
   //
-  // `stamp` is the server's answer as one string. When it moves — our save
-  // landed, or another device switched this session — the override is dropped.
   // Adjusting state during render is React's own escape hatch for exactly this
   // (an effect here causes the cascading render the lint rule warns about).
   const [runtime, setRuntime] = useState<string | null>(null);
@@ -126,7 +150,7 @@ export function SessionDetailSheet({
   const [err, setErr] = useState<string | null>(null);
   const [stamped, setStamped] = useState<string | null>(null);
 
-  const stamp = d ? `${sessionId}|${d.backend.backendId}|${d.backend.runtimeMode ?? ''}` : null;
+  const stamp = detailStamp(sessionId, d);
   if (stamp && stamped !== stamp) {
     setStamped(stamp);
     setRuntime(null);
@@ -134,35 +158,8 @@ export function SessionDetailSheet({
     setErr(null);
   }
 
-  // Both pickers show the RESOLVED value — they must say what is actually
-  // running, not what this session happens to have written in its own columns.
-  // The last fallback is the resolver's own floor, not the pane: reaching it
-  // means the detail query has not answered yet, and naming a backend the
-  // session is not on would be the one thing these pickers must never do.
-  const shownBackend: string = runtime ?? d?.backend.backendId ?? DEFAULT_BACKEND_ID;
-  // The mode select follows the HARNESS behind the chosen backend, not its
-  // name: two backends can both run pi against different credentials.
-  const shownIsPi = backendById(cfg.data, shownBackend)?.harness === 'pi-rpc';
-  const backendLabelOf = (id: string) =>
-    availableBackends(cfg.data, id).find((b) => b.id === id)?.label ?? runtimeLabel(id);
-  // A backend id is not a harness — a composed one has an id of its own — and
-  // it is the HARNESS that decides whether a switch keeps the conversation.
-  const harnessOfBackend = (id: string) => backendById(cfg.data, id)?.harness ?? id;
-  // Which driver AND whose endpoint — both halves decide whether the transcript
-  // survives the move. See sharesConversation.
-  const sideOfBackend = (id: string) => ({
-    runtime: harnessOfBackend(id),
-    credentialId: backendById(cfg.data, id)?.credentialId ?? null,
-  });
-  // A claude session resolves to no mode at all, so when the picker is flipped
-  // to pi the mode select opens on what the AGENT would start pi in — the same
-  // answer "New chat" would give — rather than snapping to the fleet default.
-  // The removed triage router opens on the fleet default instead of on a row
-  // the select does not offer. Other unknown names pass through: a machine-local
-  // mode this build does not list must keep reading as itself.
-  const resolvedMode = d?.backend.runtimeMode ?? d?.agentBackend.runtimeMode ?? DEFAULT_PI_MODE;
-  const currentMode = resolvedMode === 'triage' ? DEFAULT_PI_MODE : resolvedMode;
-  const shownMode = mode ?? currentMode;
+  const view = detailPickerView({ d, cfg: cfg.data, form: { runtime, mode }, scoped: scope.scoped });
+  const { shownBackend, shownIsPi, shownMode, currentMode, dirty, working, readOnly } = view;
 
   const save = trpc.chat.setSessionRuntime.useMutation({
     onSuccess: () => {
@@ -175,75 +172,16 @@ export function SessionDetailSheet({
     onError: (e) => setErr(e.message),
   });
 
-  // Where the mode in the picker comes from, read off the two levels the server
-  // already returned rather than by re-deriving resolveRuntime's fallback chain
-  // here: a session pin wins, an equal agent value means it was inherited, and
-  // anything else is the resolver's default. Once a different mode is picked the
-  // line stops describing the past and says what Apply is about to do.
-  const modeBlurb = isPiMode(shownMode) ? PI_MODE_META[shownMode].blurb : null;
-  const modeSource = shownMode !== currentMode
-    ? 'Applying pins it to this session.'
-    : d?.runtimeMode
-      ? 'Set on this session.'
-      : currentMode === d?.agentBackend.runtimeMode
-        ? `Inherited from ${d.agentName}.`
-        : 'The default mode.';
-
-  const dirty = !!d
-    && (shownBackend !== d.backend.backendId
-      || (shownIsPi && shownMode !== d.backend.runtimeMode));
-  const working = d?.state === 'working';
-  // A share link is scoped to one agent and deliberately gets no machine-level
-  // control (the terminal is closed to it for the same reason). It can read the
-  // session's state; it cannot re-point the machine's processes, and it is not
-  // shown filesystem paths.
-  const readOnly = scope.scoped;
-
   async function submit() {
     if (!d || !dirty) return;
-    const changingBackend = shownBackend !== d.backend.backendId;
-    // The two Claude Code drivers write the same transcript, so moving between
-    // them resumes it rather than abandoning it — the running context comes
-    // along. Saying otherwise would talk a user out of a move that costs
-    // nothing, which is the opposite of what this dialog is for.
-    const keepsContext = changingBackend && sharesConversation(
-      { runtime: d.backend.runtime, credentialId: d.backend.runtimeCredentialId },
-      sideOfBackend(shownBackend),
-    );
+    const prompt = detailSwitchPrompt(d, cfg.data, view);
     const ok = await confirm({
-      title: changingBackend ? `Switch to ${backendLabelOf(shownBackend)}?` : `Switch mode to ${piModeLabel(shownMode)}?`,
-      message: keepsContext ? (
-        <>
-          Both are Claude Code on the same conversation, so nothing is lost:{' '}
-          {backendLabelOf(d.backend.backendId)} is stopped and{' '}
-          {backendLabelOf(shownBackend)} resumes the same transcript, with its full history, on the
-          next message.
-        </>
-      ) : (
-        <>
-          The conversation on this page is kept. What is <em>not</em> kept is the running context:{' '}
-          {changingBackend ? backendLabelOf(d.backend.backendId) : 'pi'} is stopped, and the next message starts a fresh
-          turn on {changingBackend ? backendLabelOf(shownBackend) : piModeLabel(shownMode)} with no memory of this thread
-          beyond what you say in it.
-        </>
-      ),
-      confirmLabel: changingBackend ? 'Switch' : 'Switch mode',
+      title: prompt.title,
+      message: <>{prompt.message.map((p, i) => (p.em ? <em key={i}>{p.text}</em> : <span key={i}>{p.text}</span>))}</>,
+      confirmLabel: prompt.confirmLabel,
     });
     if (!ok) return;
-    save.mutate({
-      id: sessionId,
-      runtime: shownBackend,
-      // The session's OWN provider/model pins, not the resolved ones. Writing a
-      // resolved value would turn "inherits the agent's" into a pin, and on a
-      // cross-backend switch it would pin the OLD backend's. Neither is editable
-      // here any more, so both simply survive a mode change untouched.
-      runtimeProvider: shownIsPi ? d.runtimeProvider ?? null : null,
-      runtimeModel: shownIsPi ? d.runtimeModel ?? null : null,
-      // Omitted on a switch to claude, which has no modes: leaving the column
-      // alone keeps the pi mode for a switch back, and the resolver already
-      // reports null for anything that is not pi.
-      ...(shownIsPi ? { runtimeMode: shownMode } : {}),
-    });
+    save.mutate(detailSavePayload(d, view));
   }
 
   return (
@@ -255,13 +193,13 @@ export function SessionDetailSheet({
           phone. Full-bleed below sm, capped at max-w-lg above it. */}
       <SheetContent className="data-[side=right]:w-full sm:max-w-lg data-[side=right]:sm:max-w-lg overflow-hidden flex flex-col gap-0 p-0">
         <SheetHeader className="border-b">
-          <SheetTitle className="truncate">{d?.title || d?.agentName || 'Session'}</SheetTitle>
+          <SheetTitle className="truncate">{detailHeading(d)}</SheetTitle>
           <div className="flex items-start gap-1">
             {/* Wraps rather than truncates: the tail of a session url is the id,
                 which is the half worth reading, and on a phone an ellipsis eats
                 exactly that. */}
             <SheetDescription className="min-w-0 flex-1 pt-1 font-mono text-[11px] break-all">
-              {sessionUrl}
+              {url}
             </SheetDescription>
             {/* Same size and variant as the sheet's own close X, and -mr-1 pulls
                 it onto the same right edge (the header pads 4 more than the X's
@@ -294,51 +232,21 @@ export function SessionDetailSheet({
 
         {d && (
           <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5 animate-in fade-in-0">
-            {/* What is running OUTSIDE the turn.
-                First, and only when there is any. This sheet opens from the
-                status chip now, and when that chip says "background" this is
-                the answer it was tapped for — a permanent empty row above the
-                backend picker would be neither.
-
-                A backgrounded Bash or subagent ends the turn the instant it
-                starts, so the session goes idle with work still going, and
-                every surface could say only the word "background". Which
-                command, and for how long, is the difference between a build
-                that is nearly done and a `du` over ~/Library that will still be
-                running tomorrow. */}
-            {backgroundOutstanding(d.activity) && (
-              <Section title="background">
-                {backgroundTaskList(d.activity).map((t) => (
-                  <div
-                    key={t.id}
-                    className="flex items-start gap-3 py-1.5 border-b border-border/40 last:border-0"
-                  >
-                    {/* The age gets the label column — it is the thing you scan
-                        this list for, and left-aligned durations compare by eye
-                        in a way a trailing one does not. Not `Row`, whose label
-                        is uppercased: "1H 28M" reads as a heading, not a clock. */}
-                    <span className="w-20 shrink-0 pt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
-                      {t.elapsedSec ? shortDuration(t.elapsedSec) : '—'}
-                    </span>
-                    <span className="min-w-0 flex-1 font-mono text-xs break-words text-foreground/90">
-                      {t.description}
-                    </span>
-                  </div>
-                ))}
-                {backgroundTaskList(d.activity).length === 0 && (
-                  <Row label="running">
-                    <span className="text-muted-foreground">
-                      {bgCount(d.activity)} task{bgCount(d.activity) === 1 ? '' : 's'} — this machine&apos;s gateway
-                      has not said which
-                    </span>
-                  </Row>
-                )}
-                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                  The turn ended; these did not. The session keeps its working dot until they finish, or
-                  for 30 minutes after the agent&apos;s last message — whichever comes first.
-                </p>
-              </Section>
-            )}
+            {/* The core puts `background` first, and only when there is any: this
+                sheet opens from the status chip, and when that chip says
+                "background" this is the answer it was tapped for — a permanent
+                empty row above the backend picker would be neither. The other
+                sections follow the picker. */}
+            {detailSections({ d, readOnly }).map((s) => (
+              s.title === 'background' ? (
+                <Section key={s.title} title={s.title}>
+                  {s.rows.map((r, i) => <DetailRowView key={i} r={r} agentName={d.agentName} />)}
+                  {s.footer && (
+                    <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{s.footer}</p>
+                  )}
+                </Section>
+              ) : null
+            ))}
 
             <Section title="backend">
               <BackendPicker
@@ -355,11 +263,11 @@ export function SessionDetailSheet({
                   setting worth changing was the one you couldn't. Keyed off the
                   PICKER's runtime, not the server's, so flipping to pi offers
                   its mode in the same breath and one Apply lands both. */}
-              {shownBackend === 'pi-rpc' && (
+              {shownIsPi && (
                 <label className="mt-2.5 block">
                   <span className="text-[11px] uppercase tracking-wide text-muted-foreground">mode</span>
                   <Select
-                    value={shownMode}
+                    value={String(shownMode)}
                     onValueChange={(v) => { setMode(isPiMode(v) ? v : DEFAULT_PI_MODE); setErr(null); }}
                     disabled={readOnly || working || save.isPending}
                     modal={false}
@@ -375,19 +283,13 @@ export function SessionDetailSheet({
                     </SelectContent>
                   </Select>
                   <span className="mt-1 block text-[11px] leading-snug text-muted-foreground">
-                    {modeBlurb ? `${modeBlurb} ` : ''}
-                    {modeSource}
+                    {view.modeBlurb ? `${view.modeBlurb} ` : ''}
+                    {view.modeSource}
                   </span>
                 </label>
               )}
 
-              <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
-                {d.inherited ? (
-                  <>Inherited from <span className="font-mono">{d.agentName}</span> ({backendLabelOf(d.agentBackend.backendId)}). Choosing here pins it to this session.</>
-                ) : (
-                  <>Set on this session. The agent&apos;s own default is {backendLabelOf(d.agentBackend.backendId)}.</>
-                )}
-              </p>
+              <p className="mt-2 text-[11px] leading-snug text-muted-foreground">{view.inheritedLine}</p>
 
               {working && (
                 <p className="mt-2 text-[11px] text-amber-500">
@@ -417,71 +319,20 @@ export function SessionDetailSheet({
                 )}
                 {save.data?.restarted && !dirty && (
                   <span className="text-[11px] text-muted-foreground">
-                    stopped — the next message starts it on {backendLabelOf(d.backend.backendId)}
-                    {d.backend.runtime === 'pi-rpc' && ` · ${piModeLabel(d.backend.runtimeMode)}`}
+                    stopped — the next message starts it on {backendLabelOf(cfg.data, d.backend.backendId)}
+                    {d.backend.runtime === 'pi-rpc' && ` · ${piModeLabel(currentMode)}`}
                   </span>
                 )}
               </div>
             </Section>
 
-            <Section title="run">
-              {/* Reported, not edited. The switch itself is the chip in the chat
-                  header, one click from the reply that made you want it — and
-                  keeping the only control in one place is what stops this sheet
-                  from growing a second, disagreeing answer. */}
-              {(d.backend.runtime === 'claude-sdk' || d.backend.runtime === 'codex-exec') && (
-                <Row label="model" mono>
-                  {d.backend.runtimeModel ?? 'default'}
-                  <span className="ml-2 font-sans text-[11px] text-muted-foreground">
-                    change it from the header chip
-                  </span>
-                </Row>
-              )}
-              <Row label="state">
-                <span className="font-mono text-xs">{d.state ?? 'idle'}</span>
-                {d.hibernatedAt && <span className="ml-2 text-xs text-muted-foreground">💤 asleep since {relTime(d.hibernatedAt)}</span>}
-              </Row>
-              <Row label="context"><CtxBar tokens={d.contextTokens} total={contextWindowFor(d.backend.runtime, d.backend.runtimeModel)} /></Row>
-              <Row label="process" mono>
-                {d.alive ? `alive${d.pid ? ` · pid ${d.pid}` : ''}${d.rssMb ? ` · ${d.rssMb} MB` : ''}` : 'not running'}
-              </Row>
-              <Row label="snapshot">{d.snapshotAt ? relTime(d.snapshotAt) : DASH}</Row>
-              <Row label="last activity">{d.lastActivity ? relTime(d.lastActivity) : DASH}</Row>
-            </Section>
-
-            <Section title="conversation">
-              <Row label="messages" mono>{d.messageCount}</Row>
-              <Row label="started">{relTime(d.startedAt)}</Row>
-              <Row label="last message">{d.lastMessageAt ? relTime(d.lastMessageAt) : DASH}</Row>
-              <Row label="title">{d.title ? `${d.title}${d.titleAuto ? ' (auto)' : ''}` : DASH}</Row>
-              <Row label="group">{d.groupName ?? DASH}</Row>
-              <Row label="flags">
-                {[d.closedAt && 'closed', d.hiddenAt && 'hidden', d.origin && `origin:${d.origin}`]
-                  .filter(Boolean)
-                  .join(' · ') || DASH}
-              </Row>
-            </Section>
-
-            <Section title="where">
-              <Row label="agent">
-                <Link
-                  href={`/agents?name=${encodeURIComponent(d.agentName)}`}
-                  className="font-mono text-xs hover:underline underline-offset-2"
-                >
-                  {d.agentName}
-                </Link>
-              </Row>
-              {/* Filesystem paths and the backend's own session id are machine
-                  internals — not for a share link, which only ever gets one
-                  agent's conversation. */}
-              {!readOnly && (
-                <>
-                  <Row label="directory" mono>{d.agentDirectory ?? DASH}</Row>
-                  <Row label="backend id" mono>{d.claudeSessionId ?? DASH}</Row>
-                  <Row label="transcript" mono>{d.transcriptPath ?? DASH}</Row>
-                </>
-              )}
-            </Section>
+            {detailSections({ d, readOnly }).map((s) => (
+              s.title === 'background' ? null : (
+                <Section key={s.title} title={s.title}>
+                  {s.rows.map((r, i) => <DetailRowView key={i} r={r} agentName={d.agentName} />)}
+                </Section>
+              )
+            ))}
           </div>
         )}
 

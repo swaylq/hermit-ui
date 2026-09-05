@@ -234,4 +234,32 @@ enum WebLabels {
     static func hasTmuxPane(_ runtime: String?) -> Bool {
         !panelessRuntimes.contains(runtime ?? "")
     }
+
+    /// `runtimeLabel` — the full name, for pickers and headings. The short one
+    /// above is the chat header's; this one is what a backend card says.
+    /// Anything unrecognised reads `Claude Code`, the web's own fallback.
+    static func runtimeLabel(_ kind: String?) -> String {
+        switch kind {
+        case "claude-tmux": return "Claude Code (tmux)"
+        case "pi-rpc": return "pi"
+        case "prime-rpc": return "Prime Agent"
+        case "codex-exec": return "Codex"
+        case "dsh-exec": return "DeepSeek"
+        case "kimi-code": return "Kimi Code"
+        default: return "Claude Code"
+        }
+    }
+
+    /// The two Claude Code drivers write the SAME transcript, so a move between
+    /// them resumes it rather than abandoning it — but only against the same
+    /// endpoint. Which driver AND whose credential: both halves decide whether
+    /// the running context survives the switch.
+    private static let sameConversation: Set<String> = ["claude-tmux", "claude-sdk"]
+
+    static func sharesConversation(before: (runtime: String?, credentialId: String?)?,
+                                   after: (runtime: String?, credentialId: String?)?) -> Bool {
+        guard sameConversation.contains(before?.runtime ?? "") else { return false }
+        guard sameConversation.contains(after?.runtime ?? "") else { return false }
+        return (before?.credentialId ?? nil) == (after?.credentialId ?? nil)
+    }
 }

@@ -31,10 +31,10 @@ export function ctxFill(pct: number): number {
   return Math.max(2, Math.min(100, pct));
 }
 
-export function relTime(d: Date | string | null | undefined): string {
+export function relTime(d: Date | string | null | undefined, now: number = Date.now()): string {
   if (!d) return '-';
   const t = typeof d === 'string' ? new Date(d).getTime() : d.getTime();
-  const s = Math.floor((Date.now() - t) / 1000);
+  const s = Math.floor((now - t) / 1000);
   if (s < 0) return 'future';
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;

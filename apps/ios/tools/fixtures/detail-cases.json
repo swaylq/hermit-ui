@@ -1,0 +1,2978 @@
+{
+  "now": 1788696000000,
+  "sessions": {
+    "base": {
+      "id": "s_timeline",
+      "agentName": "asst",
+      "title": "the ios port",
+      "titleAuto": false,
+      "origin": null,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "lastMessageAt": "2026-09-06T11:59:15.000Z",
+      "lastActivity": "2026-09-06T11:59:48.000Z",
+      "closedAt": null,
+      "hiddenAt": null,
+      "hibernatedAt": null,
+      "snapshotAt": "2026-09-06T11:00:00.000Z",
+      "runtimeProvider": null,
+      "runtimeModel": null,
+      "runtimeMode": null,
+      "claudeSessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "transcriptPath": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+      "agentDirectory": "/Users/z/agents/asst",
+      "pid": 4711,
+      "alive": true,
+      "state": "idle",
+      "rssMb": 812,
+      "activity": null,
+      "contextTokens": 51200,
+      "messageCount": 318,
+      "groupName": null,
+      "backend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": "claude-opus-4-6",
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "agentBackend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": null,
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "inherited": true
+    },
+    "none": null,
+    "pi-pinned": {
+      "id": "s_timeline",
+      "agentName": "asst",
+      "title": "the ios port",
+      "titleAuto": false,
+      "origin": null,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "lastMessageAt": "2026-09-06T11:59:15.000Z",
+      "lastActivity": "2026-09-06T11:59:48.000Z",
+      "closedAt": null,
+      "hiddenAt": null,
+      "hibernatedAt": null,
+      "snapshotAt": "2026-09-06T11:00:00.000Z",
+      "runtimeProvider": null,
+      "runtimeModel": null,
+      "runtimeMode": "ops",
+      "claudeSessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "transcriptPath": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+      "agentDirectory": "/Users/z/agents/asst",
+      "pid": 4711,
+      "alive": true,
+      "state": "idle",
+      "rssMb": 812,
+      "activity": null,
+      "contextTokens": 51200,
+      "messageCount": 318,
+      "groupName": null,
+      "backend": {
+        "backendId": "pi-rpc",
+        "runtime": "pi-rpc",
+        "runtimeModel": null,
+        "runtimeMode": "ops",
+        "runtimeCredentialId": null
+      },
+      "agentBackend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": null,
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "inherited": false
+    },
+    "pi-inherited": {
+      "id": "s_timeline",
+      "agentName": "asst",
+      "title": "the ios port",
+      "titleAuto": false,
+      "origin": null,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "lastMessageAt": "2026-09-06T11:59:15.000Z",
+      "lastActivity": "2026-09-06T11:59:48.000Z",
+      "closedAt": null,
+      "hiddenAt": null,
+      "hibernatedAt": null,
+      "snapshotAt": "2026-09-06T11:00:00.000Z",
+      "runtimeProvider": null,
+      "runtimeModel": null,
+      "runtimeMode": null,
+      "claudeSessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "transcriptPath": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+      "agentDirectory": "/Users/z/agents/asst",
+      "pid": 4711,
+      "alive": true,
+      "state": "idle",
+      "rssMb": 812,
+      "activity": null,
+      "contextTokens": 51200,
+      "messageCount": 318,
+      "groupName": null,
+      "backend": {
+        "backendId": "pi-rpc",
+        "runtime": "pi-rpc",
+        "runtimeModel": null,
+        "runtimeMode": "writer",
+        "runtimeCredentialId": null
+      },
+      "agentBackend": {
+        "backendId": "pi-rpc",
+        "runtime": "pi-rpc",
+        "runtimeModel": null,
+        "runtimeMode": "writer",
+        "runtimeCredentialId": null
+      },
+      "inherited": true
+    },
+    "pi-triage": {
+      "id": "s_timeline",
+      "agentName": "asst",
+      "title": "the ios port",
+      "titleAuto": false,
+      "origin": null,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "lastMessageAt": "2026-09-06T11:59:15.000Z",
+      "lastActivity": "2026-09-06T11:59:48.000Z",
+      "closedAt": null,
+      "hiddenAt": null,
+      "hibernatedAt": null,
+      "snapshotAt": "2026-09-06T11:00:00.000Z",
+      "runtimeProvider": null,
+      "runtimeModel": null,
+      "runtimeMode": "triage",
+      "claudeSessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "transcriptPath": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+      "agentDirectory": "/Users/z/agents/asst",
+      "pid": 4711,
+      "alive": true,
+      "state": "idle",
+      "rssMb": 812,
+      "activity": null,
+      "contextTokens": 51200,
+      "messageCount": 318,
+      "groupName": null,
+      "backend": {
+        "backendId": "pi-rpc",
+        "runtime": "pi-rpc",
+        "runtimeModel": null,
+        "runtimeMode": "triage",
+        "runtimeCredentialId": null
+      },
+      "agentBackend": {
+        "backendId": "pi-rpc",
+        "runtime": "pi-rpc",
+        "runtimeModel": null,
+        "runtimeMode": "triage",
+        "runtimeCredentialId": null
+      },
+      "inherited": false
+    },
+    "pi-unknown-mode": {
+      "id": "s_timeline",
+      "agentName": "asst",
+      "title": "the ios port",
+      "titleAuto": false,
+      "origin": null,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "lastMessageAt": "2026-09-06T11:59:15.000Z",
+      "lastActivity": "2026-09-06T11:59:48.000Z",
+      "closedAt": null,
+      "hiddenAt": null,
+      "hibernatedAt": null,
+      "snapshotAt": "2026-09-06T11:00:00.000Z",
+      "runtimeProvider": null,
+      "runtimeModel": null,
+      "runtimeMode": "lab",
+      "claudeSessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "transcriptPath": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+      "agentDirectory": "/Users/z/agents/asst",
+      "pid": 4711,
+      "alive": true,
+      "state": "idle",
+      "rssMb": 812,
+      "activity": null,
+      "contextTokens": 51200,
+      "messageCount": 318,
+      "groupName": null,
+      "backend": {
+        "backendId": "pi-home",
+        "runtime": "pi-rpc",
+        "runtimeModel": null,
+        "runtimeMode": "lab",
+        "runtimeCredentialId": "cred-dsk"
+      },
+      "agentBackend": {
+        "backendId": "pi-home",
+        "runtime": "pi-rpc",
+        "runtimeModel": null,
+        "runtimeMode": "coding",
+        "runtimeCredentialId": "cred-dsk"
+      },
+      "inherited": false
+    },
+    "codex-working": {
+      "id": "s_timeline",
+      "agentName": "asst",
+      "title": "the ios port",
+      "titleAuto": false,
+      "origin": null,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "lastMessageAt": "2026-09-06T11:59:15.000Z",
+      "lastActivity": "2026-09-06T11:59:48.000Z",
+      "closedAt": null,
+      "hiddenAt": null,
+      "hibernatedAt": null,
+      "snapshotAt": "2026-09-06T11:00:00.000Z",
+      "runtimeProvider": null,
+      "runtimeModel": null,
+      "runtimeMode": null,
+      "claudeSessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "transcriptPath": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+      "agentDirectory": "/Users/z/agents/asst",
+      "pid": 4711,
+      "alive": true,
+      "state": "working",
+      "rssMb": 812,
+      "activity": null,
+      "contextTokens": 51200,
+      "messageCount": 318,
+      "groupName": null,
+      "backend": {
+        "backendId": "codex-exec",
+        "runtime": "codex-exec",
+        "runtimeModel": "gpt-5-codex",
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "agentBackend": {
+        "backendId": "codex-exec",
+        "runtime": "codex-exec",
+        "runtimeModel": null,
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "inherited": true
+    },
+    "tmux-retired": {
+      "id": "s_timeline",
+      "agentName": "asst",
+      "title": "the ios port",
+      "titleAuto": false,
+      "origin": null,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "lastMessageAt": "2026-09-06T11:59:15.000Z",
+      "lastActivity": "2026-09-06T11:59:48.000Z",
+      "closedAt": null,
+      "hiddenAt": null,
+      "hibernatedAt": null,
+      "snapshotAt": "2026-09-06T11:00:00.000Z",
+      "runtimeProvider": null,
+      "runtimeModel": null,
+      "runtimeMode": null,
+      "claudeSessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "transcriptPath": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+      "agentDirectory": "/Users/z/agents/asst",
+      "pid": 4711,
+      "alive": true,
+      "state": "idle",
+      "rssMb": 812,
+      "activity": null,
+      "contextTokens": 51200,
+      "messageCount": 318,
+      "groupName": null,
+      "backend": {
+        "backendId": "claude-tmux",
+        "runtime": "claude-tmux",
+        "runtimeModel": null,
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "agentBackend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": null,
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "inherited": false
+    },
+    "bare": {
+      "id": "s_timeline",
+      "agentName": "asst",
+      "title": null,
+      "titleAuto": null,
+      "origin": null,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "lastMessageAt": null,
+      "lastActivity": null,
+      "closedAt": null,
+      "hiddenAt": null,
+      "hibernatedAt": null,
+      "snapshotAt": null,
+      "runtimeProvider": null,
+      "runtimeModel": null,
+      "runtimeMode": null,
+      "claudeSessionId": null,
+      "transcriptPath": null,
+      "agentDirectory": null,
+      "pid": null,
+      "alive": false,
+      "state": null,
+      "rssMb": null,
+      "activity": null,
+      "contextTokens": null,
+      "messageCount": 0,
+      "groupName": null,
+      "backend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": "claude-opus-4-6",
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "agentBackend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": null,
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "inherited": true
+    },
+    "archived-hidden": {
+      "id": "s_timeline",
+      "agentName": "asst",
+      "title": "nightly sweep",
+      "titleAuto": true,
+      "origin": "cron",
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "lastMessageAt": "2026-09-06T11:59:15.000Z",
+      "lastActivity": "2026-09-06T11:59:48.000Z",
+      "closedAt": "2026-09-06T11:50:00.000Z",
+      "hiddenAt": "2026-09-06T11:55:00.000Z",
+      "hibernatedAt": "2026-09-06T10:00:00.000Z",
+      "snapshotAt": "2026-09-06T11:00:00.000Z",
+      "runtimeProvider": null,
+      "runtimeModel": null,
+      "runtimeMode": null,
+      "claudeSessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "transcriptPath": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+      "agentDirectory": "/Users/z/agents/asst",
+      "pid": null,
+      "alive": false,
+      "state": "closed",
+      "rssMb": null,
+      "activity": null,
+      "contextTokens": 51200,
+      "messageCount": 318,
+      "groupName": "chores",
+      "backend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": "claude-opus-4-6",
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "agentBackend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": null,
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "inherited": true
+    },
+    "background": {
+      "id": "s_timeline",
+      "agentName": "asst",
+      "title": "the ios port",
+      "titleAuto": false,
+      "origin": null,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "lastMessageAt": "2026-09-06T11:59:15.000Z",
+      "lastActivity": "2026-09-06T11:59:48.000Z",
+      "closedAt": null,
+      "hiddenAt": null,
+      "hibernatedAt": null,
+      "snapshotAt": "2026-09-06T11:00:00.000Z",
+      "runtimeProvider": null,
+      "runtimeModel": null,
+      "runtimeMode": null,
+      "claudeSessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "transcriptPath": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+      "agentDirectory": "/Users/z/agents/asst",
+      "pid": 4711,
+      "alive": true,
+      "state": "idle",
+      "rssMb": 812,
+      "activity": {
+        "kind": "background",
+        "backgroundCount": 3,
+        "backgroundTasks": [
+          {
+            "id": "bg1",
+            "description": "pnpm build",
+            "elapsedSec": 5280
+          },
+          {
+            "id": "bg2",
+            "description": "du -sh ~/Library",
+            "elapsedSec": 88
+          },
+          {
+            "elapsedSec": 0
+          }
+        ]
+      },
+      "contextTokens": 51200,
+      "messageCount": 318,
+      "groupName": null,
+      "backend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": "claude-opus-4-6",
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "agentBackend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": null,
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "inherited": true
+    },
+    "background-countonly": {
+      "id": "s_timeline",
+      "agentName": "asst",
+      "title": "the ios port",
+      "titleAuto": false,
+      "origin": null,
+      "startedAt": "2026-09-03T12:00:00.000Z",
+      "lastMessageAt": "2026-09-06T11:59:15.000Z",
+      "lastActivity": "2026-09-06T11:59:48.000Z",
+      "closedAt": null,
+      "hiddenAt": null,
+      "hibernatedAt": null,
+      "snapshotAt": "2026-09-06T11:00:00.000Z",
+      "runtimeProvider": null,
+      "runtimeModel": null,
+      "runtimeMode": null,
+      "claudeSessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "transcriptPath": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+      "agentDirectory": "/Users/z/agents/asst",
+      "pid": 4711,
+      "alive": true,
+      "state": "idle",
+      "rssMb": 812,
+      "activity": {
+        "backgroundCount": 1
+      },
+      "contextTokens": 51200,
+      "messageCount": 318,
+      "groupName": null,
+      "backend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": "claude-opus-4-6",
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "agentBackend": {
+        "backendId": "claude-sdk",
+        "runtime": "claude-sdk",
+        "runtimeModel": null,
+        "runtimeMode": null,
+        "runtimeCredentialId": null
+      },
+      "inherited": true
+    }
+  },
+  "configs": {
+    "plain": {
+      "disabled": []
+    },
+    "composed": {
+      "disabled": [],
+      "instances": [
+        {
+          "id": "pi-home",
+          "harness": "pi-rpc",
+          "credentialId": "cred-dsk",
+          "label": "pi (home)",
+          "mode": "coding"
+        },
+        {
+          "id": "kimi-lan",
+          "harness": "kimi-code",
+          "credentialId": "cred-kimi",
+          "label": "Kimi (LAN)"
+        }
+      ]
+    },
+    "retired": {
+      "disabled": [
+        "claude-tmux"
+      ],
+      "instances": [
+        {
+          "id": "pi-home",
+          "harness": "pi-rpc",
+          "credentialId": "cred-dsk",
+          "label": "pi (home)"
+        }
+      ]
+    },
+    "null": null
+  },
+  "url": "https://hermit.example/chat?session=s_timeline",
+  "pickers": [
+    {
+      "why": "a claude-sdk session, nothing touched",
+      "session": "base",
+      "cfg": "plain",
+      "form": {
+        "runtime": null,
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|claude-sdk|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "claude-sdk",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (Claude Code). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "the detail query has not answered — the floor, and nothing dirty",
+      "session": "none",
+      "cfg": "plain",
+      "form": {
+        "runtime": null,
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": null,
+      "heading": "Session",
+      "view": {
+        "shownBackend": "claude-sdk",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "the same, with a form already set: still the floor, still not dirty",
+      "session": "none",
+      "cfg": "plain",
+      "form": {
+        "runtime": "pi-rpc",
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": null,
+      "heading": "Session",
+      "view": {
+        "shownBackend": "pi-rpc",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "claude-sdk → claude-tmux: the same transcript, so the confirm says so",
+      "session": "base",
+      "cfg": "plain",
+      "form": {
+        "runtime": "claude-tmux",
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|claude-sdk|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "claude-tmux",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": true,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (Claude Code). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": {
+        "title": "Switch to Claude Code (tmux)?",
+        "confirmLabel": "Switch",
+        "keepsContext": true,
+        "message": [
+          {
+            "text": "Both are Claude Code on the same conversation, so nothing is lost: Claude Code is stopped and Claude Code (tmux) resumes the same transcript, with its full history, on the next message."
+          }
+        ]
+      },
+      "payload": {
+        "id": "s_timeline",
+        "runtime": "claude-tmux",
+        "runtimeProvider": null,
+        "runtimeModel": null
+      }
+    },
+    {
+      "why": "claude-sdk → codex: the running context does not travel",
+      "session": "base",
+      "cfg": "plain",
+      "form": {
+        "runtime": "codex-exec",
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|claude-sdk|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "codex-exec",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": true,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (Claude Code). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": {
+        "title": "Switch to Codex?",
+        "confirmLabel": "Switch",
+        "keepsContext": false,
+        "message": [
+          {
+            "text": "The conversation on this page is kept. What is "
+          },
+          {
+            "text": "not",
+            "em": true
+          },
+          {
+            "text": " kept is the running context: Claude Code is stopped, and the next message starts a fresh turn on Codex with no memory of this thread beyond what you say in it."
+          }
+        ]
+      },
+      "payload": {
+        "id": "s_timeline",
+        "runtime": "codex-exec",
+        "runtimeProvider": null,
+        "runtimeModel": null
+      }
+    },
+    {
+      "why": "claude-sdk → pi: the mode select appears in the same breath",
+      "session": "base",
+      "cfg": "plain",
+      "form": {
+        "runtime": "pi-rpc",
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|claude-sdk|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "pi-rpc",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": true,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (Claude Code). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": {
+        "title": "Switch to pi?",
+        "confirmLabel": "Switch",
+        "keepsContext": false,
+        "message": [
+          {
+            "text": "The conversation on this page is kept. What is "
+          },
+          {
+            "text": "not",
+            "em": true
+          },
+          {
+            "text": " kept is the running context: Claude Code is stopped, and the next message starts a fresh turn on pi with no memory of this thread beyond what you say in it."
+          }
+        ]
+      },
+      "payload": {
+        "id": "s_timeline",
+        "runtime": "pi-rpc",
+        "runtimeProvider": null,
+        "runtimeModel": null
+      }
+    },
+    {
+      "why": "…and pi opens on what the AGENT would start pi in, not the fleet default",
+      "session": "pi-inherited",
+      "cfg": "plain",
+      "form": {
+        "runtime": null,
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|pi-rpc|writer",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "pi-rpc",
+        "shownIsPi": false,
+        "currentMode": "writer",
+        "shownMode": "writer",
+        "modeBlurb": "Long-form prose and copy. Voice, structure, editing passes.",
+        "modeSource": "Inherited from asst.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (pi). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "a pi session pinned to ops",
+      "session": "pi-pinned",
+      "cfg": "plain",
+      "form": {
+        "runtime": null,
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|pi-rpc|ops",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "pi-rpc",
+        "shownIsPi": false,
+        "currentMode": "ops",
+        "shownMode": "ops",
+        "modeBlurb": "Live machines and services. Investigation discipline, read-before-write, ssh_run.",
+        "modeSource": "Set on this session.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Set on this session. The agent's own default is Claude Code.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "mode-only switch on a pi session",
+      "session": "pi-pinned",
+      "cfg": "plain",
+      "form": {
+        "runtime": null,
+        "mode": "scout"
+      },
+      "scoped": false,
+      "stamp": "s_timeline|pi-rpc|ops",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "pi-rpc",
+        "shownIsPi": false,
+        "currentMode": "ops",
+        "shownMode": "scout",
+        "modeBlurb": "Read-only investigation. Where is it, how does it work, what calls it.",
+        "modeSource": "Applying pins it to this session.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Set on this session. The agent's own default is Claude Code.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "a mode change on a CLAUDE session is not dirty — there is no mode to change",
+      "session": "base",
+      "cfg": "plain",
+      "form": {
+        "runtime": null,
+        "mode": "scout"
+      },
+      "scoped": false,
+      "stamp": "s_timeline|claude-sdk|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "claude-sdk",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "scout",
+        "modeBlurb": "Read-only investigation. Where is it, how does it work, what calls it.",
+        "modeSource": "Applying pins it to this session.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (Claude Code). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "triage resolves to the fleet default rather than a row the select lacks",
+      "session": "pi-triage",
+      "cfg": "plain",
+      "form": {
+        "runtime": null,
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|pi-rpc|triage",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "pi-rpc",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "Set on this session.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Set on this session. The agent's own default is pi.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "a machine-local mode keeps reading as itself",
+      "session": "pi-unknown-mode",
+      "cfg": "composed",
+      "form": {
+        "runtime": null,
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|pi-home|lab",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "pi-home",
+        "shownIsPi": true,
+        "currentMode": "lab",
+        "shownMode": "lab",
+        "modeBlurb": null,
+        "modeSource": "Set on this session.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Set on this session. The agent's own default is pi (home).",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "pi-home",
+            "label": "pi (home)",
+            "blurb": "pi or omp as an RPC child process. Small and predictable; pick the engine and recipe under Mode.",
+            "builtIn": false,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": "cred-dsk"
+          },
+          {
+            "id": "kimi-lan",
+            "label": "Kimi (LAN)",
+            "blurb": "Moonshot’s own Kimi Code CLI, one run per turn, resumed by session id. Its own tools, skills, sub-agents and hooks; the key is passed in the environment and nothing is written to its config.",
+            "builtIn": false,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": "cred-kimi"
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "a composed pi backend is a pi backend — by HARNESS, not by name",
+      "session": "base",
+      "cfg": "composed",
+      "form": {
+        "runtime": "pi-home",
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|claude-sdk|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "pi-home",
+        "shownIsPi": true,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": true,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (Claude Code). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "pi-home",
+            "label": "pi (home)",
+            "blurb": "pi or omp as an RPC child process. Small and predictable; pick the engine and recipe under Mode.",
+            "builtIn": false,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": "cred-dsk"
+          },
+          {
+            "id": "kimi-lan",
+            "label": "Kimi (LAN)",
+            "blurb": "Moonshot’s own Kimi Code CLI, one run per turn, resumed by session id. Its own tools, skills, sub-agents and hooks; the key is passed in the environment and nothing is written to its config.",
+            "builtIn": false,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": "cred-kimi"
+          }
+        ]
+      },
+      "prompt": {
+        "title": "Switch to pi (home)?",
+        "confirmLabel": "Switch",
+        "keepsContext": false,
+        "message": [
+          {
+            "text": "The conversation on this page is kept. What is "
+          },
+          {
+            "text": "not",
+            "em": true
+          },
+          {
+            "text": " kept is the running context: Claude Code is stopped, and the next message starts a fresh turn on pi (home) with no memory of this thread beyond what you say in it."
+          }
+        ]
+      },
+      "payload": {
+        "id": "s_timeline",
+        "runtime": "pi-home",
+        "runtimeProvider": null,
+        "runtimeModel": null,
+        "runtimeMode": "omp"
+      }
+    },
+    {
+      "why": "backend AND mode in one Apply",
+      "session": "base",
+      "cfg": "composed",
+      "form": {
+        "runtime": "pi-rpc",
+        "mode": "patch"
+      },
+      "scoped": false,
+      "stamp": "s_timeline|claude-sdk|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "pi-rpc",
+        "shownIsPi": true,
+        "currentMode": "omp",
+        "shownMode": "patch",
+        "modeBlurb": "Bounded code change. Read, edit, run the check, report the diff.",
+        "modeSource": "Applying pins it to this session.",
+        "dirty": true,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (Claude Code). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "pi-home",
+            "label": "pi (home)",
+            "blurb": "pi or omp as an RPC child process. Small and predictable; pick the engine and recipe under Mode.",
+            "builtIn": false,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": "cred-dsk"
+          },
+          {
+            "id": "kimi-lan",
+            "label": "Kimi (LAN)",
+            "blurb": "Moonshot’s own Kimi Code CLI, one run per turn, resumed by session id. Its own tools, skills, sub-agents and hooks; the key is passed in the environment and nothing is written to its config.",
+            "builtIn": false,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": "cred-kimi"
+          }
+        ]
+      },
+      "prompt": {
+        "title": "Switch to pi?",
+        "confirmLabel": "Switch",
+        "keepsContext": false,
+        "message": [
+          {
+            "text": "The conversation on this page is kept. What is "
+          },
+          {
+            "text": "not",
+            "em": true
+          },
+          {
+            "text": " kept is the running context: Claude Code is stopped, and the next message starts a fresh turn on pi with no memory of this thread beyond what you say in it."
+          }
+        ]
+      },
+      "payload": {
+        "id": "s_timeline",
+        "runtime": "pi-rpc",
+        "runtimeProvider": null,
+        "runtimeModel": null,
+        "runtimeMode": "patch"
+      }
+    },
+    {
+      "why": "mid-turn: dirty, but the switch is refused until the turn ends",
+      "session": "codex-working",
+      "cfg": "plain",
+      "form": {
+        "runtime": "claude-tmux",
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|codex-exec|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "claude-tmux",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": true,
+        "working": true,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (Codex). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": {
+        "title": "Switch to Claude Code (tmux)?",
+        "confirmLabel": "Switch",
+        "keepsContext": false,
+        "message": [
+          {
+            "text": "The conversation on this page is kept. What is "
+          },
+          {
+            "text": "not",
+            "em": true
+          },
+          {
+            "text": " kept is the running context: Codex is stopped, and the next message starts a fresh turn on Claude Code (tmux) with no memory of this thread beyond what you say in it."
+          }
+        ]
+      },
+      "payload": {
+        "id": "s_timeline",
+        "runtime": "claude-tmux",
+        "runtimeProvider": null,
+        "runtimeModel": null
+      }
+    },
+    {
+      "why": "a share link: read-only, and the picker still says what is running",
+      "session": "base",
+      "cfg": "plain",
+      "form": {
+        "runtime": null,
+        "mode": null
+      },
+      "scoped": true,
+      "stamp": "s_timeline|claude-sdk|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "claude-sdk",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": false,
+        "working": false,
+        "readOnly": true,
+        "inheritedLine": "Inherited from asst (Claude Code). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "a share link with a form set — dirty is about the FORM, readOnly is the gate",
+      "session": "base",
+      "cfg": "plain",
+      "form": {
+        "runtime": "codex-exec",
+        "mode": null
+      },
+      "scoped": true,
+      "stamp": "s_timeline|claude-sdk|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "codex-exec",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": true,
+        "working": false,
+        "readOnly": true,
+        "inheritedLine": "Inherited from asst (Claude Code). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": {
+        "title": "Switch to Codex?",
+        "confirmLabel": "Switch",
+        "keepsContext": false,
+        "message": [
+          {
+            "text": "The conversation on this page is kept. What is "
+          },
+          {
+            "text": "not",
+            "em": true
+          },
+          {
+            "text": " kept is the running context: Claude Code is stopped, and the next message starts a fresh turn on Codex with no memory of this thread beyond what you say in it."
+          }
+        ]
+      },
+      "payload": {
+        "id": "s_timeline",
+        "runtime": "codex-exec",
+        "runtimeProvider": null,
+        "runtimeModel": null
+      }
+    },
+    {
+      "why": "the session is on a backend the machine switched off: its card is still drawn",
+      "session": "tmux-retired",
+      "cfg": "retired",
+      "form": {
+        "runtime": null,
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|claude-tmux|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "claude-tmux",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Set on this session. The agent's own default is Claude Code.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": true,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "pi-home",
+            "label": "pi (home)",
+            "blurb": "pi or omp as an RPC child process. Small and predictable; pick the engine and recipe under Mode.",
+            "builtIn": false,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": "cred-dsk"
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "…and moving off it is a normal claude-to-claude move",
+      "session": "tmux-retired",
+      "cfg": "retired",
+      "form": {
+        "runtime": "pi-home",
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|claude-tmux|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "pi-home",
+        "shownIsPi": true,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": true,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Set on this session. The agent's own default is Claude Code.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "pi-home",
+            "label": "pi (home)",
+            "blurb": "pi or omp as an RPC child process. Small and predictable; pick the engine and recipe under Mode.",
+            "builtIn": false,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": "cred-dsk"
+          }
+        ]
+      },
+      "prompt": {
+        "title": "Switch to pi (home)?",
+        "confirmLabel": "Switch",
+        "keepsContext": false,
+        "message": [
+          {
+            "text": "The conversation on this page is kept. What is "
+          },
+          {
+            "text": "not",
+            "em": true
+          },
+          {
+            "text": " kept is the running context: Claude Code (tmux) is stopped, and the next message starts a fresh turn on pi (home) with no memory of this thread beyond what you say in it."
+          }
+        ]
+      },
+      "payload": {
+        "id": "s_timeline",
+        "runtime": "pi-home",
+        "runtimeProvider": null,
+        "runtimeModel": null,
+        "runtimeMode": "omp"
+      }
+    },
+    {
+      "why": "no config yet: two built-ins and nothing composed",
+      "session": "base",
+      "cfg": "null",
+      "form": {
+        "runtime": null,
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|claude-sdk|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "claude-sdk",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (Claude Code). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "archived session, unchanged",
+      "session": "archived-hidden",
+      "cfg": "plain",
+      "form": {
+        "runtime": null,
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|claude-sdk|",
+      "heading": "nightly sweep",
+      "view": {
+        "shownBackend": "claude-sdk",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": false,
+        "working": false,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (Claude Code). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    },
+    {
+      "why": "a codex session inheriting the agent default",
+      "session": "codex-working",
+      "cfg": "plain",
+      "form": {
+        "runtime": null,
+        "mode": null
+      },
+      "scoped": false,
+      "stamp": "s_timeline|codex-exec|",
+      "heading": "the ios port",
+      "view": {
+        "shownBackend": "codex-exec",
+        "shownIsPi": false,
+        "currentMode": "omp",
+        "shownMode": "omp",
+        "modeBlurb": "31 built-in tools: LSP, ast-edit, debug, browser, computer, github, memory.",
+        "modeSource": "The default mode.",
+        "dirty": false,
+        "working": true,
+        "readOnly": false,
+        "inheritedLine": "Inherited from asst (Codex). Choosing here pins it to this session.",
+        "cards": [
+          {
+            "id": "claude-sdk",
+            "label": "Claude Code",
+            "blurb": "Claude Code via its official Agent SDK. Same tools and skills; typed events, no pane. Built in it runs on this machine’s subscription; paired with a credential it runs that endpoint’s model instead.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "claude-tmux",
+            "label": "Claude Code (tmux)",
+            "blurb": "The same Claude Code, driven through a tmux pane. Attachable terminal, and it survives a gateway restart.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": false,
+            "credentialId": null
+          },
+          {
+            "id": "codex-exec",
+            "label": "Codex",
+            "blurb": "OpenAI Codex, one run per turn, on this machine’s own codex login.",
+            "builtIn": true,
+            "retired": false,
+            "isAgentDefault": true,
+            "credentialId": null
+          }
+        ]
+      },
+      "prompt": null,
+      "payload": null
+    }
+  ],
+  "sections": [
+    {
+      "why": "a live claude-sdk session",
+      "session": "base",
+      "readOnly": false,
+      "sections": [
+        {
+          "title": "run",
+          "rows": [
+            {
+              "label": "model",
+              "value": "claude-opus-4-6",
+              "mono": true,
+              "note": "change it from the header chip"
+            },
+            {
+              "label": "state",
+              "value": "idle",
+              "mono": true
+            },
+            {
+              "label": "context",
+              "value": null,
+              "kind": "ctx",
+              "ctxTokens": 51200,
+              "ctxTotal": 1000000
+            },
+            {
+              "label": "process",
+              "mono": true,
+              "value": "alive · pid 4711 · 812 MB"
+            },
+            {
+              "label": "snapshot",
+              "value": "1h ago"
+            },
+            {
+              "label": "last activity",
+              "value": "12s ago"
+            }
+          ]
+        },
+        {
+          "title": "conversation",
+          "rows": [
+            {
+              "label": "messages",
+              "value": "318",
+              "mono": true
+            },
+            {
+              "label": "started",
+              "value": "3d ago"
+            },
+            {
+              "label": "last message",
+              "value": "45s ago"
+            },
+            {
+              "label": "title",
+              "value": "the ios port"
+            },
+            {
+              "label": "group",
+              "value": null
+            },
+            {
+              "label": "flags",
+              "value": null
+            }
+          ]
+        },
+        {
+          "title": "where",
+          "rows": [
+            {
+              "label": "agent",
+              "value": "asst",
+              "mono": true,
+              "kind": "agent"
+            },
+            {
+              "label": "directory",
+              "value": "/Users/z/agents/asst",
+              "mono": true
+            },
+            {
+              "label": "backend id",
+              "value": "a1b2c3d4-0000-4000-8000-000000000001",
+              "mono": true
+            },
+            {
+              "label": "transcript",
+              "value": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+              "mono": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "why": "…as a share link: no directory, no backend id, no transcript",
+      "session": "base",
+      "readOnly": true,
+      "sections": [
+        {
+          "title": "run",
+          "rows": [
+            {
+              "label": "model",
+              "value": "claude-opus-4-6",
+              "mono": true,
+              "note": "change it from the header chip"
+            },
+            {
+              "label": "state",
+              "value": "idle",
+              "mono": true
+            },
+            {
+              "label": "context",
+              "value": null,
+              "kind": "ctx",
+              "ctxTokens": 51200,
+              "ctxTotal": 1000000
+            },
+            {
+              "label": "process",
+              "mono": true,
+              "value": "alive · pid 4711 · 812 MB"
+            },
+            {
+              "label": "snapshot",
+              "value": "1h ago"
+            },
+            {
+              "label": "last activity",
+              "value": "12s ago"
+            }
+          ]
+        },
+        {
+          "title": "conversation",
+          "rows": [
+            {
+              "label": "messages",
+              "value": "318",
+              "mono": true
+            },
+            {
+              "label": "started",
+              "value": "3d ago"
+            },
+            {
+              "label": "last message",
+              "value": "45s ago"
+            },
+            {
+              "label": "title",
+              "value": "the ios port"
+            },
+            {
+              "label": "group",
+              "value": null
+            },
+            {
+              "label": "flags",
+              "value": null
+            }
+          ]
+        },
+        {
+          "title": "where",
+          "rows": [
+            {
+              "label": "agent",
+              "value": "asst",
+              "mono": true,
+              "kind": "agent"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "why": "pi: no model row at all — pi's model is not switchable from the header",
+      "session": "pi-pinned",
+      "readOnly": false,
+      "sections": [
+        {
+          "title": "run",
+          "rows": [
+            {
+              "label": "state",
+              "value": "idle",
+              "mono": true
+            },
+            {
+              "label": "context",
+              "value": null,
+              "kind": "ctx",
+              "ctxTokens": 51200,
+              "ctxTotal": 1000000
+            },
+            {
+              "label": "process",
+              "mono": true,
+              "value": "alive · pid 4711 · 812 MB"
+            },
+            {
+              "label": "snapshot",
+              "value": "1h ago"
+            },
+            {
+              "label": "last activity",
+              "value": "12s ago"
+            }
+          ]
+        },
+        {
+          "title": "conversation",
+          "rows": [
+            {
+              "label": "messages",
+              "value": "318",
+              "mono": true
+            },
+            {
+              "label": "started",
+              "value": "3d ago"
+            },
+            {
+              "label": "last message",
+              "value": "45s ago"
+            },
+            {
+              "label": "title",
+              "value": "the ios port"
+            },
+            {
+              "label": "group",
+              "value": null
+            },
+            {
+              "label": "flags",
+              "value": null
+            }
+          ]
+        },
+        {
+          "title": "where",
+          "rows": [
+            {
+              "label": "agent",
+              "value": "asst",
+              "mono": true,
+              "kind": "agent"
+            },
+            {
+              "label": "directory",
+              "value": "/Users/z/agents/asst",
+              "mono": true
+            },
+            {
+              "label": "backend id",
+              "value": "a1b2c3d4-0000-4000-8000-000000000001",
+              "mono": true
+            },
+            {
+              "label": "transcript",
+              "value": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+              "mono": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "why": "codex: the model row is there, and says where to change it",
+      "session": "codex-working",
+      "readOnly": false,
+      "sections": [
+        {
+          "title": "run",
+          "rows": [
+            {
+              "label": "model",
+              "value": "gpt-5-codex",
+              "mono": true,
+              "note": "change it from the header chip"
+            },
+            {
+              "label": "state",
+              "value": "working",
+              "mono": true
+            },
+            {
+              "label": "context",
+              "value": null,
+              "kind": "ctx",
+              "ctxTokens": 51200,
+              "ctxTotal": 258400
+            },
+            {
+              "label": "process",
+              "mono": true,
+              "value": "alive · pid 4711 · 812 MB"
+            },
+            {
+              "label": "snapshot",
+              "value": "1h ago"
+            },
+            {
+              "label": "last activity",
+              "value": "12s ago"
+            }
+          ]
+        },
+        {
+          "title": "conversation",
+          "rows": [
+            {
+              "label": "messages",
+              "value": "318",
+              "mono": true
+            },
+            {
+              "label": "started",
+              "value": "3d ago"
+            },
+            {
+              "label": "last message",
+              "value": "45s ago"
+            },
+            {
+              "label": "title",
+              "value": "the ios port"
+            },
+            {
+              "label": "group",
+              "value": null
+            },
+            {
+              "label": "flags",
+              "value": null
+            }
+          ]
+        },
+        {
+          "title": "where",
+          "rows": [
+            {
+              "label": "agent",
+              "value": "asst",
+              "mono": true,
+              "kind": "agent"
+            },
+            {
+              "label": "directory",
+              "value": "/Users/z/agents/asst",
+              "mono": true
+            },
+            {
+              "label": "backend id",
+              "value": "a1b2c3d4-0000-4000-8000-000000000001",
+              "mono": true
+            },
+            {
+              "label": "transcript",
+              "value": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+              "mono": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "why": "everything missing — the em-dash rows",
+      "session": "bare",
+      "readOnly": false,
+      "sections": [
+        {
+          "title": "run",
+          "rows": [
+            {
+              "label": "model",
+              "value": "claude-opus-4-6",
+              "mono": true,
+              "note": "change it from the header chip"
+            },
+            {
+              "label": "state",
+              "value": "idle",
+              "mono": true
+            },
+            {
+              "label": "context",
+              "value": null,
+              "kind": "ctx",
+              "ctxTokens": null,
+              "ctxTotal": 1000000
+            },
+            {
+              "label": "process",
+              "mono": true,
+              "value": "not running"
+            },
+            {
+              "label": "snapshot",
+              "value": null
+            },
+            {
+              "label": "last activity",
+              "value": null
+            }
+          ]
+        },
+        {
+          "title": "conversation",
+          "rows": [
+            {
+              "label": "messages",
+              "value": "0",
+              "mono": true
+            },
+            {
+              "label": "started",
+              "value": "3d ago"
+            },
+            {
+              "label": "last message",
+              "value": null
+            },
+            {
+              "label": "title",
+              "value": null
+            },
+            {
+              "label": "group",
+              "value": null
+            },
+            {
+              "label": "flags",
+              "value": null
+            }
+          ]
+        },
+        {
+          "title": "where",
+          "rows": [
+            {
+              "label": "agent",
+              "value": "asst",
+              "mono": true,
+              "kind": "agent"
+            },
+            {
+              "label": "directory",
+              "value": null,
+              "mono": true
+            },
+            {
+              "label": "backend id",
+              "value": null,
+              "mono": true
+            },
+            {
+              "label": "transcript",
+              "value": null,
+              "mono": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "why": "archived, hidden, hibernated, grouped, auto-titled, with an origin",
+      "session": "archived-hidden",
+      "readOnly": false,
+      "sections": [
+        {
+          "title": "run",
+          "rows": [
+            {
+              "label": "model",
+              "value": "claude-opus-4-6",
+              "mono": true,
+              "note": "change it from the header chip"
+            },
+            {
+              "label": "state",
+              "value": "closed",
+              "mono": true,
+              "note": "💤 asleep since 2h ago"
+            },
+            {
+              "label": "context",
+              "value": null,
+              "kind": "ctx",
+              "ctxTokens": 51200,
+              "ctxTotal": 1000000
+            },
+            {
+              "label": "process",
+              "mono": true,
+              "value": "not running"
+            },
+            {
+              "label": "snapshot",
+              "value": "1h ago"
+            },
+            {
+              "label": "last activity",
+              "value": "12s ago"
+            }
+          ]
+        },
+        {
+          "title": "conversation",
+          "rows": [
+            {
+              "label": "messages",
+              "value": "318",
+              "mono": true
+            },
+            {
+              "label": "started",
+              "value": "3d ago"
+            },
+            {
+              "label": "last message",
+              "value": "45s ago"
+            },
+            {
+              "label": "title",
+              "value": "nightly sweep (auto)"
+            },
+            {
+              "label": "group",
+              "value": "chores"
+            },
+            {
+              "label": "flags",
+              "value": "closed · hidden · origin:cron"
+            }
+          ]
+        },
+        {
+          "title": "where",
+          "rows": [
+            {
+              "label": "agent",
+              "value": "asst",
+              "mono": true,
+              "kind": "agent"
+            },
+            {
+              "label": "directory",
+              "value": "/Users/z/agents/asst",
+              "mono": true
+            },
+            {
+              "label": "backend id",
+              "value": "a1b2c3d4-0000-4000-8000-000000000001",
+              "mono": true
+            },
+            {
+              "label": "transcript",
+              "value": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+              "mono": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "why": "two outstanding background tasks, oldest first",
+      "session": "background",
+      "readOnly": false,
+      "sections": [
+        {
+          "title": "background",
+          "footer": "The turn ended; these did not. The session keeps its working dot until they finish, or for 30 minutes after the agent’s last message — whichever comes first.",
+          "rows": [
+            {
+              "label": "1h 28m",
+              "value": "pnpm build",
+              "mono": true,
+              "kind": "task"
+            },
+            {
+              "label": "1m 28s",
+              "value": "du -sh ~/Library",
+              "mono": true,
+              "kind": "task"
+            },
+            {
+              "label": "—",
+              "value": "background task",
+              "mono": true,
+              "kind": "task"
+            }
+          ]
+        },
+        {
+          "title": "run",
+          "rows": [
+            {
+              "label": "model",
+              "value": "claude-opus-4-6",
+              "mono": true,
+              "note": "change it from the header chip"
+            },
+            {
+              "label": "state",
+              "value": "idle",
+              "mono": true
+            },
+            {
+              "label": "context",
+              "value": null,
+              "kind": "ctx",
+              "ctxTokens": 51200,
+              "ctxTotal": 1000000
+            },
+            {
+              "label": "process",
+              "mono": true,
+              "value": "alive · pid 4711 · 812 MB"
+            },
+            {
+              "label": "snapshot",
+              "value": "1h ago"
+            },
+            {
+              "label": "last activity",
+              "value": "12s ago"
+            }
+          ]
+        },
+        {
+          "title": "conversation",
+          "rows": [
+            {
+              "label": "messages",
+              "value": "318",
+              "mono": true
+            },
+            {
+              "label": "started",
+              "value": "3d ago"
+            },
+            {
+              "label": "last message",
+              "value": "45s ago"
+            },
+            {
+              "label": "title",
+              "value": "the ios port"
+            },
+            {
+              "label": "group",
+              "value": null
+            },
+            {
+              "label": "flags",
+              "value": null
+            }
+          ]
+        },
+        {
+          "title": "where",
+          "rows": [
+            {
+              "label": "agent",
+              "value": "asst",
+              "mono": true,
+              "kind": "agent"
+            },
+            {
+              "label": "directory",
+              "value": "/Users/z/agents/asst",
+              "mono": true
+            },
+            {
+              "label": "backend id",
+              "value": "a1b2c3d4-0000-4000-8000-000000000001",
+              "mono": true
+            },
+            {
+              "label": "transcript",
+              "value": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+              "mono": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "why": "the gateway said how many but not which",
+      "session": "background-countonly",
+      "readOnly": false,
+      "sections": [
+        {
+          "title": "background",
+          "footer": "The turn ended; these did not. The session keeps its working dot until they finish, or for 30 minutes after the agent’s last message — whichever comes first.",
+          "rows": [
+            {
+              "label": "running",
+              "value": "1 task — this machine’s gateway has not said which"
+            }
+          ]
+        },
+        {
+          "title": "run",
+          "rows": [
+            {
+              "label": "model",
+              "value": "claude-opus-4-6",
+              "mono": true,
+              "note": "change it from the header chip"
+            },
+            {
+              "label": "state",
+              "value": "idle",
+              "mono": true
+            },
+            {
+              "label": "context",
+              "value": null,
+              "kind": "ctx",
+              "ctxTokens": 51200,
+              "ctxTotal": 1000000
+            },
+            {
+              "label": "process",
+              "mono": true,
+              "value": "alive · pid 4711 · 812 MB"
+            },
+            {
+              "label": "snapshot",
+              "value": "1h ago"
+            },
+            {
+              "label": "last activity",
+              "value": "12s ago"
+            }
+          ]
+        },
+        {
+          "title": "conversation",
+          "rows": [
+            {
+              "label": "messages",
+              "value": "318",
+              "mono": true
+            },
+            {
+              "label": "started",
+              "value": "3d ago"
+            },
+            {
+              "label": "last message",
+              "value": "45s ago"
+            },
+            {
+              "label": "title",
+              "value": "the ios port"
+            },
+            {
+              "label": "group",
+              "value": null
+            },
+            {
+              "label": "flags",
+              "value": null
+            }
+          ]
+        },
+        {
+          "title": "where",
+          "rows": [
+            {
+              "label": "agent",
+              "value": "asst",
+              "mono": true,
+              "kind": "agent"
+            },
+            {
+              "label": "directory",
+              "value": "/Users/z/agents/asst",
+              "mono": true
+            },
+            {
+              "label": "backend id",
+              "value": "a1b2c3d4-0000-4000-8000-000000000001",
+              "mono": true
+            },
+            {
+              "label": "transcript",
+              "value": "/Users/z/.claude/projects/asst/a1b2c3d4.jsonl",
+              "mono": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "labels": [
+    {
+      "cfg": "plain",
+      "id": "claude-sdk",
+      "label": "Claude Code",
+      "harness": "claude-sdk"
+    },
+    {
+      "cfg": "plain",
+      "id": "claude-tmux",
+      "label": "Claude Code (tmux)",
+      "harness": "claude-tmux"
+    },
+    {
+      "cfg": "plain",
+      "id": "codex-exec",
+      "label": "Codex",
+      "harness": "codex-exec"
+    },
+    {
+      "cfg": "plain",
+      "id": "pi-rpc",
+      "label": "pi",
+      "harness": "pi-rpc"
+    },
+    {
+      "cfg": "plain",
+      "id": "pi-home",
+      "label": "Claude Code",
+      "harness": "pi-home"
+    },
+    {
+      "cfg": "plain",
+      "id": "kimi-lan",
+      "label": "Claude Code",
+      "harness": "kimi-lan"
+    },
+    {
+      "cfg": "plain",
+      "id": "omp-rpc",
+      "label": "Claude Code",
+      "harness": "omp-rpc"
+    },
+    {
+      "cfg": "plain",
+      "id": "nope",
+      "label": "Claude Code",
+      "harness": "nope"
+    },
+    {
+      "cfg": "composed",
+      "id": "claude-sdk",
+      "label": "Claude Code",
+      "harness": "claude-sdk"
+    },
+    {
+      "cfg": "composed",
+      "id": "claude-tmux",
+      "label": "Claude Code (tmux)",
+      "harness": "claude-tmux"
+    },
+    {
+      "cfg": "composed",
+      "id": "codex-exec",
+      "label": "Codex",
+      "harness": "codex-exec"
+    },
+    {
+      "cfg": "composed",
+      "id": "pi-rpc",
+      "label": "pi",
+      "harness": "pi-rpc"
+    },
+    {
+      "cfg": "composed",
+      "id": "pi-home",
+      "label": "pi (home)",
+      "harness": "pi-rpc"
+    },
+    {
+      "cfg": "composed",
+      "id": "kimi-lan",
+      "label": "Kimi (LAN)",
+      "harness": "kimi-code"
+    },
+    {
+      "cfg": "composed",
+      "id": "omp-rpc",
+      "label": "Claude Code",
+      "harness": "pi-rpc"
+    },
+    {
+      "cfg": "composed",
+      "id": "nope",
+      "label": "Claude Code",
+      "harness": "nope"
+    },
+    {
+      "cfg": "retired",
+      "id": "claude-sdk",
+      "label": "Claude Code",
+      "harness": "claude-sdk"
+    },
+    {
+      "cfg": "retired",
+      "id": "claude-tmux",
+      "label": "Claude Code (tmux)",
+      "harness": "claude-tmux"
+    },
+    {
+      "cfg": "retired",
+      "id": "codex-exec",
+      "label": "Codex",
+      "harness": "codex-exec"
+    },
+    {
+      "cfg": "retired",
+      "id": "pi-rpc",
+      "label": "pi",
+      "harness": "pi-rpc"
+    },
+    {
+      "cfg": "retired",
+      "id": "pi-home",
+      "label": "pi (home)",
+      "harness": "pi-rpc"
+    },
+    {
+      "cfg": "retired",
+      "id": "kimi-lan",
+      "label": "Claude Code",
+      "harness": "kimi-lan"
+    },
+    {
+      "cfg": "retired",
+      "id": "omp-rpc",
+      "label": "Claude Code",
+      "harness": "pi-rpc"
+    },
+    {
+      "cfg": "retired",
+      "id": "nope",
+      "label": "Claude Code",
+      "harness": "nope"
+    },
+    {
+      "cfg": "null",
+      "id": "claude-sdk",
+      "label": "Claude Code",
+      "harness": "claude-sdk"
+    },
+    {
+      "cfg": "null",
+      "id": "claude-tmux",
+      "label": "Claude Code (tmux)",
+      "harness": "claude-tmux"
+    },
+    {
+      "cfg": "null",
+      "id": "codex-exec",
+      "label": "Codex",
+      "harness": "codex-exec"
+    },
+    {
+      "cfg": "null",
+      "id": "pi-rpc",
+      "label": "pi",
+      "harness": "pi-rpc"
+    },
+    {
+      "cfg": "null",
+      "id": "pi-home",
+      "label": "Claude Code",
+      "harness": "pi-home"
+    },
+    {
+      "cfg": "null",
+      "id": "kimi-lan",
+      "label": "Claude Code",
+      "harness": "kimi-lan"
+    },
+    {
+      "cfg": "null",
+      "id": "omp-rpc",
+      "label": "Claude Code",
+      "harness": "omp-rpc"
+    },
+    {
+      "cfg": "null",
+      "id": "nope",
+      "label": "Claude Code",
+      "harness": "nope"
+    }
+  ]
+}
