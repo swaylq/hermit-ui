@@ -13,6 +13,51 @@ import SwiftUI
 /// compile this for the Mac and write the layout to a PNG in a couple of
 /// seconds — no simulator, no signing, no server — which is the only way this
 /// gets LOOKED at often enough to stay honest.
+/// "This is being drawn into a PNG, not onto a screen."
+///
+/// `accessibilityReduceMotion` is read-only in the environment, so the still-frame
+/// renderers cannot borrow it; this is the knob they set instead.
+/// `tools/render-list.swift` turns it on, and without it ImageRenderer catches the
+/// pulse animation at its dim end — every pulsing dot lands at half strength and
+/// `tools/pixel-compare.sh` reports four wrong dots when nothing is wrong. The web
+/// harness kills `animate-pulse` with a CSS rule for exactly the same reason.
+private struct StillFrameKey: EnvironmentKey { static let defaultValue = false }
+
+extension EnvironmentValues {
+    var hermitStillFrame: Bool {
+        get { self[StillFrameKey.self] }
+        set { self[StillFrameKey.self] = newValue }
+    }
+}
+
+/// The web row's box, in CSS pixels, measured in Chrome off the component the
+/// dashboard ships rather than derived from SwiftUI's own line height.
+///
+/// The one that is not obvious is `titleLine`. Nothing in `session-row.tsx` sets
+/// a line height, so every line in the row inherits Tailwind preflight's
+/// `line-height: 1.5` on `<html>` — a 13px title draws into a 19.5pt line box and
+/// a 10px meta line into a 15pt one. SwiftUI left to itself gives those two lines
+/// 15.5 and 12.6, so the row came out 43 instead of 48.5: fine on the first row,
+/// a whole row out by the eleventh. `tools/pixel-compare.sh` is what caught it.
+///
+/// `gapBelow` is `space-y-px` on the `<ul>` — it belongs to the list, not to the
+/// row, but the row is the only piece both the collection view and
+/// `tools/render-list.sh` share, so it is carried as trailing padding OUTSIDE the
+/// rounded background. Same 1pt gap between two highlight boxes either way.
+enum RowMetrics {
+    static let titleLine: CGFloat = 19.5    // text-[13px] × line-height 1.5
+    static let metaLine: CGFloat = 15       // text-[10px] × line-height 1.5
+    static let lineGap: CGFloat = 2         // mt-0.5
+    static let padV: CGFloat = 6            // py-1.5
+    static let padH: CGFloat = 10           // px-2.5
+    static let gapBelow: CGFloat = 1        // space-y-px, on the <ul>
+    /// The rounded box itself: 48.5.
+    static var box: CGFloat { padV * 2 + titleLine + lineGap + metaLine }
+    /// Box plus the gap under it: 49.5. This is the list's row pitch, and what
+    /// `render-list.swift` sizes its canvas from.
+    static var pitch: CGFloat { box + gapBelow }
+}
+
 struct SessionRowView: View {
     let session: SessionListItem
     let status: StatusView
@@ -43,8 +88,8 @@ struct SessionRowView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {           // gap-2
             StatusDot(status: status)
-                .padding(.top, 6)                       // mt-1.5, against a 13px line
-            VStack(alignment: .leading, spacing: 2) {   // mt-0.5 on the second line
+                .padding(.top, 6)                       // mt-1.5
+            VStack(alignment: .leading, spacing: RowMetrics.lineGap) {   // mt-0.5
                 HStack(alignment: .firstTextBaseline, spacing: 6) {   // gap-1.5
                     Text(session.displayTitle)
                         .font(.system(size: 13, weight: active ? .medium : .regular))
@@ -64,6 +109,10 @@ struct SessionRowView: View {
                         .foregroundStyle(muted.opacity(0.6))
                         .fixedSize()
                 }
+                // The web's line box, not SwiftUI's. `.frame` centres the text
+                // in it, which is what CSS half-leading does — same baseline,
+                // same 19.5pt of row.
+                .frame(height: RowMetrics.titleLine)
                 HStack(spacing: 6) {
                     Text(session.agentName)
                         .lineLimit(1)
@@ -82,17 +131,22 @@ struct SessionRowView: View {
                 .font(.system(size: 10, design: .monospaced))
                 .monospacedDigit()
                 .foregroundStyle(muted.opacity(0.75))
+                .frame(height: RowMetrics.metaLine)
             }
         }
-        .padding(.horizontal, 10)                       // px-2.5
-        .padding(.vertical, 6)                          // py-1.5
+        .padding(.horizontal, RowMetrics.padH)          // px-2.5
+        .padding(.vertical, RowMetrics.padV)            // py-1.5
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             active ? WebContract.sidebarAccent.resolve(scheme) : .clear,
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)   // rounded-lg
+            // `.circular`, not `.continuous`: CSS `rounded-lg` is a plain 8px
+            // arc, and an iOS squircle at this radius reads as a visibly
+            // different corner next to the web's.
+            in: RoundedRectangle(cornerRadius: 8, style: .circular)      // rounded-lg
         )
         .opacity(rowOpacity)
         .contentShape(Rectangle())
+        .padding(.bottom, RowMetrics.gapBelow)          // space-y-px
     }
 }
 
@@ -105,6 +159,15 @@ struct SessionRowView: View {
 private struct StatusDot: View {
     let status: StatusView
     @State private var dim = false
+    /// Reduce Motion turns the pulse off and leaves the dot at full strength.
+    /// The web has no equivalent — Tailwind's `animate-pulse` runs whatever
+    /// `prefers-reduced-motion` says — so this is one of the few places the
+    /// native side deliberately does not copy the page: a dot that breathes
+    /// forever is what the setting exists to stop.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.hermitStillFrame) private var stillFrame
+
+    private var pulses: Bool { status.pulse && !reduceMotion && !stillFrame }
 
     var body: some View {
         let resolved = StatusPalette.dot(status.dot)
@@ -117,14 +180,14 @@ private struct StatusDot: View {
         }
         .frame(width: 6, height: 6)                     // h-1.5 w-1.5
         // Tailwind's `animate-pulse`: opacity 1 → 0.5 → 1 over 2s, forever.
-        .opacity(status.pulse && dim ? 0.5 : 1)
+        .opacity(pulses && dim ? 0.5 : 1)
         .animation(
-            status.pulse
+            pulses
                 ? .easeInOut(duration: 1).repeatForever(autoreverses: true)
                 : .default,
             value: dim
         )
-        .onAppear { if status.pulse { dim = true } }
+        .onAppear { if pulses { dim = true } }
     }
 }
 

@@ -179,7 +179,11 @@ async function main(): Promise<void> {
   :root { --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
           --font-geist-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace; }
   html, body { margin: 0; padding: 0; }
-  body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+  /* The window is a whole number of points and the eleven rows are not, so a
+     sliver of body shows under the frame; paint it the same colour the native
+     canvas paints it, or the differ reports a band nobody is testing. */
+  body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased;
+         background: var(--sidebar); }
   /* The comparison is of a still frame; a pulsing dot would diff against itself. */
   .animate-pulse { animation: none !important; }
   #frame { width: 320px; box-sizing: border-box; padding: 6px 8px;

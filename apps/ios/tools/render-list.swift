@@ -89,6 +89,9 @@ let SAMPLES: [(SessionListItem, Bool, Bool)] = {
 }()
 
 struct ListMock: View {
+    /// 6 + n × 49.5 + 6, rounded up to a whole point.
+    static let canvasHeight: CGFloat = ceil(12 + CGFloat(SAMPLES.count) * RowMetrics.pitch)
+
     let scheme: ColorScheme
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -102,9 +105,20 @@ struct ListMock: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .frame(width: 320, alignment: .leading)
+        // Sized from the row pitch rather than left to grow: the web half is
+        // drawn into a Chrome window whose height is this PNG's, in whole
+        // points, and 11 rows of 49.5 is not a whole number. Rounding up here
+        // means both canvases end in a strip of `--sidebar` instead of the
+        // differ being handed two different sizes.
+        .frame(width: 320, height: ListMock.canvasHeight, alignment: .topLeading)
         .background(WebContract.sidebar.resolve(scheme))
         .environment(\.colorScheme, scheme)
+        // A still frame cannot show a pulse, and ImageRenderer catches the
+        // animation wherever it happens to be — at its dim end, in practice, so
+        // every pulsing dot came out at half strength and the comparison
+        // reported four wrong dots. The web harness freezes `animate-pulse` for
+        // the same reason; this is the same instruction on this side.
+        .environment(\.hermitStillFrame, true)
     }
 }
 

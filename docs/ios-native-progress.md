@@ -333,7 +333,11 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       而在测试台里照抄一份行的 markup，等于拿移植去比另一份移植，永远自洽。
       两边吃同一份 `tools/fixtures/session-rows.json`（11 行，时间写成「多少秒之前」），
       并且共享同一个 `HERMIT_FIXTURE_NOW`，所以「12s ago」这一列不会因为两次截图差一秒而变红。
-      现状：**明暗两套都是 10.1% 的像素不一致**，热力图看得很清楚（见下方「下一项」）
+      **第 17 轮把行对齐了：10.10%/10.03% → 4.33%/4.29%**，而且不再逐行累积。
+      三件事：行高从 43 改成网页的 48.5（`RowMetrics`，见「踩过的坑」）、
+      行与行之间补上 `space-y-px` 的 1pt、选中行的圆角从 `.continuous` 换成 `.circular`。
+      顺带给 `render-web-list.sh` 加了 `HERMIT_MEASURE=1` —— 打印 Chrome 自己量出来的
+      每个元素的盒子，M6 每一屏都会先用它
 
 ## M4 — 时间线（最贵的一块）
 
@@ -394,26 +398,31 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**M3 做完了。** 像素比对跑起来的第一件事就是它该干的事：把两边的分歧摆出来。
+**第 17 轮把 M3 留下的对齐问题做完了**：10.10%/10.03% → **4.33%/4.29%**，而且误差不再
+逐行累积（热力图上十一行的点和文字全部各就各位）。剩下的 4.3% 逐项量过，**没有一条还是
+布局问题**，所以下一轮不要再在这块行上磨，去开 M4。
 
-**下一轮做这一条：原生行比网页行矮，每行差约 4pt，一路累积。**
-热力图（`shots/diff-session-list-dark.png`）里第一行几乎重合，之后每往下一行就错开一点，
-到第八行已经整整错开一行，第十一行在网页那半被挤出画布。所以不是某一行画错了，
-是**行高本身**：网页的行是 `px-2.5 py-1.5` 加两行文字的自然行高，`SessionRowView` 那边
-用的是自己的 padding 和 spacing。做法是照着热力图把行内的三个量对齐——垂直 padding、
-标题与副标题之间的间距、两行各自的行高——每改一次就重跑一次 `tools/pixel-compare.sh`，
-看 10.1% 往下走。这条是 M4 的前提：时间线的每一行也要这样对，先在这块最简单的行上把方法磨顺。
+剩下的 4.3% 是什么，量出来的：
 
-同一张图上还看得见两处，顺手一起收：
-- **选中行的圆角背景**，网页的高亮框比原生高一点、圆角也不同（`rounded-lg` = 8px）。
-- **月亮和图钉**两个 12pt 标记，网页是 lucide 的描边线条，原生画的是实心，粗细对不上。
+1. **字形本身**（大头）。两个光栅化器画同一个字，边缘就是不一样，中文尤其明显 ——
+   最差的几条 16px 带全部落在标题的中文上。这一项不会归零，也不该追。
+2. **等宽字体宽 3%**（副标题那行差 4.3pt，逐字累积）。原因见「踩过的坑」，
+   要 sway 决定打不打包一份字体。
+3. **`/50` 和 `/30` 两个半透明点各差一个通道 9–12/255**。
+   `bg-amber-400/50` 网页是 `(139,104,12)`、原生 `(139,104,0)`；`bg-emerald-500/30`
+   是 `(18,53,41)` 对 `(9,53,41)`。原因是 Tailwind v4 的 `/50` 走
+   `color-mix(in oklab, …, transparent)`，而 Swift 这边是 `.opacity(0.5)` 直接混。
+   **这条是真该修的**，而且修的地方明确：让 `gen-ios-contract.ts` 直接生成混好的颜色，
+   别让 Swift 侧再乘一次透明度 —— WebContract 存在的理由就是不让颜色在两边各算一遍。
+   一次生成器改动，不到半小时，下一轮可以顺手带上。
+4. **图钉/眼睛/月亮三个 12pt 标记**：网页是 lucide 的描边，原生是 SF Symbols 的实心，
+   粗细和轮廓都对不上；而且网页的 `self-center` 是在行盒里居中，原生这三个还挂在基线上，
+   差 1.4pt。面积极小，先记着。
 
-**这一轮踩到的最有价值的一件事，记在这里以免下一轮重犯**：第一次跑出来，「网关沉默了」那行
-原生是灰点 `stale`、网页是黄点 `working`。看着像移植错了，其实是**夹具少喂了一个输入** ——
-`sessionStatusView` 只有在「我们一直联系得上」的前提下才敢说 stale，而一个刚起的 Node 进程
-从没收到过任何回答，`dashboardReach()` 回 `{observedAt: 0}`＝「没有依据」，于是不判 stale；
-Swift 那边 `StatusOptions.observedAt` 默认 `nil`＝取 now＝联系正常。测试台现在会先补一小时
-的正常联系记录再渲染，两边就一致了。**教训**：两个实现比对不上时，先数一遍两边各自吃了几个输入。
+**所以下一轮开 M4 的第一条：消息块的真 schema。** 它是时间线一切渲染的前提，而且和这一轮
+的教训是同一条 —— 先把两边吃的东西定死，再谈画得像不像。服务端今天是带 `.passthrough()`
+的宽松联合（`routers/chat.ts:41-57`），客户端 `components/chat/lib.ts:28` 的 `Block`
+是全可选 + `any`；做成 zod 判别联合 + Swift `enum ContentBlock: Decodable`，网页端也换过去。
 
 **仍然欠着的（顺序不变，都不大）**：
 
@@ -427,6 +436,10 @@ Swift 那边 `StatusOptions.observedAt` 默认 `nil`＝取 now＝联系正常。
    会一直停着）；浅色模式下骨架屏几乎看不见，见「踩过的坑」。
 5. `chat.send` 的幂等键现在**可以真的驱动了**（本机有 Postgres 了）：起一个本机 dashboard、
    拿同一个 `clientId` 发两次，确认第二次拿回第一次那一行、且没有副作用。
+6. **M7 那条「装到模拟器上从头到尾走一遍」还一次都没做过。** 第 15 轮之后 App 的根换了，
+   这一轮又动了每一行的高度 —— 上一次在模拟器上看这个列表是第 15 轮的 `shots/20`、`21`。
+   行高改动只在 Mac 上的 ImageRenderer 里验证过，`UIHostingConfiguration` 里的
+   自适应高度是另一条代码路径，M4 开工前值得花一次 `bridge-fixture.sh` 确认它没变形。
 
 **部署纪律不变**：`20260905090000_chatmessage_client_id` 那个提交和
 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线，先上代码后跑迁移会让部署上的
@@ -434,9 +447,10 @@ Swift 那边 `StatusOptions.observedAt` 默认 `nil`＝取 now＝联系正常。
 连接串 `postgresql://znmacserver001@localhost:5432/hermit_dev`，**worktree 里没有 `.env`**，
 独立检出里跑 Prisma 要显式带上它。
 
-**要 sway 拍板的两件（都不急，不挡下一轮）**：左边缘归壳还是归网页侧栏（第 15 轮按
+**要 sway 拍板的三件（都不急，不挡下一轮）**：左边缘归壳还是归网页侧栏（第 15 轮按
 「同一个意图，原生的赢」处理了，开关是 `lib/native-bridge.ts` 的 `setNativeEdgeSwipe`）；
-以及 `/chat/terminal` 是不是就保持网页（M6 最后一条）。
+`/chat/terminal` 是不是就保持网页（M6 最后一条）；以及要不要为那 3% 的等宽字体宽度往包里
+塞一份字体（第 17 轮量出来的，见「踩过的坑」）。
 
 `ChatCache` 欠的两件仍然要等 M4 有调用方：`full`/`digest` 两层，以及真机上的 FTS5
 （`ChatCache.open` 建表时就 `CREATE VIRTUAL TABLE`，旧系统缺 FTS5 会在**开库**时炸，
@@ -685,6 +699,41 @@ Swift 那边 `StatusOptions.observedAt` 默认 `nil`＝取 now＝联系正常。
 - **`URL(fileURLToPath:)` 是 Node 的写法，Swift 是 `URL(fileURLWithPath:)`。**
   写夹具驱动脚本时手指比脑子快，编译器的报错还挺长。
 
+### 网页的行高来自 Tailwind preflight，不在这一行的任何 class 里（第 17 轮）
+
+`session-row.tsx` 通篇没有一个 `leading-*`，所以「`text-[13px]` 那行有多高」这个问题，
+答案不在这一行、也不在这个文件里：Tailwind preflight 往 `<html>` 上写了
+`line-height: 1.5`，于是 13px 的标题画进 19.5pt 的行盒、10px 的副标题画进 15pt 的，
+一行连着 padding 是 `6 + 19.5 + 2 + 15 + 6 = 48.5`。SwiftUI 自己算是 15.5 和 12.6，
+行高 43 —— 第一行几乎重合，到第十一行整整错开一行。
+`.frame(height:)` 把文字在行盒里居中，和 CSS 的 half-leading 是同一件事，基线也就对上了。
+**判据不是读 class，是问浏览器**：`HERMIT_MEASURE=1 tools/render-web-list.sh` 会把
+`#frame` 底下每个元素的 `getBoundingClientRect()` 打出来。M6 每一屏都从这一步开始，
+自己推 CSS 的行高等于拿一份猜测去比另一份移植。
+
+### ImageRenderer 会把脉动的点定格在它最暗的那一帧（第 17 轮）
+
+`animate-pulse` 那个点在 `render-list.sh` 里画出来是**半透明**的：`onAppear` 把 `dim`
+置真，ImageRenderer 拿到的是动画的终态，于是四个会脉动的点全部只有 50% 强度 ——
+比对报四个点不一致，而屏幕上什么毛病都没有。网页那半早就用一条
+`.animate-pulse { animation: none !important; }` 掐掉了动画，原生这半漏了同一件事。
+**顺带一个坑**：`accessibilityReduceMotion` 在 environment 里是只读的，
+`.environment(\.accessibilityReduceMotion, true)` 直接编译不过
+（`cannot convert KeyPath to WritableKeyPath`），所以另开了一个
+`\.hermitStillFrame`；产品里 `StatusDot` 同时认这两个。
+改完四个满色的点逐字节相同（amber 400 = (255,185,0)、sky 400、rose 500、emerald 500）。
+
+### SwiftUI 的 monospaced 系统字体比浏览器的等宽字体宽 3%（第 17 轮）
+
+副标题那行「sway · background · 1h 28m」原生比网页宽 4.3pt，一开始以为是 SF 的自动字距，
+`.tracking(0)` 加上去**一个像素都没变**（69428 → 69428，完全相同）。真正的原因量出来是字面
+的：`NSFont.monospacedSystemFont(ofSize: 10)` 是 `.AppleSystemUIFontMonospaced-Regular`，
+`m` 的步进 **6.1816**；浏览器拿到的是 SF Mono，步进 6.0。22 个字乘 0.18 就是那 4pt。
+**这不是能改的数字**，除非往包里塞一份字体。顺带查到的事实：dashboard 的
+`--font-mono: var(--font-geist-mono)` 其实**从来没有定义过**（`layout.tsx` 只加载了
+Geist sans），所以真机上那一列用的是 WKWebView 的默认等宽字体。要不要为这 3% 打包一份
+字体，是 sway 的决定，不是这一轮能定的。
+
 ### 两个实现判得不一样，第一个抓到的却是夹具少喂了一个输入（第 16 轮）
 
 像素比对第一次跑出来，「网关沉默了」那行原生是灰点 `stale`、网页是黄点 `working`。
@@ -892,6 +941,7 @@ Oklab→线性 sRGB 那一步会塌成三个通道都等于 L³，Display P3 和
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 17 | 2026-09-05 | **把第 16 轮量出来的行错位修掉：10.10%/10.03% → 4.33%/4.29%，误差不再逐行累积。** 根因是网页的行高压根不在这一行的 class 里（Tailwind preflight 的 `line-height: 1.5`），所以 `SessionRowView` 新增 `RowMetrics`（`titleLine` 19.5 / `metaLine` 15 / `lineGap` 2 / `padV` 6 / `box` 48.5 / `pitch` 49.5），两行各自 `.frame(height:)` 到网页的行盒；补上 `space-y-px` 的 1pt（做成行自己的下外边距，所以列表和 `render-list.sh` 共用一份）；选中行圆角 `.continuous` → `.circular`。`StatusDot` 认 Reduce Motion，另加一个 `\.hermitStillFrame` 环境值给静帧渲染器（`accessibilityReduceMotion` 只读，设不了）。`render-list.swift` 的画布改成按行距算的整数高度，`render-session-rows.tsx` 把 body 也刷成 `--sidebar`，两张图因此同尺寸。新增 `HERMIT_MEASURE=1 tools/render-web-list.sh`：打印 Chrome 自己量的每个元素盒子 | `xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0 无输出**（先 `prisma generate`）；`tools/pixel-compare.sh` 跑了四遍，**10.10%/10.03% → 4.33%/4.29%**，热力图**亲眼看过**：十一行的点和文字全部各就各位，不再逐行错开，浅色那张原生渲染也逐行看过。四个满色的状态点改完**逐字节相同**（`(255,185,0)`/`(0,188,255)`/`(255,32,86)`/`(0,188,125)`，改之前脉动的三个只有 50% 强度）。剩下的 4.3% 逐项量过并写进「下一项」：字形本身、等宽字体宽 3%（`.AppleSystemUIFontMonospaced` 步进 6.1816 对浏览器的 6.0，**`.tracking(0)` 试过，一个像素都没变**）、`/50` `/30` 两个点各差一个通道。**没起过模拟器**，收工 `simctl list devices booted` 为空、无残留 Chrome |
 | 16 | 2026-09-05 | **M3 收官：像素比对流程。** `tools/pixel-compare.sh` 一条命令 33 秒：`render-list.sh` 画原生、新增的 `render-web-list.sh` 画网页、新增的 `tools/png-diff.swift` 逐像素比，热力图落 `shots/`。网页那半是新增的 `apps/dashboard/scripts/render-session-rows.tsx`：`react-dom/server` 渲染**真的那个行组件**＋`@tailwindcss/postcss` 编出的 CSS 内联，再用 `/Applications` 的 Chrome `--headless=new` 截图；为此把 `SessionRow` 从 `recent-lists.tsx` 抬进 `components/sidebar/session-row.tsx`（原文件 import 时就要 trpc 客户端和 Next 路由 hook）。两边吃同一份新增的 `tools/fixtures/session-rows.json`（11 行，时间写成「多少秒之前」），共享一个 `HERMIT_FIXTURE_NOW`；`render-list.swift` 的 SAMPLES 因此从写死改成读这份夹具 | `xcodegen` + `swiftc -typecheck` **exit 0**；dashboard `tsc --noEmit` **0 错**；`tools/pixel-compare.sh` **真跑通了两遍**，明暗各 960x1455、**10.10% / 10.03% 像素不一致**，热力图**亲眼看过**：第一行几乎重合、之后每行错开约 4pt 一路累积，到第八行整整错开一行 —— 结论是原生行比网页行矮，已写进「下一项」。过程中比对**自己先抓到一个夹具 bug**（网页那半从没联系过 dashboard，`dashboardReach()` 回 0＝「没有依据」，于是不判 stale，而 Swift 默认联系正常）：补上一小时正常联系记录后 11 行状态逐行一致，已逐条核对（working/background/unread/ready/starting/restarting/stale/asleep/closed/ready/ready）。`png-diff` 第一版写出的是一整张白图，改成直写字节后重跑才看见上面那些结论。**没起过模拟器**，收工 `simctl list devices booted` 为空、无残留 Chrome |
 | 15 | 2026-09-05 | **M3 倒数第二条：会话列表成了前门。** `SceneDelegate` 的根从 `WebViewController` 换成 `SessionListViewController`，网页改成按需 push；网页那一份实例由 scene 强持有（栈只是借走，见「踩过的坑」），启动时就 `loadViewIfNeeded()` 预热。keyring 为空时冷启动仍然无动画直接进网页（登录闸门和换服务器都在那边）。新增 `Hermit/SessionListCache.swift`：`lib/session-list-cache.ts` 的移植，Application Support 里每个 keyring 条目一个 JSON、20 秒节流、空列表读回来当没有，`SessionListItem` 因此加了 `Encodable`、`HermitAPI` 加了与 `decoder` 严格互逆的 `encoder`（带毫秒）。`AppDelegate` 不再持有 `WebViewController` 而是一个 `AppShell`（token 不动屏幕、path 要把网页带到前面）。列表加 `New chat`（`/chat?new=1`）和点开即高亮；返回靠边缘手势（要自己开，见「踩过的坑」）。假页面加一个「同 id、坏 token」的 keyring 按钮 | `xcodegen` + `swiftc -typecheck` **exit 0**；**模拟器上跑过**：五条 UI 用例（新增 `testTheSessionListIsTheFrontDoor`，其余四条因为换根全部改写）**163 秒全过**，加行点击覆盖后新用例单独重跑 42 秒也过；**反证做过**：把读快照那行 `if false` 掉，用例正好卡在「the front door drew nothing — the cold-start snapshot never painted」，恢复后通过。`shots/20`（冷启动只有快照、拉取被 401 挡住）和 `shots/21`（点开一行再返回，首行高亮、状态色齐全）两张亲眼看过。dashboard 未改动，未跑它的 typecheck。收工 `simctl list devices booted` 为空 |
 | 14 | 2026-09-05 | **前门那一条的两个前提**：会话列表开始自己刷新，并且只在它在屏幕上的时候刷新 —— `viewWillAppear` 起 5 秒定时器（`tolerance=1`，照抄网页的 `refetchInterval: 5_000`）、`viewWillDisappear` 停、`didEnterBackground` 停、`willEnterForeground` 立刻拉一次再起（网页那半是 React Query 的 `refetchIntervalInBackground` 默认 false）。轮询逼出一个只手动刷新时看不见的 bug：diffable 的标识符从行值换成会话 id，变了的行 `reconfigureItems` 原地重画，否则每 5 秒整屏删了重插。在飞的请求不会被轮询挤掉，下拉刷新/回前台才顶掉它；**轮询失败不动已经画好的列表**。另加 `Hermit/SessionListSkeleton.swift`（网页那六条 `h-8 rounded-md bg-sidebar-accent/40 animate-pulse`，纯 SwiftUI，`render-list.sh` 多出两张图），空态/错误文案改成网页的排版和原句。假服务端多一个「这是第几次回答」的计数行 | `xcodegen` + `swiftc -typecheck` **exit 0**；**模拟器上跑过**：新用例 `testTheNativeListRefreshesItselfWhileYouWatch` 36 秒过（不碰屏幕等到计数 +2 = 定时器在跑；退回网页等 12 秒再进来，计数只涨 1 = 定时器停了），旧的 `testTheNativeListDrawsTheActiveMachinesSessions` 回归重跑也过（改了共享夹具，必须回归），两条合计 68 秒；**反证做过**：`startPolling` 改成直接 return，用例正好卡在「the list never refetched by itself」，恢复后再跑通过。`shots/19` 亲眼看过（11 行画全、最后一行 `poll #6`、各状态点色不变），`session-list-loading-{dark,light}` 两张也看过（浅色那张几乎看不见，和网页一致，见「踩过的坑」）。dashboard 未改动，未跑它的 typecheck。收工 `simctl list devices booted` 为空 |
