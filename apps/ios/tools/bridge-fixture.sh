@@ -32,6 +32,7 @@ TESTS=("$@")
 [ ${#TESTS[@]} -gt 0 ] || TESTS=(
   testTheKeychainKeepsTheKeyring
   testTheNativeListDrawsTheActiveMachinesSessions
+  testTheNativeListRefreshesItselfWhileYouWatch
   testThePageCanProposeAnotherServer
 )
 

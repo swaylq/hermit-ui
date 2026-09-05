@@ -75,6 +75,21 @@ struct ListMock: View {
     }
 }
 
+/// The screen before the first answer arrives. Its six bars are `recent-lists.tsx`'s
+/// own markup, so this is where a wrong height or a wrong shade of
+/// `--sidebar-accent` gets caught — on a loopback fixture the state is over
+/// before a screenshot can be taken.
+struct SkeletonMock: View {
+    let scheme: ColorScheme
+    var body: some View {
+        SessionListSkeleton()
+            .padding(.horizontal, 8)
+            .frame(width: 320, height: 232, alignment: .top)
+            .background(WebContract.sidebar.resolve(scheme))
+            .environment(\.colorScheme, scheme)
+    }
+}
+
 @MainActor func shoot(_ view: some View, _ name: String, _ outDir: String) {
     let r = ImageRenderer(content: view)
     r.scale = 3
@@ -91,6 +106,8 @@ enum Main {
         let outDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "."
         shoot(ListMock(scheme: .dark), "session-list-dark", outDir)
         shoot(ListMock(scheme: .light), "session-list-light", outDir)
+        shoot(SkeletonMock(scheme: .dark), "session-list-loading-dark", outDir)
+        shoot(SkeletonMock(scheme: .light), "session-list-loading-light", outDir)
         // What each row was judged to be, so a wrong dot can be named rather
         // than squinted at.
         for (s, _, _) in SAMPLES {

@@ -375,7 +375,73 @@ final class SmokeTests: XCTestCase {
         shoot("18-session-list-signed-out")
     }
 
+    /// The list keeps itself fresh — and stops the moment it is not on screen.
+    ///
+    /// Neither half shows up in a screenshot: a list that polls every five
+    /// seconds and a list frozen since you opened it draw the same pixels, and a
+    /// timer still firing behind the web view is invisible by definition. So the
+    /// fixture numbers its answers and the last row prints the number, which
+    /// makes both halves assertable — how many times the shell asked, and when
+    /// it stopped asking.
+    func testTheNativeListRefreshesItselfWhileYouWatch() throws {
+        let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
+        guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
+
+        app.launchArguments = ["-hermitOrigin", fixture]
+        app.launch()
+        XCTAssertTrue(
+            app.webViews.buttons["keychain.set — two machines"].waitForExistence(timeout: 30),
+            "the fixture page never loaded — is the fixture server still up?")
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer")
+        app.webViews.buttons["keychain.set — two machines"].tap()
+        XCTAssertTrue(fixtureSays("keyring ok"), "the shell refused to store the keyring")
+
+        openSessionList()
+        XCTAssertTrue(screenSays("poll #"), "the list never drew the fixture's counter row")
+        guard let first = pollNumber() else { return XCTFail("could not read the counter row") }
+
+        // Nothing is touched from here on. Two more answers on their own is the
+        // 5s timer, and only the 5s timer.
+        XCTAssertTrue(
+            screenSays("poll #\(first + 2)", timeout: 25),
+            "the list never refetched by itself — the poll is not running")
+        shoot("19-session-list-polling")
+
+        // Off screen it goes quiet. Twelve seconds is two polls' worth; coming
+        // back is worth exactly one fetch, so a third says the timer kept firing
+        // behind the web view. (Two is allowed: a poll already on the wire when
+        // the screen went away still reaches the server, whatever the shell then
+        // does with the answer.)
+        let before = pollNumber() ?? 0
+        popToPage()
+        Thread.sleep(forTimeInterval: 12)
+        openSessionList()
+        XCTAssertTrue(screenSays("poll #"), "the counter row did not come back")
+        let after = pollNumber() ?? 0
+        XCTAssertGreaterThan(after, before, "coming back to the list did not refetch at all")
+        XCTAssertLessThanOrEqual(
+            after - before, 2,
+            "the list kept polling while it was off screen (#\(before) → #\(after) over 12s)")
+    }
+
     // MARK: - helpers
+
+    /// The number the fixture stamped on the answer this screen is showing.
+    ///
+    /// Scans labels rather than asking for a text element, for the same reason
+    /// `screenSays` does — a `UIHostingConfiguration` row may come back as one
+    /// merged element or as its separate texts.
+    private func pollNumber() -> Int? {
+        let match = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'poll #'"))
+        for i in 0..<match.count {
+            let label = match.element(boundBy: i).label
+            guard let r = label.range(of: "poll #[0-9]+", options: .regularExpression) else { continue }
+            return Int(label[r].dropFirst("poll #".count))
+        }
+        return nil
+    }
 
     /// `hermit://sessions`, opened through the system rather than a back door
     /// built for the test. The list ships behind a URL before it ships as the

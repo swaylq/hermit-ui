@@ -288,6 +288,22 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       会把假页面存的两条 keyring 装进 Keychain、指定第二条为活动、开 `hermit://sessions`，
       而假服务端**按 `x-asst-key` 给不同的答案**，所以第一行的标题就是壳挑中的那台机器。
       三张截图 `shots/16..18`
+- [x] **自己刷新，且只在你看着它的时候刷新** —— 第 14 轮，前门那一条的前提。
+      网页侧栏是 `refetchInterval: 5_000`，并且标签页切走就停（React Query 的
+      `refetchIntervalInBackground` 默认 false）；两半都照抄了：`viewWillAppear` 起
+      5 秒定时器（`tolerance = 1`）、`viewWillDisappear` 停，
+      `didEnterBackground` 停 / `willEnterForeground` 立刻拉一次再起。
+      **轮询把一个原来看不见的 bug 逼出来了**：diffable 的标识符原来是行值本身，
+      而 `SessionListItem` 对所有字段 `Hashable`，所以「同一条会话、晚一秒」是另一行 ——
+      每 5 秒整列表删了重插。改成按 `id` 做标识符、变了的行 `reconfigureItems` 原地重画。
+      在飞的请求不会被轮询挤掉（否则超过 5 秒的请求永远落不了地），
+      但下拉刷新和回前台会顶掉它；**轮询失败不动屏幕上已有的列表**，和网页一样
+- [x] **首屏的等待指示** —— 第 14 轮，同一提交。`Hermit/SessionListSkeleton.swift`
+      就是 `recent-lists.tsx` 那六条 `h-8 rounded-md bg-sidebar-accent/40 animate-pulse`，
+      纯 SwiftUI 所以 `tools/render-list.sh` 能画（多出两张 `session-list-loading-*`）。
+      空态和错误文案改成网页的排版（`px-2 py-2 text-xs text-muted-foreground`、
+      左对齐贴在标题下，不是居中），空列表的句子也换成网页原文
+      `no chats yet — start a New chat.`
 - [ ] 冷启动先画 App Group 里的本地快照，同时后台预热 WebView
       —— 这一条才是「列表变成前门」：`SceneDelegate` 的根从 `WebViewController`
       换成 `SessionListViewController`，随之而来的是冷启动、离线、深链接、
@@ -365,34 +381,39 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
    **这个提交和 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线。**
    索引是全表扫，建的时候挡写不挡读，挑个没人聊天的时候。
 
-**第 13 轮把列表在模拟器上跑通了**，所以上一轮那条「让列表真的在模拟器上跑一次」不再是待办。
-`keychain.setActive` 的往返、`KeyStore.active()` 挑中哪一条、`UIHostingConfiguration`
-的行高在真 UIKit 里对不对，三件都在 iPhone 17 上验过，截图在 `shots/16..18`。
+**第 14 轮把「列表变成前门」的两个前提做完了**：5 秒轮询（含离开屏幕就停）和首屏骨架屏，
+都在模拟器上驱动过，反证也做过。所以下一轮那一条已经没有拦路的了。
 
-**下一轮建议做这两条：**
+**下一轮建议做这两条中的一条，别两条一起：**
 
-1. **像素比对流程**（M3 最后一条）。原来那句「缺网页那一半，同视口截一张侧栏」
-   低估了工作量：这台机器上**根本没有截网页的路**（详见「踩过的坑」最后一条 ——
-   仓库里没有 playwright/puppeteer/storybook/jsdom，`pnpm dev` 要连 Postgres）。
-   所以这一条要先选一条路，三个候选：
+1. **列表变成前门**（M3 倒数第二条，推荐先做这条）：`SceneDelegate` 的根从
+   `WebViewController` 换成 `SessionListViewController`，冷启动先画 `ChatCache` 里的
+   本地快照、同时后台预热 WebView。这一条会把冷启动、离线、深链接、`AppDelegate.attach`
+   全交给列表，所以**要单独一轮**。三件事先想清楚再动手：
+   **(a)** 本地快照存哪儿 —— 网页侧栏用 `placeholderData: () => readCachedSessions()`
+   在第一帧就画上一次的列表，Swift 侧对应的是 `ChatCache` 里加一张 sessions 快照表
+   （`ChatCache` 今天已经有 `sessions` 记账，但没有整行的 JSON）；
+   **(b)** 列表当根之后，`hermit://session/<id>` 和 Live Activity 点击要先 push 网页再
+   `openDeepLink`，`SceneDelegate.web` 那个「在栈里找」的访问器会返回 nil，得改成「没有就建一个」；
+   **(c)** 返回手势：根视图没有返回，网页那一屏要能回到列表，今天是靠导航栏的返回键。
+2. **像素比对流程**（M3 最后一条）。路线还没选，三个候选原样保留在下面 ——
+   它比上面那条更容易做成半截，挑它就要留够时间：
    **(a)** 加 playwright + 一个静态页面，用 `react-dom/server` 把**真的**
    `components/sidebar/recent-lists.tsx` 连同构建出来的 Tailwind CSS 渲染成 HTML，
    再用 Chrome 截图 —— 不需要数据库，也不会出现第二份行视图实现，代价是要确认
    那个组件能脱离 hooks/context 静态渲染；
    **(b)** 拿这台机器现成的 Chrome 去截线上的 `hermit-preview.zhinan.tech` ——
    一天就能做，但拍到的是**真实数据**，和夹具行对不上，只能并排看、不能算像素差；
-   **(c)** 干脆不比网页，改成比 `tools/render-list.sh`（Mac 端 5 秒）和模拟器截图，
-   把「Mac 端的图能不能代表手机」这件事钉死 —— 值得做，但它不是这一条要的东西。
+   **(c)** 干脆不比网页，改成比 `tools/render-list.sh`（Mac 端 5 秒）和模拟器截图。
    倾向 (a)。**不管选哪条，两边都必须吃 `tools/bridge-fixture/server.py` 里那十行夹具**，
    否则比的是两份不同的数据。第 9 轮那个 25 行的 PNG 差分器还没落成文件，
    落成 `tools/png-diff.swift` 比重写便宜。
-2. **列表变成前门**（M3 倒数第二条）：`SceneDelegate` 的根从 `WebViewController`
-   换成 `SessionListViewController`，冷启动先画本地快照、同时后台预热 WebView。
-   这一条会把冷启动、离线、深链接、`AppDelegate.attach` 全交给列表，
-   所以**它要单独一轮**，别和上面那条挤在一起。做之前先补两件今天缺的：
-   **首次加载没有任何等待指示**（loopback 是瞬间返回的，所以夹具看不出来；
-   真网络上是最多 30 秒的空白屏），以及 `viewWillAppear` 之外**没有轮询**
-   （网页侧栏是 5 秒一次，这是列表当前和网页最明显的行为差别）。
+
+**顺手能做、不值得单独占一轮的两件**（都是第 14 轮量出来的）：
+相对时间不会自己走 —— 只有服务端字段变了的行才会 `reconfigureItems`，
+一条彻底静止的会话上「3m ago」会一直停在那儿（网页有同样的性质，React Query
+结构共享之后也不重渲染），要么每分钟整体 reconfigure 一次，要么认了并写进文档；
+以及浅色模式下的骨架屏几乎看不见，见「踩过的坑」。
 
 `ChatCache` 还欠两件事，都要等有调用方才做得了（M3/M4）：
 **（a）`full` / `digest` 两层**（今天只有 `text` 这一层散文 + `sessions` 记账），
@@ -647,6 +668,35 @@ libsqlite3 上跑过**，M7 装到模拟器/真机那一轮要亲眼确认一次
 - **`URL(fileURLToPath:)` 是 Node 的写法，Swift 是 `URL(fileURLWithPath:)`。**
   写夹具驱动脚本时手指比脑子快，编译器的报错还挺长。
 
+### diffable 的标识符用行值，开始轮询之后整个列表每 5 秒闪一次（第 14 轮）
+
+`UICollectionViewDiffableDataSource<Section, SessionListItem>` 看着很自然，因为
+`SessionListItem` 是 `Hashable`。但它是**对所有字段**合成的 `Hashable`，而
+`snapshotAt` 这种字段每次 poll 都在动 —— 于是「同一条会话、晚一秒」在快照里是一条
+全新的行：旧的删、新的插，整屏每 5 秒重来一遍。**只手动刷新的时候完全看不出来**，
+第 12、13 两轮就是这么过去的。标识符要用 `String`（会话 id），行数据放一张
+`[String: SessionListItem]`，内容变了的行走 `snapshot.reconfigureItems`。
+配套的坑：`reconfigureItems` 只能点名**已经在数据源里**的行，新插入的行不能进那个数组，
+所以过滤条件是「上一份里有，且和这一份不一样」。
+
+### 一个不会自己变的假服务端，证明不了任何「自动」的行为（第 14 轮）
+
+轮询这件事在截图里是隐形的：轮询的列表和开屏之后就冻住的列表画出来一模一样。
+所以 `tools/bridge-fixture/server.py` 加了一个进程内计数器，把「这是第几次回答」
+写进最后一行的标题（`poll #6`），UI 用例就能读那个数字：先读一次，什么都不碰，
+断言 `+2` 出现 —— 那只能是定时器。**离开屏幕要停**同样能测：退回网页等 12 秒再进来，
+计数只许涨 1（允许 2，一个已经在路上的请求照样会到服务端）；如果定时器还在后台跑，
+12 秒是两三次。反证做过：把 `startPolling` 改成直接 return，用例正好卡在
+「the list never refetched by itself」那一条。
+
+### 浅色模式下，网页自己的骨架屏几乎是看不见的（第 14 轮，请 sway 拍板）
+
+`--sidebar` 是 `oklch(0.985)`、`--sidebar-accent` 是 `oklch(0.97)`，差 1.5%，
+再乘 `/40` 的透明度，浅色下六条骨架和背景几乎同色（`shots/session-list-loading-light.png`
+就是这样，深色那张很清楚）。**这不是移植错了，网页就长这样** ——
+所以按「静态呈现和网页一致」这条目标，我没有偷偷调深它。
+真要改，那是**网页和 iOS 一起改**的事，不是在 Swift 里挑一个更好看的灰。
+
 ### `wt.sh land` 会把 worktree 里的截图一起删掉（第 13 轮，真踩到了）
 
 `land` 最后一步是 `git worktree remove`，它删的是整个目录 —— 包括 `apps/ios/shots/`，
@@ -737,6 +787,7 @@ Oklab→线性 sRGB 那一步会塌成三个通道都等于 L³，Display P3 和
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
+| 14 | 2026-09-05 | **前门那一条的两个前提**：会话列表开始自己刷新，并且只在它在屏幕上的时候刷新 —— `viewWillAppear` 起 5 秒定时器（`tolerance=1`，照抄网页的 `refetchInterval: 5_000`）、`viewWillDisappear` 停、`didEnterBackground` 停、`willEnterForeground` 立刻拉一次再起（网页那半是 React Query 的 `refetchIntervalInBackground` 默认 false）。轮询逼出一个只手动刷新时看不见的 bug：diffable 的标识符从行值换成会话 id，变了的行 `reconfigureItems` 原地重画，否则每 5 秒整屏删了重插。在飞的请求不会被轮询挤掉，下拉刷新/回前台才顶掉它；**轮询失败不动已经画好的列表**。另加 `Hermit/SessionListSkeleton.swift`（网页那六条 `h-8 rounded-md bg-sidebar-accent/40 animate-pulse`，纯 SwiftUI，`render-list.sh` 多出两张图），空态/错误文案改成网页的排版和原句。假服务端多一个「这是第几次回答」的计数行 | `xcodegen` + `swiftc -typecheck` **exit 0**；**模拟器上跑过**：新用例 `testTheNativeListRefreshesItselfWhileYouWatch` 36 秒过（不碰屏幕等到计数 +2 = 定时器在跑；退回网页等 12 秒再进来，计数只涨 1 = 定时器停了），旧的 `testTheNativeListDrawsTheActiveMachinesSessions` 回归重跑也过（改了共享夹具，必须回归），两条合计 68 秒；**反证做过**：`startPolling` 改成直接 return，用例正好卡在「the list never refetched by itself」，恢复后再跑通过。`shots/19` 亲眼看过（11 行画全、最后一行 `poll #6`、各状态点色不变），`session-list-loading-{dark,light}` 两张也看过（浅色那张几乎看不见，和网页一致，见「踩过的坑」）。dashboard 未改动，未跑它的 typecheck。收工 `simctl list devices booted` 为空 |
 | 13 | 2026-09-05 | **上一轮那两条终于是真的了**：会话列表第一次在模拟器上跑起来。`tools/bridge-fixture/` 从 `python3 -m http.server` 换成自己的 `server.py`——静态页面照旧，外加一条 `chat.listSessions`，而且**按 `x-asst-key` 给不同答案**（`key-one`→第一行标题写 `active key: m_one`，`key-two`→`m_two`，认不出的 key→401 的 tRPC 错误形状）。假页面加三个按钮（存两条 keyring、把活动项指到 m_two / m_one），`ask()` 多一个只影响显示的 `label` 参数。新 UI 用例 `testTheNativeListDrawsTheActiveMachinesSessions`：装 keyring → 指定活动项 → `XCUIDevice.shared.system.open("hermit://sessions")` → 断言第一行 → 退回去换一台机器 → 再开一次 → 登出看空态。**没有为测试给产品开后门**，走的就是 `SceneDelegate` 那个 URL。夹具的日期全部按请求现算（见「踩过的坑」） | `xcodegen` + `swiftc -typecheck` **exit 0**；**模拟器上跑过**：新用例 31 秒通过，旧的 `testTheKeychainKeepsTheKeyring` + `testThePageCanProposeAnotherServer` 回归重跑 41 秒也过（改了共享夹具，必须回归）；`shots/16..18` 三张**逐张亲眼看过**——十行状态各自的点色与透明度对得上（amber 脉动 / amber 暗 / rose / emerald / zinc stale / sky starting / emerald-30 asleep / zinc closed）、空标题掉到 preview（`帮我看看这个构建为什么挂了`）、长中文标题截断、月亮与眼睛两个 12pt 标记、归档与隐藏的整行透明度、等宽副标题；**换活动项之后第一行从 `m_two` 变成 `m_one`**，证明 key 是每次请求现读的、`list[0]` 兜底没有抢答；空 keyring 的那张写着「No machine key on this device yet.」。dashboard 未改动，未跑它的 typecheck。收工 `simctl list devices booted` 为空 |
 | 12 | 2026-09-05 | **M3 第三、四条**：原生会话列表。`Hermit/SessionListItem.swift`（`chat.listSessions` 的行 + `relTime`/未读/recency 三个纯函数移植）、`Hermit/SessionRowView.swift`（纯 SwiftUI 行视图，逐个 Tailwind 类当 CSS 像素读）、`Hermit/SessionListViewController.swift`（`UICollectionView` list + `UIHostingConfiguration`，一个 `chat.listSessions`、不重排、下拉刷新、失败把错误原文写在屏幕上）。**红线跨过去了**：`Hermit/KeyStore.swift` 是全 App 唯一打开 keyring 的地方，`HermitAPI`/`HermitStream` 仍只收闭包；11 处红线文字同一提交改掉。方法表加 `keychain.setActive`（网页 `setActiveMachine`/`addScopedMachine`/`hydrateKeyring` 推过来，存 `<origin>#active`），解决了上一轮记下的「哪一条是活动的」。生成器加 `readThemeVar` + `ThemeColor`，把 `--sidebar`/`--sidebar-foreground`/`--sidebar-accent`/`--muted-foreground` 的明暗两套带过来。新增 `tools/render-list.sh`（Mac 端 5 秒出图，不用模拟器）| `xcodegen` + `swiftc -typecheck` **exit 0**（故意写错的临时文件反证过它真在检查）；`tools/api-fixture.sh` 加了一条**服务端真实形状**的 `chat.listSessions`，两行都逐字段核对过（空标题掉到 agentName、无消息的会话 recency 退回 startedAt、未读判定、dot=`bg-amber-400` / `bg-emerald-500/30`），十一个未声明字段被忽略而不是解不出来；`ios-contract.test.ts` **11/11**（新增 4 条），**反证做过**：把行视图里的颜色改回字面量，只红了「行视图仍从 contract 读颜色」那一条，恢复后全绿；dashboard `tsc --noEmit` **0 错**；`tools/render-list.sh` 出图，**明暗两张都亲眼看过**——九种状态色、`/50` 与 `/30` 的透明度、标题截断、图钉/眼睛/月亮三个 12pt 标记、归档与隐藏的整行透明度都对；`render-cards.sh` 回归重跑没退化。**没起过模拟器**，收工 `simctl list devices booted` 为空 |
 | 11 | 2026-09-05 | M3 第一条 + 第二条的前提：`SceneDelegate` 换成 `UINavigationController` 当根（栈里仍只有 `WebViewController`，导航栏隐藏），三处 `rootViewController as? WebViewController` 强转合并成一个「在栈里找」的访问器；`Hermit/SessionStatus.swift`（441 行）把 `lib/session-status.ts` 的判定阶梯连同 `shortDuration`/`activityLabel`/`backgroundSummary`/`backgroundTaskList`/`backgroundStillRunning`/`snapshotSilenceMs` 移植过来，`SessionActivity` 从 `HermitStream.swift` 搬进来，`StatusView.dot` 保留网页的 Tailwind 类名原文、`StatusPalette.dot` 负责转颜色（含 `/50`、`/30` 的透明度）。生成器加两个阈值（`SNAPSHOT_STALE_MS`/`BACKGROUND_RESIDENT_MS`，毫秒）。新增 `scripts/gen-status-fixture.ts` + `tools/fixtures/status-cases.json` + `tools/status-fixture.sh` + `src/lib/status-fixture.test.ts` | `xcodegen` + `swiftc -typecheck` **exit 0**（故意写错的临时文件反证过它真在检查）；`tools/status-fixture.sh` **213/213**（20 条时长 + 22 条 activity 逐项比 label/summary/tasks + 30 条状态逐字段比 key/label/dot/pulse/detail，再加 silence 与配色查表）；**四个反证做过，四个都如期只红了预期那几条**（关掉 JS 数字格式化 → 12 条时长；unread 排到 asleep 之后 → 只红 `unread-beats-asleep`；45 秒边界改成闭区间 → 只红 `stale-boundary-just-under`；空字符串当有效 label → 只红 `tool-empty-label`），恢复后全绿；dashboard `tsc --noEmit` **0 错**，`status-fixture` + `ios-contract` **10/10**；**模拟器上跑过** `tools/bridge-fixture.sh` 2 个 UI 用例 41 秒全过，截图 `shots/11` 亲眼看过——页面仍是满屏、没有多出导航栏、安全区没有变。收工 `simctl list devices booted` 为空 |

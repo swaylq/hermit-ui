@@ -15,6 +15,7 @@ BIN="$(mktemp -d)/render-list"
 swiftc -O -o "$BIN" \
   Shared/StatusPalette.swift Shared/WebContract.swift \
   Hermit/SessionStatus.swift Hermit/SessionListItem.swift Hermit/SessionRowView.swift \
+  Hermit/SessionListSkeleton.swift \
   tools/render-list.swift
 "$BIN" "$OUT"
 echo "→ $OUT"

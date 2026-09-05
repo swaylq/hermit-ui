@@ -24,6 +24,7 @@ Keys, matching KEYRING in index.html:
 No request log, unlike tools/api-fixture/server.py — what this drives is a
 screen, and the screen is the record.
 """
+import itertools
 import json
 import os
 import sys
@@ -32,6 +33,14 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 IDENTITY = {"key-one": "m_one", "key-two": "m_two"}
+
+# How many times `chat.listSessions` has been answered, printed into the LAST
+# row's title. That number is the only way a screen can show that the list
+# refetched on its own: every other row would look identical after a poll, so a
+# list that polls and a list that fetched once and froze are the same
+# screenshot. `next()` on a count is atomic under the GIL, which this
+# ThreadingHTTPServer needs.
+SERVED = itertools.count(1)
 
 
 def ago(seconds):
@@ -105,6 +114,10 @@ def rows(name):
         row(id="s_hidden", title="试验：换一个分词器", agentName="asst",
             hiddenAt=ago(86400), alive=False,
             lastMessageAt=ago(90000), lastReadAt=ago(90000)),
+        # The counter. Last rather than first so the identity assertion above it
+        # keeps the top of the screenshot it has had since round 13.
+        row(id="s_poll", title="poll #%d" % next(SERVED), agentName="fixture",
+            alive=False, state=None, lastMessageAt=ago(5), lastReadAt=ago(5)),
     ]
 
 
