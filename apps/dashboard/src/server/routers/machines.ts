@@ -8,6 +8,7 @@ import { listBackends, backendsConfigOf } from '@/lib/backends';
 import { watchdogConfigOf } from '@/lib/watchdog-config';
 import { modelCredentialsOf, defaultModelOf } from '@/lib/model-credentials';
 import { claudeModelsOf } from '@/lib/claude-models';
+import { codexCatalogueOf } from '@/lib/codex-models';
 
 // ── Machine operations ────────────────────────────────────────────────────────
 // The ops the dashboard can queue for a gateway to run on its host. Kept in step
@@ -213,6 +214,17 @@ export const machinesRouter = router({
       select: { claudeModels: true },
     });
     return claudeModelsOf(m);
+  }),
+
+  // The same for codex, plus the piece claude has no equivalent of: the model
+  // this machine's gateway resolves when a session pins none. Pushed by the
+  // gateway (/api/sync/codex-models) off codex's own models_cache.json.
+  getCodexModels: machineProcedure.query(async ({ ctx }) => {
+    const m = await prisma.machine.findUnique({
+      where: { id: ctx.machine.id },
+      select: { codexModels: true },
+    });
+    return codexCatalogueOf(m);
   }),
 
   setModelCredentials: machineProcedure

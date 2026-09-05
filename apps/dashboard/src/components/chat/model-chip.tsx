@@ -11,32 +11,44 @@
 // stayed where it was, so the header, the context-window maths and the next
 // respawn all disagreed with what was actually answering.
 //
-// Claude Code only. The pane driver takes its model from that machine's
+// Claude Code and codex. The pane driver takes its model from that machine's
 // ~/.claude/settings.json and ignores the column (the server refuses it too),
 // and every other backend picks its model from its credential in Settings →
 // Models, where the catalogue that makes a picker meaningful lives.
 //
-// The list is the machine's own — `supportedModels()` off the CLI, cached on
-// Machine.claudeModels by the gateway. See lib/claude-models.ts.
+// Either way the list is the machine's own, cached by its gateway: claude's is
+// `supportedModels()` off the CLI (Machine.claudeModels), codex's is the
+// catalogue codex keeps in models_cache.json (Machine.codexModels). See
+// lib/claude-models.ts and lib/codex-models.ts.
+//
+// The two differ in ONE place, and it is worth knowing which chip you are
+// reading. An unpinned claude session says "Default", because the CLI's default
+// is not knowable from here. An unpinned codex session names the model it is
+// really running, because its gateway reports what it resolves.
 
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/lib/trpc';
 import { DEFAULT_MODEL_VALUE, modelChipLabel, modelPinOf } from '@/lib/claude-models';
+import { codexChipLabel, codexMenuModels } from '@/lib/codex-models';
 
 /** Menu width, in px. Needed as a number to keep the menu on screen. */
 const MENU_W = 256;
 
 export function ModelChip({
   sessionId,
+  /** The RESOLVED backend — which catalogue this chip offers. */
+  runtime,
   /** The RESOLVED model for this session — the pin, or what it inherits. */
   model,
   disabled,
 }: {
   sessionId: string;
+  runtime: string | null | undefined;
   model: string | null | undefined;
   disabled?: boolean;
 }) {
+  const isCodex = runtime === 'codex-exec';
   const [open, setOpen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -58,9 +70,19 @@ export function ModelChip({
   const [show, setShow] = useState(false);
   const utils = trpc.useUtils();
 
-  // Changed by installing a new Claude Code, not by anything on this page.
-  // Cached long, shared by every chat via the query key.
-  const models = trpc.machines.getClaudeModels.useQuery(undefined, { staleTime: 10 * 60_000 }).data ?? [];
+  // Changed by installing a new CLI, not by anything on this page. Cached long,
+  // shared by every chat via the query key. Both hooks run unconditionally —
+  // `enabled` is what keeps the unused one from fetching, since a hook cannot be
+  // called behind an `if`.
+  const claudeModels = trpc.machines.getClaudeModels.useQuery(undefined, {
+    staleTime: 10 * 60_000,
+    enabled: !isCodex,
+  }).data ?? [];
+  const codex = trpc.machines.getCodexModels.useQuery(undefined, {
+    staleTime: 10 * 60_000,
+    enabled: isCodex,
+  }).data;
+  const models = isCodex ? (codex ? codexMenuModels(codex) : []) : claudeModels;
 
   const setModel = trpc.chat.setSessionModel.useMutation({
     onSuccess: () => {
@@ -142,7 +164,9 @@ export function ModelChip({
         title={
           current
             ? `model: ${current} — click to switch (applied to the next message; the conversation is kept)`
-            : "model: this machine's Claude Code default — click to switch"
+            : isCodex
+              ? `model: ${codex?.default ?? '…'} — this machine's codex default, click to switch`
+              : "model: this machine's Claude Code default — click to switch"
         }
         className={cn(
           'shrink-0 font-mono rounded px-1 -mx-1 transition-colors',
@@ -150,7 +174,9 @@ export function ModelChip({
           open && 'bg-accent text-foreground',
         )}
       >
-        {modelChipLabel(current || null, models)}
+        {isCodex
+          ? (codex ? codexChipLabel(current || null, codex) : current || '…')
+          : modelChipLabel(current || null, models)}
       </button>
 
       {/* `whitespace-normal font-sans` on the menu are not decoration: the
@@ -193,7 +219,10 @@ export function ModelChip({
           })}
           {/* Where the switch actually lands. Claude Code re-pins a live session
               with one control request — no respawn, no lost context — but not
-              mid-turn, so the honest promise is "from your next message". */}
+              mid-turn, so the honest promise is "from your next message". codex
+              gets there by another road with the same result: the model is baked
+              into its Thread object, so the gateway rebuilds that object and
+              resumes the SAME thread id, which is the conversation. */}
           <p className="px-2 py-1 text-[11px] leading-snug text-muted-foreground/80">
             Applies from your next message. The conversation is kept.
           </p>

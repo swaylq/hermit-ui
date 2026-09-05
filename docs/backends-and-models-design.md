@@ -91,7 +91,10 @@ Two things the composition changes elsewhere:
 - **The header's model chip is hidden on a credential-backed session.** Its list
   is this machine's own `supportedModels()` — Opus, Sonnet, Haiku — and none of
   those names exists at a Kimi or GLM endpoint. That backend's model is set once
-  in Settings → Backends, exactly like pi's and prime's.
+  in Settings → Backends, exactly like pi's and prime's. codex has a chip of its
+  own (2026-09-05, `lib/codex-models.ts`) and needs no such exclusion: it
+  authenticates as itself, one catalogue per machine, read off the file codex
+  caches at `<CODEX_HOME>/models_cache.json`.
 
 A model pin still applies live (`setModel`, one control request, warm context
 kept). A credential that moved does not: the endpoint and the key are read once,

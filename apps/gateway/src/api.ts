@@ -88,6 +88,14 @@ export const api = {
   // maintain. Pushed once per gateway lifetime and again whenever it changes.
   syncClaudeModels: (models: Array<{ value: string; displayName: string; description?: string }>) =>
     post('/api/sync/claude-models', { models }),
+  // The same for codex, off the catalogue codex caches for itself. `default` has
+  // no claude counterpart: which model an unpinned session runs is decided HERE
+  // (a constant plus HERMIT_CODEX_MODEL), so the dashboard can only know it by
+  // being told, and without it the chat header's chip has nothing to name.
+  syncCodexModels: (
+    models: Array<{ value: string; displayName: string; description?: string }>,
+    defaultModel: string,
+  ) => post('/api/sync/codex-models', { models, default: defaultModel }),
 
   // ── Cron jobs (gateway cron-runner) ───────────────────────────────────────
   // Enabled crons joined with their agent's on-disk directory; the runner fires

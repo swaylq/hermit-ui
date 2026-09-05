@@ -100,6 +100,19 @@ model Machine {
   // the picker falls back to lib/claude-models.ts.
   claudeModels Json?
 
+  // The same thing for codex: `{ default, models: [{ value, displayName,
+  // description }] }`, pushed by the gateway (POST /api/sync/codex-models) when
+  // a codex session boots. `models` is codex's own catalogue, read off the
+  // `models_cache.json` the CLI maintains; `default` is the model THAT gateway
+  // resolves when a session pins none, which the dashboard cannot derive — it
+  // lives in a gateway constant plus a machine env var.
+  //
+  // The default is what makes the chip able to name the model an unpinned
+  // session is really running, instead of writing "default" and leaving the
+  // question open. null = no gateway has reported yet; the picker falls back to
+  // lib/codex-models.ts.
+  codexModels Json?
+
   // Legacy pi-runtime machine config, superseded by `modelProviders`. Still
   // written by nothing and read only by the compatibility projection that keeps
   // a lagging gateway working until it restarts (machines.pollPiConfig).

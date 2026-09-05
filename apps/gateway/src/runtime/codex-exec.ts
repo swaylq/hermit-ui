@@ -28,6 +28,7 @@ import type {
 import { translateCodexEvent, emitNoticeOnce } from './codex-events';
 import { installJsonlRepair } from './codex-jsonl-repair';
 import { DASHBOARD_URL, ASST_KEY } from '../config';
+import { api } from '../api';
 
 /** Cumulative token counters, as codex reports them. */
 type Totals = { input: number; output: number };
@@ -226,7 +227,96 @@ export function clampEffort(effort: string, model: string): string {
  * thread every tick or never rebuild one at all.
  */
 export function resolveCodexModel(session: RuntimeSession): string {
-  return session.model?.trim() || process.env.HERMIT_CODEX_MODEL?.trim() || DEFAULT_MODEL;
+  return session.model?.trim() || machineDefaultModel();
+}
+
+/**
+ * What a session with no pin of its own runs on this machine.
+ *
+ * Split out of resolveCodexModel because the dashboard has to be TOLD this: it
+ * is an env var plus a constant in this file, so nothing on the other side can
+ * derive it, and until it knows, the chat header's model chip can only write
+ * "default" on a session and leave "which model is this actually?" unanswered.
+ */
+export function machineDefaultModel(): string {
+  return process.env.HERMIT_CODEX_MODEL?.trim() || DEFAULT_MODEL;
+}
+
+/** A catalogue row in the shape the dashboard's model picker renders. */
+type CatalogueRow = { value: string; displayName: string; description?: string };
+
+/**
+ * The catalogue codex keeps for itself, in `<CODEX_HOME>/models_cache.json`.
+ *
+ * Not a list this file maintains, for the reason the claude path gives: a
+ * hardcoded catalogue is right until the day it silently is not. codex refreshes
+ * this file from the server on each run, so it is the same answer `codex` would
+ * show a human in its own model picker.
+ *
+ * `visibility: "hide"` rows are dropped — codex does not offer them either
+ * (`gpt-reserve`, `codex-auto-review`), and a picker row that exists for
+ * internal plumbing is a trap. Ordered by codex's own `priority`, best first.
+ */
+export function readCodexCatalogue(): CatalogueRow[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(path.join(codexHome(), 'models_cache.json'), 'utf8'));
+  } catch {
+    return []; // no cache yet (a machine that has never run codex), or unreadable
+  }
+  const models = (raw as { models?: unknown } | null)?.models;
+  if (!Array.isArray(models)) return [];
+  const rows: Array<CatalogueRow & { priority: number }> = [];
+  for (const m of models) {
+    if (!m || typeof m !== 'object') continue;
+    const r = m as Record<string, unknown>;
+    const value = typeof r.slug === 'string' ? r.slug.trim() : '';
+    if (!value || r.visibility === 'hide') continue;
+    const display = typeof r.display_name === 'string' ? r.display_name.trim() : '';
+    const desc = typeof r.description === 'string' ? r.description.trim() : '';
+    rows.push({
+      value,
+      displayName: display || value,
+      // The dashboard's endpoint caps this at 300; truncate here so a long
+      // description is shortened rather than rejecting the whole push.
+      ...(desc ? { description: desc.slice(0, 300) } : {}),
+      priority: typeof r.priority === 'number' ? r.priority : Number.MAX_SAFE_INTEGER,
+    });
+  }
+  rows.sort((a, b) => a.priority - b.priority);
+  return rows.map(({ priority: _priority, ...row }) => row);
+}
+
+/**
+ * The last catalogue we told the dashboard about, so this costs one HTTP call
+ * per gateway lifetime rather than one per session start.
+ */
+let reportedCatalogue: string | null = null;
+
+/** Tell the dashboard which models codex offers here, and which one it defaults to. */
+async function reportModelCatalogue(): Promise<void> {
+  const fallback = machineDefaultModel();
+  const models = readCodexCatalogue();
+  if (models.length === 0) return; // nothing useful to say; keep whatever is stored
+
+  // The cache file is rewritten by whichever codex binary ran last, and the
+  // server tailors its answer to that binary's version — so a stale CLI
+  // elsewhere on the box can leave a catalogue with the newest model missing
+  // (measured 2026-09-05: a 0.152.0 run dropped gpt-6-astra from the file).
+  // Keeping the resolved default in the list whatever the file says is what
+  // stops the picker from offering every model except the one the session is
+  // already running.
+  if (!models.some((m) => m.value === fallback)) models.unshift({ value: fallback, displayName: fallback });
+
+  const fingerprint = JSON.stringify([fallback, models]);
+  if (fingerprint === reportedCatalogue) return;
+  try {
+    await api.syncCodexModels(models, fallback);
+    reportedCatalogue = fingerprint;
+    console.log(`[codex] reported ${models.length} models to the dashboard (default ${fallback})`);
+  } catch (e) {
+    console.warn('[codex] model catalogue report failed:', (e as Error).message);
+  }
 }
 
 function threadOptions(session: RuntimeSession): ThreadOptions {
@@ -711,6 +801,10 @@ export class CodexExecRuntime implements AgentRuntime {
       seenNotices: new Set(),
     };
     live.set(session.id, handle);
+    // Fire-and-forget, and only on the path that builds a thread — the early
+    // return above runs on every tick. Guarded by its own fingerprint, so this
+    // is one HTTP call per gateway lifetime unless codex's catalogue moves.
+    void reportModelCatalogue();
     return handle;
   }
 

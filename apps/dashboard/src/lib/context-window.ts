@@ -30,6 +30,11 @@ const CODEX_WINDOWS: ReadonlyArray<{ prefix: string; window: number }> = [
   // Ordered longest-first so `gpt-5.3-codex-spark` is not shadowed by a shorter
   // `gpt-5.3` entry if one is ever added above it.
   { prefix: 'gpt-5.3-codex-spark', window: 121_600 },
+  // Same 272,000 * 95% as the 5.x families — verified against a gpt-6-astra
+  // rollout on 2026-09-05, which records model_context_window 258,400. Listed
+  // rather than left to the fallback because the fleet default landing on the
+  // "model we have never heard of" branch reads like an oversight.
+  { prefix: 'gpt-6', window: 258_400 },
   { prefix: 'gpt-5.6', window: 258_400 },
   { prefix: 'gpt-5.5', window: 258_400 },
   { prefix: 'gpt-5.4', window: 258_400 },

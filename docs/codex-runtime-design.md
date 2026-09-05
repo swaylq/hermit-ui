@@ -101,8 +101,11 @@ codex 不会：第三轮（换了个进程 resume 的）只发自己这轮的 it
 
 ### 模型与推理档位
 
-默认 `gpt-5.6-sol` + effort `max` + 服务档位 `fast`（sway 2026-09-01 拍板）。
-模型与档位都可被覆盖（session 的 `runtimeModel` > `HERMIT_CODEX_MODEL` > 内置默认）。
+默认 `gpt-6-astra` + effort `max` + 服务档位 `fast`（模型 sway 2026-09-05 拍板，
+之前是 `gpt-5.6-sol`；档位 2026-09-01）。模型与档位都可被覆盖（session 的
+`runtimeModel` > `HERMIT_CODEX_MODEL` > 内置默认）。`gpt-6-astra` 的目录条目写着
+`minimal_client_version: 0.153.0`，旧 CLI 点名它是服务端 400 硬拒绝、不是降级，
+所以 `DEFAULT_MODEL` 和 package.json 里的 `@openai/codex-sdk` 版本必须一起动。
 
 数据来自 codex 自己的 `~/.codex/models_cache.json`（client_version 0.152.0）：
 
@@ -125,6 +128,39 @@ automatic task delegation"——它会自己派生子 agent 干活，那是换�
 `max` 是"仍然一个 agent 自己做"的最深一档。（`ultra` 发的事件类型早先实测过，只有
 `agent_message` / `command_execution` / `file_change`，翻译层都认识；所以哪天想换回去，
 不用担心事件被静默丢掉。）
+
+### 在 dashboard 里显示与切换模型
+
+聊天页头部那个模型 chip 原来只给 Claude Code 用，codex 会话什么都不显示——于是"这个会话
+到底跑的是不是 astra"只能去翻 rollout 文件。现在两个后端都有 chip（2026-09-05）。
+
+后端本来就是通的，加的全在显示这一侧：
+
+- `resolveCodexModel()` 一直是 session pin > `HERMIT_CODEX_MODEL` > 内置默认；
+  `ensure()` 发现 pin 变了就用同一个 thread id 重建 Thread（历史不丢），且回合中途不动。
+- `chat.setSessionModel` 不挑后端，`planRuntimeSwitch` 里 codex 那条是 `restart: false`。
+
+新增的是目录和默认值的上报。claude 那边的列表来自 CLI 的 `supportedModels()` 控制请求，
+codex 没有对应的请求，但它自己把目录缓存在 `<CODEX_HOME>/models_cache.json`——网关读那个文件，
+丢掉 `visibility: "hide"` 的行（`gpt-reserve`、`codex-auto-review`），按 `priority` 排序，
+连同**它自己解析出来的默认模型**一起 POST 到 `/api/sync/codex-models`，落在 `Machine.codexModels`
+（`{ default, models }`）。
+
+默认值必须单独报，是这套东西和 claude 唯一实质不同的地方：它由网关的常量加机器上的环境变量决定，
+dashboard 推不出来。没有它，没 pin 的会话只能显示 "default"，正是要回答的问题没回答。有了它，
+chip 上写的是真在跑的那个模型名（`gpt-6-astra` → `6-Astra`，省掉每行都一样的 `GPT-` 前缀，
+全名在 tooltip 和菜单里）。
+
+两个坑：
+
+1. **缓存文件会被最后跑过的那个 codex 二进制改写**，服务端还会按客户端版本裁目录——机器上另有
+   一个旧 CLI 跑过一次，文件里就可能没有最新模型（2026-09-05 实测：一次 0.152.0 的调用把
+   `gpt-6-astra` 从目录里抹掉了）。所以上报前会强行把解析出来的默认模型塞回列表，否则菜单会
+   列出除了当前正在跑的那个以外的所有模型。
+2. **模型和档位是硬绑定的**：pin 一个 `gpt-5.5` 而 effort 还留在 `max`，是启动前就失败的组合。
+   `clampEffort` 按模型压到该模型的上限（5.5 → `xhigh`），所以从 chip 里随便挑一个老模型不会炸。
+
+推理档位本身还是机器级的环境变量，不跟着 chip 走——真要每会话调档，得再加一列。
 
 ### 服务档位：fast
 
@@ -214,6 +250,8 @@ dashboard 里出现和 claude 会话一模一样的下载 chip。
 - `lib/runtime-labels.ts` — 加进 `RUNTIME_KINDS` / `BACKEND_OPTIONS` / blurb / label
   （三个 picker 界面由这张表驱动，加卡片不用碰组件；4 张卡正好回到 2×2）
 - `server/runtime-switch.ts` — 换 model 不需要 restart（没有常驻进程要拆）
+- `lib/codex-models.ts` + `app/api/sync/codex-models/route.ts` + `machines.getCodexModels`
+  — 目录与默认模型的存取；`components/chat/model-chip.tsx` 按后端选目录
 - `server/routers/{chat,agents}.ts` — 三处 `z.enum` 放行
 
 Mode 下拉在三处都是 `shownBackend === 'pi-rpc'` 才渲染，所以 codex 天然没有 mode 选择器。
