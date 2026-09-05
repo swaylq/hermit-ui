@@ -499,16 +499,28 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       新移植的七个纯函数（`fmtBytes` / `ctxPct` / `ctxFill` / `contextWindowFor` /
       `runtimeShortLabel` / `providerMark` / `chatHeaderTitle`）配 `tools/header-fixture.sh`，
       `mergeLiveStatus` 进了 `tools/status-fixture.sh`
-- [ ] **头部右侧的动作簇**：新建会话、终端（有 tmux pane 才有）、删除（`ConfirmIconButton`）、
-      归档会话的「恢复」，加上手机上那个溢出托盘里的五个（pure chat / 会话详情 /
-      查找 / compact / restart）。今天右侧是空的
+- [x] **头部右侧的动作簇** —— 第 21 轮。`Hermit/ChatHeaderActionsView.swift` +
+      `Hermit/HeaderActionsCore.swift`。新建会话、终端（有 tmux pane 才有）、
+      删除、归档会话的「恢复」、托盘开关，加上托盘里的 pure chat / compact / restart。
+      **规则本身抬进了网页的 `components/chat/header-actions-core.ts`**（`page.tsx` 和
+      `confirm-icon-button.tsx` 现在都调它），Swift 那份配 `tools/actions-fixture.sh`
+      —— 121 条断言，反证四次（改 arm guard、compact 忽略 closed、press 不重新武装、
+      从 paneless 名单里去掉 codex-exec），四次都红在该红的行。
+      **不适用的按钮是「不画」而不是「画灰」**，和网页一样；模拟器用例
+      `testTheChatHeaderCarriesItsActions` 在 codex 会话上断言终端**不存在**。
+- [ ] **托盘里的另外两个（查找 / 会话详情）** —— 第 21 轮**故意没画**：它们开的是
+      这一屏还没有的两块面板，而一个点了没有去处的按钮比一个诚实缺席的按钮更糟。
+      共享的核心仍然为十个都作答（网页有十个），少画哪两个写在
+      `ChatHeaderView.availableActions` 里，做完面板就删那一行。
+      查找要 `useChatSearch`（prose 缓存那条路），详情要 `chat.sessionDetail`
 - [ ] **模型胶囊**（`modelChipLabel` + `chat.setSessionModel` + 那张模型目录）——
       条件是**不是分享链接**，且 `codex-exec`，或者 `claude-sdk` 且没有凭据。
       codex 那一半是 09-05 19:07 才加的（`f14567d8`），目录来自网关读 `models_cache.json`
       推上来的那张表，和 claude 的 `supportedModels()` 不是同一条路
 - [ ] **点标题改名**（`chat.setTitle`）+ 那颗重新生成标题的 `Sparkles`（`chat.autoTitle`）
 - [ ] **状态胶囊和后端胶囊点开会话详情面板**（`chat.sessionDetail`）——
-      网页上这两个都是按钮，手机没有 hover，面板是那句被截断的状态唯一能读全的地方
+      网页上这两个都是按钮，手机没有 hover，面板是那句被截断的状态唯一能读全的地方。
+      **和上面「托盘里的会话详情」是同一块面板**，一起做
 - [ ] `nextId` 空洞证明 + 本地缓存直接供页（`lib/chat-cache/types.ts:47-68`、
       `use-older-pages.ts` 的 `pageBefore`）—— 翻页现在每一页都问服务端。网页在本地存储
       **能证明**自己握着一段没断过的链时直接供页；那个证明读的是 `full` / `digest` 两个行存储，
@@ -632,15 +644,15 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 > 2026-09-05 16:35 起，这个清单由 `perfect-goal` 的轮次驱动，轮次日志在
 > `~/agents/asst/projects/ios-native/goal/ROUNDS.md`，目标与验收标准在同目录的 `GOAL.md`。
-> 目标未变：把这个清单清空。**清单 40/70** —— 第 10 轮勾掉一条（会话列表那一行
-> 点进原生时间线），加一条：通知和 Live Activity 的 `hermit://session/<id>` 故意还留在网页。
+> 目标未变：把这个清单清空。**清单 41/71** —— 第 21 轮勾掉一条（头部右侧的动作簇），
+> 加一条：托盘里的查找 / 会话详情故意没画（它们开的是还不存在的面板）。
 > 留在散文里的活只会让清单先清空、活后干完。
 
-**第 1 条：头部右侧的动作簇。** 排到第一位是因为第 10 轮改了这一屏的地位：
-点一行进来的就是它，人在原生 App 里看到的聊天屏只有这一个，而它的头部右边现在是空的
-—— 网页那边是新建会话、终端、删除，加手机上折进溢出盘的另外五个。
-做它等于把 `chat.createSession` / `deleteSession` / `reopenSession` 一次性接进原生
-（`chat.send` / `cancelTurn` 第 6 轮已经接了，所以它不再是「第一条会写服务端的活」）。
+**第 1 条：会话详情面板 + 查找。** 排第一是因为它是上一轮唯一欠下的、而且**已经有位置了**
+—— 头部托盘里少的就是这两格，`ChatHeaderView.availableActions` 那一行就是为删掉它写的。
+详情面板 `chat.sessionDetail` 一份，把清单里「状态胶囊和后端胶囊点开会话详情」那条
+一起解掉（网页上是同一块面板，三个入口）。查找要走 prose 缓存那条
+`useChatSearch`，比面板重。
 
 **第 2 条：`streamingTailId`。** `turnInFlight(streamingTail:)` 在原生恒为 false，
 靠网关的 `working` 兜底 —— 最多晚一次 5 秒轮询，是晚不是错。做掉它，
@@ -713,6 +725,39 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 16:5x 那句「全部复刻网页，做完再评审，反复改到完美」把范围定死成全量，见 `GOAL.md`。
 
 ## 踩过的坑
+
+### `min-w-0` 在 SwiftUI 里没有对应物，`.clipped()` 和 `.layoutPriority` 都不是它（第 21 轮）
+
+网页那个标题列写着 `min-w-0`，意思是「可以被压到比内容最小宽度还窄，压出去的裁掉」。
+SwiftUI 的栈里，**子视图的最小宽度是不可谈判的**：头部元信息行的尾巴是固定宽的
+（后端名、ctx 条、`closed`），所以一屏归档会话在 390pt 上，标题列的最小宽度比剩下的空间还大。
+`HStack` 的回答是把整行撑长，删除按钮被挤出右边缘。三次都没修好，值得各记一句：
+
+1. **`.clipped()` 不管用** —— 裁剪是绘制，这是布局。列仍然按内容宽度上报。
+2. **`.layoutPriority(1)` 不管用** —— 它改的是「先问谁」，而最小宽度照样赢。
+3. **量出簇宽写进 `.frame(maxWidth:)` 也不管用** —— 那个写回落后一帧，
+   而 `ImageRenderer` 在那之前就截图了。
+4. **`.frame(maxWidth: .infinity)` + `.clipped()` 更不管用** —— 只给 max 的 frame，
+   在子视图更宽时上报的是**子视图的宽**，于是 `.clipped()` 裁的是那个撑大的尺寸，等于没裁。
+
+真正的答案是自己写 `Layout`：`HeaderRowLayout` 把两端按各自的理想宽放好、
+把**剩下的**交给中间那列，`ClipToProposedWidth` 再把「无论子视图怎么答，都上报提议的宽」
+补上（文字照样按提议宽省略号截断，和 `truncate` 一样）。两个都在 `ChatHeaderView.swift`。
+
+### 一个看不见的 overlay 仍然可以被点到（第 21 轮）
+
+溢出托盘一开始照网页那样**一直挂着**、用 `opacity` 开合（网页要留个 DOM 给 CSS 过渡）。
+`.opacity(0)` + `.allowsHitTesting(false)` + `.accessibilityHidden(true)` **三个一起上，
+`header.pureChat` 还是 hittable** —— 模拟器用例当场红在「托盘关着的时候它的东西在头部行上」。
+SwiftUI 有 transition，所以正确写法是**开着才挂**，关的时候整块不存在。
+
+### 一个两步确认的截图也在花那 5 秒（第 21 轮）
+
+`AUTO_DISARM_MS` 是 5000。用例里 `settle()`（3 秒）加上截图本身，
+到点 confirm 的时候胶囊已经自己收了 —— 报的是
+`No matches found for header.pureChat.confirm`，看起来像按钮坏了。
+**武装之后到确认之间的每一件事都在花那 5 秒**，包括截图。1 秒的 `Thread.sleep` 正好
+兼作 350ms 的 arm guard。
 
 ### 夹具里按下标挑一行点开，挑中的多半是那条什么都证明不了的（第 10 轮）
 

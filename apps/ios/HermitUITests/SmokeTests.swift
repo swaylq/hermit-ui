@@ -1261,6 +1261,151 @@ final class SmokeTests: XCTestCase {
     /// so once the caret is in the box there is no reliable way to get it out
     /// again from a test — and the layer being gone at that point is the web's
     /// behaviour too, not a limitation.
+    /// The header's right-hand action cluster: what is there, what is not, and
+    /// what each button actually asks the server for.
+    ///
+    /// Every mutation is read back through the header's OWN title one poll
+    /// later — `get_session` prints what the fixture was asked for — so a
+    /// button that fired the right route with the wrong session id, or the
+    /// wrong flag, shows a different string on screen rather than passing. The
+    /// alternative was an HTTP call out of this process to read the fixture's
+    /// state, which is a second thing that can be wrong.
+    func testTheChatHeaderCarriesItsActions() throws {
+        let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
+        guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
+
+        app.launchArguments = ["-hermitOrigin", fixture]
+        app.launch()
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer")
+        app.webViews.buttons["keychain.set — two machines"].tap()
+        XCTAssertTrue(fixtureSays("keyring ok"), "the shell refused to store the keyring")
+        app.webViews.buttons["keychain.setActive — m_two"].tap()
+        XCTAssertTrue(fixtureSays("active m_two ok"), "the shell would not record which entry is active")
+        openSessionList()
+        openTimeline()
+        XCTAssertEqual(app.webViews.count, 0, "there is a web view on the chat screen")
+
+        // ── what the cluster has, and what it has not ────────────────────────
+        //
+        // The persistent three. `header.<id>` is the shared core's own
+        // identifier, so this is addressing the buttons by the same names the
+        // table in tools/actions-fixture.sh uses.
+        for id in ["more", "newChat", "delete"] {
+            XCTAssertTrue(app.buttons["header.\(id)"].waitForExistence(timeout: 10),
+                          "the chat header has no \(id) button")
+        }
+        // NOT the terminal: this fixture's session runs on `codex-exec`, a
+        // child process with no tmux pane, and the web hides the button for
+        // exactly that case. A port that drew it anyway would look right in
+        // every screenshot and attach to a pane that does not exist.
+        XCTAssertFalse(app.buttons["header.terminal"].exists,
+                       "a paneless codex session should not offer a terminal")
+        // NOT restore: this session is open.
+        XCTAssertFalse(app.buttons["header.restore"].exists,
+                       "a live session should not offer to be restored from the archive")
+        // The five that fold are in the tray, so none of them is on the row.
+        XCTAssertFalse(app.buttons["header.pureChat"].isHittable,
+                       "the tray's contents are on the header row with the tray shut")
+        settle(); shoot("52-header-cluster")
+
+        // ── the two-step confirm ─────────────────────────────────────────────
+        //
+        // One tap arms; it does NOT delete. The pill that replaces the icon is
+        // two buttons, and cancel is the one nearer the title.
+        app.buttons["header.delete"].tap()
+        XCTAssertTrue(app.buttons["header.delete.confirm"].waitForExistence(timeout: 5),
+                      "tapping delete did not arm a confirm")
+        XCTAssertTrue(app.buttons["header.delete.cancel"].exists, "the armed pill has no way out")
+        // A 1s pause and not `settle()`: an armed pill auto-disarms after five
+        // seconds, and `settle()` plus taking the screenshot spends most of
+        // that. Nothing on this screen is moving anyway — the settle exists for
+        // a decelerating collection view.
+        Thread.sleep(forTimeInterval: 1.0); shoot("53-header-delete-armed")
+        app.buttons["header.delete.cancel"].tap()
+        XCTAssertTrue(app.buttons["header.delete"].waitForExistence(timeout: 5),
+                      "cancelling the confirm did not put the icon back")
+        // …and the session is still here. The screen we are standing on is the
+        // one delete would have left.
+        XCTAssertTrue(screenSays("trashed -", timeout: 25),
+                      "an armed-then-cancelled delete still reached chat.trashSessions")
+
+        // ── the tray ─────────────────────────────────────────────────────────
+        app.buttons["header.more"].tap()
+        XCTAssertTrue(app.buttons["header.restart"].waitForExistence(timeout: 5),
+                      "the overflow tray did not open")
+        XCTAssertTrue(app.buttons["header.pureChat"].exists, "the tray has no pure chat")
+        XCTAssertTrue(app.buttons["header.compact"].exists, "the tray has no compact")
+        settle(); shoot("54-header-tray")
+
+        // ── restart, confirmed ───────────────────────────────────────────────
+        app.buttons["header.restart"].tap()
+        XCTAssertTrue(app.buttons["header.restart.confirm"].waitForExistence(timeout: 5),
+                      "restart did not arm")
+        // Past the 350ms arm guard. Not a courtesy: a confirm inside it is
+        // DROPPED by `Confirm.step` (that is the whole point of the guard), so
+        // a test that tapped immediately would be testing the guard by
+        // accident and reporting it as a broken button.
+        Thread.sleep(forTimeInterval: 1.0)
+        app.buttons["header.restart.confirm"].tap()
+        // The id the mutation carried, printed by the fixture into the title
+        // the header polls for. `s_timeline` and not some other row.
+        XCTAssertTrue(screenSays("restarts s_timeline", timeout: 25),
+                      "confirming restart never reached chat.requestSessionRestart with this session's id")
+        settle(); shoot("55-header-restarted")
+
+        // ── new chat: a create, and the screen that opens on it ──────────────
+        //
+        // The tray closed itself? No — new chat is PERSISTENT, on the row at
+        // every width, which is what this reaches for.
+        app.buttons["header.newChat"].tap()
+        // The screen that opened is the created session, and its title spells
+        // out what `chat.createSession` was asked for. `chatOnly 0` is the
+        // difference from the button below; `runtime codex-exec` is the "same
+        // backend as the conversation you came from" rule.
+        XCTAssertTrue(screenSays("made · chatOnly 0 · runtime codex-exec · agent asst · key m_two", timeout: 30),
+                      "new chat did not open the session it created, or created it wrong")
+        XCTAssertEqual(app.webViews.count, 0, "the created session opened in a web view")
+        settle(); shoot("56-header-new-chat")
+
+        // ── pure chat: the same call with one flag ───────────────────────────
+        openTimeline()
+        app.buttons["header.more"].tap()
+        XCTAssertTrue(app.buttons["header.pureChat"].waitForExistence(timeout: 5), "the tray did not open")
+        app.buttons["header.pureChat"].tap()
+        XCTAssertTrue(app.buttons["header.pureChat.confirm"].waitForExistence(timeout: 5),
+                      "pure chat did not arm")
+        // The labelled confirm: a destructive action's icon already said what
+        // it does, this one has to say it in words.
+        XCTAssertTrue(app.buttons["confirm — pure chat"].exists,
+                      "the armed pure-chat pill does not name itself")
+        // Same clock as above, and this one was measured: the first version
+        // used `settle()` here and the pill had auto-disarmed by the time the
+        // confirm was tapped ("No matches found for header.pureChat.confirm").
+        // The 1s doubles as the arm guard.
+        Thread.sleep(forTimeInterval: 1.0); shoot("57-header-pure-chat-armed")
+        app.buttons["header.pureChat.confirm"].tap()
+        XCTAssertTrue(screenSays("made · chatOnly 1", timeout: 30),
+                      "pure chat created a session without the read-only flag")
+
+        // ── delete, confirmed, and the way out ───────────────────────────────
+        openTimeline()
+        app.buttons["header.delete"].tap()
+        XCTAssertTrue(app.buttons["header.delete.confirm"].waitForExistence(timeout: 5), "delete did not arm")
+        Thread.sleep(forTimeInterval: 1.0)
+        app.buttons["header.delete.confirm"].tap()
+        // It leaves. A timeline that stayed would be polling a trashed id.
+        XCTAssertTrue(screenStops("Bash · 47s", timeout: 25),
+                      "the chat screen stayed put after its session was deleted")
+        // And the list behind it says what was asked for — the ids AND the
+        // reason, which is what tells a manual delete from a cleanup sweep.
+        openTimeline()
+        XCTAssertTrue(screenSays("trashed s_timeline/manual", timeout: 30),
+                      "delete did not reach chat.trashSessions with this id and reason")
+        settle(); shoot("58-header-deleted")
+    }
+
     func testTheNativeComposerHoldsTheBoxToTalk() throws {
         let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
         guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }

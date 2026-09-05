@@ -307,7 +307,16 @@ struct ChatHeaderActionsView: View {
         // The tray floats over the title rather than taking header width, so
         // opening it costs the row nothing — the same reason the web anchors it
         // to `right-full` instead of putting it in the flow.
-        .overlay(alignment: .leading) { if folded { tray } }
+        //
+        // Mounted only while OPEN, unlike the web's, which keeps it in the DOM
+        // at `opacity-0` so CSS has something to transition. SwiftUI has
+        // transitions, and the mounted-but-invisible version was a real bug:
+        // `.opacity(0)` plus `.allowsHitTesting(false)` plus
+        // `.accessibilityHidden(true)` STILL left `header.pureChat` hittable —
+        // the simulator test caught it reaching a button nobody could see
+        // ("the tray's contents are on the header row with the tray shut").
+        .overlay(alignment: .leading) { if folded && state.moreOpen { tray } }
+        .animation(.easeOut(duration: HeaderActionMetrics.trayDuration), value: state.moreOpen)
         .accessibilityElement(children: .contain)
     }
 
@@ -321,8 +330,7 @@ struct ChatHeaderActionsView: View {
     }
 
     private var tray: some View {
-        let open = state.moreOpen
-        return HStack(spacing: HeaderActionMetrics.trayGap) {
+        HStack(spacing: HeaderActionMetrics.trayGap) {
             ForEach(specs.filter { $0.group == .secondary }, id: \.id) { spec in
                 button(spec, surface: WebContract.popover)
             }
@@ -351,8 +359,6 @@ struct ChatHeaderActionsView: View {
                     .onChange(of: geo.size.width) { _, w in trayWidth = w }
             }
         }
-        // `origin-right`: it grows out of the toggle, not out of its own middle.
-        .scaleEffect(open ? 1 : HeaderActionMetrics.trayScale, anchor: .trailing)
         // `right-full mr-1`: the overlay's `.leading` alignment puts the tray's
         // left edge on the cluster's left edge, and this walks it back by its
         // own width plus one gap, so its RIGHT edge lands one gap left of the
@@ -363,11 +369,11 @@ struct ChatHeaderActionsView: View {
         // drew on top of the three persistent buttons instead of beside them
         // (shots/timeline-header-light.png, first pass). Measuring is longer
         // and it is visibly right.
-        .offset(x: -(trayWidth + HeaderActionMetrics.gap)
-                   + (open ? 0 : HeaderActionMetrics.trayShift))
-        .opacity(open ? 1 : 0)
-        .allowsHitTesting(open)
-        .animation(.easeOut(duration: HeaderActionMetrics.trayDuration), value: open)
-        .accessibilityHidden(!open)
+        .offset(x: -(trayWidth + HeaderActionMetrics.gap))
+        // `origin-right ... translate-x-2 scale-95`: it grows out of the
+        // toggle, not out of its own middle.
+        .transition(.scale(scale: HeaderActionMetrics.trayScale, anchor: .trailing)
+            .combined(with: .offset(x: HeaderActionMetrics.trayShift))
+            .combined(with: .opacity))
     }
 }

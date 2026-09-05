@@ -337,6 +337,20 @@ def emit(sid, frame, after=0.0):
 SENT = {}            # clientId -> the row we answered with
 SENT_ORDER = []      # clientIds, in the order they arrived
 CANCELS = []         # every chat.cancelTurn we were asked for
+# The chat header's action cluster. Each list is what the SHELL asked for, and
+# each one is read back through the header's own title one poll later — see
+# `get_session`. Nothing here is a stub that always says yes: the input is kept
+# whole, so a button that fired the right route with the wrong id or the wrong
+# flag is a different string on screen rather than the same green test.
+RESTARTS = []        # every chat.requestSessionRestart id
+TRASHED = []         # every (ids, reason) chat.trashSessions was given
+REOPENED = []        # every chat.reopenSession id
+MADE = []            # every chat.createSession input, whole
+# The id `chat.createSession` answers with. One id for every create, so the
+# screen that opens next is the same screen whichever button made it — what
+# distinguishes pure chat from new chat is the FLAG, which this fixture prints
+# into that session's title.
+MADE_SESSION = "s_made"
 SEND_LOCK = threading.Lock()
 
 # ── the waiting queue (M5) ───────────────────────────────────────────────────
@@ -442,6 +456,14 @@ class Handler(SimpleHTTPRequestHandler):
             return self.dequeue()
         if route == "/api/trpc/chat.clearQueue":
             return self.clear_queue()
+        if route == "/api/trpc/chat.createSession":
+            return self.create_session()
+        if route == "/api/trpc/chat.trashSessions":
+            return self.trash_sessions()
+        if route == "/api/trpc/chat.requestSessionRestart":
+            return self.request_restart()
+        if route == "/api/trpc/chat.reopenSession":
+            return self.reopen_session()
         self.plain(404, "no POST route " + route)
 
     # ── replies ──────────────────────────────────────────────────────────────
@@ -659,6 +681,44 @@ class Handler(SimpleHTTPRequestHandler):
         CANCELS.append(self.trpc_body().get("sessionId") or "")
         self.reply(200, trpc({"ok": True}, {}))
 
+    # ── the header's action cluster ──────────────────────────────────────────
+
+    def create_session(self):
+        """`chat.createSession` — the header's new chat, and its pure chat.
+
+        The two differ by one field, so the answer is the same id and the FLAG
+        is what the next screen's title prints. A shell that sent `chatOnly` on
+        the wrong button therefore opens a screen that says so.
+        """
+        name = self.identity()
+        if not name:
+            return self.reply(401, unauth("chat.createSession"))
+        body = self.trpc_body()
+        MADE.append({"key": name, **body})
+        self.reply(200, trpc({"id": MADE_SESSION, "agentName": body.get("agentName")}, {}))
+
+    def trash_sessions(self):
+        name = self.identity()
+        if not name:
+            return self.reply(401, unauth("chat.trashSessions"))
+        body = self.trpc_body()
+        TRASHED.append((list(body.get("ids") or []), body.get("reason")))
+        self.reply(200, trpc({"ok": True, "trashed": len(body.get("ids") or [])}, {}))
+
+    def request_restart(self):
+        name = self.identity()
+        if not name:
+            return self.reply(401, unauth("chat.requestSessionRestart"))
+        RESTARTS.append(self.trpc_body().get("id") or "")
+        self.reply(200, trpc({"ok": True}, {}))
+
+    def reopen_session(self):
+        name = self.identity()
+        if not name:
+            return self.reply(401, unauth("chat.reopenSession"))
+        REOPENED.append(self.trpc_body().get("id") or "")
+        self.reply(200, trpc({"id": TIMELINE_SESSION, "closedAt": None}, {}))
+
     # ── the session list ─────────────────────────────────────────────────────
 
     def sessions(self):
@@ -684,6 +744,33 @@ class Handler(SimpleHTTPRequestHandler):
         if not name:
             return self.reply(401, unauth("chat.getSession"))
         arg = self.trpc_input()
+        if arg.get("sessionId") == MADE_SESSION:
+            # What `chat.createSession` was actually asked for, printed where
+            # the header will show it. `chatOnly` is the whole difference
+            # between the cluster's two create buttons, and `runtime` is the
+            # "same backend as the conversation you are in" rule — including
+            # the case where there is no pin at all, which prints as `-`.
+            made = MADE[-1] if MADE else {}
+            return self.reply(200, trpc({
+                "id": MADE_SESSION,
+                "agentName": made.get("agentName") or "?",
+                "title": "made · chatOnly %s · runtime %s · agent %s · key %s"
+                         % ("1" if made.get("chatOnly") else "0",
+                            made.get("runtime") or "-",
+                            made.get("agentName") or "-", name),
+                "preview": None, "origin": "web",
+                "startedAt": ago(5), "lastMessageAt": None, "lastReadAt": None,
+                "closedAt": None, "hiddenAt": None, "hibernatedAt": None,
+                "restartRequestedAt": None,
+                "alive": True, "state": "idle", "snapshotAt": ago(1),
+                "contextTokens": 0,
+                "runtime": made.get("runtime") or "claude-sdk", "runtimeProvider": None,
+                "runtimeModel": None, "runtimeCredentialId": None,
+                "runtimeMode": None, "chatOnly": bool(made.get("chatOnly")),
+                "activity": None, "livePreview": None, "rssMb": 0,
+                "takeoverBySessionId": None, "takeoverGoal": None, "takeoverTurns": None,
+                "takeoverStartedAt": None, "takeoverDraft": None, "takeoverBrainState": None,
+            }, {f: ["Date"] for f in DATE_FIELDS if f in ("startedAt", "snapshotAt")}))
         if arg.get("sessionId") != TIMELINE_SESSION:
             return self.reply(200, trpc(None, {}))
         row = {
@@ -696,7 +783,10 @@ class Handler(SimpleHTTPRequestHandler):
             # the test to be wrong. `pulls`/`clears` are what tell a strip that
             # emptied itself locally from one that emptied on the server.
             "title": "getSession #%d · key %s · cancels %d · pulls %d · clears %d"
-                     % (next(META_SERVED), name, len(CANCELS), len(DEQUEUED), len(CLEARS)),
+                     " · restarts %s · trashed %s"
+                     % (next(META_SERVED), name, len(CANCELS), len(DEQUEUED), len(CLEARS),
+                        ",".join(RESTARTS) or "-",
+                        ",".join("+".join(i) + "/" + str(r) for i, r in TRASHED) or "-"),
             "preview": "should never be read — the title is not empty",
             "origin": "web",
             "startedAt": ago(7200), "lastMessageAt": ago(3), "lastReadAt": ago(3),

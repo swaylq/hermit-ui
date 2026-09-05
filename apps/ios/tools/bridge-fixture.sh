@@ -38,6 +38,7 @@ TESTS=("$@")
   testThePageCanProposeAnotherServer
   testTheNativeTimelineStreamsAndPagesBack
   testTheNativeComposerSendsAndHandsTheBubbleOver
+  testTheChatHeaderCarriesItsActions
   testTheNativeQueueStripShowsAndPullsBack
   testTheNativeComposerAttachesAPhoto
   testTheNativeComposerHoldsTheBoxToTalk
