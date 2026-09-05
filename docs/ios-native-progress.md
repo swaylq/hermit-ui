@@ -359,8 +359,15 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       网页端改用它的地方挑了不花代价的三处：`chat.send` 现在**以 `WireContentBlock` 的身份**
       拼块（编译期就管住），`extractSearchText` 和 `msgText` 换成共用的那个读法。
       时间线自己的组件仍留着宽松的 `Block`，理由写在 `components/chat/lib.ts` 的注释里
-- [ ] `foldRuns`（`components/chat/fold-runs.ts` 323 行纯函数）移植成 Swift；
-      把 TS 那 398 行测试的输入输出导成共享 JSON 夹具，两边跑同一份
+- [x] **`foldRuns` 移植成 Swift** —— 第 19 轮。`apps/ios/Hermit/FoldRuns.swift`（只依赖
+      Foundation），连同 `isMachineryBlock` / `closesRunUnconditionally` / `safeSplitIndex` /
+      `summarizeRun` / `isHarnessTerminator` 和「运行块按它下面那行取名」的第二遍。
+      夹具 `tools/fixtures/fold-cases.json` 由 `scripts/gen-fold-fixture.ts` 跑真函数生成，
+      驱动是 `tools/fold-fixture.sh`（29 组折叠 + 23 + 13 + 11 + 6 组单点，**97/97**）。
+      **它折的是原始块，不是 `parseBlocks()` 的结果**，这一条和上一轮写在「下一项」里的
+      打算相反，理由见「踩过的坑」——照那个打算做会让同一段会话在手机上和网页上折得不一样。
+      两条附带的性质也在夹具里：任意安全接缝处分两半折 == 整体折（11 个接缝逐个验），
+      以及**摘要后的内容折出来的折叠态，和网页用完整内容折出来的逐字段相同**
 - [ ] markdown 渲染：GFM 表格、围栏代码、14 种语言高亮（bash css diff go javascript
       json markdown plaintext python rust sql typescript xml yaml）。
       **没有数学公式、没有 mermaid** —— 这是省下来的范围。
@@ -412,17 +419,20 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**第 18 轮开了 M4：消息块现在有一份定义了**，两边共用，53 个块 + 9 个整列的夹具全过
-（`tools/blocks-fixture.sh`，4 秒，反证做过：往 Swift 里塞三处偏差，正好红在对应的三个用例上）。
-顺带在模拟器上补掉了第 17 轮欠的那次确认，见下面第 2 条。
+**第 19 轮做完 M4 第二条：`foldRuns` 有 Swift 版了**（`Hermit/FoldRuns.swift`，
+`tools/fold-fixture.sh` 97/97，五次反证各红在该红的地方）。M4 前两条现在是一对：
+`ContentBlock` 说一条消息由什么组成，`FoldRuns` 说这些块排成哪几行。清单 28/45。
 
-**下一轮做 M4 第二条：`foldRuns` 移植成 Swift。** 现在是做它最好的时机 ——
-`fold-runs.ts` 那 323 行读的全是块的字段，而这些字段刚刚被定死；它已有的 398 行 TS 测试
-可以照 `gen-blocks-fixture.ts` 的样子导成共享夹具（那个生成器就是照 `gen-status-fixture.ts`
-抄的，第三次用同一个套路了，模板很稳）。注意 `fold-runs.ts` 今天吃的是宽松的 `Block`，
-移植时两边都应该改吃 `parseBlocks()` 的结果，否则 Swift 那边等于对着另一份输入跑。
+**下一轮建议做「时间线的骨架」，也就是 M4 第四条的前半，而不是照清单顺序去做 markdown。**
+理由是这三样纯函数（`SessionStatus`、`ContentBlock`、`FoldRuns`）到今天**一个调用方都没有**，
+而它们的正确性已经被夹具管住了；再往上堆第四个纯函数，风险不会下降，能看的东西还是零。
+骨架的范围只要：一个倒置的 `UICollectionView`（cell 也翻转）+ `FoldRuns.fold` 出来的行 +
+纯文本气泡 + 折叠胶囊只画摘要（名字、次数、错误数、思考字数）+ 不认识的块画成写着类型名的
+灰卡片（M4 最后一条顺带就做完了）。**markdown 先不碰**：那一步要引第一个第三方依赖，
+是个该由 sway 点头的决定，不该夹在别的活里顺手做掉；骨架也不挡它，气泡里换渲染器就行。
+做完骨架，M6 那套像素比对第一次能对着时间线跑，下面第 1 条的盲区也才有真页面可量。
 
-**这一轮量出来、要接着处理的两件**：
+**接着处理的两件（第 18 轮量出来的，原样有效）**：
 
 1. **真列表的行距是 52.33pt，像素比对画的那张是 49.5pt** —— 差 2.83pt，
    **11 行完全均匀、不累积**（从 `shots/16-session-list.png` 的状态点逐点量的）。
@@ -457,7 +467,7 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 连接串 `postgresql://znmacserver001@localhost:5432/hermit_dev`，**worktree 里没有 `.env`**，
 独立检出里跑 Prisma 要显式带上它。
 
-**要 sway 拍板的三件（都不急，不挡下一轮）**：左边缘归壳还是归网页侧栏（第 15 轮按
+**要 sway 拍板的四件（都不急，不挡下一轮）**：**M4 的 markdown 那一步要引第一个第三方依赖**（GFM 表格 + 围栏代码 + 14 种语言高亮，自己写不现实），这会终结「零第三方依赖」这条一直守着的性质，值得他先点头；左边缘归壳还是归网页侧栏（第 15 轮按
 「同一个意图，原生的赢」处理了，开关是 `lib/native-bridge.ts` 的 `setNativeEdgeSwipe`）；
 `/chat/terminal` 是不是就保持网页（M6 最后一条）；以及要不要为那 3% 的等宽字体宽度往包里
 塞一份字体（第 17 轮量出来的，见「踩过的坑」）。
@@ -467,6 +477,38 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 而这条路径只在这台 Mac 的 libsqlite3 上跑过）。`HermitStream` 的前后台切换同理。
 
 ## 踩过的坑
+
+### 用 `parseBlocks()` 的结果去折叠，会让同一段会话两边折得不一样（第 19 轮）
+
+上一轮在「下一项」里写着「移植时两边都应该改吃 `parseBlocks()` 的结果」。**那是错的，没做。**
+`fold-runs.ts` 的 `isMachineryBlock` 只看线上那个 `type` 字符串，而 `parseBlock` 更严：
+一个没有 `id` 的 `tool_use` 会掉成 `unknown`（这是**故意的**，为的是画成写着类型名的灰卡片
+而不是半个工具条）。于是照那个打算做，这种块在手机上是**可见的一行**、在网页上是**折进胶囊的**
+—— 同一段会话两种画法。所以 Swift 这半的分类逐字照抄网页，`FoldedMessage` 同时带着
+`rawBlocks`（折叠依据的那份）和 `blocks`（`ContentBlock.parse` 之后、渲染用的那份）。
+**教训**：两个函数各自都对，不代表可以把一个的输出接到另一个的输入上；接之前先找一个
+两者判得不一样的输入，找不到再接。
+
+### JS 的 `.length` 是 UTF-16 码元，Swift 的 `.count` 是字素（第 19 轮，真是个 bug）
+
+移植 `foldRuns` 时顺手给块夹具加了 `好👍` 和 `é` 两个用例，
+**第 18 轮就上线的 `ContentBlock.swift` 立刻红了**：`chars` 网页算 3 / 2，Swift 算 2 / 1。
+`chars` 是折叠胶囊那句「💭 thinking · N chars」的全部内容，而摘要写进库里的那个数就是
+JS `.length` 量的，所以两边必须同一把尺。改成 `body.utf16.count`。
+**推广**：凡是从 JS 抄过来的「长度/偏移/截断」，默认都是 UTF-16 码元
+（第 10 轮的搜索片段偏移已经踩过一次，这是第二次）。纯 ASCII 的夹具永远抓不到它 ——
+夹具里必须有一个 emoji 和一个组合字符。
+
+### worktree 里 dashboard 的 typecheck 会报一堆不是你造成的错（第 19 轮）
+
+`prisma generate` 的产物在 `apps/dashboard/src/generated/prisma`，是 gitignore 的，
+**新开的 worktree 里没有**，于是 `tsc --noEmit` 在 `session-cleanup.ts`、`unanswered.ts`、
+`session-title.ts` 里吐一串 `TS7006 implicitly has an 'any' type`，看着像自己刚写的代码
+把类型推崩了，其实一行都不相干。补一条软链就干净了：
+`ln -sfn ~/hermit-ui/apps/dashboard/src/generated $WT/apps/dashboard/src/generated`
+（和 `node_modules` 那条一样，**提交前必须删掉**，`.gitignore` 里带斜杠的目录名挡不住软链）。
+判据很好认：报错的文件你这一轮根本没打开过。别去「修」它们。
+
 
 ### 「服务端已经有 schema」写在文件里，但没有任何人引用它（第 18 轮）
 
@@ -979,6 +1021,7 @@ Oklab→线性 sRGB 那一步会塌成三个通道都等于 L³，Display P3 和
 
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
+| 19 | 2026-09-05 | **M4 第二条：`foldRuns` 移植成 Swift。** 新增 `apps/ios/Hermit/FoldRuns.swift`（只依赖 Foundation，500 行，含 `isMachineryBlock`/`stepFor`/`closesRunUnconditionally`/`safeSplitIndex`/`summarizeRun`/`isHarnessTerminator` 和「运行块按下面那行取名」的第二遍）、生成器 `scripts/gen-fold-fixture.ts` → `tools/fixtures/fold-cases.json`、驱动 `tools/fold-fixture.sh`。**明确不按上一轮的打算做**：折叠的依据是原始块而不是 `parseBlocks()` 的结果，否则没有 `id` 的 `tool_use` 在手机上可见、在网页上被折走（写进「踩过的坑」）；`FoldedMessage` 因此同时带 `rawBlocks` 和 `blocks`。JS 的三处强制转换（`String(x)`、`??`、`is_error`/`__d` 的真值判断）照抄而不是「顺手改好」。**顺带修掉第 18 轮就上线的一个真 bug**：`ContentBlock.swift` 的 `chars` 用 `body.count` 数字素，网页数的是 UTF-16 码元 | `tools/fold-fixture.sh` **97/97 过**，**反证做过五次**（去掉 ask 豁免 → 只红 3 条 `isMachineryBlock[ask/*]` + `ask-stays-visible` + `digestInvariance`；运行块改按上面那行取名 → 红 20 条折叠；`chars` 改数字素 → 只红 `coercions`；`is_error` 改成只认字面 `true` → 只红 `coercions`；关掉跨天断开 → 只红 `run-never-spans-a-date-divider` 和 `unparseable-timestamp-closes-the-run`），逐个恢复后全绿。夹具里两条性质**真的验过**：11 个接缝逐个分两半折 == 整体折；摘要后的内容折出的折叠态与网页用完整内容折出的逐字段相同。块夹具加了 `好👍` / `é` 两例后 `tools/blocks-fixture.sh` 先红后绿（**73/73 → 75/75**）。`xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0 无输出**（先补 `src/generated/prisma` 软链，见「踩过的坑」）。无界面改动，未截图；**没起过模拟器** |
 | 18 | 2026-09-05 | **开 M4：消息块有定义了。** 新增 `apps/dashboard/src/lib/chat-blocks.ts`（`WireContentBlock` 只校验、原样交还，给写入口；`parseBlocks()` 是读的那一面，判别联合，unknown 一支显式）、`apps/ios/Hermit/ContentBlock.swift`（只依赖 Foundation，含一个 `JSONValue` 给 `input`/`content`/`payload` 这三个谁都不约束的字段）、生成器 `scripts/gen-blocks-fixture.ts` → `tools/fixtures/block-cases.json`（53 块 + 9 个整列）、驱动 `tools/blocks-fixture.sh`。联合**不可能失败**：匹配不上就是 `unknown` 并带着生产者自己那个 type 字符串，这正是 M4 最后一条的灰卡片要的。网页端接了三处：`chat.send` 以 `WireContentBlock` 拼块、`extractSearchText` 和 `msgText` 换成共用读法；时间线组件仍留宽松 `Block`，理由写在注释里。**发现 `routers/chat.ts:41` 的块级联合是死代码**（零引用） | `tools/blocks-fixture.sh` **73/73 过**，反证做过（塞三处偏差 → 正好红在对应用例上，恢复后全绿）；`xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0 无输出**（先 `prisma generate`）；改到的两个纯函数各自驱动过 —— `chat-text.test.ts` **8/8 过**，`msgText` 与被它替换掉的那份实现在 20 种真实形状上**逐条相同**。另跑了一次模拟器补第 17 轮欠的确认：`testTheNativeListDrawsTheActiveMachinesSessions` 过，`shots/16`、`17`、`18` **亲眼看过**，真列表行距 **52.33pt 完全均匀**（比对那张是 49.5，差 2.83 写进「踩过的坑」）。收工 `simctl list devices booted` 为空 |
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
 | 17 | 2026-09-05 | **把第 16 轮量出来的行错位修掉：10.10%/10.03% → 4.33%/4.29%，误差不再逐行累积。** 根因是网页的行高压根不在这一行的 class 里（Tailwind preflight 的 `line-height: 1.5`），所以 `SessionRowView` 新增 `RowMetrics`（`titleLine` 19.5 / `metaLine` 15 / `lineGap` 2 / `padV` 6 / `box` 48.5 / `pitch` 49.5），两行各自 `.frame(height:)` 到网页的行盒；补上 `space-y-px` 的 1pt（做成行自己的下外边距，所以列表和 `render-list.sh` 共用一份）；选中行圆角 `.continuous` → `.circular`。`StatusDot` 认 Reduce Motion，另加一个 `\.hermitStillFrame` 环境值给静帧渲染器（`accessibilityReduceMotion` 只读，设不了）。`render-list.swift` 的画布改成按行距算的整数高度，`render-session-rows.tsx` 把 body 也刷成 `--sidebar`，两张图因此同尺寸。新增 `HERMIT_MEASURE=1 tools/render-web-list.sh`：打印 Chrome 自己量的每个元素盒子 | `xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0 无输出**（先 `prisma generate`）；`tools/pixel-compare.sh` 跑了四遍，**10.10%/10.03% → 4.33%/4.29%**，热力图**亲眼看过**：十一行的点和文字全部各就各位，不再逐行错开，浅色那张原生渲染也逐行看过。四个满色的状态点改完**逐字节相同**（`(255,185,0)`/`(0,188,255)`/`(255,32,86)`/`(0,188,125)`，改之前脉动的三个只有 50% 强度）。剩下的 4.3% 逐项量过并写进「下一项」：字形本身、等宽字体宽 3%（`.AppleSystemUIFontMonospaced` 步进 6.1816 对浏览器的 6.0，**`.tracking(0)` 试过，一个像素都没变**）、`/50` `/30` 两个点各差一个通道。**没起过模拟器**，收工 `simctl list devices booted` 为空、无残留 Chrome |

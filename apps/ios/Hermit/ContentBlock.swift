@@ -226,7 +226,11 @@ extension ContentBlock {
             }
         case "thinking":
             let body = o["thinking"]?.asString ?? o["text"]?.asString ?? ""
-            let chars = o["chars"]?.asDouble.map { Int($0) } ?? body.count
+            // `.length` in JS counts UTF-16 units — an emoji is two, a
+            // combining accent is two — and the count the digest wrote was
+            // measured that way. `body.count` counts Characters and would put a
+            // different number under every capsule holding an emoji.
+            let chars = o["chars"]?.asDouble.map { Int($0) } ?? body.utf16.count
             return .thinking(ThinkingBlock(thinking: body, chars: chars, digested: digested(o)))
         case "tool_use":
             guard let id = o["id"]?.asString, let name = o["name"]?.asString else { break }

@@ -53,6 +53,11 @@ const BLOCKS: Array<{ name: string; block: unknown }> = [
   { name: 'thinking/digested', block: { type: 'thinking', thinking: '', chars: 1204, [DIGEST_FLAG]: 1 } },
   { name: 'thinking/text-field', block: { type: 'thinking', text: 'older shape' } },
   { name: 'thinking/signature-stripped', block: { type: 'thinking', thinking: 'reasoned' } },
+  // `chars` is the collapsed capsule's whole subtitle, and the count the digest
+  // wrote came from JS `.length` — UTF-16 units, so an emoji is two of them and
+  // a CJK character is one. A port counting Swift Characters gets 好👍 wrong.
+  { name: 'thinking/astral', block: { type: 'thinking', thinking: '好👍' } },
+  { name: 'thinking/combining', block: { type: 'thinking', thinking: 'e\u0301' } },
 
   // tool_use — whole, digested, and the ask call the question card joins on
   {

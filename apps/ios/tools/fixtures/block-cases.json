@@ -162,6 +162,32 @@
       }
     },
     {
+      "name": "thinking/astral",
+      "block": {
+        "type": "thinking",
+        "thinking": "好👍"
+      },
+      "expected": {
+        "type": "thinking",
+        "thinking": "好👍",
+        "chars": 3,
+        "digested": false
+      }
+    },
+    {
+      "name": "thinking/combining",
+      "block": {
+        "type": "thinking",
+        "thinking": "é"
+      },
+      "expected": {
+        "type": "thinking",
+        "thinking": "é",
+        "chars": 2,
+        "digested": false
+      }
+    },
+    {
       "name": "tool_use",
       "block": {
         "type": "tool_use",

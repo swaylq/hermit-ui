@@ -15,6 +15,7 @@
     "gen:search-fixture": "tsx scripts/gen-search-fixture.ts",
     "gen:status-fixture": "tsx scripts/gen-status-fixture.ts",
     "gen:blocks-fixture": "tsx scripts/gen-blocks-fixture.ts",
+    "gen:fold-fixture": "TZ=UTC tsx scripts/gen-fold-fixture.ts",
     "render:session-rows": "tsx scripts/render-session-rows.tsx",
     "seed": "tsx scripts/seed-machine.ts",
     "migrate": "prisma migrate deploy",
