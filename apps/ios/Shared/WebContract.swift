@@ -98,6 +98,8 @@ enum WebContract {
     static let amber400 = Color(.displayP3, red: 0.9592, green: 0.7385, blue: 0.1183)
     /// `amber-500` — oklch(76.9% 0.188 70.08)
     static let amber500 = Color(.displayP3, red: 0.9399, green: 0.6206, blue: 0.0585)
+    /// `amber-600` — oklch(66.6% 0.179 58.318)
+    static let amber600 = Color(.displayP3, red: 0.8271, green: 0.4672, blue: 0.0336)
     /// `amber-700` — oklch(55.5% 0.163 48.998)
     static let amber700 = Color(.displayP3, red: 0.6799, green: 0.3277, blue: 0.0521)
     /// `emerald-400` — oklch(76.5% 0.177 163.223)
@@ -190,6 +192,30 @@ enum WebContract {
     /// light oklch(1 0 0) · dark oklch(0.205 0 0)
     static let popover = ThemeColor(
         light: Color(.displayP3, red: 1.0000, green: 1.0000, blue: 1.0000),
+        dark: Color(.displayP3, red: 0.0905, green: 0.0905, blue: 0.0905)
+    )
+    /// `--popover-foreground` — body text inside the session detail panel.
+    /// light oklch(0.145 0 0) · dark oklch(0.985 0 0)
+    static let popoverForeground = ThemeColor(
+        light: Color(.displayP3, red: 0.0394, green: 0.0394, blue: 0.0394),
+        dark: Color(.displayP3, red: 0.9803, green: 0.9803, blue: 0.9803)
+    )
+    /// `--card` — an unselected backend card in the detail panel.
+    /// light oklch(1 0 0) · dark oklch(0.205 0 0)
+    static let card = ThemeColor(
+        light: Color(.displayP3, red: 1.0000, green: 1.0000, blue: 1.0000),
+        dark: Color(.displayP3, red: 0.0905, green: 0.0905, blue: 0.0905)
+    )
+    /// `--primary` — the detail panel's Apply button.
+    /// light oklch(0.205 0 0) · dark oklch(0.922 0 0)
+    static let primary = ThemeColor(
+        light: Color(.displayP3, red: 0.0905, green: 0.0905, blue: 0.0905),
+        dark: Color(.displayP3, red: 0.8982, green: 0.8982, blue: 0.8982)
+    )
+    /// `--primary-foreground` — the label on it.
+    /// light oklch(0.985 0 0) · dark oklch(0.205 0 0)
+    static let primaryForeground = ThemeColor(
+        light: Color(.displayP3, red: 0.9803, green: 0.9803, blue: 0.9803),
         dark: Color(.displayP3, red: 0.0905, green: 0.0905, blue: 0.0905)
     )
 }

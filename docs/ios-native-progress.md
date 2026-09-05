@@ -508,19 +508,30 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       从 paneless 名单里去掉 codex-exec），四次都红在该红的行。
       **不适用的按钮是「不画」而不是「画灰」**，和网页一样；模拟器用例
       `testTheChatHeaderCarriesItsActions` 在 codex 会话上断言终端**不存在**。
-- [ ] **托盘里的另外两个（查找 / 会话详情）** —— 第 21 轮**故意没画**：它们开的是
-      这一屏还没有的两块面板，而一个点了没有去处的按钮比一个诚实缺席的按钮更糟。
-      共享的核心仍然为十个都作答（网页有十个），少画哪两个写在
-      `ChatHeaderView.availableActions` 里，做完面板就删那一行。
-      查找要 `useChatSearch`（prose 缓存那条路），详情要 `chat.sessionDetail`
+- [x] **会话详情面板** —— 第 22 轮。`Hermit/SessionDetailView.swift` +
+      `Hermit/SessionDetailController.swift` + `Hermit/SessionDetailCore.swift`。
+      **一块面板三个入口**：托盘里的 `detail`、头部的状态胶囊、头部的后端胶囊 ——
+      网页上这三个是同一块面板，手机上尤其重要，因为没有 hover，
+      那句被截断的状态只有在这里读得全。规则先抬进网页的
+      `components/chat/session-detail-core.ts`（`session-detail-sheet.tsx` 现在调它），
+      Swift 那份配 `tools/detail-fixture.sh` —— 569 条断言，反证四次。
+      读的两条查询是 `chat.sessionDetail`（开着才轮询，10 秒）和
+      `machines.getBackendsConfig`（只取一次），写的是 `chat.setSessionRuntime`
+- [ ] **托盘里的查找** —— 第 21 轮起故意没画：它开的是这一屏还没有的面板，
+      而一个点了没有去处的按钮比一个诚实缺席的按钮更糟。共享的核心仍然为十个都作答
+      （网页有十个），少画哪一个写在 `ChatHeaderView.availableActions` 里，
+      做完就删那一行。要 `useChatSearch`（prose 缓存那条路）——
+      `ChatCache.search(_:options:)` 已经有了（`.chronological` 也有），
+      欠的是那条 44pt 的查找条、DOM 那半的高亮对应物、以及跳到窗口外那条消息
 - [ ] **模型胶囊**（`modelChipLabel` + `chat.setSessionModel` + 那张模型目录）——
       条件是**不是分享链接**，且 `codex-exec`，或者 `claude-sdk` 且没有凭据。
       codex 那一半是 09-05 19:07 才加的（`f14567d8`），目录来自网关读 `models_cache.json`
       推上来的那张表，和 claude 的 `supportedModels()` 不是同一条路
 - [ ] **点标题改名**（`chat.setTitle`）+ 那颗重新生成标题的 `Sparkles`（`chat.autoTitle`）
-- [ ] **状态胶囊和后端胶囊点开会话详情面板**（`chat.sessionDetail`）——
-      网页上这两个都是按钮，手机没有 hover，面板是那句被截断的状态唯一能读全的地方。
-      **和上面「托盘里的会话详情」是同一块面板**，一起做
+- [x] **状态胶囊和后端胶囊点开会话详情面板**（`chat.sessionDetail`）—— 第 22 轮，
+      和上面那块面板一起做掉的：`ChatHeaderView` 的 `onOpenDetail` 一个回调，
+      两个胶囊都挂它。**没有 handler 时它们退回纯文本**，
+      因为 Mac 渲染工具画的是没有回调的那一版
 - [ ] `nextId` 空洞证明 + 本地缓存直接供页（`lib/chat-cache/types.ts:47-68`、
       `use-older-pages.ts` 的 `pageBefore`）—— 翻页现在每一页都问服务端。网页在本地存储
       **能证明**自己握着一段没断过的链时直接供页；那个证明读的是 `full` / `digest` 两个行存储，
@@ -644,15 +655,18 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 > 2026-09-05 16:35 起，这个清单由 `perfect-goal` 的轮次驱动，轮次日志在
 > `~/agents/asst/projects/ios-native/goal/ROUNDS.md`，目标与验收标准在同目录的 `GOAL.md`。
-> 目标未变：把这个清单清空。**清单 41/71** —— 第 21 轮勾掉一条（头部右侧的动作簇），
-> 加一条：托盘里的查找 / 会话详情故意没画（它们开的是还不存在的面板）。
+> 目标未变：把这个清单清空。**清单 43/72** —— 第 22 轮勾掉两条（会话详情面板本身、
+> 状态/后端胶囊的入口），并把「托盘里的另外两个」拆成两条，只剩查找。
 > 留在散文里的活只会让清单先清空、活后干完。
 
-**第 1 条：会话详情面板 + 查找。** 排第一是因为它是上一轮唯一欠下的、而且**已经有位置了**
-—— 头部托盘里少的就是这两格，`ChatHeaderView.availableActions` 那一行就是为删掉它写的。
-详情面板 `chat.sessionDetail` 一份，把清单里「状态胶囊和后端胶囊点开会话详情」那条
-一起解掉（网页上是同一块面板，三个入口）。查找要走 prose 缓存那条
-`useChatSearch`，比面板重。
+**第 1 条：会话内查找。** 上一轮剩下的那一格，也是 `ChatHeaderView.availableActions`
+那一行还没删掉的唯一原因。搜索本身**已经移植好了** —— `ChatCache.search(_:options:)`
+带 `.chronological`，`tools/cache-fixture.sh` 的 502 条里就有它。欠的是三件：
+那条 44pt 的查找条（`chat-find.tsx`，输入框 + `pos/count` + ↑↓ + ×）、
+`useChatSearch` 的防抖与 settled 语义（120ms，只显示当前 query 的答案）、
+以及**跳到窗口外那条消息**（网页 `onJump` 走 `use-anchored-window`，原生这边还没有）。
+网页那半的 CSS Custom Highlight 在原生是 `AttributedString` 上的 background，
+只画渲染出来的那些 —— 计数归缓存、高亮归屏幕，这个分工要照搬。
 
 **第 2 条：`streamingTailId`。** `turnInFlight(streamingTail:)` 在原生恒为 false，
 靠网关的 `working` 兜底 —— 最多晚一次 5 秒轮询，是晚不是错。做掉它，
@@ -725,6 +739,34 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 16:5x 那句「全部复刻网页，做完再评审，反复改到完美」把范围定死成全量，见 `GOAL.md`。
 
 ## 踩过的坑
+
+### 「5% 的背景是看不见的」是错的 —— 糊的 5% 和清楚的 5% 不一样（第 21 轮埋，第 22 轮修）
+
+第 21 轮把托盘的 `backdrop-blur-sm` 去掉了，理由写在代码里：`bg-popover/95` 底下只透
+5%，而 `.ultraThinMaterial` 要多一遍离屏。**截图否掉了这个推理**
+（`shots/54-header-tray.png`）：透出来的标题是**清晰的**，能读出一个词，
+浏览器那边是一团糊。**眼睛找的是字形，不是对比度** —— 5% 的清晰笔画照样是笔画。
+现在托盘是 `.fill(.ultraThinMaterial)` 再叠 95% 的 popover。
+`.ultraThinMaterial` 不是 4px 高斯，但它是个 backdrop filter，
+而且它多付的那一遍离屏，浏览器为 `backdrop-blur-sm` 本来就在付。
+**教训不是「别省」，是「省之前先出图」** —— 这条推理在纸面上是对的。
+
+### `ImageRenderer` 把 `ScrollView` 排成零高，`Menu` 画成一个禁止符（第 22 轮）
+
+Mac 渲染工具（`tools/render-detail.sh`）第一版出的图只有头部，底下全空。
+不是视图错了：`ImageRenderer` 给 `ScrollView` 的建议高度是零，内容一行都不画。
+办法是给视图一个 `scrolls` 参数，渲染工具传 `false` 走纯 `VStack` ——
+顺带还有个好处，面板比一屏高，不滚动的那一版一张图就装得下整块。
+**`Menu` 同理但没救**：它在图里是一个黄底禁止符（AppKit 的弹出菜单不参与光栅化）。
+模式选择器因此在渲染图上永远是那个符号，**它下面那行 blurb 才是证据**
+（写着 ops 就说明选中的是 ops）。要看那个控件本身只能上模拟器。
+
+### 渲染夹具的 `now` 必须是这个进程的钟（第 22 轮）
+
+`render-detail.swift` 第一版把 `now` 写死成一个 epoch，结果每一行 relTime 都印 `future`
+—— 面板自己是拿 `Date()` 算的。列表那个渲染器早就解决过同一件事
+（`HERMIT_FIXTURE_NOW`，且所有时刻都写成「距 now 多少秒」），
+新写的渲染器要么照抄那套，要么就用 `Date()`，**别自己定义一个「现在」**。
 
 ### `min-w-0` 在 SwiftUI 里没有对应物，`.clipped()` 和 `.layoutPriority` 都不是它（第 21 轮）
 

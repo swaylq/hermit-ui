@@ -137,16 +137,19 @@ struct ChatHeaderView: View {
     /// which is what the Mac render tool and the pending state want.
     var actions: HeaderActionState?
     var onAction: ((HeaderAction) -> Void)?
+    /// The status chip and the backend chip. Nil draws them as plain text.
+    var onOpenDetail: (() -> Void)?
 
     /// The cluster members this screen has somewhere to send.
     ///
-    /// `find` and `detail` open PANELS the native chat screen does not have
-    /// yet; every other member is a mutation or a navigation that does. The
+    /// `find` alone is left out now: it opens a find bar this screen does not
+    /// have yet, and a button that leads nowhere is worse than one that is
+    /// honestly absent. `detail` came off this list when the panel landed. The
     /// shared core still answers for all ten — `tools/actions-fixture.sh` holds
     /// it against the web, which has all ten — and this line is the one the
-    /// round that builds those two panels deletes.
+    /// round that builds the find bar deletes.
     static let availableActions: Set<HeaderAction> = [
-        .restore, .pureChat, .compact, .restart, .more, .newChat, .terminal, .delete,
+        .restore, .pureChat, .detail, .compact, .restart, .more, .newChat, .terminal, .delete,
     ]
 
     @Environment(\.colorScheme) private var scheme
@@ -280,14 +283,20 @@ struct ChatHeaderView: View {
             }
             if let status = model.status {
                 dotSeparator
-                HStack(spacing: ChatHeaderMetrics.metaGap) {
-                    StatusDot(status: status)
-                    Text(status.label)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                // Both chips are BUTTONS on the web, and both open the same
+                // panel. On a phone that is not a nicety: there is no hover, so
+                // the panel is the only place a truncated status line — "Bash
+                // · 47s", "general-purpose +2 bg" — can be read in full.
+                chip(id: "header.statusChip") {
+                    HStack(spacing: ChatHeaderMetrics.metaGap) {
+                        StatusDot(status: status)
+                        Text(status.label)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                 }
                 dotSeparator
-                Text(model.backend).fixedSize()
+                chip(id: "header.backendChip") { Text(model.backend).fixedSize() }
                 dotSeparator
                 ctx
             }
@@ -305,6 +314,20 @@ struct ChatHeaderView: View {
 
     private var dotSeparator: some View {
         Text("·").foregroundStyle(muted.opacity(0.4)).fixedSize()
+    }
+
+    /// A meta-line chip that opens the detail panel. Plain when there is
+    /// nowhere to send it — the Mac render tool draws this header with no
+    /// handler, and a Button there would still take taps in the simulator.
+    @ViewBuilder
+    private func chip<Content: View>(id: String, @ViewBuilder _ content: () -> Content) -> some View {
+        if let onOpenDetail {
+            Button(action: onOpenDetail) { content() }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(id)
+        } else {
+            content()
+        }
     }
 
     /// `<CtxBar variant="mini" showLabel={false}>`: the token count people

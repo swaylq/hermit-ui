@@ -314,6 +314,10 @@ export const THEME_VARS: ReadonlyArray<{ cssVar: string; note: string }> = [
   { cssVar: 'border', note: 'a run capsule\'s hairline' },
   { cssVar: 'accent', note: 'a lit header toggle, and the pressed fill under every header button' },
   { cssVar: 'popover', note: 'the phone header\'s overflow tray, floated over the title' },
+  { cssVar: 'popover-foreground', note: 'body text inside the session detail panel' },
+  { cssVar: 'card', note: 'an unselected backend card in the detail panel' },
+  { cssVar: 'primary', note: 'the detail panel\'s Apply button' },
+  { cssVar: 'primary-foreground', note: 'the label on it' },
 ] as const;
 
 /** `muted-foreground` → `mutedForeground` */
@@ -336,6 +340,7 @@ export const EXTRA_CLASSES: ReadonlyArray<{ cls: string; note: string }> = [
   { cls: 'neutral-900', note: 'the transcript in the hold bubble, and a lit arc label (components/chat/hold-to-talk.tsx)' },
   { cls: 'amber-500', note: "the archived header's Restore tint (app/chat/page.tsx)" },
   { cls: 'amber-700', note: "the archived header's Restore glyph in the light scheme (app/chat/page.tsx)" },
+  { cls: 'amber-600', note: 'the "off" badge on a retired backend card, light scheme (components/chat/backend-picker.tsx)' },
 ] as const;
 
 const SHADE = (cls: string) => Number(cls.split('-')[1]);

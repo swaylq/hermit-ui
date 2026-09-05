@@ -751,10 +751,23 @@ final class ChatTimelineViewController: UIViewController {
             deleteSession()
         case .restore:
             reopenSession()
-        case .find, .detail:
+        case .detail:
+            openDetail()
+        case .find:
             // Filtered out of the cluster — see `ChatHeaderView.availableActions`.
             break
         }
+    }
+
+    /// The detail panel — one panel, three doors: the overflow tray's
+    /// `detail`, the status chip and the backend chip. All three are the same
+    /// button on the web, and it opens over the conversation rather than
+    /// replacing it: what is behind it is the context you need to decide
+    /// whether to move this session onto another backend.
+    @MainActor
+    private func openDetail() {
+        if moreOpen { moreOpen = false; refreshHeader() }
+        present(SessionDetailController(sessionId: sessionId), animated: false)
     }
 
     private struct IdInput: Encodable { let id: String }
@@ -971,7 +984,8 @@ final class ChatTimelineViewController: UIViewController {
             model: model,
             onBack: canPop ? { [weak self] in self?.navigationController?.popViewController(animated: true) } : nil,
             actions: headerActionState,
-            onAction: { [weak self] id in self?.runHeaderAction(id) }
+            onAction: { [weak self] id in self?.runHeaderAction(id) },
+            onOpenDetail: { [weak self] in self?.openDetail() }
         )
     }
 

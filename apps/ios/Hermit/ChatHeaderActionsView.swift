@@ -339,12 +339,24 @@ struct ChatHeaderActionsView: View {
         .padding(.vertical, HeaderActionMetrics.trayPadV)
         .background(
             RoundedRectangle(cornerRadius: HeaderActionMetrics.trayRadius)
-                // `bg-popover/95` over a `backdrop-blur-sm`. The blur is
-                // dropped: it exists on the web so the title shows through
-                // faintly, and `.ultraThinMaterial` under a 95% fill is
-                // invisible while costing an offscreen pass on every frame of
-                // the slide.
-                .fill(WebContract.popover.resolve(scheme).opacity(0.95))
+                // `bg-popover/95` over a `backdrop-blur-sm`.
+                //
+                // Round 21 dropped the blur, reasoning that 5% of a backdrop is
+                // invisible and not worth an offscreen pass. The screenshot
+                // said otherwise (shots/54-header-tray.png): what came through
+                // was a SHARP ghost of the title, legible enough to read a word
+                // of, where the browser shows a smudge. 5% of something sharp
+                // and 5% of something blurred do not look alike — the eye finds
+                // the letterforms, not the contrast.
+                //
+                // `.ultraThinMaterial` is not a 4px gaussian either, but it is
+                // a backdrop filter, and it costs the same offscreen pass the
+                // browser is already paying for `backdrop-blur-sm`.
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: HeaderActionMetrics.trayRadius)
+                        .fill(WebContract.popover.resolve(scheme).opacity(0.95))
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: HeaderActionMetrics.trayRadius)
                         .strokeBorder(WebContract.border.resolve(scheme), lineWidth: 1)
