@@ -298,7 +298,10 @@ struct HermitAPI {
     /// superjson emits `toISOString()`, which always has milliseconds — but a
     /// hand-rolled `/api/sync/*` payload or a future column read straight out of
     /// Postgres may not, and one missing `.000` should not fail a whole screen.
-    private static func isoDate(_ s: String) -> Date? {
+    /// The app's only ISO-8601 parser. Not private: `TimelineMerge` orders rows
+    /// by the same instant the decoder produces, and a second parser here is a
+    /// second set of rounding rules.
+    static func isoDate(_ s: String) -> Date? {
         for f in [isoWithMillis, isoPlain] {
             if let d = f.date(from: s) { return d }
         }

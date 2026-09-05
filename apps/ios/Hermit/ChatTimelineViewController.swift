@@ -30,14 +30,17 @@ import SwiftUI
 /// The price is that `row 0` is the NEWEST row, which is why `rows` is stored
 /// reversed and why anything reading it says so.
 ///
-/// ## One query, no stream
+/// ## One query, then a live tail
 ///
 /// `chat.listMessages` for the newest window, `WebContract.timelineLimit` rows
 /// with `WebContract.timelineDigest` — the same window the web asks for, from
-/// the generated contract rather than from two numbers typed here. There is no
-/// SSE yet: `HermitStream` exists and works, but wiring a live tail into a
-/// screen whose rows have never been looked at would mean debugging two new
-/// things at once.
+/// the generated contract rather than from two numbers typed here. A
+/// `HermitStream` opens alongside it with `skipInitial`, so the window is paid
+/// for once, and every later change arrives as a delta.
+///
+/// The two racing is the whole subtlety, and `TimelineMerge.fold` is the answer:
+/// a push that lands before the query answers is HELD, not applied, because a
+/// delta applied to an empty list looks exactly like a complete window.
 final class ChatTimelineViewController: UIViewController {
     private enum Section { case main }
 
@@ -49,6 +52,17 @@ final class ChatTimelineViewController: UIViewController {
     private let message = UILabel()
     private let spinner = UIActivityIndicatorView(style: .medium)
     private var inFlight: Task<Void, Never>?
+
+    /// The window as merged so far, oldest-first — the fold's input, kept apart
+    /// from its output so a push re-folds from the same rows the server sent
+    /// rather than from something already grouped into capsules.
+    private var inputs: [FoldInput] = []
+    private var stream: HermitStream<WireMessage>?
+    private var streamTask: Task<Void, Never>?
+    /// Frames that arrived before `chat.listMessages` answered. See
+    /// `TimelineMerge.fold`.
+    private var pending: [TimelineMerge.Frame] = []
+    private var windowLanded = false
 
     /// Newest first — see the class comment. Keyed lookups go through `rowsByKey`
     /// because the diffable data source carries `FoldedRow.key`, not the row.
@@ -148,12 +162,14 @@ final class ChatTimelineViewController: UIViewController {
         source = UICollectionViewDiffableDataSource(collectionView: collection) { view, indexPath, key in
             view.dequeueConfiguredReusableCell(using: cell, for: indexPath, item: key)
         }
+
+        observeAppState()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         navigationController?.setNavigationBarHidden(false, animated: animated)
-        load()
+        start()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -161,8 +177,29 @@ final class ChatTimelineViewController: UIViewController {
         if navigationController?.topViewController !== self {
             navigationController?.setNavigationBarHidden(true, animated: animated)
         }
-        inFlight?.cancel()
-        inFlight = nil
+        teardown()
+    }
+
+    /// Backgrounding tears the stream down and foregrounding builds a new one.
+    ///
+    /// Not a nicety: iOS suspends the process, the socket dies without anyone
+    /// being told, and the zombie watchdog only fires once code is running again
+    /// — so a resumed screen would sit on a dead connection for up to
+    /// `streamIdleDeadline` looking perfectly connected. Coming back re-runs the
+    /// window query too, which is what closes the gap the suspension left.
+    private func observeAppState() {
+        let c = NotificationCenter.default
+        c.addObserver(self, selector: #selector(appDidBackground),
+                      name: UIApplication.didEnterBackgroundNotification, object: nil)
+        c.addObserver(self, selector: #selector(appWillForeground),
+                      name: UIApplication.willEnterForegroundNotification, object: nil)
+    }
+
+    @objc private func appDidBackground() { teardown() }
+
+    @objc private func appWillForeground() {
+        guard view.window != nil else { return }
+        start()
     }
 
     /// What a row has to lay out in: the collection's width less the cell's own
@@ -187,16 +224,26 @@ final class ChatTimelineViewController: UIViewController {
 
     // MARK: - Loading
 
-    /// One wire row of `chat.listMessages`. `content` stays JSON: the fold reads
-    /// the raw blocks (`FoldRuns` classifies on the producer's own type string —
-    /// see the note in `FoldRuns.swift` on why it must), and `ContentBlock`
-    /// parses them a second time for the renderer.
-    private struct WireMessage: Decodable {
+    /// One wire row of `chat.listMessages`, and of every `messages` frame on the
+    /// stream. Deliberately one type for both: the server sends the same narrow
+    /// select down each, and the merge is by id ACROSS the two, so a second
+    /// shape here would be two ways to spell the same row.
+    ///
+    /// `content` stays JSON: the fold reads the raw blocks (`FoldRuns` classifies
+    /// on the producer's own type string — see the note in `FoldRuns.swift` on
+    /// why it must), and `ContentBlock` parses them a second time for the
+    /// renderer.
+    struct WireMessage: Decodable {
         let id: String
         let role: String
         let content: JSONValue
         let createdAt: String
         let authoredBy: String?
+
+        var asInput: FoldInput {
+            FoldInput(id: id, role: role, content: content,
+                      createdAt: createdAt, authoredBy: authoredBy)
+        }
     }
 
     private struct WindowInput: Encodable {
@@ -205,18 +252,85 @@ final class ChatTimelineViewController: UIViewController {
         let digest: Bool
     }
 
-    private func load() {
+    /// Open the stream and fetch the window, in that order.
+    ///
+    /// The stream goes first on purpose. It cannot miss anything by starting
+    /// early — frames before the window are held — but starting it second means
+    /// every change between the query being answered and the socket being open
+    /// is simply lost, and nothing later notices, because both halves look
+    /// healthy afterwards.
+    private func start() {
         guard let entry = KeyStore.active() else {
+            teardown()
             show(rows: [])
             message.text = "No machine key on this device yet.\n"
                 + "Sign in on the web view first — the timeline reads the same keyring."
             message.isHidden = false
             return
         }
-        inFlight?.cancel()
+        teardown()
         message.isHidden = true
         if order.isEmpty { spinner.startAnimating() }
-        let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+        let base = KeyStore.base(for: entry)
+        openStream(origin: base)
+        loadWindow(origin: base)
+    }
+
+    private func teardown() {
+        inFlight?.cancel()
+        inFlight = nil
+        streamTask?.cancel()
+        streamTask = nil
+        stream?.stop()
+        stream = nil
+        pending = []
+        windowLanded = false
+    }
+
+    private func openStream(origin: URL) {
+        let s = HermitStream<WireMessage>(
+            origin: origin,
+            sessionId: sessionId,
+            key: { KeyStore.active()?.key ?? "" },
+            // The window query below is already paying for this window.
+            skipInitial: true
+        )
+        stream = s
+        streamTask = Task { [weak self] in
+            for await event in s.events {
+                if Task.isCancelled { return }
+                await MainActor.run { self?.handle(event) }
+            }
+        }
+        s.start()
+    }
+
+    @MainActor
+    private func handle(_ event: HermitStream<WireMessage>.Event) {
+        switch event {
+        case .messages(let rows, let gone):
+            let frame = TimelineMerge.Frame(rows: rows.map(\.asInput), gone: gone)
+            guard windowLanded else {
+                pending.append(frame)
+                return
+            }
+            inputs = TimelineMerge.apply(inputs, frame.rows, gone: frame.gone)
+            refold()
+        case .status, .connected, .frameDropped:
+            // Status drives the header (not built yet); a dropped frame is one
+            // unreadable payload on a connection that is still good, and the
+            // next frame carries the row again.
+            break
+        case .disconnected:
+            // Silent on purpose: the stream reconnects itself, and a banner that
+            // flashes on every backoff is worse than the gap it announces. The
+            // screen keeps showing what it has.
+            break
+        }
+    }
+
+    private func loadWindow(origin: URL) {
+        let api = HermitAPI(origin: origin, key: { KeyStore.active()?.key ?? "" })
         let input = WindowInput(sessionId: sessionId,
                                 limit: WebContract.timelineLimit,
                                 digest: WebContract.timelineDigest)
@@ -224,17 +338,18 @@ final class ChatTimelineViewController: UIViewController {
             do {
                 let wire = try await api.query("chat.listMessages", input: input, as: [WireMessage].self)
                 if Task.isCancelled { return }
-                let rows = FoldRuns.fold(wire.map {
-                    FoldInput(id: $0.id, role: $0.role, content: $0.content,
-                              createdAt: $0.createdAt, authoredBy: $0.authoredBy)
-                })
                 await MainActor.run {
                     guard let self else { return }
                     self.inFlight = nil
                     self.spinner.stopAnimating()
-                    self.show(rows: rows)
-                    self.message.isHidden = !rows.isEmpty
-                    if rows.isEmpty { self.message.text = "Nothing in this conversation yet." }
+                    // Merged, not assigned. On a foreground refresh this screen
+                    // may already hold rows older than the window (paged-in
+                    // history), and assigning would silently throw them away.
+                    self.inputs = TimelineMerge.apply(self.inputs, wire.map(\.asInput))
+                    self.inputs = TimelineMerge.fold(self.inputs, self.pending)
+                    self.pending = []
+                    self.windowLanded = true
+                    self.refold()
                 }
             } catch {
                 if Task.isCancelled { return }
@@ -252,16 +367,38 @@ final class ChatTimelineViewController: UIViewController {
         }
     }
 
+    /// Re-fold the whole window and redraw whatever changed.
+    ///
+    /// Folding the lot on every frame is the blunt option and it is the right
+    /// one here: `FoldRuns.safeSplitIndex` exists precisely because folding a
+    /// suffix is not guaranteed to equal folding the whole, and a live tail is
+    /// exactly where a seam would land. Sixty rows of pure-function work per
+    /// push is not the cost worth being clever about.
+    private func refold() {
+        show(rows: FoldRuns.fold(inputs))
+        message.isHidden = !inputs.isEmpty
+        if inputs.isEmpty { message.text = "Nothing in this conversation yet." }
+    }
+
     /// `rows` arrives oldest-first, the way the fold produces it and the way the
     /// web renders it. It is reversed here, once, because the list is upside
     /// down; everything downstream of this line is newest-first.
     private func show(rows: [FoldedRow]) {
-        let newestFirst = rows.reversed()
+        let newestFirst = Array(rows.reversed())
+        // A row whose key survives but whose CONTENT changed — the open run
+        // gaining a step, a reply growing a sentence — is the common case while
+        // a turn streams, and diffable will not redraw it on identifier alone.
+        // The session list learned this the same way in round 14.
+        let changed: [String] = newestFirst.compactMap { row in
+            guard let old = rowsByKey[row.key], old != row else { return nil }
+            return row.key
+        }
         order = newestFirst.map(\.key)
         rowsByKey = Dictionary(newestFirst.map { ($0.key, $0) }, uniquingKeysWith: { _, last in last })
         var snapshot = NSDiffableDataSourceSnapshot<Section, String>()
         snapshot.appendSections([.main])
         snapshot.appendItems(order, toSection: .main)
+        if !changed.isEmpty { snapshot.reconfigureItems(changed) }
         source.apply(snapshot, animatingDifferences: false)
     }
 }
