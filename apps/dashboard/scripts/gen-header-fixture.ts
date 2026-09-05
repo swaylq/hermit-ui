@@ -99,6 +99,15 @@ const WINDOWS: { runtime: string | null; model: string | null }[] = [
   { runtime: 'codex-exec', model: 'gpt-5.6' },
   { runtime: 'codex-exec', model: 'gpt-5.6-sol-wm' },
   { runtime: 'codex-exec', model: 'gpt-5.3-codex-spark' },
+  // The fleet default and a dated build of it. Deliberately kept even though
+  // they CANNOT fail today: every codex entry except the spark one carries the
+  // same 258,400 the fallback does, so dropping any of them from either table
+  // changes no answer — verified by deleting the gpt-6 row and watching this
+  // fixture stay green. They are a tripwire for the day one of these windows
+  // stops being the default, which is when regenerating the table would move
+  // and a port missing the row would not.
+  { runtime: 'codex-exec', model: 'gpt-6-astra' },
+  { runtime: 'codex-exec', model: 'gpt-6' },
   { runtime: 'codex-exec', model: 'GPT-5.6' },
   { runtime: 'codex-exec', model: '  gpt-5.5  ' },
   { runtime: 'codex-exec', model: 'gpt-4o' },

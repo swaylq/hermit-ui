@@ -484,7 +484,9 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       归档会话的「恢复」，加上手机上那个溢出托盘里的五个（pure chat / 会话详情 /
       查找 / compact / restart）。今天右侧是空的
 - [ ] **模型胶囊**（`modelChipLabel` + `chat.setSessionModel` + 那张模型目录）——
-      只在 `claude-sdk` 且没有凭据、且不是分享链接的会话上出现
+      条件是**不是分享链接**，且 `codex-exec`，或者 `claude-sdk` 且没有凭据。
+      codex 那一半是 09-05 19:07 才加的（`f14567d8`），目录来自网关读 `models_cache.json`
+      推上来的那张表，和 claude 的 `supportedModels()` 不是同一条路
 - [ ] **点标题改名**（`chat.setTitle`）+ 那颗重新生成标题的 `Sparkles`（`chat.autoTitle`）
 - [ ] **状态胶囊和后端胶囊点开会话详情面板**（`chat.sessionDetail`）——
       网页上这两个都是按钮，手机没有 hover，面板是那句被截断的状态唯一能读全的地方
@@ -613,6 +615,29 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 16:5x 那句「全部复刻网页，做完再评审，反复改到完美」把范围定死成全量，见 `GOAL.md`。
 
 ## 踩过的坑
+
+### worktree 里跑 `tsc` 之前一定要先 `prisma generate`（第 5 轮，第三次）
+
+第 16 轮和第 19 轮各记过一次，这一轮又踩了 —— **land 之后为了跟一次别人的改动重新
+`enter` 了一个新 worktree，然后只补了 `node_modules` 软链、忘了 `prisma generate`**，
+于是 `tsc` 吐出两百多条 `Cannot find module '@/generated/prisma/client'` 和一片
+`implicitly has an 'any' type`，一条都不是自己造成的。
+新 worktree 的完整配方是**三步，缺一不可**：
+`ln -sfn ~/hermit-ui/node_modules $WT/node_modules` →
+`cd $WT/apps/dashboard && DATABASE_URL="postgresql://x:x@127.0.0.1:5432/x" $WT/node_modules/.bin/prisma generate` →
+`$WT/node_modules/.bin/tsc --noEmit`，跑完 `rm -f $WT/node_modules`。
+**一轮里 land 过一次就等于换了一个 worktree**，这三步要重来。
+
+### 一轮跑完 land，别人的改动可能正好落在你移植的那个函数上（第 5 轮）
+
+第 5 轮 land 完 `pull`，带回来兄弟会话的两个提交，其中一个给
+`lib/context-window.ts` 的 codex 表加了 `gpt-6` 一行 —— 正是这一轮刚移植成 Swift 的那张表。
+所以 **land + pull 之后要在合并后的检出上把闸门重跑一遍**，而且是「重新生成夹具表再跑」，
+不是只跑 `swiftc`：表是从网页那份代码生成的，网页动了表就该动。
+这次补上 `gpt-6` 之后 128/128。
+**但反证说明这条抓不到**：codex 表里除了 spark 那行，其余每一行都是 258,400，
+和 fallback 一样，删掉哪一行夹具都还是绿的。那张表今天是**记账**，
+等哪天某个窗口不等于默认值，它才开始有牙齿 —— 两边的注释都写了这句。
 
 ### SwiftUI 的 `.frame(maxWidth:)` 是贪婪的，它不是 CSS 的 `max-width`（第 5 轮）
 

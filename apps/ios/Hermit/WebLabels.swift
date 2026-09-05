@@ -117,6 +117,16 @@ enum WebLabels {
     /// web and the order is kept here — `first(where:)` is not `max(by:)`.
     private static let codexWindows: [(prefix: String, window: Int)] = [
         ("gpt-5.3-codex-spark", 121_600),
+        // The fleet default. Listed rather than left to the fallback for the
+        // reason the web gives: the model everything actually runs on landing on
+        // the "never heard of it" branch reads like an oversight.
+        //
+        // Worth knowing that the fixture cannot catch this row going missing —
+        // every codex entry but the spark one carries the same number the
+        // fallback does, so today the whole table is bookkeeping. It stops being
+        // bookkeeping the first time one of these windows differs, and that is
+        // the day a stale table would start lying.
+        ("gpt-6", 258_400),
         ("gpt-5.6", 258_400),
         ("gpt-5.5", 258_400),
         ("gpt-5.4", 258_400),
