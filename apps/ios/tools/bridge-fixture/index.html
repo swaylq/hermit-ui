@@ -45,6 +45,7 @@
 <button id="kring">keychain.set — two machines</button>
 <button id="kactive2">keychain.setActive — m_two</button>
 <button id="kactive1">keychain.setActive — m_one</button>
+<button id="kdead">keychain.set — two machines, dead keys</button>
 
 <div id="out">idle</div>
 
@@ -67,6 +68,15 @@ var KEYRING = [
   { id: 'm_one', name: 'first mac', key: 'key-one', scoped: false, agentName: null, baseUrl: '' },
   { id: 'm_two', name: 'second mac', key: 'key-two', scoped: false, agentName: null, baseUrl: '' }
 ];
+
+// The same two machines with tokens server.py refuses, so `chat.listSessions`
+// answers 401 while the ENTRY IDS stay the same. That combination is what makes
+// the cold-start snapshot provable: the list is keyed by entry id, so it still
+// finds the rows it saved, and the fetch behind them cannot be what put them
+// there. Without a snapshot the same launch shows the failure sentence instead.
+var DEAD_KEYRING = KEYRING.map(function (e) {
+  return { id: e.id, name: e.name, key: 'no-' + e.key, scoped: false, agentName: null, baseUrl: '' };
+});
 
 var seq = 0;
 var pending = {};
@@ -130,6 +140,9 @@ document.getElementById('kactive2').onclick = function () {
 };
 document.getElementById('kactive1').onclick = function () {
   ask('keychain.setActive', { id: 'm_one' }, 'active m_one');
+};
+document.getElementById('kdead').onclick = function () {
+  ask('keychain.set', { value: JSON.stringify(DEAD_KEYRING) }, 'dead keyring');
 };
 
 post({ type: 'ready' });

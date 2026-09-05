@@ -1,7 +1,7 @@
 import UIKit
 import SwiftUI
 
-/// The session list, drawn natively.
+/// The session list, drawn natively — and, as of M3, the app's front door.
 ///
 /// The first screen in this app that is not a web view, and the first place the
 /// shell makes an authenticated request of its own — `README.md` and
@@ -16,6 +16,14 @@ import SwiftUI
 /// a second implementation of a key that has already been got wrong twice on the
 /// web (see the comment in `routers/chat.ts`), and it would be wrong in a way
 /// only a screenshot could catch.
+///
+/// ## The first frame is not blank
+///
+/// A cold start paints `SessionListCache` — the last answer this machine gave —
+/// before it asks for anything, which is the web sidebar's `placeholderData`.
+/// With no snapshot it paints the skeleton instead. Neither is an answer: the
+/// fetch started in `viewWillAppear` replaces whichever it was, and the empty
+/// state and the error sentence still get their turn.
 ///
 /// ## Every five seconds, while you are looking at it
 ///
@@ -48,18 +56,28 @@ final class SessionListViewController: UIViewController {
     private let message = UILabel()
     private let skeleton = UIHostingController(rootView: SessionListSkeleton())
 
-    /// The row `bg-sidebar-accent` is drawn on. Nothing sets it yet — the list
-    /// is not the front door — but the row already knows how to draw it.
+    /// The row `bg-sidebar-accent` is drawn on: the session currently open on
+    /// the screen behind this one. Set on the tap that opens it, so coming back
+    /// to the list shows where you were.
     var activeSessionId: String?
+
+    /// Where a tap goes. Set by whoever put this screen up — `SceneDelegate`,
+    /// which owns the web layer.
+    ///
+    /// NOT a search of the navigation stack, which is what this did while the
+    /// list was pushed in front of the page: the list is the root now, and on a
+    /// cold start there is no web view in the stack at all. Reaching for one and
+    /// finding nil would make a tapped row do nothing, silently.
+    var openPath: ((String) -> Void)?
 
     private var order: [String] = []
     private var itemsById: [String: SessionListItem] = [:]
     private var inFlight: Task<Void, Never>?
     private var poll: Timer?
-    /// Has any answer at all landed — rows, an empty list, an error, or "no key
-    /// on this device"? Until one has, the screen shows the skeleton, and after
-    /// one it never comes back: a poll refreshing a list that is already drawn
-    /// must not blank it.
+    /// Is there anything on this screen yet — a snapshot, rows, an empty list,
+    /// an error, or "no key on this device"? Until there is, it shows the
+    /// skeleton, and afterwards the skeleton never comes back: a poll refreshing
+    /// a list that is already drawn must not blank it.
     private var settled = false {
         didSet { skeleton.view.isHidden = settled }
     }
@@ -69,6 +87,15 @@ final class SessionListViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Sessions"
+        // The one way from this screen into the web app, and the only thing the
+        // empty state's "start a New chat" can be pointing at. `/chat?new=1` and
+        // a square-and-pencil are the sidebar's own button, verbatim
+        // (components/app-sidebar.tsx).
+        let compose = UIBarButtonItem(
+            image: UIImage(systemName: "square.and.pencil"),
+            style: .plain, target: self, action: #selector(newChat))
+        compose.accessibilityLabel = "New chat"
+        navigationItem.rightBarButtonItem = compose
         // `--sidebar`, through the generated contract rather than as two numbers
         // typed here — a hand-copied colour is exactly the drift WebContract
         // exists to end, and this one would have been invisible: a background
@@ -147,6 +174,13 @@ final class SessionListViewController: UIViewController {
             view.dequeueConfiguredReusableCell(using: cell, for: indexPath, item: id)
         }
 
+        // The last answer this machine gave, on screen before anything is asked
+        // for. Unanimated: this is the first frame, not a change to it.
+        if let cached = SessionListCache.read(entryId: KeyStore.active()?.id) {
+            show(items: cached, animated: false)
+            settled = true
+        }
+
         refresh.addTarget(self, action: #selector(pulled), for: .valueChanged)
         collection.refreshControl = refresh
 
@@ -219,6 +253,22 @@ final class SessionListViewController: UIViewController {
 
     @objc private func pulled() { load(.manual) }
 
+    @objc private func newChat() { openPath?("/chat?new=1") }
+
+    /// Move the `bg-sidebar-accent` highlight, redrawing only the two rows that
+    /// can have changed.
+    private func markActive(_ id: String?) {
+        let was = activeSessionId
+        guard was != id else { return }
+        activeSessionId = id
+        var snapshot = source.snapshot()
+        let drawn = Set(snapshot.itemIdentifiers)
+        let touched = [was, id].compactMap { $0 }.filter { drawn.contains($0) }
+        guard !touched.isEmpty else { return }
+        snapshot.reconfigureItems(touched)
+        source.apply(snapshot, animatingDifferences: false)
+    }
+
     private func cancelInFlight() {
         inFlight?.cancel()
         inFlight = nil
@@ -260,6 +310,11 @@ final class SessionListViewController: UIViewController {
                     self.settled = true
                     self.refresh.endRefreshing()
                     self.show(items: rows)
+                    // Next cold start paints this instead of a skeleton. Only a
+                    // real answer is kept, and an empty one is kept too — a
+                    // machine whose last session was deleted has to stop
+                    // painting it.
+                    SessionListCache.write(rows, entryId: entry.id)
                     self.message.isHidden = !rows.isEmpty
                     // `no chats yet — start a New chat.`, the web's own sentence.
                     if rows.isEmpty { self.message.text = "no chats yet — start a New chat." }
@@ -287,7 +342,7 @@ final class SessionListViewController: UIViewController {
         }
     }
 
-    private func show(items rows: [SessionListItem]) {
+    private func show(items rows: [SessionListItem], animated: Bool = true) {
         let previous = itemsById
         order = rows.map(\.id)
         itemsById = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
@@ -301,7 +356,7 @@ final class SessionListViewController: UIViewController {
             return was != itemsById[id]
         }
         if !changed.isEmpty { snapshot.reconfigureItems(changed) }
-        source.apply(snapshot, animatingDifferences: !rows.isEmpty)
+        source.apply(snapshot, animatingDifferences: animated && !rows.isEmpty)
     }
 
     /// The verdict, with the options a list row can honestly supply.
@@ -319,13 +374,13 @@ extension SessionListViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
         guard let id = source.itemIdentifier(for: indexPath) else { return }
-        // Hand it to the page, the same route a Live Activity tap takes, and get
-        // out of the way. The timeline is M4; until it exists this list is a
-        // faster front door onto the same web screen, not a replacement for it.
-        let web = navigationController?.viewControllers
-            .lazy.compactMap({ $0 as? WebViewController }).first
-        guard let web else { return }
-        web.openDeepLink("/chat?session=\(id)")
-        navigationController?.popToViewController(web, animated: true)
+        // Highlight it before leaving, the same beat the web does
+        // (`optimisticActiveId`, recent-lists.tsx): this row is the one that
+        // should be marked when you come back, and nothing else will say so.
+        markActive(id)
+        // Hand it to the page, the same route a Live Activity tap takes. The
+        // timeline is M4; until it exists this list is a faster way onto the
+        // same web screen, not a replacement for it.
+        openPath?("/chat?session=\(id)")
     }
 }

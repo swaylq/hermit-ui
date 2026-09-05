@@ -1,11 +1,27 @@
 import UIKit
 import UserNotifications
 
+/// What the app delegate is allowed to ask of the UI.
+///
+/// Two things, and they are deliberately different. A push TOKEN is bookkeeping
+/// between the shell and the server and changes nothing on screen. A PATH is
+/// somebody tapping a notification, so it has to bring the page forward as well
+/// as navigate it — and since the session list became the root, "the page" may
+/// not be on screen, or even in the navigation stack, when one arrives.
+///
+/// A protocol rather than a `WebViewController` reference because that is the
+/// distinction: this file must not be able to reach a web view directly, or the
+/// second case quietly becomes the first again.
+protocol AppShell: AnyObject {
+    func deliverPushToken(_ token: String, env: ApnsEnvironment)
+    func openPath(_ path: String)
+}
+
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     /// Set by SceneDelegate once the UI exists, so push callbacks — which can fire
     /// before or after that — always have somewhere to deliver to.
-    weak var webController: WebViewController?
+    weak var shell: AppShell?
 
     /// Parked until a controller exists (a notification tap can launch the app cold).
     private var pendingToken: (String, ApnsEnvironment)?
@@ -113,24 +129,24 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
     // MARK: - Delivery to the web layer
 
-    func attach(_ controller: WebViewController) {
-        webController = controller
+    func attach(_ shell: AppShell) {
+        self.shell = shell
         if let (token, env) = pendingToken {
             pendingToken = nil
-            controller.deliverPushToken(token, env: env)
+            shell.deliverPushToken(token, env: env)
         }
         if let path = pendingPath {
             pendingPath = nil
-            controller.openDeepLink(path)
+            shell.openPath(path)
         }
     }
 
     private func deliver(token: String, env: ApnsEnvironment) {
-        if let c = webController { c.deliverPushToken(token, env: env) } else { pendingToken = (token, env) }
+        if let s = shell { s.deliverPushToken(token, env: env) } else { pendingToken = (token, env) }
     }
 
     private func deliver(path: String) {
-        if let c = webController { c.openDeepLink(path) } else { pendingPath = path }
+        if let s = shell { s.openPath(path) } else { pendingPath = path }
     }
 }
 

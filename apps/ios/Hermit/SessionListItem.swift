@@ -10,7 +10,13 @@ import Foundation
 ///
 /// Every date is optional and every flag is optional for the reason
 /// `SessionRuntime` gives: a missing field must read as "cannot say".
-struct SessionListItem: Decodable, Hashable, Identifiable {
+///
+/// `Encodable` too, and only so `SessionListCache` can keep the last answer on
+/// disk. That direction is lossy on purpose — it writes back the declared fields
+/// and no others, so a snapshot carries exactly what a row draws, which is what
+/// a snapshot is for. Anything a later screen needs gets declared here first and
+/// is then in both directions at once.
+struct SessionListItem: Codable, Hashable, Identifiable {
     var id: String
     var agentName: String
     var title: String?

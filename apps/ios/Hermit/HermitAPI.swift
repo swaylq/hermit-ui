@@ -281,6 +281,20 @@ struct HermitAPI {
         return d
     }()
 
+    /// The exact inverse of `decoder`, for the one caller that writes a decoded
+    /// payload back to disk (`SessionListCache`). Not `.iso8601`, which drops the
+    /// milliseconds: a row that goes out through here has to come back in
+    /// through `decoder` as the same instant, and `snapshotAt` is compared
+    /// against thresholds measured in milliseconds.
+    static let encoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .custom { date, encoder in
+            var c = encoder.singleValueContainer()
+            try c.encode(isoWithMillis.string(from: date))
+        }
+        return e
+    }()
+
     /// superjson emits `toISOString()`, which always has milliseconds — but a
     /// hand-rolled `/api/sync/*` payload or a future column read straight out of
     /// Postgres may not, and one missing `.000` should not fail a whole screen.

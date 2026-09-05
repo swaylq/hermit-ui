@@ -33,6 +33,7 @@ TESTS=("$@")
   testTheKeychainKeepsTheKeyring
   testTheNativeListDrawsTheActiveMachinesSessions
   testTheNativeListRefreshesItselfWhileYouWatch
+  testTheSessionListIsTheFrontDoor
   testThePageCanProposeAnotherServer
 )
 
