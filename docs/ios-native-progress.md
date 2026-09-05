@@ -398,7 +398,21 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
 - [ ] markdown 渲染：GFM 表格、围栏代码、14 种语言高亮（bash css diff go javascript
       json markdown plaintext python rust sql typescript xml yaml）。
       **没有数学公式、没有 mermaid** —— 这是省下来的范围。
-      注意这一步会终结「零第三方依赖」
+      **sway 09-05 15:40 点头了：「可以装第三方依赖」**，所以「零第三方依赖」这条性质到此为止，
+      不用再为它绕路。选型的准绳仍然是那句「和网页完全一致」，网页那半是
+      `react-markdown` + `remark-gfm` + **`remark-cjk-friendly`** + `rehype-highlight`
+      （即 `highlight.js`），主题是 `globals.css:162-260` **手写的**一套 `.hljs-*` 规则。
+      由此有两条路，**先花一轮各画一屏、逐像素比，再定**（别凭直觉挑）：
+      **(a) 全 Swift**：`swift-markdown`（Apple，cmark-gfm）+ 一个 Swift 高亮器。
+      干净、无 JS，但两处必然对不上：`remark-cjk-friendly` 那条中日韩强调规则 cmark 没有
+      （`**中文**紧跟标点` 这类会分歧），以及换掉 highlight.js 就等于换了一套分词，
+      而颜色表是按它的 class 名写的。
+      **(b) 解析和高亮都用网页那两份 JS**，在 `JavaScriptCore` 里跑（不是 WebView），
+      Swift 只把 AST 画成原生视图；颜色表照 `gen-ios-contract.ts` 的老套路从 `globals.css`
+      直接生成。一致性最强、网页以后改了重新打一次 bundle 就跟上，代价是包里多一个 JS bundle
+      和一次冷启动的执行开销 —— **两者都要量出来写进这个文件**（bundle 体积、首次高亮耗时、
+      长消息滚动时的帧）。
+      不论走哪条，测法不变：拿真实消息里最长最花的那几条做夹具，两边吃同一份
 - [x] **倒置 `UICollectionView` 的时间线骨架**（每个 cell 也翻转）—— 第 20 轮。
       `apps/ios/Hermit/TimelineRowView.swift`（纯 SwiftUI，画一个 `FoldedRow`）+
       `apps/ios/Hermit/ChatTimelineViewController.swift`（`collection.transform` 竖向翻转、
@@ -543,13 +557,12 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 连接串 `postgresql://znmacserver001@localhost:5432/hermit_dev`，**worktree 里没有 `.env`**，
 独立检出里跑 Prisma 要显式带上它。
 
-**要 sway 拍板的，现在只剩一件**：**M4 的 markdown 那一步要引第一个第三方依赖**
-（GFM 表格 + 围栏代码 + 14 种语言高亮，自己写不现实），这会终结「零第三方依赖」这条一直守着的
-性质，值得他先点头 —— **骨架已经把位置留好了，换掉 `ProseText` 里那一个 `Text` 就行**。
-
-另外三件 09-05 15:05 一起定了 —— 那句「要和网页交互和 UI 保持完全一致」把它们变成了同一个
-答案：左边缘**归网页抽屉**（推翻第 15 轮的处理）、`/chat/terminal` **保持网页**、
-等宽字体**把 Geist Mono 塞进包里**。出处和做法见文件最上面「这条一改，已经落地的四件」。
+**要 sway 拍板的：一件都不剩了。** 09-05 15:05 那句「要和网页交互和 UI 保持完全一致」
+定了三件——左边缘**归网页抽屉**（推翻第 15 轮的处理）、`/chat/terminal` **保持网页**、
+等宽字体**把 Geist Mono 塞进包里**（出处见文件最上面「这条一改，已经落地的四件」）；
+15:40 那句「可以装第三方依赖」定了第四件——**markdown 可以引依赖，「零第三方依赖」这条性质
+到此结束**。选型准绳和两条候选路写在 M4 那一条里，**要先各画一屏逐像素比再定**。
+骨架已经把位置留好了：换掉 `ProseText` 里那一个 `Text` 就行。
 
 `ChatCache` 欠的两件仍然要等 M4 有调用方：`full`/`digest` 两层，以及真机上的 FTS5
 （`ChatCache.open` 建表时就 `CREATE VIRTUAL TABLE`，旧系统缺 FTS5 会在**开库**时炸）。
