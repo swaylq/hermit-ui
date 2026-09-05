@@ -436,16 +436,34 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       不用再为它绕路。选型的准绳仍然是那句「和网页完全一致」，网页那半是
       `react-markdown` + `remark-gfm` + **`remark-cjk-friendly`** + `rehype-highlight`
       （即 `highlight.js`），主题是 `globals.css:162-260` **手写的**一套 `.hljs-*` 规则。
-      由此有两条路，**先花一轮各画一屏、逐像素比，再定**（别凭直觉挑）：
-      **(a) 全 Swift**：`swift-markdown`（Apple，cmark-gfm）+ 一个 Swift 高亮器。
-      干净、无 JS，但两处必然对不上：`remark-cjk-friendly` 那条中日韩强调规则 cmark 没有
-      （`**中文**紧跟标点` 这类会分歧），以及换掉 highlight.js 就等于换了一套分词，
-      而颜色表是按它的 class 名写的。
-      **(b) 解析和高亮都用网页那两份 JS**，在 `JavaScriptCore` 里跑（不是 WebView），
-      Swift 只把 AST 画成原生视图；颜色表照 `gen-ios-contract.ts` 的老套路从 `globals.css`
-      直接生成。一致性最强、网页以后改了重新打一次 bundle 就跟上，代价是包里多一个 JS bundle
-      和一次冷启动的执行开销 —— **两者都要量出来写进这个文件**（bundle 体积、首次高亮耗时、
-      长消息滚动时的帧）。
+      **sway 2026-09-06 定了：走 (b)，JavaScriptCore。** 不用再各画一屏比了，
+      理由他认了那条——换一个分词器，同一段代码就是不同的颜色，而且是永久差异。
+      (a) 只作为下面那条性能红线触发时的退路。
+
+      落地要点，四条：
+
+      1. **JS 只出树，不出 HTML。** bundle 的入口收一段 markdown、吐一份 hast JSON，
+         Swift 照着画原生视图。别让它吐 HTML —— 那会把「怎么画」也搬进 JS，
+         最后要么塞回 WebView（正是这个项目在避开的东西），要么在 Swift 里写一个 HTML 解析器。
+      2. **bundle 必须是生成物，不是手工拷的。** 在 `apps/dashboard/scripts/` 加一步
+         esbuild，从 dashboard **自己的 node_modules** 打出
+         `apps/ios/Hermit/Resources/markdown.bundle.js` 并提交，和
+         `gen-ios-contract.ts` → `WebContract.swift` 同一套纪律：网页升级了
+         `remark-gfm`，重新生成就跟上，手抄一份就会漂。生成器要固定 esbuild 的
+         `--target` 和插件顺序，插件顺序变了输出就变。
+      3. **性能红线：iOS 上进程内的 `JSContext` 没有 JIT。** JIT 只给 WKWebView 那个
+         独立进程，`JavaScriptCore.framework` 在 App 自己进程里是解释执行的。
+         所以要量的不是「bundle 多大」而是**解释执行下的解析耗时**：
+         一条典型消息、一条 200 行带围栏代码的长消息，各量首次和缓存命中；
+         主线程上一帧都不能占（放后台队列），结果按内容哈希缓存进 `ChatCache`。
+         **量出来长消息首次超过 ~100ms 且缓存救不了，就退回 (a)** 并在这里写明数字。
+      4. **颜色表照 `gen-ios-contract.ts` 的老套路从 `globals.css:162-260` 生成。**
+         那套 `.hljs-*` 是手写的，不是主题包，所以生成器要读的是那段 CSS 本身。
+
+      **`apps/ios/README.md` 要如实改**：「零第三方依赖」这句到此为止，
+      但准确的说法是**「零第三方 Swift 包，一份第三方 JS bundle」** —— 两者性质不同
+      （没有 SwiftPM 解析、没有二进制、可审计、随网页一起升级），别含糊成一句
+      「引了依赖」，也别假装还是零。
       不论走哪条，测法不变：拿真实消息里最长最花的那几条做夹具，两边吃同一份
 - [x] **倒置 `UICollectionView` 的时间线骨架**（每个 cell 也翻转）—— 第 20 轮。
       `apps/ios/Hermit/TimelineRowView.swift`（纯 SwiftUI，画一个 `FoldedRow`）+
