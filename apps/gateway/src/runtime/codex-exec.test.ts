@@ -471,11 +471,11 @@ test('HERMIT_CODEX_WEBSOCKETS=1 restores the default transport', () => {
 // that does not offer the tier is not a failure — codex warns and drops it — so
 // there is no per-model table here to go stale.
 
-test('the fleet asks codex for the fast queue', () => {
+test('the fleet uses the ordinary queue by default', () => {
   const previous = process.env.HERMIT_CODEX_SERVICE_TIER;
   delete process.env.HERMIT_CODEX_SERVICE_TIER;
   try {
-    assert.deepEqual(serviceTierConfig(), { service_tier: 'fast' });
+    assert.deepEqual(serviceTierConfig(), {});
   } finally {
     if (previous === undefined) delete process.env.HERMIT_CODEX_SERVICE_TIER;
     else process.env.HERMIT_CODEX_SERVICE_TIER = previous;

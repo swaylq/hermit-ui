@@ -457,15 +457,10 @@ function codexSdkVersion(): string | null {
 /**
  * The queue codex's requests join.
  *
- * codex's own catalog prices the `priority` tier as speed bought with quota —
- * the same model and the same answer, served ahead of the ordinary queue and
- * charged harder against the ChatGPT plan's limits. The price is per-model:
- * "1.5x speed, increased usage" on the gpt-5.6 family, "2x speed, increased
- * usage" on gpt-6-astra. sway chose this tier for the whole fleet on
- * 2026-09-01 alongside gpt-5.6-sol at `max`, and kept it on 2026-09-05 when
- * the default model became gpt-6-astra — so the fleet now sits on the more
- * expensive multiplier. Worth remembering when the weekly allowance looks high:
- * it is one ChatGPT account's budget, shared by every machine.
+ * Standard speed is the fleet default. sway disabled fast mode on 2026-09-05
+ * to reduce subscription usage. Astra and GPT-5.6 fast mode consume credits
+ * at 2.5x their standard rates; the catalog's speed multiplier is a different
+ * number. Model and reasoning effort are independent of this setting.
  *
  * `fast` is the spelling codex's own `/fast` command writes into config.toml;
  * codex resolves it to the tier id `priority` when it builds the request.
@@ -477,11 +472,12 @@ function codexSdkVersion(): string | null {
  * a session pinned to gpt-5.4-mini or gpt-5.3-codex-spark keeps working, and
  * this file does not acquire a second list to keep in sync with the catalog.
  *
- * A machine that wants the ordinary queue back sets
- * HERMIT_CODEX_SERVICE_TIER to `default` or to the empty string; any other
- * value is passed through for codex to validate.
+ * HERMIT_CODEX_SERVICE_TIER=`default` or the empty string also selects the
+ * ordinary queue. Fast mode requires an explicit `fast` override; any other
+ * value is passed through for codex to validate. A local Codex config must
+ * not separately opt into fast mode when the ordinary queue is wanted.
  */
-const DEFAULT_SERVICE_TIER = 'fast';
+const DEFAULT_SERVICE_TIER = 'default';
 
 export function serviceTierConfig(): NonNullable<CodexOptions['config']> {
   const tier = process.env.HERMIT_CODEX_SERVICE_TIER?.trim() ?? DEFAULT_SERVICE_TIER;

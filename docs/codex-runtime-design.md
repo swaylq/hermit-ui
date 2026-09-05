@@ -162,11 +162,13 @@ chip 上写的是真在跑的那个模型名（`gpt-6-astra` → `6-Astra`，省
 
 推理档位本身还是机器级的环境变量，不跟着 chip 走——真要每会话调档，得再加一列。
 
-### 服务档位：fast
+### 服务档位：默认普通速度
 
-codex 目录里这一档叫 `priority`，展示名 "Fast"，描述是 **"1.5x speed, increased usage"**——
-同一个模型同一个答案，插队走，代价是更快吃掉 ChatGPT 套餐额度。`gpt-5.6-sol/terra/luna`、
-`gpt-5.5`、`gpt-5.4` 有这一档，`gpt-5.4-mini` 和 `gpt-5.3-codex-spark` 没有。
+2026-09-05 sway 要求全舰队关闭加速，默认改为普通速度。模型和推理档位由各自配置决定。
+各机设置 `HERMIT_CODEX_SERVICE_TIER=default`，同时检查本机 Codex 配置没有另开加速。
+
+Codex 的加速档叫 `priority`，展示名 "Fast"。Astra 和 GPT-5.6 的加速档消耗额度为普通档的
+**2.5 倍**；目录里的速度倍率不是额度倍率，见 [官方说明](https://learn.chatgpt.com/docs/agent-configuration/speed)。
 
 配置键是 `service_tier`，值写 `fast`（codex 自己的 `/fast` 命令往 config.toml 里写的也是这个
 词），codex 组请求时把它解析成 `priority`。
@@ -176,8 +178,9 @@ codex 目录里这一档叫 `priority`，展示名 "Fast"，描述是 **"1.5x sp
 gpt-5.4-mini and will be omitted from requests` 然后照常发请求（实测 codex-cli 0.152.0）。
 所以钉在某个老模型上的会话不会因此挂掉。
 
-想让某台机器回到普通队列：`HERMIT_CODEX_SERVICE_TIER=default`（或设成空串）。普通队列没有名字
-可发——不发这个键**就是**普通队列，所以这两个值的实现都是"不带 `service_tier` 参数"。
+`HERMIT_CODEX_SERVICE_TIER=default`（或空串）不传 `service_tier` 参数；只有明确设为 `fast`
+才由网关请求加速。省略参数仍会读取 Codex 本机配置，所以全舰队关闭时也要清除
+`~/.codex/config.toml` 内的 `service_tier = "fast"` / `"priority"`。
 
 ### 档位钳制（不是防御性代码）
 
