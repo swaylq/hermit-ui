@@ -10,50 +10,83 @@ import SwiftUI
 // about five seconds, so a change to a padding number gets checked with eyes
 // instead of with hope.
 //
-// The rows below are the states the sidebar can actually be in, one each, and
-// the point is that every one of them is judged by SessionStatus — the port of
-// the function the web row calls — rather than posed by hand.
+// The rows are the states the sidebar can actually be in, one each, and the point
+// is that every one of them is judged by SessionStatus — the port of the function
+// the web row calls — rather than posed by hand. They live in
+// tools/fixtures/session-rows.json so the web renderer draws the same eleven.
 
-let now = Date()
-func ago(_ s: TimeInterval) -> Date { now.addingTimeInterval(-s) }
+// `now` is injectable so the two renderers can agree on what "ago" means: the web
+// row prints relTime() against ITS clock, this one against this process's, and two
+// screenshots taken a second apart would differ in the "12s" column for no reason
+// anyone cares about. tools/pixel-compare.sh sets HERMIT_FIXTURE_NOW once and hands
+// the same epoch to both sides. Unset — the normal way this script is run — it is
+// just the current time.
+let now: Date = {
+    if let ms = ProcessInfo.processInfo.environment["HERMIT_FIXTURE_NOW"],
+       let v = Double(ms) {
+        return Date(timeIntervalSince1970: v / 1000)
+    }
+    return Date()
+}()
 
-func row(
-    _ id: String, _ agent: String, title: String?, preview: String? = nil,
-    msg: TimeInterval? = 90, read: TimeInterval? = 0, snapshot: TimeInterval? = 4,
-    alive: Bool? = true, state: String? = "idle",
-    closed: Bool = false, hidden: Bool = false, asleep: Bool = false,
-    restartAgo: TimeInterval? = nil, bgBusy: Bool? = nil, bgNote: String? = nil
-) -> SessionListItem {
-    SessionListItem(
-        id: id, agentName: agent, title: title, preview: preview,
-        startedAt: ago(86_400 * 3),
-        lastMessageAt: msg.map(ago), lastReadAt: read.map(ago),
-        closedAt: closed ? ago(600) : nil,
-        hiddenAt: hidden ? ago(600) : nil,
-        hibernatedAt: asleep ? ago(600) : nil,
-        restartRequestedAt: restartAgo.map(ago),
-        alive: alive, state: state, snapshotAt: snapshot.map(ago),
-        backgroundBusy: bgBusy, backgroundNote: bgNote
-    )
+/// One row of `tools/fixtures/session-rows.json` — the file this renderer and the
+/// web one both read. The rows used to be written out in Swift right here; they
+/// moved to JSON the moment a second renderer existed, because a pixel comparison
+/// between two lists proves nothing unless it is one list drawn twice.
+///
+/// Every instant arrives as SECONDS BEFORE `now` rather than as a timestamp: a
+/// fixture with dates baked in silently becomes a different list every day, which
+/// is the same trap `tools/bridge-fixture/server.py` fell into.
+struct FixtureRow: Decodable {
+    var id: String
+    var agentName: String
+    var title: String?
+    var preview: String?
+    var startedAtAgo: Double
+    var lastMessageAtAgo: Double?
+    var lastReadAtAgo: Double?
+    var snapshotAtAgo: Double?
+    var closedAtAgo: Double?
+    var hiddenAtAgo: Double?
+    var hibernatedAtAgo: Double?
+    var restartRequestedAtAgo: Double?
+    var alive: Bool?
+    var state: String?
+    var backgroundBusy: Bool?
+    var backgroundNote: String?
+    var active: Bool
+    var pinned: Bool
+
+    func item(now: Date) -> SessionListItem {
+        func at(_ ago: Double?) -> Date? { ago.map { now.addingTimeInterval(-$0) } }
+        return SessionListItem(
+            id: id, agentName: agentName, title: title, preview: preview,
+            startedAt: now.addingTimeInterval(-startedAtAgo),
+            lastMessageAt: at(lastMessageAtAgo), lastReadAt: at(lastReadAtAgo),
+            closedAt: at(closedAtAgo), hiddenAt: at(hiddenAtAgo),
+            hibernatedAt: at(hibernatedAtAgo), restartRequestedAt: at(restartRequestedAtAgo),
+            alive: alive, state: state, snapshotAt: at(snapshotAtAgo),
+            backgroundBusy: backgroundBusy, backgroundNote: backgroundNote)
+    }
 }
 
-let SAMPLES: [(SessionListItem, Bool, Bool)] = [   // row, active, pinned
-    (row("a", "asst", title: "iOS 原生化 — 会话列表", msg: 12, read: 12, state: "working"), true, false),
-    (row("b", "sway", title: "hermit-ui 部署凭据", msg: 400, read: 400, state: "idle",
-         bgBusy: true, bgNote: "background · 1h 28m"), false, true),
-    (row("c", "asst", title: nil, preview: "把 planSync 移植成 Swift，顺手把 FTS5 的分词器换掉",
-         msg: 30, read: 3600), false, false),
-    (row("d", "brain", title: "Longer than the row is wide — a title that has to truncate somewhere",
-         msg: 7_200, read: 0, state: "idle"), false, false),
-    (row("e", "asst", title: "启动中", msg: 60, read: 60, state: "starting"), false, false),
-    (row("f", "asst", title: "重启中", msg: 60, read: 60, state: "idle", restartAgo: 3), false, false),
-    (row("g", "asst", title: "网关沉默了", msg: 900, read: 900, snapshot: 600, state: "working"), false, false),
-    (row("h", "asst", title: "睡着了", msg: 40_000, read: 0, alive: false, state: nil, asleep: true), false, false),
-    (row("i", "asst", title: "归档了", msg: 300_000, read: 0, closed: true), false, false),
-    (row("j", "asst", title: "藏起来了", msg: 300_000, read: 0, hidden: true), false, false),
-    (row("k", "asst", title: "", preview: "", msg: nil, read: nil, snapshot: nil,
-         alive: nil, state: nil), false, false),
-]
+struct RowFixture: Decodable { var rows: [FixtureRow] }
+
+let SAMPLES: [(SessionListItem, Bool, Bool)] = {
+    let path = ProcessInfo.processInfo.environment["HERMIT_ROWS_FIXTURE"]
+        ?? "tools/fixtures/session-rows.json"
+    guard let data = FileManager.default.contents(atPath: path) else {
+        FileHandle.standardError.write(Data("render-list: cannot read \(path)\n".utf8))
+        exit(1)
+    }
+    do {
+        return try JSONDecoder().decode(RowFixture.self, from: data)
+            .rows.map { ($0.item(now: now), $0.active, $0.pinned) }
+    } catch {
+        FileHandle.standardError.write(Data("render-list: \(path): \(error)\n".utf8))
+        exit(1)
+    }
+}()
 
 struct ListMock: View {
     let scheme: ColorScheme

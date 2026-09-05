@@ -17,17 +17,13 @@
 import { useState, useCallback, useMemo, useEffect, memo, lazy, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, Moon, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree, Archive, ArchiveRestore } from 'lucide-react';
+import { Trash2, RotateCw, FoldVertical, X, Search, Pin, Eye, EyeOff, ChevronRight, FolderPlus, FolderOpen, Pencil, ListTree, Archive, ArchiveRestore } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { relTime } from '@/lib/format';
-import { sessionRecencyAt } from '@/lib/session-recency';
-import { isRestingState, sessionStatusView } from '@/lib/session-status';
-import { dashboardReach } from '@/lib/dashboard-reach';
-import { isSessionUnread } from '@/lib/session-read';
-import { useLiveWorking, useLiveStatus, type LiveStatus } from '@/lib/session-live';
+import { useLiveWorking, useLiveStatus } from '@/lib/session-live';
 import { usePins, togglePin } from '@/lib/session-pins';
 import { isSessionPutAway } from '@/lib/session-put-away';
 import { useSessionView, setSessionView, useAgentDrawers, setAgentDrawer, type SessionView } from '@/lib/session-view';
@@ -41,6 +37,9 @@ import { useConfirm, usePrompt } from '@/components/ui/confirm-dialog';
 import { SidebarFindInput } from '@/components/sidebar/sidebar-find-input';
 import { TrashedAgents } from '@/components/sidebar/trashed-agents';
 import { cronStatusTone, type CronStatusTone } from '@/lib/cron-status';
+// The session row lives in its own file so a headless renderer can draw the real
+// one — see components/sidebar/session-row.tsx and apps/ios/tools/pixel-compare.sh.
+import { SessionRow } from '@/components/sidebar/session-row';
 
 // The agent filter dropdown, split off so base-ui's Select (and the floating-ui
 // positioning engine it carries) stays OUT of the app-shell chunk every route
@@ -312,124 +311,6 @@ export function RecentAgents() {
     </div>
   );
 }
-
-// One session row. memo'd: `session` is stable across a no-op poll (RQ structural
-// sharing), `active`/`liveAt`/`live`/`pinned` are primitives, and onPrefetch/
-// onOpenMenu/longPress are stable, so an unchanged row bails. The optimistic-working
-// / unread / status derivation runs INSIDE the row (only when it re-renders), and the
-// per-row handlers are built here from the stable callbacks — neither defeats the memo.
-const SessionRow = memo(function SessionRow({
-  session: s,
-  active,
-  liveAt,
-  live,
-  pinned,
-  onPrefetch,
-  onSelect,
-  onOpenMenu,
-  longPress,
-}: {
-  session: SessionListItem;
-  active: boolean;
-  liveAt: number | null;
-  live: LiveStatus | null;
-  pinned: boolean;
-  onPrefetch: (id: string) => void;
-  onSelect: (id: string) => void;
-  onOpenMenu: (id: string, x: number, y: number) => void;
-  longPress: ReturnType<typeof useLongPress>;
-}) {
-  // Optimistic working: the moment the user sends, the session is marked live
-  // (markSessionWorking) so this dot turns yellow instantly — no waiting ~13s for
-  // the gateway snapshot + 5s poll. Reconcile with the gateway's truth: once it
-  // snapshots the pane AFTER the send (snapshotAt > stamp), drop the optimism and
-  // let the real `state` drive the dot.
-  const optimisticWorking = liveAt != null && (!s.snapshotAt || new Date(s.snapshotAt).getTime() < liveAt);
-  // …but a chat page open on this session doesn't have to guess: it reads the
-  // message stream and the pending-interaction blocks, so when it is speaking
-  // (`live` non-null) its reading REPLACES the guess in both directions — it can
-  // say "working" ~13s before any snapshot could, and its 'idle' retires a send
-  // stamp whose turn quietly died. Same function, same row, same inputs as the
-  // header two inches to the right; that is the point. See lib/session-live.
-  // Read inside the row, not passed in: contact with the dashboard is a fact
-  // about the tab, and a prop that changed on every 5s poll would re-render
-  // every row in the sidebar — the exact cost this memo exists to avoid. A
-  // synchronous read costs nothing extra in a render that already calls
-  // Date.now(), and the row's status only has to be right when it renders.
-  const status = sessionStatusView(s, {
-    unread: isSessionUnread(s),
-    liveWorking: live !== null ? live === 'working' : optimisticWorking,
-    needsYou: live === 'needs-you',
-    ...dashboardReach(),
-  });
-  return (
-    <li>
-      <Link
-        href={`/chat?session=${encodeURIComponent(s.id)}`}
-        // Active styling on the click, not on the URL commit (long-press
-        // swallows this click after its menu fires, so no false active).
-        onClick={() => onSelect(s.id)}
-        onMouseEnter={() => onPrefetch(s.id)}
-        onFocus={() => onPrefetch(s.id)}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          onOpenMenu(s.id, e.clientX, e.clientY);
-        }}
-        {...longPress(s.id)}
-        className={cn(
-          'group block w-full rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors select-none [-webkit-touch-callout:none]',
-          active ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60',
-          s.closedAt && 'opacity-60',
-          s.hiddenAt && 'opacity-50',
-          s.hibernatedAt && !s.closedAt && 'opacity-60',
-        )}
-        // The status is on the row whether or not it is printed: a resting
-        // state shows only a dot, and this is where you find out which one.
-        title={`${s.title || s.preview || s.agentName}\n${status.detail ?? status.label}`}
-      >
-        <div className="flex items-start gap-2 min-w-0">
-          <span
-            className={cn('mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 transition-colors', status.dot, status.pulse && 'animate-pulse')}
-            aria-hidden="true"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-baseline justify-between gap-1.5">
-              <span className={cn('flex-1 truncate text-[13px]', active ? 'text-sidebar-foreground font-medium' : 'text-sidebar-foreground/85')}>
-                {s.title || s.preview || s.agentName}
-              </span>
-              {pinned && (
-                <Pin className="h-3 w-3 shrink-0 self-center -rotate-45 fill-current text-muted-foreground/70" aria-label="pinned" />
-              )}
-              {s.hiddenAt && (
-                <EyeOff className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="hidden" />
-              )}
-              {s.hibernatedAt && (
-                <Moon className="h-3 w-3 shrink-0 self-center text-muted-foreground/60" aria-label="asleep — wakes on send" />
-              )}
-              <span className="shrink-0 text-[10px] font-mono text-muted-foreground/60 tabular-nums">
-                {relTime(sessionRecencyAt(s))}
-              </span>
-            </div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 tabular-nums truncate">
-              <span className="truncate">{s.agentName}</span>
-              {/* A label for everything EXCEPT the resting states. 'asleep' joins
-                  'ready' there on purpose: with claude-sdk most of this list has
-                  no live child at any moment, so labelling it would print the
-                  same word down the whole sidebar. The dimmed dot carries it,
-                  and the row's title spells it out. */}
-              {!isRestingState(status.key) && (
-                <>
-                  <span className="text-muted-foreground/40">·</span>
-                  <span>{status.label}</span>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      </Link>
-    </li>
-  );
-});
 
 // How the session list is arranged: one tree button in the section header. Lit =
 // the agent tree; unlit = the list the way you filed it yourself (your groups,
