@@ -117,7 +117,7 @@ final class ChatTimelineViewController: UIViewController {
     // supplies the facts and performs the two mutations. See ComposerView for
     // what is deliberately not drawn yet.
 
-    private var composerHost: UIHostingController<ComposerView>!
+    private var composerHost: UIHostingController<ComposerStack>!
     private let composer = ComposerState(draft: "", model: ComposerModel(
         placeholder: "", canSend: false, sending: false,
         showStop: false, stopping: false, disabled: false, notice: nil, bottomInset: 0
@@ -135,6 +135,30 @@ final class ChatTimelineViewController: UIViewController {
     /// safe area while the keyboard is down, nothing while it is up. `max()`, not
     /// stacked — the web's `pwa-pb-safe` does the same.
     private var composerBottomInset: CGFloat = 0
+
+    // MARK: The waiting queue
+    //
+    // Messages sent behind a running turn. `QueueCore` decides what the strip
+    // shows; these five fields are the facts it reads, and they are the web's
+    // five (`queue.data`, `starterIds`, `removedQueueIds`, `optimisticQueue`,
+    // `clearQueue.isPending`) under the same names where the name still fits.
+
+    /// `chat.queue` as it last answered — the server's own list, unfiltered.
+    private var queueRows: [QueueCore.Row] = []
+    /// Ids of messages that ARE the running turn rather than queued behind it,
+    /// hidden until the gateway picks them up. See `QueueCore.display`.
+    private var queueStarters: Set<String> = []
+    /// Rows pulled by the reader, hidden before `chat.dequeue` answers.
+    private var queueCancelled: Set<String> = []
+    /// Sends made during a running turn that the queue has not reported yet.
+    /// Kept apart from `outgoing` exactly as the web keeps `optimisticQueue`
+    /// apart from `pending`: a send made while NOTHING was running belongs in
+    /// the timeline only, because it is the turn, not a thing waiting for one.
+    private var queueOptimistic: [ComposerCore.Optimistic] = []
+    /// `chat.clearQueue` is in the air.
+    private var queueClearing = false
+    private var queueTask: Task<Void, Never>?
+    private var queuePoll: Timer?
 
     /// The LIVE window, oldest-first — the newest `WebContract.timelineLimit`
     /// rows, and the only rows the stream carries. Kept apart from the fold's
@@ -266,16 +290,30 @@ final class ChatTimelineViewController: UIViewController {
         view.addSubview(collection)
 
         composer.draft = ComposerDraft.load(sessionId)
-        composerHost = UIHostingController(rootView: ComposerView(
+        composerHost = UIHostingController(rootView: ComposerStack(
             state: composer,
             onSend: { [weak self] in self?.sendDraft() },
             onStop: { [weak self] in self?.stopTurn() },
             onClear: { [weak self] in self?.setDraft("") },
             onDismissNotice: { [weak self] in self?.setNotice(nil) },
-            onDraftChange: { [weak self] value in self?.draftChanged(value) }
+            onDraftChange: { [weak self] value in self?.draftChanged(value) },
+            onCancelQueued: { [weak self] id in self?.cancelQueued(id) },
+            onClearQueue: { [weak self] in self?.clearQueue() }
         ))
         composerHost.view.translatesAutoresizingMaskIntoConstraints = false
         composerHost.view.backgroundColor = .clear
+        // The host's view has no height of its own: the collection's bottom is
+        // pinned to its top and the whole bottom of the screen is however tall
+        // SwiftUI says it is. Without this, that measurement is taken once and
+        // never RETAKEN — the composer's own growth was inside the first
+        // measurement, but the queue strip appearing is not, so the content
+        // overflowed upward, drew over the conversation, and the part of it
+        // outside the view's bounds took no touches. The ✕ on a queued line
+        // worked (it sits low enough to be inside) and 清空队列 at the top of the
+        // card did nothing at all — a control that is plainly there, plainly
+        // enabled, and dead. Nothing but the simulator can see this: every
+        // render on the Mac draws SwiftUI with no UIKit bounds around it.
+        composerHost.sizingOptions = .intrinsicContentSize
         addChild(composerHost)
         view.addSubview(composerHost.view)
         composerHost.didMove(toParent: self)
@@ -577,6 +615,8 @@ final class ChatTimelineViewController: UIViewController {
         loadWindow(origin: base)
         loadMeta(origin: base)
         startMetaPoll(origin: base)
+        loadQueue(origin: base)
+        startQueuePoll(origin: base)
     }
 
     // MARK: - The header's own query
@@ -661,6 +701,173 @@ final class ChatTimelineViewController: UIViewController {
         )
     }
 
+    // MARK: - The waiting queue
+
+    /// `chat.queue`: the user messages the gateway has not picked up yet,
+    /// oldest first.
+    ///
+    /// A separate route from `chat.listMessages` on purpose, and the server says
+    /// why: that query is the hot one and skips `deliveredAt` entirely. So the
+    /// strip is the only thing on this screen that knows a message has been
+    /// written and not started — the timeline draws it as an ordinary bubble.
+    private func loadQueue(origin: URL) {
+        let api = HermitAPI(origin: origin, key: { KeyStore.active()?.key ?? "" })
+        let input = SessionInput(sessionId: sessionId)
+        queueTask?.cancel()
+        queueTask = Task { [weak self] in
+            let got = try? await api.query("chat.queue", input: input, as: [QueuedMessage].self)
+            if Task.isCancelled { return }
+            await MainActor.run {
+                guard let self else { return }
+                self.queueTask = nil
+                // Silent on failure, like the header's own poll: the strip keeps
+                // what it had, and a broken connection is the timeline's news to
+                // break, not this one's.
+                guard let got else { return }
+                self.adopt(queue: got.map { QueueCore.Row(id: $0.id, content: $0.content) })
+            }
+        }
+    }
+
+    /// A fresh answer from `chat.queue`, and the three bits of local memory it
+    /// settles.
+    @MainActor
+    private func adopt(queue rows: [QueueCore.Row]) {
+        queueRows = rows
+        let live = rows.map(\.id)
+        // Both hidden sets shrink to what is still queued — see
+        // `QueueCore.pruneToLive` for why that is the right direction.
+        queueStarters = QueueCore.pruneToLive(queueStarters, live: live)
+        queueCancelled = QueueCore.pruneToLive(queueCancelled, live: live)
+        // A stub whose real row is now in the queue has landed. Against the RAW
+        // list, starters included.
+        queueOptimistic = ComposerCore.dropLanded(
+            queueOptimistic, landed: rows.map { (id: $0.id, content: $0.content) }
+        )
+        refreshQueue()
+        // The strip's length is a rung on the composer's ladder.
+        refreshComposer()
+    }
+
+    /// The web's `refetchInterval`, as a timer.
+    ///
+    /// It fires on the poll's own period and each tick ASKS `QueueCore` whether
+    /// to make the request at all — which is what react-query's callback does
+    /// there. Leaving the timer running while the answer is "no" costs one
+    /// comparison every two seconds and means the moment a turn starts, the next
+    /// tick is already scheduled.
+    private func startQueuePoll(origin: URL) {
+        queuePoll?.invalidate()
+        let timer = Timer(timeInterval: QueueCore.pollMs / 1000, repeats: true) { [weak self] _ in
+            guard let self, self.queueTask == nil else { return }
+            guard QueueCore.pollInterval(inFlight: self.liveWorking,
+                                         serverCount: self.queueRows.count) != nil else { return }
+            self.loadQueue(origin: origin)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        queuePoll = timer
+    }
+
+    /// What the strip shows right now.
+    private var displayQueue: [QueueCore.Row] {
+        QueueCore.display(server: queueRows,
+                          starters: queueStarters,
+                          cancelled: queueCancelled,
+                          optimistic: queueOptimistic)
+    }
+
+    /// Rebuild the strip. Cheap and idempotent, like `refreshComposer`.
+    @MainActor
+    private func refreshQueue() {
+        guard composerHost != nil else { return }
+        let model = QueueBarModel(
+            items: displayQueue.map {
+                QueueBarItem(id: $0.id, label: QueueCore.itemLabel(ComposerCore.msgText($0.content)))
+            },
+            clearing: queueClearing
+        )
+        guard model != composer.queue else { return }
+        composer.queue = model
+    }
+
+    /// The ✕ on one queued line.
+    ///
+    /// Two different actions behind one glyph, and `QueueCore.cancelTarget`
+    /// picks: a stub this screen invented just goes away, while a real row takes
+    /// a `chat.dequeue` — which can come back `removed: false`, meaning the
+    /// gateway got there first. That row is then history, not rubbish, so it is
+    /// put back rather than left hidden.
+    private func cancelQueued(_ id: String) {
+        switch QueueCore.cancelTarget(id: id, optimisticIds: queueOptimistic.map(\.id)) {
+        case .local:
+            queueOptimistic.removeAll { $0.id == id }
+            refreshQueue()
+            refreshComposer()
+        case .server:
+            guard let entry = KeyStore.active() else { return }
+            let restore = { [weak self] in
+                guard let self else { return }
+                self.queueCancelled.remove(id)
+                self.refreshQueue()
+                self.refreshComposer()
+            }
+            // Hide it NOW rather than after the round trip: the reader has just
+            // said they do not want it, and a line that sits there for a second
+            // afterwards reads as the tap having missed.
+            queueCancelled.insert(id)
+            refreshQueue()
+            refreshComposer()
+            let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+            Task { [weak self] in
+                let got = try? await api.mutate("chat.dequeue",
+                                                input: DequeueInput(messageId: id),
+                                                as: DequeueResult.self)
+                await MainActor.run {
+                    guard let self else { return }
+                    if got?.removed != true { restore() }
+                    if let e = KeyStore.active() { self.loadQueue(origin: KeyStore.base(for: e)) }
+                }
+            }
+        }
+    }
+
+    /// Empty the queue.
+    ///
+    /// The stubs go immediately — nothing on a server can answer for them — and
+    /// the real rows stay until the poll says they are gone, which is the web's
+    /// behaviour: the button dims for the round trip instead of the list
+    /// blanking and possibly coming back.
+    private func clearQueue() {
+        guard !queueClearing, let entry = KeyStore.active() else { return }
+        queueOptimistic.removeAll()
+        queueClearing = true
+        refreshQueue()
+        refreshComposer()
+        let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+        let input = SessionInput(sessionId: sessionId)
+        Task { [weak self] in
+            _ = try? await api.mutate("chat.clearQueue", input: input, as: ClearQueueResult.self)
+            await MainActor.run {
+                guard let self else { return }
+                self.queueClearing = false
+                self.refreshQueue()
+                if let e = KeyStore.active() { self.loadQueue(origin: KeyStore.base(for: e)) }
+            }
+        }
+    }
+
+    /// One row of `chat.queue`. `createdAt` is selected by the server and not
+    /// read here — the strip's order is the server's, oldest first.
+    private struct QueuedMessage: Decodable {
+        let id: String
+        let content: JSONValue
+    }
+
+    private struct DequeueInput: Encodable { let messageId: String }
+    /// `removed: false` means the gateway had already delivered it.
+    private struct DequeueResult: Decodable { let removed: Bool }
+    private struct ClearQueueResult: Decodable { let removed: Int }
+
     // MARK: - The composer
 
     /// One outgoing message, as a row the fold can draw.
@@ -729,15 +936,16 @@ final class ChatTimelineViewController: UIViewController {
         model.stopping = stopping
         model.sending = sending > 0
         model.bottomInset = composerBottomInset
+        let queueFull = QueueCore.isFull(displayQueue.count)
         model.placeholder = ComposerCore.placeholder(ComposerCore.Face(
             disabled: closed,
-            // Neither of these can be true yet: the timeline cannot see an
-            // interaction card (M4) and it has no queue readout (M5), so the two
-            // rungs they own are unreachable rather than wrong. Both are their
-            // own checklist lines; passing `false` here is what makes the ladder
-            // itself already correct when they land.
+            // `awaitingInput` still cannot be true: the timeline does not draw
+            // an interaction card yet (M4), so that one rung is unreachable
+            // rather than wrong, and it has its own checklist line. `queueFull`
+            // became reachable in round 7 — it is counted over what the strip
+            // SHOWS, which is what the reader can see.
             awaitingInput: false,
-            queueFull: false,
+            queueFull: queueFull,
             working: stop.turnRunning,
             uploadingCount: 0,
             dictating: false,
@@ -747,7 +955,7 @@ final class ChatTimelineViewController: UIViewController {
             brainGhost: false
         ))
         model.canSend = ComposerCore.canSend(
-            disabled: closed, awaitingInput: false, queueFull: false,
+            disabled: closed, awaitingInput: false, queueFull: queueFull,
             uploadingCount: 0, draft: composer.draft, readyAttachments: 0
         )
         guard model != composer.model else { return }
@@ -812,16 +1020,31 @@ final class ChatTimelineViewController: UIViewController {
         // that comes back — `dropLanded`'s text fallback compares trimmed text.
         let text = ComposerCore.jsTrim(typed)
         let clientId = ComposerCore.newClientId()
+        // Is a turn ALREADY unanswered before this send? If not, this message is
+        // the imminent active turn rather than something queued behind one, and
+        // the strip must not flash it during the ~2s the gateway takes to pick
+        // it up (see `QueueCore.display`). Read BEFORE the optimistic row goes
+        // in, because `turnSignals` counts that row.
+        //
+        // `waitingAssistant`, not `inFlight`: the web gates on the narrower one
+        // on purpose. `inFlight` also counts the streaming tail's decay, so a
+        // send made right after a reply visibly ends was read as "queued" and
+        // stuttered through the strip.
+        let wasIdle = !ComposerCore.turnInFlight(turnSignals).waitingAssistant
+        let content = JSONValue.array([.object(["type": .string("text"), "text": .string(text)])])
 
         scrollToTail()
         setNotice(nil)
-        outgoing.append(ComposerCore.Optimistic(
-            id: clientId, realId: nil,
-            content: .array([.object(["type": .string("text"), "text": .string(text)])])
-        ))
+        outgoing.append(ComposerCore.Optimistic(id: clientId, realId: nil, content: content))
+        // A send made DURING a running turn is a queue item, and the strip shows
+        // it now rather than on the next 2s poll.
+        if !wasIdle {
+            queueOptimistic.append(ComposerCore.Optimistic(id: clientId, realId: nil, content: content))
+        }
         setDraft("")
         sending += 1
         refold()
+        refreshQueue()
         refreshComposer()
         refreshHeader()
 
@@ -834,7 +1057,7 @@ final class ChatTimelineViewController: UIViewController {
             _ = await previous?.result
             do {
                 let sent = try await api.mutate("chat.send", input: input, as: SentMessage.self)
-                await MainActor.run { self?.sendLanded(clientId: clientId, realId: sent.id) }
+                await MainActor.run { self?.sendLanded(clientId: clientId, realId: sent.id, wasIdle: wasIdle) }
             } catch {
                 await MainActor.run { self?.sendFailed(clientId: clientId, typed: typed, error: error) }
             }
@@ -842,7 +1065,7 @@ final class ChatTimelineViewController: UIViewController {
     }
 
     @MainActor
-    private func sendLanded(clientId: String, realId: String) {
+    private func sendLanded(clientId: String, realId: String, wasIdle: Bool) {
         sending = max(0, sending - 1)
         // Hand the bubble over to its real counterpart BY ID. It stays on screen
         // until that exact row arrives (see `ComposerCore.dropLanded`), which is
@@ -850,15 +1073,27 @@ final class ChatTimelineViewController: UIViewController {
         if let i = outgoing.firstIndex(where: { $0.id == clientId }) {
             outgoing[i].realId = realId
         }
+        if let i = queueOptimistic.firstIndex(where: { $0.id == clientId }) {
+            queueOptimistic[i].realId = realId
+        }
+        // Only now is the server id known, and the server id is what
+        // `chat.queue` will report. A message that was the turn is remembered
+        // here so the strip never shows it.
+        if wasIdle { queueStarters.insert(realId) }
         dropLandedOutgoing()
         refold()
+        refreshQueue()
         refreshComposer()
+        // The queue has just changed on the server; ask rather than wait out the
+        // poll. The web's mutation does the same thing by invalidating.
+        if let e = KeyStore.active() { loadQueue(origin: KeyStore.base(for: e)) }
     }
 
     @MainActor
     private func sendFailed(clientId: String, typed: String, error: Error) {
         sending = max(0, sending - 1)
         outgoing.removeAll { $0.id == clientId }
+        queueOptimistic.removeAll { $0.id == clientId }
         // Put back what was typed, untrimmed, exactly as it was — including a
         // trailing newline someone was in the middle of writing after.
         if composer.draft.isEmpty { setDraft(typed) }
@@ -867,6 +1102,7 @@ final class ChatTimelineViewController: UIViewController {
         // is the useful half.
         setNotice(error.localizedDescription)
         refold()
+        refreshQueue()
         refreshComposer()
     }
 
@@ -940,6 +1176,10 @@ final class ChatTimelineViewController: UIViewController {
         metaTask = nil
         metaPoll?.invalidate()
         metaPoll = nil
+        queueTask?.cancel()
+        queueTask = nil
+        queuePoll?.invalidate()
+        queuePoll = nil
         // `meta` and `pushedStatus` deliberately survive: coming back from the
         // background re-queries, and blanking the header for that round trip
         // would be a flicker with nothing behind it.

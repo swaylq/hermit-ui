@@ -69,6 +69,72 @@ let CASES: [Case] = [
          draft: LONG_DRAFT, model: model(draft: LONG_DRAFT)),
 ]
 
+/// The queue strip, on its own and then under a composer.
+///
+/// Its labels come out of `QueueCore` for the same reason the composer's do:
+/// what a picture says here is what the phone will say. The interesting case is
+/// the one that only a picture answers — a queued line long enough to need the
+/// ellipsis, beside a ✕ that must not be pushed off the edge.
+func queueItems(_ labels: [String]) -> [QueueBarItem] {
+    labels.enumerated().map { i, text in
+        QueueBarItem(id: "q\(i)", label: QueueCore.itemLabel(text))
+    }
+}
+
+let LONG_QUEUED = "把队列条也做成原生的，顺便把 dequeue 和 clearQueue 一起接进来，" +
+    "这一行故意写得很长，长到必须省略号"
+
+struct QueueCase {
+    var why: String
+    var model: QueueBarModel
+}
+
+let QUEUE_CASES: [QueueCase] = [
+    QueueCase(why: "one message waiting", model: QueueBarModel(items: queueItems(["再看一下那个报错"]))),
+    QueueCase(why: "three, one of them too long for the line — the ✕ stays put",
+              model: QueueBarModel(items: queueItems(["先跑构建", LONG_QUEUED, "然后出图"]))),
+    QueueCase(why: "an attachments-only send has no prose to show",
+              model: QueueBarModel(items: queueItems(["", "看看这张图"]))),
+    QueueCase(why: "full: five is QUEUE_LIMIT, and the composer below says so",
+              model: QueueBarModel(items: queueItems(["一", "二", "三", "四", "五"]))),
+    QueueCase(why: "清空队列 was pressed — the button is out until the server answers",
+              model: QueueBarModel(items: queueItems(["一", "二"]), clearing: true)),
+]
+
+struct QueueStates: View {
+    let scheme: ColorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(QUEUE_CASES.enumerated()), id: \.offset) { _, c in
+                Text(c.why)
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(WebContract.mutedForeground.resolve(scheme).opacity(0.6))
+                    .padding(.horizontal, ComposerMetrics.padH)
+                    .padding(.top, 10)
+                QueueBarView(model: c.model, onCancel: { _ in }, onClear: {})
+                    .padding(.bottom, 6)
+            }
+            Text("the whole bottom of the screen: strip + composer, queue full")
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(WebContract.mutedForeground.resolve(scheme).opacity(0.6))
+                .padding(.horizontal, ComposerMetrics.padH)
+                .padding(.top, 14)
+            ComposerStack(
+                state: ComposerState(draft: "这一条发不出去",
+                                     model: model(working: true, queueFull: true, draft: "这一条发不出去"),
+                                     queue: QUEUE_CASES[3].model),
+                onSend: {}, onStop: {}, onClear: {}, onDismissNotice: {},
+                onDraftChange: { _ in }, onCancelQueued: { _ in }, onClearQueue: {}
+            )
+        }
+        .frame(width: CANVAS_WIDTH, alignment: .topLeading)
+        .background(WebContract.background.resolve(scheme))
+        .environment(\.colorScheme, scheme)
+        .environment(\.hermitStillFrame, true)
+    }
+}
+
 struct ComposerStates: View {
     let scheme: ColorScheme
 
@@ -110,6 +176,8 @@ enum Main {
         let outDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "."
         shoot(ComposerStates(scheme: .dark), "composer-dark", outDir)
         shoot(ComposerStates(scheme: .light), "composer-light", outDir)
+        shoot(QueueStates(scheme: .dark), "queue-bar-dark", outDir)
+        shoot(QueueStates(scheme: .light), "queue-bar-light", outDir)
 
         // What the ladder actually answered, printed so a wrong rung can be
         // named rather than squinted at.
@@ -117,6 +185,10 @@ enum Main {
         for c in CASES {
             print("\(c.model.canSend ? "send" : "····")  \(c.model.showStop ? "STOP" : "····")  \(c.why)")
             print("        placeholder: \(c.model.placeholder.isEmpty ? "‹empty›" : c.model.placeholder)")
+        }
+        print("")
+        for c in QUEUE_CASES {
+            print("\(QueueCore.isFull(c.model.items.count) ? "FULL" : "····")  \(QueueCore.summary(c.model.items.count))  — \(c.why)")
         }
     }
 }

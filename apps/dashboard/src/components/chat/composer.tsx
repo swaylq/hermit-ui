@@ -16,6 +16,7 @@ import dynamic from 'next/dynamic';
 import { Plus, ArrowUp, FileText, Loader2, Mic, X } from 'lucide-react';
 import { msgText, type Attachment } from '@/components/chat/lib';
 import { composerCanSend, composerPlaceholder } from '@/components/chat/composer-core';
+import { QUEUE_CLEAR_LABEL, queueItemLabel, queueSummary } from '@/components/chat/queue-core';
 import { Collapse } from '@/components/chat/collapse';
 import { originalFor } from '@/lib/translate-outbound';
 import { canOpenMicSilently, refreshMicPermission, requestMicAccess } from '@/lib/voice-capture';
@@ -53,14 +54,14 @@ export function QueueBar({
     <Collapse open={items.length > 0} className="mx-auto w-full max-w-3xl px-3">
       <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
         <div className="mb-1 flex items-center justify-between text-muted-foreground">
-          <span>{items.length} 条排队中 · 等当前任务完成后依次执行</span>
+          <span>{queueSummary(items.length)}</span>
           <button
             type="button"
             onClick={onClear}
             disabled={clearing}
             className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground transition-colors disabled:opacity-40 cursor-pointer"
           >
-            清空队列
+            {QUEUE_CLEAR_LABEL}
           </button>
         </div>
         <ul className="flex flex-col gap-1">
@@ -70,7 +71,7 @@ export function QueueBar({
               {/* What the reader typed, not the English it was translated into
                   on the way out — otherwise the bubble above shows Chinese and
                   this strip shows English for the same message. */}
-              <span className="min-w-0 flex-1 truncate text-foreground/80">{queuePreview(it.content) || '（附件）'}</span>
+              <span className="min-w-0 flex-1 truncate text-foreground/80">{queueItemLabel(queuePreview(it.content))}</span>
               <button
                 type="button"
                 onClick={() => onCancel(it.id)}

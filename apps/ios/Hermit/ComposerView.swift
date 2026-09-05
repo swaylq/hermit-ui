@@ -141,10 +141,16 @@ private enum ComposerAmber {
 final class ComposerState: ObservableObject {
     @Published var draft: String
     @Published var model: ComposerModel
+    /// The waiting-dispatch strip above the row. Here rather than in its own
+    /// object because it is published on the same clock as everything else the
+    /// bottom of this screen shows, and because the two are one unit to the
+    /// reader: a message leaves the box and appears in the strip.
+    @Published var queue: QueueBarModel
 
-    init(draft: String = "", model: ComposerModel) {
+    init(draft: String = "", model: ComposerModel, queue: QueueBarModel = QueueBarModel()) {
         self.draft = draft
         self.model = model
+        self.queue = queue
     }
 }
 

@@ -843,7 +843,165 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer at the end")
     }
 
+    /// The waiting-dispatch strip: it counts, it leaves out the message that IS
+    /// the turn, it pulls one row back out, and it empties.
+    ///
+    /// **Nothing here asserts a count it did not put there.** The fixture server
+    /// outlives every test in the run, so the queue this test opens on holds
+    /// whatever the composer test sent — an earlier version opened by asserting
+    /// "1 条排队中", passed alone, and failed in the suite. So it empties the queue
+    /// first, through the button it is about to test, and every number after that
+    /// is one this test caused.
+    ///
+    /// Both mutations are proved ACROSS A RELAUNCH. Inside one run the strip
+    /// hides a pulled row locally (`queueCancelled`) whether or not
+    /// `chat.dequeue` reached anything, so an assertion taken before the relaunch
+    /// would pass against a button wired to nothing.
+    func testTheNativeQueueStripShowsAndPullsBack() throws {
+        let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
+        guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
+
+        app.launchArguments = ["-hermitOrigin", fixture]
+        app.launch()
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer")
+        app.webViews.buttons["keychain.set — two machines"].tap()
+        XCTAssertTrue(fixtureSays("keyring ok"), "the shell refused to store the keyring")
+        app.webViews.buttons["keychain.setActive — m_two"].tap()
+        XCTAssertTrue(fixtureSays("active m_two ok"), "the shell would not record which entry is active")
+
+        openTimeline()
+
+        // ── the strip is the server's, not the timeline's ────────────────────
+        //
+        // The seeded row is in `chat.queue` and in NOTHING else — no client sent
+        // it and it is absent from `chat.listMessages`. A strip built out of the
+        // timeline would never show it.
+        XCTAssertTrue(screenSays("queued from somewhere else", timeout: 25),
+                      "the queue strip never showed the seeded row — chat.queue is not being polled")
+        settle(); shoot("32-queue-strip")
+
+        // ── empty it, and start counting ─────────────────────────────────────
+        //
+        // This is also the first assertion about `chat.clearQueue`: emptying the
+        // strip locally only drops rows this client invented, and every row on
+        // screen right now came from the server. They go when a poll says they
+        // are gone, and not before.
+        app.buttons["queue.clear"].tap()
+        XCTAssertTrue(screenStops("条排队中", timeout: 20),
+                      "清空队列 left the strip up — chat.clearQueue never reached the server")
+
+        // ── the message that IS the turn does not belong in the strip ────────
+        //
+        // Nothing is running — the newest row of a freshly loaded window is the
+        // agent's — so this send is the imminent active turn. It lands in
+        // `chat.queue` all the same (this fixture has no gateway to drain it) and
+        // the strip has to leave it out. Without `starters` the strip comes back
+        // here and stays.
+        let box = composerField()
+        XCTAssertTrue(box.waitForExistence(timeout: 10), "the timeline has no composer")
+        box.tap()
+        box.typeText("the turn itself")
+        app.buttons["composer.send"].tap()
+        // The row the SERVER wrote, matched on the separator so the optimistic
+        // bubble cannot satisfy it — that one says only what was typed. Not
+        // "server #1": the count is the fixture's and it depends on which tests
+        // ran before this one.
+        XCTAssertTrue(screenSays("· the turn itself", timeout: 25),
+                      "the first send never came back")
+        settle()
+        XCTAssertFalse(screenSays("条排队中", timeout: 6),
+                       "the message that IS the running turn was counted as queued")
+
+        // ── a send made behind a running turn IS queued ──────────────────────
+        let box2 = composerField()
+        box2.tap()
+        box2.typeText("behind it")
+        app.buttons["composer.send"].tap()
+        XCTAssertTrue(screenSays("1 条排队中", timeout: 20),
+                      "a message sent while a turn was unanswered never reached the strip")
+        XCTAssertTrue(screenSays("· behind it", timeout: 25), "the second send never came back")
+
+        let box3 = composerField()
+        box3.tap()
+        box3.typeText("and then this")
+        app.buttons["composer.send"].tap()
+        XCTAssertTrue(screenSays("2 条排队中", timeout: 20), "the third send never reached the strip")
+        settle(); shoot("33-queue-two-waiting")
+
+        // ── pull one back out ────────────────────────────────────────────────
+        //
+        // Line 1 is "behind it": the strip is in server order and the message
+        // that is the turn is not in it.
+        let pull = app.buttons["queue.cancel.1"]
+        XCTAssertTrue(pull.waitForExistence(timeout: 5), "a queued line has no ✕")
+        pull.tap()
+        XCTAssertTrue(screenSays("1 条排队中", timeout: 10),
+                      "the ✕ did not take the line off the strip")
+        settle(); shoot("34-queue-after-dequeue")
+
+        // The proof that the ✕ was a mutation and not a local hide: come back
+        // with no local state at all. The server holds the three sends minus the
+        // one that was pulled, and all of them are in the strip now — the message
+        // that was the turn was only a starter to the run that sent it.
+        app.terminate()
+        app.launch()
+        openTimeline()
+        XCTAssertTrue(screenSays("2 条排队中", timeout: 40),
+                      "after a relaunch the strip is the server's own answer, and it is not 2")
+        XCTAssertFalse(screenSays("3 条排队中", timeout: 3),
+                       "the pulled row is still on the server — chat.dequeue never happened")
+        XCTAssertFalse(screenSays("· behind it", timeout: 3),
+                       "the row that was pulled is back in the strip")
+
+        // ── empty it again, and prove that one too ───────────────────────────
+        let clear = app.buttons["queue.clear"]
+        XCTAssertTrue(clear.waitForExistence(timeout: 10), "the strip has no 清空队列 button")
+        clear.tap()
+        XCTAssertTrue(screenStops("条排队中", timeout: 20),
+                      "清空队列 left the strip up the second time")
+        settle(); shoot("35-queue-cleared")
+
+        app.terminate()
+        app.launch()
+        openTimeline()
+        XCTAssertFalse(screenSays("条排队中", timeout: 8),
+                       "the queue came back after a relaunch — chat.clearQueue never emptied it")
+
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer at the end")
+    }
+
     // MARK: - helpers
+    /// Deep-link into the fixture's chat session and wait for it to draw.
+    ///
+    /// The newest row carries the key and the window the request was made with,
+    /// so waiting on it is waiting for a real answer rather than for a screen.
+    private func openTimeline(file: StaticString = #filePath, line: UInt = #line) {
+        XCUIDevice.shared.system.open(URL(string: "hermit://timeline/s_timeline")!)
+        XCTAssertTrue(screenSays("window · key m_two · limit 60 · digest 1", timeout: 40),
+                      "the native timeline never drew its window", file: file, line: line)
+    }
+
+    /// Wait for something to LEAVE the screen.
+    ///
+    /// NOT `XCTAssertFalse(screenSays(…))`, which is what the queue test wrote
+    /// first: `waitForExistence` answers TRUE the instant the element is there,
+    /// so that phrasing asks "was it absent when I looked" and fails against
+    /// anything that goes away over a round trip rather than in the same frame.
+    /// It failed against a strip that did in fact empty. Absence is a poll.
+    private func screenStops(_ needle: String, timeout: TimeInterval = 15) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        let match = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", needle))
+        repeat {
+            if match.count == 0 { return true }
+            Thread.sleep(forTimeInterval: 0.4)
+        } while Date() < deadline
+        return false
+    }
+
     /// Let the list stop moving before a screenshot.
     ///
     /// Every shot in this test is taken the instant an assertion passed, which

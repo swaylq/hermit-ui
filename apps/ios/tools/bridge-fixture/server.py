@@ -331,6 +331,27 @@ SENT_ORDER = []      # clientIds, in the order they arrived
 CANCELS = []         # every chat.cancelTurn we were asked for
 SEND_LOCK = threading.Lock()
 
+# ── the waiting queue (M5) ───────────────────────────────────────────────────
+#
+# What `chat.queue` reports: user messages written and not yet picked up. Every
+# `chat.send` lands here and nothing ever drains it — this fixture has no
+# gateway, and a queue that emptied itself on a timer would make the strip's
+# assertions race a clock.
+#
+# The seed is a row NOBODY here sent: another client queued it, which is a real
+# thing that happens and is also the only way to prove the strip reads
+# `chat.queue` rather than the timeline. It is deliberately absent from
+# `chat.listMessages` for that reason — on the real server every queued row is
+# also a timeline row, so a strip that quietly read the timeline would look
+# right there and show nothing at all here.
+QUEUE = [{
+    "id": "qseed1",
+    "content": [{"type": "text", "text": "queued from somewhere else"}],
+    "createdAt": stamp(time.time() - 30),
+}]
+DEQUEUED = []        # every chat.dequeue messageId we were asked for
+CLEARS = []          # how many rows each chat.clearQueue took
+
 
 def sent_row(client_id, text):
     """The row `chat.send` answers with, minted once per clientId."""
@@ -376,13 +397,17 @@ class Handler(SimpleHTTPRequestHandler):
             return self.list_messages()
         if route == "/api/trpc/chat.listMessagesBefore":
             return self.list_before()
+        if route == "/api/trpc/chat.queue":
+            return self.queue()
         if route == "/api/chat/stream":
             return self.stream()
         if route == "/__fixture/sent":
             # What the composer actually posted, for the test to read back. Not a
             # dashboard route — the two leading underscores are there so nobody
             # mistakes it for one.
-            return self.reply(200, {"clientIds": SENT_ORDER, "cancels": CANCELS})
+            return self.reply(200, {"clientIds": SENT_ORDER, "cancels": CANCELS,
+                                    "dequeued": DEQUEUED, "clears": CLEARS,
+                                    "queue": [r["id"] for r in QUEUE]})
         super().do_GET()
 
     def do_POST(self):
@@ -391,6 +416,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_message()
         if route == "/api/trpc/chat.cancelTurn":
             return self.cancel_turn()
+        if route == "/api/trpc/chat.dequeue":
+            return self.dequeue()
+        if route == "/api/trpc/chat.clearQueue":
+            return self.clear_queue()
         self.plain(404, "no POST route " + route)
 
     # ── replies ──────────────────────────────────────────────────────────────
@@ -468,7 +497,49 @@ class Handler(SimpleHTTPRequestHandler):
         # edit.
         if not replayed:
             emit(TIMELINE_SESSION, sent_frame(row), after=1.0)
+            # A sent message is a queued message until a gateway takes it, and
+            # there is no gateway here. So it stays, and the shell has to decide
+            # for itself which of these rows belongs in the strip — the one that
+            # IS the running turn does not (see QueueCore.display's `starters`).
+            with SEND_LOCK:
+                QUEUE.append({"id": row["id"], "content": row["content"],
+                              "createdAt": row["createdAt"]})
         self.reply(200, trpc(row, {"createdAt": ["Date"]}))
+
+    def queue(self):
+        name = self.identity()
+        if not name:
+            return self.reply(401, unauth("chat.queue"))
+        with SEND_LOCK:
+            rows = list(QUEUE)
+        # `envelope` builds superjson's own `values` map for the list, so the
+        # strip is answered the way every other list route here is answered.
+        self.reply(200, envelope(rows))
+
+    def dequeue(self):
+        """Pull one row back out. `removed: false` is a real answer, not an error:
+        it means the gateway got there first, and the shell has to put the line
+        back rather than leave it hidden."""
+        name = self.identity()
+        if not name:
+            return self.reply(401, unauth("chat.dequeue"))
+        mid_ = self.trpc_body().get("messageId") or ""
+        DEQUEUED.append(mid_)
+        with SEND_LOCK:
+            before = len(QUEUE)
+            QUEUE[:] = [r for r in QUEUE if r["id"] != mid_]
+            removed = len(QUEUE) != before
+        self.reply(200, trpc({"removed": removed}, {}))
+
+    def clear_queue(self):
+        name = self.identity()
+        if not name:
+            return self.reply(401, unauth("chat.clearQueue"))
+        with SEND_LOCK:
+            n = len(QUEUE)
+            QUEUE.clear()
+        CLEARS.append(n)
+        self.reply(200, trpc({"removed": n}, {}))
 
     def cancel_turn(self):
         name = self.identity()
@@ -507,11 +578,14 @@ class Handler(SimpleHTTPRequestHandler):
         row = {
             "id": TIMELINE_SESSION,
             "agentName": "asst",
-            # The cancel count rides on the title so a `chat.cancelTurn` is
-            # visible ON SCREEN one poll later. The alternative was an HTTP call
-            # out of the test process to read the fixture's own state, which is a
-            # second way for the test to be wrong.
-            "title": "getSession #%d · key %s · cancels %d" % (next(META_SERVED), name, len(CANCELS)),
+            # The mutation counters ride on the title so a `chat.cancelTurn`, a
+            # `chat.dequeue` and a `chat.clearQueue` are each visible ON SCREEN
+            # one poll later. The alternative was an HTTP call out of the test
+            # process to read the fixture's own state, which is a second way for
+            # the test to be wrong. `pulls`/`clears` are what tell a strip that
+            # emptied itself locally from one that emptied on the server.
+            "title": "getSession #%d · key %s · cancels %d · pulls %d · clears %d"
+                     % (next(META_SERVED), name, len(CANCELS), len(DEQUEUED), len(CLEARS)),
             "preview": "should never be read — the title is not empty",
             "origin": "web",
             "startedAt": ago(7200), "lastMessageAt": ago(3), "lastReadAt": ago(3),

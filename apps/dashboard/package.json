@@ -19,6 +19,8 @@
     "gen:merge-fixture": "tsx scripts/gen-merge-fixture.ts",
     "gen:header-fixture": "tsx scripts/gen-header-fixture.ts",
     "gen:composer-fixture": "tsx scripts/gen-composer-fixture.ts",
+    "gen:queue-fixture": "tsx scripts/gen-queue-fixture.ts",
+    "render:queue-bar": "tsx scripts/render-queue-bar.tsx",
     "render:session-rows": "tsx scripts/render-session-rows.tsx",
     "seed": "tsx scripts/seed-machine.ts",
     "migrate": "prisma migrate deploy",

@@ -518,9 +518,15 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
 - [ ] **输入框左边那颗 `+`（附件）**：`/api/upload` multipart，20 图 / 10 文件上限，
       用返回的 **safe** url。**今天那一格是空的** —— 画一颗点不动的 `+` 比不画更坏，
       但空着就意味着输入框比网页少一格、发送圈往左挪了 36pt，这是看得见的差
-- [ ] **队列条**（`QUEUE_LIMIT=5`）+ `chat.queue` / `dequeue` / `clearQueue`。
-      没有它，`composerPlaceholder` 的 `queue full` 那一级和 `canSend` 的 `queueFull`
-      在原生这边永远是 false —— 梯子本身已经是对的，缺的是喂给它的那个数
+- [x] **队列条**（`QUEUE_LIMIT=5`）+ `chat.queue` / `dequeue` / `clearQueue` —— 第 7 轮。
+      `Hermit/QueueCore.swift`（七个纯函数配 `tools/queue-fixture.sh`）+
+      `Hermit/QueueBarView.swift`（纯 SwiftUI）。`composerPlaceholder` 的 `queue full`
+      那一级和 `canSend` 的 `queueFull` 第一次拿到真数。网页那边把同样的判断从
+      `chat/page.tsx` 抬进 `components/chat/queue-core.ts`，两边跑同一张表
+- [ ] **出站自动翻译**：网页发送前可以把中文译成英文（`translateOutgoing`），
+      时间线和队列条再用 `originalFor` 把它显示回你打的那句。原生这边一整条都没有 ——
+      所以 `QueueCore.itemLabel` 收的是「已经解析好的那句话」，网页传译回来的、
+      原生传 `msgText` 的原文。功能本身是 `/api/translate` 加一个会话级的 Map
 - [ ] **`streamingTailId`**：网页盯着尾部 assistant 行的 JSON 在两次轮询之间长没长，
       长了就把「在跑」再撑 1.8 秒，并且把这个信号喂进 `sessionStatusView(liveWorking:)`。
       原生这边 `turnInFlight(streamingTail:)` 今天恒为 false，靠网关的 `working`
@@ -568,18 +574,18 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 > 2026-09-05 16:35 起，这个清单由 `perfect-goal` 的轮次驱动，轮次日志在
 > `~/agents/asst/projects/ios-native/goal/ROUNDS.md`，目标与验收标准在同目录的 `GOAL.md`。
-> 目标未变：把这个清单清空。**清单 34/61** —— 分母涨了 5：第 6 轮做完输入框最小的
-> 那一半（勾掉一条），并把这一条里**没做的部分拆成五条明写的**（`+` 附件 / 队列条 /
-> `streamingTailId` / 桌面键盘的两条快捷键 / 把列表点进原生时间线）。都是
-> 「全部复刻网页」躲不掉的，留在散文里只会让清单先清空、活后干完。
+> 目标未变：把这个清单清空。**清单 35/62** —— 第 7 轮勾掉队列条，分母涨 1：
+> 队列条那一行的预览文字在网页上会先过一遍「把译出去的英文显示回你打的中文」，
+> 原生一整条翻译都没有，所以把**出站自动翻译**写成明写的一条。
+> 留在散文里的活只会让清单先清空、活后干完。
 
-**第 1 条：队列条 + `chat.queue`。** 输入框的梯子里 `queue full` 那一级今天喂不到数，
-`dequeue` / `clearQueue` 也还没接。做完它，`composerPlaceholder` 和 `composerCanSend`
-两个已经移植好的纯函数才第一次拿到全部四个输入。
+**第 1 条：`+` 附件。** 输入框左边那一格今天是空的 —— 网页那颗 `+` 在，原生不在，
+整排控件因此比网页少一格、发送圈往左挪了 36pt。`/api/upload` multipart，20 图 / 10 文件，
+用返回的 **safe** url。这是「看得见的差」里最后一件挡在「把会话列表点进原生时间线」前面的。
 
-**第 2 条：`+` 附件。** 输入框左边那一格今天是空的 —— 网页那颗 `+` 在，原生不在，
-整排控件因此比网页少一格。`/api/upload` multipart，20 图 / 10 文件，用返回的 **safe** url。
-做完这两条，「把会话列表那一行点进原生时间线」才能开。
+**第 2 条：`streamingTailId`。** `turnInFlight(streamingTail:)` 在原生恒为 false，
+靠网关的 `working` 兜底 —— 最多晚一次 5 秒轮询，是晚不是错。做掉它，
+`composerCore` 五个纯函数的输入才第一次全部到齐。
 
 **第 3 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
 所以翻页每一页都问服务端，而网页读过一遍的历史是零网络的。加 `full` / `digest` 两个行存储
@@ -636,6 +642,65 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 16:5x 那句「全部复刻网页，做完再评审，反复改到完美」把范围定死成全量，见 `GOAL.md`。
 
 ## 踩过的坑
+
+### `UIHostingController` 的 view 不会自己重新量高，多出来的部分不接触摸（第 7 轮）
+
+时间线底下那一坨（队列条 + 输入框）是一个 `UIHostingController`，**没有高度约束** ——
+列表的底边钉在它的顶边上，整块有多高由 SwiftUI 说了算。队列条出现之后，
+SwiftUI 的内容长高了，**宿主 view 的 frame 没有跟着长**：多出来的那截画在了 bounds 外面，
+所以
+
+- **看起来完全正常** —— UIKit 默认不裁剪，条子照画，只是压在会话上面（截图里最后一行
+  正文被条子的圆角切掉了一小块，这是唯一的线索）；
+- **条子上半截不接触摸** —— `hitTest` 在 bounds 外面返回 nil。每行的 ✕ 位置靠下，
+  在 bounds 里，能点；**顶上那颗「清空队列」在 bounds 外面，点了什么都不发生**。
+  按钮在那儿、是启用的、XCUITest 也认为它 hittable（它信 SwiftUI 报的 frame），
+  `.tap()` 不报错，`chat.clearQueue` 从来没发出去。
+
+解法一行：`composerHost.sizingOptions = .intrinsicContentSize`（iOS 16+）。
+**Mac 上的任何一次渲染都看不见这条** —— `render-composer.sh` 画的是纯 SwiftUI，
+外面根本没有 UIKit 的 bounds。只有模拟器能看见，而且只有「点了没反应」这一种症状。
+以后往输入框上面再叠任何一条（附件预览、听写、麦克风提示），都受这条管。
+
+### 「消失」不能用 `waitForExistence` 问（第 7 轮，UI 测试）
+
+`XCTAssertFalse(screenSays(x, timeout: 12))` 读起来像「12 秒内它没出现过」，
+实际是「我看的那一刻它在不在」—— `waitForExistence` 只要元素**当下就在**就立刻回 true。
+所以这句话对「按下去之后经过一个来回才消失」的东西**永远是失败的**，
+不管功能对不对。新加的 `screenStops()` 是轮询到查询不再命中。
+反过来「它不该出现」用 `XCTAssertFalse(screenSays(…))` 是对的，两者别混。
+
+### 夹具服务器活得比一个用例长，用例不能断言不是自己造成的数（第 7 轮）
+
+`bridge-fixture.sh` 一次运行只起一个 `server.py`，八个用例共享它的内存。
+队列这条用例第一版开头断言「1 条排队中」（只有那颗种子行），**单跑通过、进套件就红**：
+输入框那条用例先跑，它发的两条也还在队列里。
+改法是**开头先用它自己要测的那颗按钮把队列清空**，后面每个数都是自己造出来的；
+断言「服务端那行来了」也从 `server #1` 改成按分隔符匹配 `· the turn itself`
+（`server #N` 的 N 同样取决于谁先跑）。
+
+### CSS 的 border 撑高盒子，这条会再犯（第 7 轮，第二次）
+
+第 6 轮为输入框记过一次，队列条第一版又踩了一模一样的：`rounded-lg border px-3 py-2`
+的卡片，Chrome 量出来一张 60pt，SwiftUI 画出来 58pt —— `.strokeBorder` 是 overlay，
+一点都不撑。六张卡片叠起来差 12pt，比对图里从第二张开始全部错位、**21.3% 不一致**。
+padding 写成 `cardPadV + hairline` 之后画布高度和 Chrome 逐点相同（584pt）。
+**新画一个带边框的盒子，就先想这一条。**
+
+### lucide 的图标不是 SF Symbol（第 7 轮）
+
+队列条每行右边那颗 ✕，网页是 lucide 的 `X`：24 的 viewBox 上从 6 画到 18、
+`stroke-width: 2`、圆头，所以 `h-3.5`（14pt）上是一个 **7pt 的叉、1.17pt 的线**。
+`Image(systemName: "xmark")` 无论哪个 weight 都比它大一圈、粗一截 ——
+断言看不出来，比对图里那颗是一坨实心红。照 lucide 的坐标画成一个 `Shape`（`LucideX`）
+之后，同一颗在热力图里只剩一圈描边。
+
+### 手指要的点击区比网页的鼠标目标大，但不能因此挪版（第 7 轮）
+
+那颗 ✕ 网页上是 18×18，够鼠标用，不够手指用（44 才够）。把控件做大就会推走旁边的文字列、
+和网页对不上。做法是 **pad → `contentShape` → 把 pad 减回去**：
+画出来还是 18×18，点击区 28×22。纵向只放到 22 是因为**两行之间只有 4pt**，
+放更大两行的点击区会重叠 —— 那意味着点错一行就删错一条消息。
 
 ### CSS 的 border 撑高盒子，SwiftUI 的 `.strokeBorder` 不撑（第 6 轮）
 

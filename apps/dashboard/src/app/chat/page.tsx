@@ -13,7 +13,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { QUEUE_LIMIT } from '@/lib/chat-queue';
+import {
+  pruneToLive,
+  queueCancelTarget,
+  queueDisplay,
+  queueIsFull,
+  queuePollMs,
+} from '@/components/chat/queue-core';
 import { CtxBar } from '@/components/ctx-bar';
 import { contextWindowFor } from '@/lib/context-window';
 import { chatHeaderTitle } from '@/lib/chat-header';
@@ -1509,7 +1515,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // invalidate for instant feedback.
   const queue = trpc.chat.queue.useQuery(
     { sessionId },
-    { refetchInterval: (q) => (isInFlight || (q.state.data?.length ?? 0) > 0 ? 2_000 : false) },
+    { refetchInterval: (q) => queuePollMs(isInFlight, q.state.data?.length ?? 0) ?? false },
   );
   // A message sent while NO prior turn is in flight is the imminent ACTIVE turn,
   // not a queued item — yet it lingers in queue.data (deliveredAt=null) for the
@@ -1536,11 +1542,11 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // delivered it — the row belongs back); pruned once the row leaves
   // queue.data for real, so a stale in-flight poll can't flash it back.
   const [removedQueueIds, setRemovedQueueIds] = useState<Set<string>>(() => new Set());
-  const realQueue = (queue.data ?? []).filter((m) => !starterIds.has(m.id) && !removedQueueIds.has(m.id));
-  const displayQueue = [
-    ...realQueue,
-    ...dropLanded(optimisticQueue, queue.data ?? []),
-  ];
+  const displayQueue = queueDisplay(
+    queue.data ?? [],
+    { starters: starterIds, cancelled: removedQueueIds },
+    optimisticQueue,
+  );
   const queueLen = displayQueue.length;
   // Messages you've typed this session, oldest→newest — the ↑/↓ recall history in
   // the composer. msgText is empty for tool_result rows (gateway-synced role:user),
@@ -1564,10 +1570,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // after the dequeue cannot make the cancelled row flash back.
   useEffect(() => {
     if (removedQueueIds.size === 0) return;
-    const live = new Set((queue.data ?? []).map((m) => m.id));
+    const live = (queue.data ?? []).map((m) => m.id);
     setRemovedQueueIds((s) => {
-      const next = new Set([...s].filter((id) => live.has(id)));
-      return next.size === s.size ? s : next;
+      const kept = pruneToLive(s, live);
+      return kept.length === s.size ? s : new Set(kept);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue.data]);
@@ -1576,10 +1582,10 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
   // hidden; an id no longer in the queue is gone for good.
   useEffect(() => {
     if (starterIds.size === 0) return;
-    const live = new Set((queue.data ?? []).map((m) => m.id));
+    const live = (queue.data ?? []).map((m) => m.id);
     setStarterIds((s) => {
-      const next = new Set([...s].filter((id) => live.has(id)));
-      return next.size === s.size ? s : next;
+      const kept = pruneToLive(s, live);
+      return kept.length === s.size ? s : new Set(kept);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue.data]);
@@ -2606,8 +2612,9 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             items={displayQueue}
             onCancel={(id) => {
               // A still-optimistic stub isn't a real DB row yet — drop it locally;
-              // a real queued row goes through the dequeue mutation.
-              if (id.startsWith('pending-')) {
+              // a real queued row goes through the dequeue mutation. Decided by
+              // membership rather than by the id's shape, so the same rule ports.
+              if (queueCancelTarget(id, optimisticQueue.map((x) => x.id)) === 'local') {
                 setOptimisticQueue((q) => q.filter((x) => x.id !== id));
                 return;
               }
@@ -2643,7 +2650,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
             awaitingInput={!!pendingInteraction}
             sending={send.isPending}
             inFlight={turnRunning}
-            queueFull={queueLen >= QUEUE_LIMIT}
+            queueFull={queueIsFull(queueLen)}
             brainDraft={takenOver ? takeover?.takeoverDraft : null}
             onSend={(text, images, files) => {
               // Sending always re-pins to the bottom (even if the user had

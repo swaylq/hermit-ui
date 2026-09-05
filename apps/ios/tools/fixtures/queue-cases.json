@@ -1,0 +1,708 @@
+{
+  "queueLimit": 5,
+  "pollMs": 2000,
+  "clearLabel": "清空队列",
+  "display": [
+    {
+      "why": "nothing anywhere",
+      "server": [],
+      "starters": [],
+      "cancelled": [],
+      "optimistic": [],
+      "expected": []
+    },
+    {
+      "why": "two queued rows, nothing hidden — server order is kept",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "first"
+            }
+          ]
+        },
+        {
+          "id": "q2",
+          "content": [
+            {
+              "type": "text",
+              "text": "second"
+            }
+          ]
+        }
+      ],
+      "starters": [],
+      "cancelled": [],
+      "optimistic": [],
+      "expected": [
+        "q1",
+        "q2"
+      ]
+    },
+    {
+      "why": "the starter is the imminent turn, not a queue item: hidden",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "the one running"
+            }
+          ]
+        },
+        {
+          "id": "q2",
+          "content": [
+            {
+              "type": "text",
+              "text": "behind it"
+            }
+          ]
+        }
+      ],
+      "starters": [
+        "q1"
+      ],
+      "cancelled": [],
+      "optimistic": [],
+      "expected": [
+        "q2"
+      ]
+    },
+    {
+      "why": "a row the reader just pulled is hidden before dequeue answers",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "keep"
+            }
+          ]
+        },
+        {
+          "id": "q2",
+          "content": [
+            {
+              "type": "text",
+              "text": "pulled"
+            }
+          ]
+        }
+      ],
+      "starters": [],
+      "cancelled": [
+        "q2"
+      ],
+      "optimistic": [],
+      "expected": [
+        "q1"
+      ]
+    },
+    {
+      "why": "both sets naming the same row hide it once, not twice",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "gone"
+            }
+          ]
+        }
+      ],
+      "starters": [
+        "q1"
+      ],
+      "cancelled": [
+        "q1"
+      ],
+      "optimistic": [],
+      "expected": []
+    },
+    {
+      "why": "an id in neither list that names no row changes nothing",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "here"
+            }
+          ]
+        }
+      ],
+      "starters": [
+        "nope"
+      ],
+      "cancelled": [
+        "also-nope"
+      ],
+      "optimistic": [],
+      "expected": [
+        "q1"
+      ]
+    },
+    {
+      "why": "a stub the server has not confirmed shows, and shows LAST",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "already queued"
+            }
+          ]
+        }
+      ],
+      "starters": [],
+      "cancelled": [],
+      "optimistic": [
+        {
+          "id": "c1",
+          "content": [
+            {
+              "type": "text",
+              "text": "just typed"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        "q1",
+        "c1"
+      ]
+    },
+    {
+      "why": "a stub whose realId is in the queue has landed: gone",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "server wording"
+            }
+          ]
+        }
+      ],
+      "starters": [],
+      "cancelled": [],
+      "optimistic": [
+        {
+          "id": "c1",
+          "realId": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "typed wording"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        "q1"
+      ]
+    },
+    {
+      "why": "a stub whose realId is NOT in the queue stays, even when text matches another row",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "same words"
+            }
+          ]
+        }
+      ],
+      "starters": [],
+      "cancelled": [],
+      "optimistic": [
+        {
+          "id": "c1",
+          "realId": "q9",
+          "content": [
+            {
+              "type": "text",
+              "text": "same words"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        "q1",
+        "c1"
+      ]
+    },
+    {
+      "why": "THE ONE THAT BITES: the stub landed as a starter — hidden from the strip, still landed",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "starters": [
+        "q1"
+      ],
+      "cancelled": [],
+      "optimistic": [
+        {
+          "id": "c1",
+          "realId": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "expected": []
+    },
+    {
+      "why": "…same, by the text fallback rather than by id",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "starters": [
+        "q1"
+      ],
+      "cancelled": [],
+      "optimistic": [
+        {
+          "id": "c1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "expected": []
+    },
+    {
+      "why": "no realId yet: text is the fallback and it matches",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "starters": [],
+      "cancelled": [],
+      "optimistic": [
+        {
+          "id": "c1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        "q1"
+      ]
+    },
+    {
+      "why": "each real row claims at most ONE stub: the same sentence sent twice",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ],
+      "starters": [],
+      "cancelled": [],
+      "optimistic": [
+        {
+          "id": "c1",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        },
+        {
+          "id": "c2",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        "q1",
+        "c2"
+      ]
+    },
+    {
+      "why": "the trailing-whitespace trap: msgText trims, so these are the same text",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "  spaced  "
+            }
+          ]
+        }
+      ],
+      "starters": [],
+      "cancelled": [],
+      "optimistic": [
+        {
+          "id": "c1",
+          "content": [
+            {
+              "type": "text",
+              "text": "spaced"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        "q1"
+      ]
+    },
+    {
+      "why": "U+FEFF is stripped by JS trim and not by CharacterSet.whitespacesAndNewlines",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "﻿bom"
+            }
+          ]
+        }
+      ],
+      "starters": [],
+      "cancelled": [],
+      "optimistic": [
+        {
+          "id": "c1",
+          "content": [
+            {
+              "type": "text",
+              "text": "bom"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        "q1"
+      ]
+    },
+    {
+      "why": "a full strip: three server rows, one hidden, two stubs, one of them landed",
+      "server": [
+        {
+          "id": "q1",
+          "content": [
+            {
+              "type": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "id": "q2",
+          "content": [
+            {
+              "type": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "id": "q3",
+          "content": [
+            {
+              "type": "text",
+              "text": "three"
+            }
+          ]
+        }
+      ],
+      "starters": [
+        "q1"
+      ],
+      "cancelled": [],
+      "optimistic": [
+        {
+          "id": "c1",
+          "realId": "q3",
+          "content": [
+            {
+              "type": "text",
+              "text": "three"
+            }
+          ]
+        },
+        {
+          "id": "c2",
+          "content": [
+            {
+              "type": "text",
+              "text": "four"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        "q2",
+        "q3",
+        "c2"
+      ]
+    }
+  ],
+  "prune": [
+    {
+      "why": "nothing remembered",
+      "ids": [],
+      "live": [
+        "q1"
+      ],
+      "expected": []
+    },
+    {
+      "why": "every remembered id is still queued: all kept",
+      "ids": [
+        "q1",
+        "q2"
+      ],
+      "live": [
+        "q1",
+        "q2"
+      ],
+      "expected": [
+        "q1",
+        "q2"
+      ]
+    },
+    {
+      "why": "one has been delivered and left the queue",
+      "ids": [
+        "q1",
+        "q2"
+      ],
+      "live": [
+        "q2"
+      ],
+      "expected": [
+        "q2"
+      ]
+    },
+    {
+      "why": "the queue drained: everything is forgotten",
+      "ids": [
+        "q1",
+        "q2"
+      ],
+      "live": [],
+      "expected": []
+    },
+    {
+      "why": "rows nobody is hiding do not enter the set",
+      "ids": [
+        "q1"
+      ],
+      "live": [
+        "q1",
+        "q7",
+        "q8"
+      ],
+      "expected": [
+        "q1"
+      ]
+    },
+    {
+      "why": "an id that never named a row is dropped on the first prune",
+      "ids": [
+        "ghost"
+      ],
+      "live": [
+        "q1"
+      ],
+      "expected": []
+    }
+  ],
+  "poll": [
+    {
+      "why": "idle and empty: nothing can change it",
+      "inFlight": false,
+      "serverCount": 0,
+      "expected": null
+    },
+    {
+      "why": "idle but something is queued — the reader can still pull it",
+      "inFlight": false,
+      "serverCount": 1,
+      "expected": 2000
+    },
+    {
+      "why": "a turn is running: the gateway will drain as it ends",
+      "inFlight": true,
+      "serverCount": 0,
+      "expected": 2000
+    },
+    {
+      "why": "both",
+      "inFlight": true,
+      "serverCount": 3,
+      "expected": 2000
+    }
+  ],
+  "cancel": [
+    {
+      "why": "a stub this client made up",
+      "id": "c1",
+      "optimisticIds": [
+        "c1",
+        "c2"
+      ],
+      "expected": "local"
+    },
+    {
+      "why": "a real queued row",
+      "id": "q1",
+      "optimisticIds": [
+        "c1"
+      ],
+      "expected": "server"
+    },
+    {
+      "why": "nothing optimistic at all",
+      "id": "q1",
+      "optimisticIds": [],
+      "expected": "server"
+    },
+    {
+      "why": "an id SHAPED like the web's stubs but not in the list is still a server row",
+      "id": "pending-1757000000000-abcdef",
+      "optimisticIds": [
+        "c1"
+      ],
+      "expected": "server"
+    },
+    {
+      "why": "the iOS shape — an idempotency key — is a stub when the list says so",
+      "id": "3f2504e0-4f89:1757000000000-x7",
+      "optimisticIds": [
+        "3f2504e0-4f89:1757000000000-x7"
+      ],
+      "expected": "local"
+    }
+  ],
+  "summaries": [
+    {
+      "n": 0,
+      "expected": "0 条排队中 · 等当前任务完成后依次执行"
+    },
+    {
+      "n": 1,
+      "expected": "1 条排队中 · 等当前任务完成后依次执行"
+    },
+    {
+      "n": 2,
+      "expected": "2 条排队中 · 等当前任务完成后依次执行"
+    },
+    {
+      "n": 5,
+      "expected": "5 条排队中 · 等当前任务完成后依次执行"
+    },
+    {
+      "n": 12,
+      "expected": "12 条排队中 · 等当前任务完成后依次执行"
+    }
+  ],
+  "labels": [
+    {
+      "why": "ordinary prose",
+      "preview": "把这一屏也做成原生的",
+      "expected": "把这一屏也做成原生的"
+    },
+    {
+      "why": "empty — the message is attachments and nothing else",
+      "preview": "",
+      "expected": "（附件）"
+    },
+    {
+      "why": "NOT a trim: spaces are prose as far as this is concerned",
+      "preview": "   ",
+      "expected": "   "
+    },
+    {
+      "why": "a zero the JS falsy check must not swallow",
+      "preview": "0",
+      "expected": "0"
+    }
+  ],
+  "full": [
+    {
+      "n": 0,
+      "expected": false
+    },
+    {
+      "n": 1,
+      "expected": false
+    },
+    {
+      "n": 4,
+      "expected": false
+    },
+    {
+      "n": 5,
+      "expected": true
+    },
+    {
+      "n": 6,
+      "expected": true
+    },
+    {
+      "n": 99,
+      "expected": true
+    }
+  ]
+}

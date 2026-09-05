@@ -1,0 +1,21 @@
+{
+  "note": "One table, drawn twice: the web's own QueueBar (scripts/render-queue-bar.tsx) and the Swift port (tools/render-queue.swift). tools/queue-compare.sh runs the pair and diffs the PNGs. Text only — the strip draws nothing that depends on a clock, so unlike the session list there is no epoch to pin.",
+  "width": 390,
+  "gap": 8,
+  "cases": [
+    { "why": "one message waiting", "items": ["再看一下那个报错"], "clearing": false },
+    {
+      "why": "three, one of them past the end of the line",
+      "items": [
+        "先跑构建",
+        "把队列条也做成原生的，顺便把 dequeue 和 clearQueue 一起接进来，这一行故意写得很长，长到必须省略号",
+        "然后出图"
+      ],
+      "clearing": false
+    },
+    { "why": "an attachments-only send has no prose", "items": ["", "看看这张图"], "clearing": false },
+    { "why": "five, which is QUEUE_LIMIT", "items": ["一", "二", "三", "四", "五"], "clearing": false },
+    { "why": "清空队列 pressed: the button is out", "items": ["一", "二"], "clearing": true },
+    { "why": "one latin line, to catch a font metric the CJK lines hide", "items": ["run the build first"], "clearing": false }
+  ]
+}
