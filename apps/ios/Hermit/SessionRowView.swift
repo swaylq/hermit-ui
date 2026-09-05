@@ -152,11 +152,16 @@ struct SessionRowView: View {
 
 /// The 6pt dot, including the pulse.
 ///
+/// Shared with the chat header, which draws `h-1.5 w-1.5 rounded-full` with
+/// the same `animate-pulse` off the same `sessionStatusView` — two copies
+/// would be two chances for the sidebar and the header to disagree about a
+/// session that is two inches away from itself.
+///
 /// `StatusPalette.dot` is the only thing that turns the web's class string into
 /// a colour; a class this build has never heard of draws a hollow ring rather
 /// than a guessed colour or nothing at all — a new state added on the web should
 /// look unfamiliar, not invisible.
-private struct StatusDot: View {
+struct StatusDot: View {
     let status: StatusView
     @State private var dim = false
     /// Reduce Motion turns the pulse off and leaves the dot at full strength.

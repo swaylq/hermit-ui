@@ -18,6 +18,19 @@ export function ctxPct(n: number | null | undefined, total = 1_000_000): number 
   return Math.min(100, (n / total) * 100);
 }
 
+/**
+ * How wide the context bar's fill is drawn, as a percentage of its track.
+ *
+ * Not the same number as `ctxPct`: a bar clamped to a 2% minimum so that a
+ * session which has used something reads as a sliver rather than as an empty
+ * track. Lives here rather than inside `<CtxBar>` so the iOS port can be held
+ * against it — the phone draws the same bar and would otherwise be a second
+ * reading of a one-line expression (apps/ios/tools/header-fixture.sh).
+ */
+export function ctxFill(pct: number): number {
+  return Math.max(2, Math.min(100, pct));
+}
+
 export function relTime(d: Date | string | null | undefined): string {
   if (!d) return '-';
   const t = typeof d === 'string' ? new Date(d).getTime() : d.getTime();

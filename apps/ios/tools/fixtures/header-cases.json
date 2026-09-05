@@ -1,0 +1,499 @@
+{
+  "defaultContextWindow": 1000000,
+  "codexDefaultWindow": 258400,
+  "kimiDefaultWindow": 262144,
+  "bytes": [
+    {
+      "n": null,
+      "expected": "-"
+    },
+    {
+      "n": 0,
+      "expected": "0"
+    },
+    {
+      "n": 1,
+      "expected": "1"
+    },
+    {
+      "n": 999,
+      "expected": "999"
+    },
+    {
+      "n": 1000,
+      "expected": "1.0k"
+    },
+    {
+      "n": 1050,
+      "expected": "1.1k"
+    },
+    {
+      "n": 1150,
+      "expected": "1.1k"
+    },
+    {
+      "n": 1250,
+      "expected": "1.3k"
+    },
+    {
+      "n": 1350,
+      "expected": "1.4k"
+    },
+    {
+      "n": 1449,
+      "expected": "1.4k"
+    },
+    {
+      "n": 1450,
+      "expected": "1.4k"
+    },
+    {
+      "n": 9999,
+      "expected": "10.0k"
+    },
+    {
+      "n": 12345,
+      "expected": "12.3k"
+    },
+    {
+      "n": 999949,
+      "expected": "999.9k"
+    },
+    {
+      "n": 999950,
+      "expected": "1000.0k"
+    },
+    {
+      "n": 1000000,
+      "expected": "1.00M"
+    },
+    {
+      "n": 1005000,
+      "expected": "1.00M"
+    },
+    {
+      "n": 1015000,
+      "expected": "1.01M"
+    },
+    {
+      "n": 1234567,
+      "expected": "1.23M"
+    },
+    {
+      "n": 12345678,
+      "expected": "12.35M"
+    },
+    {
+      "n": 999994999,
+      "expected": "999.99M"
+    },
+    {
+      "n": 1000000000,
+      "expected": "1.00B"
+    },
+    {
+      "n": 1005000000,
+      "expected": "1.00B"
+    },
+    {
+      "n": 1250000000,
+      "expected": "1.25B"
+    },
+    {
+      "n": 10641710000,
+      "expected": "10.64B"
+    }
+  ],
+  "pct": [
+    {
+      "tokens": null,
+      "total": 1000000,
+      "pct": 0,
+      "fill": 2
+    },
+    {
+      "tokens": 0,
+      "total": 1000000,
+      "pct": 0,
+      "fill": 2
+    },
+    {
+      "tokens": 1,
+      "total": 1000000,
+      "pct": 0.00009999999999999999,
+      "fill": 2
+    },
+    {
+      "tokens": 19999,
+      "total": 1000000,
+      "pct": 1.9999,
+      "fill": 2
+    },
+    {
+      "tokens": 20000,
+      "total": 1000000,
+      "pct": 2,
+      "fill": 2
+    },
+    {
+      "tokens": 699999,
+      "total": 1000000,
+      "pct": 69.9999,
+      "fill": 69.9999
+    },
+    {
+      "tokens": 700000,
+      "total": 1000000,
+      "pct": 70,
+      "fill": 70
+    },
+    {
+      "tokens": 899999,
+      "total": 1000000,
+      "pct": 89.9999,
+      "fill": 89.9999
+    },
+    {
+      "tokens": 900000,
+      "total": 1000000,
+      "pct": 90,
+      "fill": 90
+    },
+    {
+      "tokens": 1000000,
+      "total": 1000000,
+      "pct": 100,
+      "fill": 100
+    },
+    {
+      "tokens": 1400000,
+      "total": 1000000,
+      "pct": 100,
+      "fill": 100
+    },
+    {
+      "tokens": 155000,
+      "total": 258400,
+      "pct": 59.98452012383901,
+      "fill": 59.98452012383901
+    },
+    {
+      "tokens": 155000,
+      "total": 262144,
+      "pct": 59.1278076171875,
+      "fill": 59.1278076171875
+    }
+  ],
+  "windows": [
+    {
+      "runtime": null,
+      "model": null,
+      "window": 1000000
+    },
+    {
+      "runtime": "claude-sdk",
+      "model": "opus",
+      "window": 1000000
+    },
+    {
+      "runtime": "claude-tmux",
+      "model": null,
+      "window": 1000000
+    },
+    {
+      "runtime": "pi-rpc",
+      "model": "anything",
+      "window": 1000000
+    },
+    {
+      "runtime": "dsh-exec",
+      "model": "deepseek-v4",
+      "window": 1000000
+    },
+    {
+      "runtime": "codex-exec",
+      "model": "gpt-5.6",
+      "window": 258400
+    },
+    {
+      "runtime": "codex-exec",
+      "model": "gpt-5.6-sol-wm",
+      "window": 258400
+    },
+    {
+      "runtime": "codex-exec",
+      "model": "gpt-5.3-codex-spark",
+      "window": 121600
+    },
+    {
+      "runtime": "codex-exec",
+      "model": "GPT-5.6",
+      "window": 258400
+    },
+    {
+      "runtime": "codex-exec",
+      "model": "  gpt-5.5  ",
+      "window": 258400
+    },
+    {
+      "runtime": "codex-exec",
+      "model": "gpt-4o",
+      "window": 258400
+    },
+    {
+      "runtime": "codex-exec",
+      "model": "",
+      "window": 258400
+    },
+    {
+      "runtime": "codex-exec",
+      "model": null,
+      "window": 258400
+    },
+    {
+      "runtime": "kimi-code",
+      "model": "k3",
+      "window": 1048576
+    },
+    {
+      "runtime": "kimi-code",
+      "model": "k3-256k",
+      "window": 262144
+    },
+    {
+      "runtime": "kimi-code",
+      "model": "k3[1m]",
+      "window": 1048576
+    },
+    {
+      "runtime": "kimi-code",
+      "model": "kimi-for-coding",
+      "window": 262144
+    },
+    {
+      "runtime": "kimi-code",
+      "model": "k2",
+      "window": 262144
+    },
+    {
+      "runtime": "kimi-code",
+      "model": null,
+      "window": 262144
+    },
+    {
+      "runtime": "teleport-rpc",
+      "model": "x",
+      "window": 1000000
+    }
+  ],
+  "runtimes": [
+    {
+      "kind": null,
+      "label": "Claude"
+    },
+    {
+      "kind": "",
+      "label": "Claude"
+    },
+    {
+      "kind": "claude-sdk",
+      "label": "Claude"
+    },
+    {
+      "kind": "claude-tmux",
+      "label": "Claude"
+    },
+    {
+      "kind": "pi-rpc",
+      "label": "pi"
+    },
+    {
+      "kind": "prime-rpc",
+      "label": "prime"
+    },
+    {
+      "kind": "codex-exec",
+      "label": "Codex"
+    },
+    {
+      "kind": "dsh-exec",
+      "label": "dsh"
+    },
+    {
+      "kind": "kimi-code",
+      "label": "Kimi"
+    },
+    {
+      "kind": "omp-rpc",
+      "label": "Claude"
+    },
+    {
+      "kind": "teleport-rpc",
+      "label": "Claude"
+    }
+  ],
+  "providers": [
+    {
+      "provider": null,
+      "mark": null
+    },
+    {
+      "provider": "",
+      "mark": null
+    },
+    {
+      "provider": "   ",
+      "mark": null
+    },
+    {
+      "provider": "kimi-coding",
+      "mark": "Kimi"
+    },
+    {
+      "provider": "moonshotai-cn",
+      "mark": "Kimi"
+    },
+    {
+      "provider": "MoonshotAI",
+      "mark": "Kimi"
+    },
+    {
+      "provider": "zai",
+      "mark": "GLM"
+    },
+    {
+      "provider": "openrouter",
+      "mark": "OpenRouter"
+    },
+    {
+      "provider": "deepseek",
+      "mark": "DeepSeek"
+    },
+    {
+      "provider": "  kimi  ",
+      "mark": "Kimi"
+    },
+    {
+      "provider": "anthropic",
+      "mark": "anthropic"
+    },
+    {
+      "provider": "twelve chars",
+      "mark": "twelve chars"
+    },
+    {
+      "provider": "thirteen chars",
+      "mark": "thirteen ch…"
+    },
+    {
+      "provider": "aaaaaaaaaaaa",
+      "mark": "aaaaaaaaaaaa"
+    },
+    {
+      "provider": "aaaaaaaaaaaaa",
+      "mark": "aaaaaaaaaaa…"
+    },
+    {
+      "provider": "ab😀cdefghijkl",
+      "mark": "ab😀cdefghi…"
+    },
+    {
+      "provider": "abcdefghijéfgh",
+      "mark": "abcdefghije…"
+    },
+    {
+      "provider": "月之暗面的供应商一二三四五",
+      "mark": "月之暗面的供应商一二三…"
+    }
+  ],
+  "titles": [
+    {
+      "why": "the ordinary case",
+      "session": {
+        "title": "Ship the header",
+        "preview": "p",
+        "agentName": "asst"
+      },
+      "sessionId": "abcdefgh-1234",
+      "expected": "Ship the header"
+    },
+    {
+      "why": "a brand-new session: the title column is an EMPTY STRING, not null",
+      "session": {
+        "title": "",
+        "preview": "do the thing",
+        "agentName": "asst"
+      },
+      "sessionId": "abcdefgh-1234",
+      "expected": "do the thing"
+    },
+    {
+      "why": "null title",
+      "session": {
+        "title": null,
+        "preview": "do the thing",
+        "agentName": "asst"
+      },
+      "sessionId": "abcdefgh-1234",
+      "expected": "do the thing"
+    },
+    {
+      "why": "no title and no preview",
+      "session": {
+        "title": null,
+        "preview": null,
+        "agentName": "asst"
+      },
+      "sessionId": "abcdefgh-1234",
+      "expected": "asst"
+    },
+    {
+      "why": "empty preview falls through too",
+      "session": {
+        "title": "",
+        "preview": "",
+        "agentName": "asst"
+      },
+      "sessionId": "abcdefgh-1234",
+      "expected": "asst"
+    },
+    {
+      "why": "nothing at all: the id, first eight",
+      "session": {
+        "title": null,
+        "preview": null,
+        "agentName": null
+      },
+      "sessionId": "abcdefgh-1234",
+      "expected": "abcdefgh"
+    },
+    {
+      "why": "no session yet — the header paints before getSession answers",
+      "session": null,
+      "sessionId": "abcdefgh-1234",
+      "expected": "abcdefgh"
+    },
+    {
+      "why": "a short id is not padded",
+      "session": null,
+      "sessionId": "abc",
+      "expected": "abc"
+    },
+    {
+      "why": "slice(0, 8) counts UTF-16 code units, so this id is cut mid-pair on the web too",
+      "session": null,
+      "sessionId": "ab😀cdefghij",
+      "expected": "ab😀cdef"
+    },
+    {
+      "why": "whitespace is NOT trimmed here — a title of one space is a title",
+      "session": {
+        "title": " ",
+        "preview": "p",
+        "agentName": "asst"
+      },
+      "sessionId": "abcdefgh-1234",
+      "expected": " "
+    }
+  ]
+}

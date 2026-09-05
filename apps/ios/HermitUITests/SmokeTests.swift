@@ -582,7 +582,36 @@ final class SmokeTests: XCTestCase {
         // the scene owns is off the stack, so nothing of it should be in the
         // hierarchy.
         XCTAssertEqual(app.webViews.count, 0, "the native timeline has a web view in it")
+
+        // The header. It is a second query — `chat.getSession`, not the list —
+        // and every line below is a different reason to believe it ran.
+        XCTAssertTrue(screenSays("getSession #", timeout: 25),
+                      "the header never drew what chat.getSession said — the query, the key, or the decode")
+        // The state line, out of the `activity` blob. `chat.listSessions`
+        // deliberately never carries that blob, so a header wired to the list
+        // could show a dot but never this string.
+        XCTAssertTrue(screenSays("Bash · 47s", timeout: 20),
+                      "the header has no live state line — sessionStatusView never saw the activity")
+        // The RESOLVED backend, short-labelled the way a 390pt row needs.
+        XCTAssertTrue(screenSays("Codex", timeout: 10), "the header does not name the backend")
+        // `fmtBytes(214000)`. The bar beside it is amber only because
+        // `contextWindowFor` used codex's 258,400 — against the 1M default the
+        // same number is 21% and green.
+        XCTAssertTrue(screenSays("214.0k", timeout: 10), "the header does not print the context count")
+        // The title ladder really is a ladder: this session has a title AND a
+        // preview, and the preview must not be what shows.
+        XCTAssertFalse(screenSays("should never be read", timeout: 2),
+                       "the header fell through to the preview even though the title is set")
         settle(); shoot("22-timeline-window")
+        // Half of the "does it poll?" check. The other half is read minutes
+        // later, at the end of the paging below — no sleep of its own, and a far
+        // wider gap than one this test could afford to wait out. Nothing
+        // between here and there may WAIT on this number: the stream assertions
+        // that follow are catching transient states, and a pause put in front of
+        // them is a pause that misses them (which is exactly how the first run
+        // of this failed).
+        let firstServe = headerNumber()
+        XCTAssertNotNil(firstServe, "could not read the fixture's getSession counter off the header")
 
         // It moves on its own. Nothing between here and the next screenshot
         // touches the screen — a timeline that only changes when you scroll it
@@ -638,6 +667,20 @@ final class SmokeTests: XCTestCase {
             screenSays("load earlier", timeout: 3),
             "the pill is still offered at the beginning of the conversation")
         settle(); shoot("25-timeline-beginning")
+        // Parked at the oldest row, which is where the old shape was worst: with
+        // the navigation bar translucent and the scroll edge effect turned off
+        // in round 3, the first message drew straight through the title. The
+        // header is opaque, so this shot is also the pixel evidence — see
+        // `tools/header-band.sh`, which reads the strip out of this PNG.
+        XCTAssertTrue(screenSays("getSession #", timeout: 10),
+                      "the header went away once the reader scrolled into history")
+        // The other half: the header has been polling `chat.getSession` on its
+        // own the whole way through the paging above. One that queried once and
+        // froze passes every other assertion here.
+        let laterServe = headerNumber()
+        XCTAssertNotNil(laterServe, "the header stopped saying which serve it is showing")
+        XCTAssertGreaterThan(laterServe ?? 0, firstServe ?? 0,
+                             "the header is not polling — it is still showing the serve it opened with")
 
         // Open it a second time and photograph the resting position. Every shot
         // above is taken somewhere the reader was steered to; this is the one a
@@ -654,6 +697,21 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(screenSays("window · key m_two · limit 60 · digest 1", timeout: 30),
                       "the timeline did not come back on a second open")
         settle(); shoot("26-timeline-tail")
+
+        // The header's own back control, which is the slot the web puts its
+        // sidebar toggle in. Tested here rather than trusted: the navigation bar
+        // is hidden on this screen, so this button and the edge swipe are the
+        // only two ways off it, and `openPage()` below already covers the swipe.
+        let back = app.buttons["back"]
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "the header has no back control")
+        back.tap()
+        // One screen back, which from here is the session list: this test opened
+        // the timeline off `hermit://timeline/<id>` while the list was on
+        // screen, so the stack is page → list → timeline. Asserting the LIST and
+        // not the page is the point — a "back" that jumped to the root would
+        // pass a laxer check and be wrong.
+        XCTAssertTrue(app.navigationBars["Sessions"].waitForExistence(timeout: 20),
+                      "tapping the header's back control did not pop one screen")
 
         // Leave the install clean for whatever runs next. Two screens deep, so
         // this is also the one place the edge swipe is asked to run twice.
@@ -702,6 +760,18 @@ final class SmokeTests: XCTestCase {
             let label = match.element(boundBy: i).label
             guard let r = label.range(of: "poll #[0-9]+", options: .regularExpression) else { continue }
             return Int(label[r].dropFirst("poll #".count))
+        }
+        return nil
+    }
+
+    /// The fixture's `chat.getSession` serve number, off the header's title.
+    private func headerNumber() -> Int? {
+        let match = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'getSession #'"))
+        for i in 0..<match.count {
+            let label = match.element(boundBy: i).label
+            guard let r = label.range(of: "getSession #[0-9]+", options: .regularExpression) else { continue }
+            return Int(label[r].dropFirst("getSession #".count))
         }
         return nil
     }

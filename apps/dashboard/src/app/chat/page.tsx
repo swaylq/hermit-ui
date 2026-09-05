@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { CtxBar } from '@/components/ctx-bar';
 import { contextWindowFor } from '@/lib/context-window';
+import { chatHeaderTitle } from '@/lib/chat-header';
 import {
   sessionStatusView, mergeLiveStatus, workingUnconfirmed, isRestingState, DELIVERY_GRACE_MS,
   type LiveStatusFrame,
@@ -2184,7 +2185,7 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
                   {/* Same label as the sidebar entry (app-sidebar.tsx): title,
                       else first-message preview, else agent name — so the
                       header matches the name you clicked on the left. */}
-                  <span className="truncate">{session?.title || session?.preview || session?.agentName || sessionId.slice(0, 8)}</span>
+                  <span className="truncate">{chatHeaderTitle(session, sessionId)}</span>
                   <Pencil className="h-3 w-3 shrink-0 opacity-0 group-hover/title:opacity-100 transition-opacity text-muted-foreground/70" aria-hidden="true" />
                 </button>
               )}

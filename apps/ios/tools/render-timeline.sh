@@ -26,6 +26,8 @@ swiftc -O -o "$BIN" \
   Shared/WebContract.swift Shared/StatusPalette.swift \
   Hermit/ContentBlock.swift Hermit/FoldRuns.swift \
   Hermit/SessionListItem.swift Hermit/SessionStatus.swift \
+  Hermit/SessionMeta.swift Hermit/WebLabels.swift \
+  Hermit/SessionRowView.swift Hermit/ChatHeaderView.swift \
   Hermit/TimelineRowView.swift \
   tools/render-timeline.swift
 "$BIN" "$OUT"

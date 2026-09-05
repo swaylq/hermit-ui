@@ -61,6 +61,70 @@ let CANVAS_WIDTH: CGFloat = 390          // iPhone 15 / 16 point width
 let PAD_H: CGFloat = 16
 let CONTENT_WIDTH: CGFloat = CANVAS_WIDTH - PAD_H * 2
 
+/// Six headers, chosen for the things that can go wrong in that one row rather
+/// than for looking nice: a long state label has to concede width to the agent
+/// name, a credential-backed session shows the VENDOR and not the harness, and
+/// the very first frame of every session has nothing but eight characters of id.
+///
+/// The pixels this draws are the header's OWN layout and nothing else — where it
+/// sits relative to the status bar and the list is a collection-view question,
+/// and the Mac cannot answer those. See the note in ChatTimelineViewController.
+struct HeaderStates: View {
+    let scheme: ColorScheme
+
+    private func working(_ label: String) -> StatusView {
+        SessionStatus.view(SessionRuntime(alive: true, state: "working",
+                                          snapshotAt: now,
+                                          activity: SessionActivity(kind: "tool", label: label, elapsedSec: 47)),
+                           StatusOptions(now: now.timeIntervalSince1970 * 1000))
+    }
+
+    private var models: [(String, ChatHeaderModel)] {
+        [
+            ("before getSession answers",
+             ChatHeaderModel.pending(sessionId: "cm5x9q2t0000abcd", title: nil)),
+            ("working, short tool name",
+             ChatHeaderModel(title: "Ship the native chat header", agentName: "asst",
+                             status: working("Bash"), backend: "Claude",
+                             contextTokens: 214_000, contextWindow: 1_000_000, closed: false)),
+            ("a state label long enough to have to yield",
+             ChatHeaderModel(title: "A conversation with a very long title that has to truncate somewhere",
+                             agentName: "general-purpose", status: working("general-purpose +2 bg"),
+                             backend: "Claude", contextTokens: 12_500, contextWindow: 1_000_000, closed: false)),
+            ("context past the amber line, on a codex window",
+             ChatHeaderModel(title: "codex run", agentName: "pi", status: working("Read"),
+                             backend: "Codex", contextTokens: 200_000,
+                             contextWindow: WebLabels.codexDefaultWindow, closed: false)),
+            ("running on a credential: the VENDOR, not the harness",
+             ChatHeaderModel(title: "kimi run", agentName: "asst", status: working("Grep"),
+                             backend: "Kimi", contextTokens: 950_000, contextWindow: 1_000_000, closed: false)),
+            ("closed, and no completed turn to count tokens from",
+             ChatHeaderModel(title: "an archived chat", agentName: "asst",
+                             status: SessionStatus.view(SessionRuntime(alive: false, state: "idle",
+                                                                       snapshotAt: now, closedAt: now)),
+                             backend: "Claude", contextTokens: nil,
+                             contextWindow: 1_000_000, closed: true)),
+        ]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(models.enumerated()), id: \.offset) { _, pair in
+                Text(pair.0)
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(WebContract.mutedForeground.resolve(scheme).opacity(0.6))
+                    .padding(.horizontal, PAD_H)
+                    .padding(.top, 8)
+                ChatHeaderView(model: pair.1, onBack: {})
+            }
+        }
+        .frame(width: CANVAS_WIDTH, alignment: .topLeading)
+        .background(WebContract.background.resolve(scheme))
+        .environment(\.colorScheme, scheme)
+        .environment(\.hermitStillFrame, true)
+    }
+}
+
 struct TimelineMock: View {
     let scheme: ColorScheme
     var body: some View {
@@ -117,6 +181,8 @@ enum Main {
         // difference between them is a word and `disabled:opacity-50`.
         shoot(PillStates(scheme: .dark), "timeline-earlier-dark", outDir)
         shoot(PillStates(scheme: .light), "timeline-earlier-light", outDir)
+        shoot(HeaderStates(scheme: .dark), "timeline-header-dark", outDir)
+        shoot(HeaderStates(scheme: .light), "timeline-header-light", outDir)
 
         // What the fold made of the fixture, so a wrong row can be NAMED rather
         // than squinted at — the same reason render-list.swift prints its

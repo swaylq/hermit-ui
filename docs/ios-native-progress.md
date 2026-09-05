@@ -77,7 +77,8 @@
    `tools/api-fixture.sh`（8 秒），SSE 那半用 `tools/stream-fixture.sh`（15 秒），
    本地库和搜索用 `tools/cache-fixture.sh`（4 秒），
    状态判定（`sessionStatusView` 的移植）用 `tools/status-fixture.sh`（2 秒），
-   消息块的解码用 `tools/blocks-fixture.sh`（4 秒，第 18 轮加的）。
+   消息块的解码用 `tools/blocks-fixture.sh`（4 秒，第 18 轮加的），
+   聊天头部那七个纯函数用 `tools/header-fixture.sh`（3 秒，第 5 轮加的）。
    两个都是假 dashboard + 一个 `swiftc` 直接编出来的驱动程序，会把「Swift 解出了什么」
    和「服务器真收到的请求行」两边都打出来。**它们不在任何 target 里，
    `swiftc -typecheck Hermit/*.swift` 看不见 `tools/`** —— 编不过只有跑一次才知道。
@@ -86,7 +87,10 @@
    `TEST_RUNNER_HERMIT_SHOT_DIR=$PWD/shots xcodebuild test-without-building … \
    -only-testing:HermitUITests/SmokeTests/<用例名>`。
    `shots/` 是 gitignore 的（截图不进仓库），所以 M7 那批要单独交给 sway。
-5. 回来更新这个文件：勾掉做完的、重写「下一项」、把踩到的坑写进最下面那节。
+5. **截图当证据要读像素**：`tools/pixel-probe.sh <png> [列比例] [步长]` 打一条竖扫描，
+   相同颜色的段合并，像素和点一起印。别用 `sips --cropOffset`（它是相对图片中心的偏移）。
+   端点色（255 / 10）永远精确，中间调要拿同一常量在另一条渲染路径上的读数比，见「踩过的坑」。
+6. 回来更新这个文件：勾掉做完的、重写「下一项」、把踩到的坑写进最下面那节。
 
 ---
 
@@ -464,6 +468,26 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       所以 `Hermit/TimelinePager.swift` 把 `shedRows` / `shouldKeepShed` / `absorbShed`
       也移植了（同一张夹具，`tools/merge-fixture.sh`）。**没有移植 `chunksBottomFirst`**，
       理由写在文件头：它买的两件事在倒置的 collection view 上都不存在
+- [x] **时间线的头** —— 第 5 轮 perfect-goal。`Hermit/ChatHeaderView.swift`，
+      照 `app/chat/page.tsx` 那个 `h-12 px-4 border-b border-border` 的头做：
+      标题（`chatHeaderTitle` 的四级回退）+ 元信息行（agent · 状态点和标签 ·
+      后端 · ctx 迷你条 · closed）。导航栏在这一屏改成**隐藏**，因为网页那个头是不透明的，
+      而第 3 轮关掉 scroll edge effect 之后半透明导航栏底下什么都没有、最老一行会穿过标题。
+      数据是 `chat.getSession` 自己的 5 秒轮询（列表那条 `listSessions` **故意不带**
+      `activity`，所以「Bash · 47s」只可能来自这条），外加 `event: status` 帧走
+      `SessionStatus.merge`（`mergeLiveStatus` 的移植）抢在轮询前面 ——
+      **这是 `event: status` 第一次有消费者**。
+      新移植的七个纯函数（`fmtBytes` / `ctxPct` / `ctxFill` / `contextWindowFor` /
+      `runtimeShortLabel` / `providerMark` / `chatHeaderTitle`）配 `tools/header-fixture.sh`，
+      `mergeLiveStatus` 进了 `tools/status-fixture.sh`
+- [ ] **头部右侧的动作簇**：新建会话、终端（有 tmux pane 才有）、删除（`ConfirmIconButton`）、
+      归档会话的「恢复」，加上手机上那个溢出托盘里的五个（pure chat / 会话详情 /
+      查找 / compact / restart）。今天右侧是空的
+- [ ] **模型胶囊**（`modelChipLabel` + `chat.setSessionModel` + 那张模型目录）——
+      只在 `claude-sdk` 且没有凭据、且不是分享链接的会话上出现
+- [ ] **点标题改名**（`chat.setTitle`）+ 那颗重新生成标题的 `Sparkles`（`chat.autoTitle`）
+- [ ] **状态胶囊和后端胶囊点开会话详情面板**（`chat.sessionDetail`）——
+      网页上这两个都是按钮，手机没有 hover，面板是那句被截断的状态唯一能读全的地方
 - [ ] `nextId` 空洞证明 + 本地缓存直接供页（`lib/chat-cache/types.ts:47-68`、
       `use-older-pages.ts` 的 `pageBefore`）—— 翻页现在每一页都问服务端。网页在本地存储
       **能证明**自己握着一段没断过的链时直接供页；那个证明读的是 `full` / `digest` 两个行存储，
@@ -524,26 +548,25 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 > 2026-09-05 16:35 起，这个清单由 `perfect-goal` 的轮次驱动，轮次日志在
 > `~/agents/asst/projects/ios-native/goal/ROUNDS.md`，目标与验收标准在同目录的 `GOAL.md`。
-> 目标未变：把这个清单清空。**清单 32/51** —— 分母涨了 4：第 4 轮把前门退回网页
-> （勾掉一条），并把原来只写在散文里的**原生抽屉**拆成三条明写的清单项。
-> 那三条本来就是「全部复刻网页」要付的，藏在段落里只会让清单先清空、活后干完。
+> 目标未变：把这个清单清空。**清单 33/56** —— 分母涨了 5：第 5 轮做完时间线的头
+> （勾掉一条），并把这个头**还欠着的四件**（右侧动作簇 / 模型胶囊 / 点标题改名 /
+> 两个胶囊开详情面板）写成明写的清单项。都是「全部复刻网页」躲不掉的，
+> 留在散文里只会让清单先清空、活后干完。
 
-**第 1 条：给时间线一个和网页一致的头。**
-第 3 轮关掉了 iOS 26 那层 scroll edge effect（它被翻转带反了，整屏冲淡到读不了），
-代价是导航栏底下没有任何遮挡，最老的一行会和「Chat」标题、返回键叠在一起。
-**不要把模糊加回来** —— 网页 chat 页的 header 是不透明的，正解是照它做一个，
-顺带把标题、状态、右侧那几个按钮一起挪过来（今天标题是写死的 "Chat"）。
+**第 1 条：M5 输入框。** `GOAL.md` 验收标准 2 里只剩这一块没做：
+读得到、会自己长、翻得动、头也有了，发不出去。做完了列表点一行才该换成进原生时间线。
+先做最小的那一半（草稿、`chat.send` + 幂等键、乐观气泡、发送中的停止胶囊），
+附件 / 按住说话 / 听写各自是独立的清单项，别一轮全吃。
 
-**第 2 条：M5 输入框。** `GOAL.md` 验收标准 2 里只剩这一块没做：
-读得到、会自己长、翻得动都验过了，发不出去。做完了列表点一行才该换成进原生时间线。
-
-**第 3 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
+**第 2 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
 所以翻页每一页都问服务端，而网页读过一遍的历史是零网络的。加 `full` / `digest` 两个行存储
 （带 `nextId`），`pageBefore` 才有调用方，`ChatCache` 欠的「两级保真」也一起解掉。
 
-**抽屉原生化现在是 M3 末尾三条明写的清单项**，不再只是这里的一段话 ——
-第 4 轮把前门退回网页之后，它就是「会话列表在原生里该长成什么样」的唯一答案，
-藏在散文里会让清单清空而活没干完。比时间线那几条大得多，但排在它们后面：
+**第 3 条：头部右侧的动作簇。** 现在右边是空的。做它等于把 `chat.createSession` /
+`deleteSession` / `reopenSession` 这几条 mutation 一次性接进原生，
+所以它也是 M5 之外第一条真正会**写**服务端的活。
+
+**抽屉原生化是 M3 末尾三条明写的清单项**，比上面几条都大，排在它们后面：
 时间线是 `GOAL.md` 验收标准 2 点名的那一屏。
 
 **markdown 那一条随时可以开**（M4 第三条）：sway 已经点头可以引第三方依赖，
@@ -590,6 +613,48 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 16:5x 那句「全部复刻网页，做完再评审，反复改到完美」把范围定死成全量，见 `GOAL.md`。
 
 ## 踩过的坑
+
+### SwiftUI 的 `.frame(maxWidth:)` 是贪婪的，它不是 CSS 的 `max-width`（第 5 轮）
+
+网页那行元信息用 `max-w-[9rem]` 给 agent 名字封顶，**内容多短就多短**，只有溢出时才收缩。
+Swift 照抄成 `.frame(maxWidth: 144, alignment: .leading)` 的行为**正好相反**：
+它会把行里所有余量吃掉。结果是四个字母的 `asst` 后面留出一百点的洞，
+而挨着它的状态标签「Bash · 47s」被挤成了「4…」。
+判据只有出图才看得见 —— 六条断言全过，字都在，只是排布是错的。
+今天的做法是把两个上限**去掉**：一行纯 `Text` + `lineLimit(1)` 本来就是非贪婪且可压缩的，
+而在手机宽度上那两个上限**永远够不着**（留给它俩的大约 175pt，压缩先到）。
+iPad 上才够得着，而 `GOAL.md` 说的是「iPhone 上的 Hermit」。
+
+### `toFixed` 不是 `String(format:)`，也不是「乘十再取整」（第 5 轮）
+
+第 20 轮已经记过一半：JS 的 `toFixed` 平局向远离零的方向进位，C 的 `%.*f` 进到偶数。
+这一轮踩到的是**修法本身的坑**：写成 `(x * 10).rounded(.toNearestOrAwayFromZero)` 依然错，
+因为那次乘法自己会被舍入。`1150 / 1000` 真实值是 1.14999999999999991…，
+`toFixed(1)` 读作 1.1；乘十之后**正好落在 11.5**，再向远离零进位就成了 1.2。
+夹具第一次跑就把 1150 和 1450 两条抓了出来。
+正确做法是从 double 自己的十进制展开取数字（`String(format: "%.30f")`），
+按截断位后面第一位决定进位 —— `WebLabels.jsToFixed`。
+
+### UI 用例里加一句 `sleep`，会让它错过要抓的瞬时状态（第 5 轮）
+
+给头部加轮询断言时，我在「窗口画出来了」和「流推了一帧」两条断言之间插了 12 秒等待，
+于是流那条直接失败 —— 夹具会**改写**那一行，它是一个要抓的状态、不是一个可以回头看的状态，
+那句注释就写在断言上面。改法不是把等待缩短，是**把要对比的两次读数拆到测试的两头**：
+开头记一次 `getSession #N`，翻完两页历史之后再记一次，中间一秒都不用等，
+而且间隔比任何 sleep 都长。**任何 `sleep` 都不许挡在一条抓瞬时状态的断言前面。**
+
+### 读像素要有工具，`sips --cropOffset` 不是（第 5 轮，第二次）
+
+第 3 轮那条「截图当证据要读像素」现在有工具了：`tools/pixel-probe.sh <png> [列比例]`
+打一条竖扫描，把相同颜色的段合并，同时印像素和**点**。自己找带，不用知道这台模拟器的
+状态栏多高。第 5 轮拿它确认头部那一条：`y 0–108.7pt` 整段 **255**（`--background`），
+`109.0–109.7pt` 是 **234** 的一条 1pt 细线，之后才是正文的 **10**。
+也就是说最老一行没有透上来。
+**234 而不是算出来的 229**：`Color(.displayP3, 0.8982)` 经过截图编码再读回来就是 234，
+Mac 渲染的 P3 图和模拟器截下来的 sRGB 图**读数完全一致**，所以这是取色管线的常数偏移，
+不是头部画错了。端点（255 / 10）永远精确，中间调不要拿算术当判据，
+要拿**同一个常量在另一条渲染路径上的读数**当判据。
+
 
 ### 一次反证会停在第一个红的断言上，而那多半不是你想验的那条（第 4 轮 perfect-goal）
 

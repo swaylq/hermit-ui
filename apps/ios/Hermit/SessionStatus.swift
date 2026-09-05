@@ -109,6 +109,26 @@ struct BackgroundTaskView: Equatable {
 }
 
 /// The verdict. Mirrors `StatusView`.
+/// The four fields a pushed status frame is allowed to speak for.
+///
+/// `LiveStatusFrame` in `lib/session-status.ts`. Deliberately not
+/// `SessionStatusFrame` from `HermitStream` — that one is a wire format with a
+/// decoder, this is the argument `merge` takes, and keeping them apart is what
+/// lets the merge be tested without a socket.
+struct LiveStatusFrame: Equatable {
+    var state: String?
+    var alive: Bool
+    var activity: SessionActivity?
+    var snapshotAt: Date?
+
+    init(state: String?, alive: Bool, activity: SessionActivity?, snapshotAt: Date?) {
+        self.state = state
+        self.alive = alive
+        self.activity = activity
+        self.snapshotAt = snapshotAt
+    }
+}
+
 struct StatusView: Equatable {
     enum Key: String {
         case needsYou = "needs-you"
@@ -346,6 +366,34 @@ enum SessionStatus {
         let silentSince = max(snap, opts.reachableSince ?? 0)
         // Clamped at 0: our clock and the dashboard's are independent.
         return max(0, observedAt - silentSince)
+    }
+
+    /// Fold a pushed status frame into the polled session row.
+    ///
+    /// `mergeLiveStatus` in `lib/session-status.ts`. Both describe the same row;
+    /// the frame is just earlier, and `snapshotAt` decides which one is later —
+    /// the GATEWAY's clock on both sides, never this device's.
+    ///
+    /// Three details that are the whole function:
+    ///
+    ///   · a frame equal in time to the row LOSES. The poll has already caught
+    ///     up, and the row carries every field where the frame carries four.
+    ///   · a missing `snapshotAt` counts as zero on either side, so a frame that
+    ///     cannot say when it was taken never displaces a row that can.
+    ///   · it replaces exactly `state`, `alive`, `activity` and `snapshotAt`.
+    ///     `closedAt` and `restartRequestedAt` stay as the row has them even
+    ///     though the wire frame carries both — a push must not be able to
+    ///     contradict a field it is not the authority on.
+    static func merge(_ s: SessionRuntime?, _ live: LiveStatusFrame?) -> SessionRuntime? {
+        guard var row = s, let live else { return s }
+        let rowAt = ms(row.snapshotAt) ?? 0
+        let liveAt = ms(live.snapshotAt) ?? 0
+        if liveAt <= rowAt { return row }
+        row.state = live.state
+        row.alive = live.alive
+        row.activity = live.activity
+        row.snapshotAt = live.snapshotAt
+        return row
     }
 
     /// Resting states: the session is fine and nothing is happening. What keeps

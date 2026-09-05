@@ -16,6 +16,7 @@ import Foundation
 struct MaybeActivity: Decodable {
     let value: SessionActivity?
     init(from decoder: Decoder) throws { value = try? SessionActivity(from: decoder) }
+    init(_ v: SessionActivity?) { value = v }
 }
 
 struct SessionJSON: Decodable {
@@ -76,6 +77,28 @@ struct ExpectedTask: Decodable, Equatable {
     var outputTail: String?
 }
 
+struct MergedJSON: Decodable, Equatable {
+    var alive: Bool?
+    var state: String?
+    var snapshotAt: Date?
+    var activity: MaybeActivity?
+    var closedAt: Date?
+    var restartRequestedAt: Date?
+
+    static func of(_ r: SessionRuntime?) -> MergedJSON? {
+        guard let r else { return nil }
+        return MergedJSON(alive: r.alive, state: r.state, snapshotAt: r.snapshotAt,
+                          activity: r.activity.map { MaybeActivity($0) }, closedAt: r.closedAt,
+                          restartRequestedAt: r.restartRequestedAt)
+    }
+
+    static func == (a: MergedJSON, b: MergedJSON) -> Bool {
+        a.alive == b.alive && a.state == b.state && a.snapshotAt == b.snapshotAt
+            && a.activity?.value == b.activity?.value
+            && a.closedAt == b.closedAt && a.restartRequestedAt == b.restartRequestedAt
+    }
+}
+
 struct Fixture: Decodable {
     struct Duration: Decodable { var sec: Double; var expected: String }
     struct Activity: Decodable {
@@ -84,6 +107,22 @@ struct Fixture: Decodable {
         var label: ExpectedLabel?
         var summary: String?
         var tasks: [ExpectedTask]
+    }
+    struct Merge: Decodable {
+        struct Live: Decodable {
+            var state: String?
+            var alive: Bool
+            var activity: MaybeActivity?
+            var snapshotAt: Date?
+            var frame: LiveStatusFrame {
+                LiveStatusFrame(state: state, alive: alive, activity: activity?.value, snapshotAt: snapshotAt)
+            }
+        }
+        var name: String
+        var session: SessionJSON?
+        var live: Live?
+        var merged: MergedJSON?
+        var view: ExpectedView
     }
     struct Status: Decodable {
         var name: String
@@ -99,6 +138,7 @@ struct Fixture: Decodable {
     var durations: [Duration]
     var activities: [Activity]
     var statuses: [Status]
+    var merges: [Merge]
 }
 
 // MARK: - Running it
@@ -181,9 +221,20 @@ if StatusPalette.dot("bg-fuchsia-600") != nil { failures.append("dot(): invented
 checks += 1
 if StatusPalette.dot("bg-amber-400/x") != nil { failures.append("dot(): accepted a non-numeric opacity") }
 
+// The pushed status frame folded into the polled row. Only the header consumes
+// this today, and it is the reason `event: status` finally drives something.
+for c in fixture.merges {
+    let merged = SessionStatus.merge(c.session?.runtime, c.live?.frame)
+    expect(MergedJSON.of(merged), c.merged, "mergeLiveStatus[\(c.name)]")
+    let v = SessionStatus.view(merged, StatusOptions(unread: false, now: fixture.now))
+    expect(ExpectedView(key: v.key.rawValue, label: v.label, dot: v.dot, pulse: v.pulse, detail: v.detail),
+           c.view, "sessionStatusView after the merge[\(c.name)]")
+}
+
 // MARK: - Report
 
-print("\(fixture.durations.count) durations · \(fixture.activities.count) activities · \(fixture.statuses.count) statuses")
+print("\(fixture.durations.count) durations · \(fixture.activities.count) activities · "
+      + "\(fixture.statuses.count) statuses · \(fixture.merges.count) merges")
 if failures.isEmpty {
     print("\u{2713} \(checks)/\(checks) checks")
     exit(0)

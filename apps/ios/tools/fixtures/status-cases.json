@@ -415,6 +415,277 @@
       "tasks": []
     }
   ],
+  "merges": [
+    {
+      "name": "no-row",
+      "why": "Nothing to merge into. The frame is dropped, not promoted into a row.",
+      "session": null,
+      "live": {
+        "state": "working",
+        "alive": true,
+        "activity": {
+          "kind": "tool",
+          "label": "Bash"
+        },
+        "snapshotAt": "2026-09-05T04:00:00.000Z"
+      },
+      "merged": null,
+      "view": {
+        "key": "down",
+        "label": "—",
+        "dot": "bg-zinc-400",
+        "pulse": false
+      }
+    },
+    {
+      "name": "no-frame",
+      "why": "The ordinary case before the socket has said anything.",
+      "session": {
+        "alive": true,
+        "state": "idle",
+        "snapshotAt": "2026-09-05T03:59:59.000Z"
+      },
+      "live": null,
+      "merged": {
+        "alive": true,
+        "state": "idle",
+        "snapshotAt": "2026-09-05T03:59:59.000Z",
+        "activity": null,
+        "closedAt": null,
+        "restartRequestedAt": null
+      },
+      "view": {
+        "key": "ready",
+        "label": "ready",
+        "dot": "bg-emerald-500",
+        "pulse": false
+      }
+    },
+    {
+      "name": "frame-newer",
+      "why": "The whole point: a push lands between two polls and the header moves.",
+      "session": {
+        "alive": true,
+        "state": "idle",
+        "snapshotAt": "2026-09-05T03:59:50.000Z"
+      },
+      "live": {
+        "state": "working",
+        "alive": true,
+        "activity": {
+          "kind": "tool",
+          "label": "Bash",
+          "elapsedSec": 3
+        },
+        "snapshotAt": "2026-09-05T03:59:59.000Z"
+      },
+      "merged": {
+        "alive": true,
+        "state": "working",
+        "snapshotAt": "2026-09-05T03:59:59.000Z",
+        "activity": {
+          "kind": "tool",
+          "label": "Bash",
+          "elapsedSec": 3
+        },
+        "closedAt": null,
+        "restartRequestedAt": null
+      },
+      "view": {
+        "key": "working",
+        "label": "Bash · 3s",
+        "dot": "bg-amber-400",
+        "pulse": true
+      }
+    },
+    {
+      "name": "frame-equal",
+      "why": "A tie goes to the ROW — the poll has caught up and carries every field.",
+      "session": {
+        "alive": true,
+        "state": "idle",
+        "snapshotAt": "2026-09-05T03:59:59.000Z",
+        "activity": {
+          "kind": "tool",
+          "label": "Read"
+        }
+      },
+      "live": {
+        "state": "working",
+        "alive": true,
+        "activity": null,
+        "snapshotAt": "2026-09-05T03:59:59.000Z"
+      },
+      "merged": {
+        "alive": true,
+        "state": "idle",
+        "snapshotAt": "2026-09-05T03:59:59.000Z",
+        "activity": {
+          "kind": "tool",
+          "label": "Read"
+        },
+        "closedAt": null,
+        "restartRequestedAt": null
+      },
+      "view": {
+        "key": "ready",
+        "label": "ready",
+        "dot": "bg-emerald-500",
+        "pulse": false
+      }
+    },
+    {
+      "name": "frame-older",
+      "why": "A frame that arrives after the poll it predates must not undo it.",
+      "session": {
+        "alive": true,
+        "state": "idle",
+        "snapshotAt": "2026-09-05T03:59:59.000Z"
+      },
+      "live": {
+        "state": "working",
+        "alive": true,
+        "activity": null,
+        "snapshotAt": "2026-09-05T03:59:51.000Z"
+      },
+      "merged": {
+        "alive": true,
+        "state": "idle",
+        "snapshotAt": "2026-09-05T03:59:59.000Z",
+        "activity": null,
+        "closedAt": null,
+        "restartRequestedAt": null
+      },
+      "view": {
+        "key": "ready",
+        "label": "ready",
+        "dot": "bg-emerald-500",
+        "pulse": false
+      }
+    },
+    {
+      "name": "frame-no-snapshot",
+      "why": "A frame that cannot say when it was taken counts as zero and loses.",
+      "session": {
+        "alive": true,
+        "state": "idle",
+        "snapshotAt": "2026-09-05T03:59:55.000Z"
+      },
+      "live": {
+        "state": "working",
+        "alive": true,
+        "activity": null,
+        "snapshotAt": null
+      },
+      "merged": {
+        "alive": true,
+        "state": "idle",
+        "snapshotAt": "2026-09-05T03:59:55.000Z",
+        "activity": null,
+        "closedAt": null,
+        "restartRequestedAt": null
+      },
+      "view": {
+        "key": "ready",
+        "label": "ready",
+        "dot": "bg-emerald-500",
+        "pulse": false
+      }
+    },
+    {
+      "name": "row-no-snapshot",
+      "why": "A row that never had one loses to any frame that does.",
+      "session": {
+        "alive": false,
+        "state": "idle",
+        "snapshotAt": null
+      },
+      "live": {
+        "state": "working",
+        "alive": true,
+        "activity": null,
+        "snapshotAt": "2026-09-05T03:59:51.000Z"
+      },
+      "merged": {
+        "alive": true,
+        "state": "working",
+        "snapshotAt": "2026-09-05T03:59:51.000Z",
+        "activity": null,
+        "closedAt": null,
+        "restartRequestedAt": null
+      },
+      "view": {
+        "key": "working",
+        "label": "working",
+        "dot": "bg-amber-400",
+        "pulse": true
+      }
+    },
+    {
+      "name": "frame-does-not-clear-closed",
+      "why": "It replaces four fields. `closedAt` is not one of them.",
+      "session": {
+        "alive": false,
+        "state": "idle",
+        "snapshotAt": "2026-09-05T03:59:50.000Z",
+        "closedAt": "2026-09-05T03:59:00.000Z",
+        "restartRequestedAt": "2026-09-05T03:59:30.000Z"
+      },
+      "live": {
+        "state": "working",
+        "alive": true,
+        "activity": null,
+        "snapshotAt": "2026-09-05T03:59:59.000Z"
+      },
+      "merged": {
+        "alive": true,
+        "state": "working",
+        "snapshotAt": "2026-09-05T03:59:59.000Z",
+        "activity": null,
+        "closedAt": "2026-09-05T03:59:00.000Z",
+        "restartRequestedAt": "2026-09-05T03:59:30.000Z"
+      },
+      "view": {
+        "key": "down",
+        "label": "closed",
+        "dot": "bg-zinc-400",
+        "pulse": false
+      }
+    },
+    {
+      "name": "frame-clears-activity",
+      "why": "A null activity on a newer frame really does clear the row's.",
+      "session": {
+        "alive": true,
+        "state": "working",
+        "snapshotAt": "2026-09-05T03:59:50.000Z",
+        "activity": {
+          "kind": "tool",
+          "label": "Bash"
+        }
+      },
+      "live": {
+        "state": "idle",
+        "alive": true,
+        "activity": null,
+        "snapshotAt": "2026-09-05T03:59:59.000Z"
+      },
+      "merged": {
+        "alive": true,
+        "state": "idle",
+        "snapshotAt": "2026-09-05T03:59:59.000Z",
+        "activity": null,
+        "closedAt": null,
+        "restartRequestedAt": null
+      },
+      "view": {
+        "key": "ready",
+        "label": "ready",
+        "dot": "bg-emerald-500",
+        "pulse": false
+      }
+    }
+  ],
   "statuses": [
     {
       "name": "no-session",

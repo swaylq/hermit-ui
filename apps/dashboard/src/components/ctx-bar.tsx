@@ -1,6 +1,6 @@
 'use client';
 
-import { ctxPct, fmtBytes } from '@/lib/format';
+import { ctxFill, ctxPct, fmtBytes } from '@/lib/format';
 
 function barColor(pct: number): string {
   if (pct >= 90) return 'bg-rose-500';
@@ -39,7 +39,7 @@ export function CtxBar({
 }) {
   const known = tokens != null;
   const pct = known ? ctxPct(tokens, total) : 0;
-  const fill = known ? Math.max(2, Math.min(100, pct)) : 0;
+  const fill = known ? ctxFill(pct) : 0;
   const pctText = known ? `${pct.toFixed(0)}%` : '—';
   const pctClass = known ? textColor(pct) : 'text-muted-foreground/50';
   const title = known

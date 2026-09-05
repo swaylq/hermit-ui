@@ -88,6 +88,24 @@ final class ChatTimelineViewController: UIViewController {
     private let spinner = UIActivityIndicatorView(style: .medium)
     private var inFlight: Task<Void, Never>?
 
+    // MARK: The header
+    //
+    // The screen draws its own instead of using the navigation bar's title. Two
+    // reasons, both in `ChatHeaderView`: the web's chat header is opaque, and it
+    // carries a second line the bar has nowhere to put.
+
+    private var headerHost: UIHostingController<ChatHeaderView>!
+    /// The last `chat.getSession`. Nil until the first one lands, which is what
+    /// `ChatHeaderModel.pending` is for.
+    private var meta: SessionMeta?
+    /// The newest `event: status` frame off the stream. Folded into `meta` by
+    /// `SessionStatus.merge`, which is the same thing the web's `statusRow` does
+    /// — it is the fast half, and the poll below only ever covers the gap.
+    private var pushedStatus: LiveStatusFrame?
+    private var metaTask: Task<Void, Never>?
+    /// `chat.getSession` on the web's own `refetchInterval`.
+    private var metaPoll: Timer?
+
     /// The LIVE window, oldest-first — the newest `WebContract.timelineLimit`
     /// rows, and the only rows the stream carries. Kept apart from the fold's
     /// output so a push re-folds from the same rows the server sent rather than
@@ -202,6 +220,13 @@ final class ChatTimelineViewController: UIViewController {
         collection.delegate = self
         view.addSubview(collection)
 
+        headerHost = UIHostingController(rootView: ChatHeaderView(model: pendingHeaderModel, onBack: nil))
+        headerHost.view.translatesAutoresizingMaskIntoConstraints = false
+        headerHost.view.backgroundColor = .clear
+        addChild(headerHost)
+        view.addSubview(headerHost.view)
+        headerHost.didMove(toParent: self)
+
         message.numberOfLines = 0
         message.textAlignment = .natural
         message.font = .systemFont(ofSize: 12)
@@ -217,11 +242,23 @@ final class ChatTimelineViewController: UIViewController {
         view.addSubview(spinner)
 
         NSLayoutConstraint.activate([
-            collection.topAnchor.constraint(equalTo: view.topAnchor),
+            // Below the status bar, not under it — the web's app shell pads
+            // itself by `env(safe-area-inset-top)` and the strip above is plain
+            // `bg-background`, which is what `view.backgroundColor` already is.
+            headerHost.view.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            headerHost.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            headerHost.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            headerHost.view.heightAnchor.constraint(equalToConstant: ChatHeaderMetrics.height),
+            // The list starts BELOW the header rather than scrolling behind it.
+            // The web's header is a `shrink-0` flex item over its own scroller,
+            // and the difference is visible at the edges: content sliding under
+            // an opaque bar still moves the scroll indicator and the rubber-band
+            // through it.
+            collection.topAnchor.constraint(equalTo: headerHost.view.bottomAnchor),
             collection.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             collection.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collection.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            message.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
+            message.topAnchor.constraint(equalTo: headerHost.view.bottomAnchor, constant: 16),
             message.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Self.padH),
             message.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Self.padH),
             spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -287,10 +324,10 @@ final class ChatTimelineViewController: UIViewController {
     ///
     /// The collection is flipped, so its content-space TOP is the BOTTOM of the
     /// screen — and UIKit's own safe-area adjustment does not know that. Left
-    /// alone it adds the navigation bar's inset at content-top, which lands as a
-    /// hundred points of dead space under the newest message, while the oldest
-    /// rows scroll under the status bar with `padV` and nothing else. That is
-    /// what the first simulator run of this screen looked like.
+    /// alone it adds its top inset at content-top, which lands as dead space
+    /// under the newest message while the oldest rows run off the other end with
+    /// `padV` and nothing else. That is what the first simulator run of this
+    /// screen looked like.
     ///
     /// Fixed by cancelling out what UIKit contributes rather than by turning the
     /// adjustment off: `adjustedContentInset = safeAreaInsets + contentInset`, so
@@ -299,20 +336,42 @@ final class ChatTimelineViewController: UIViewController {
     /// content offset by hand, and writing `contentOffset` from inside a layout
     /// pass is exactly the re-entrancy that killed `scrollViewDidScroll`.
     ///
-    /// A negative component is fine and expected: on a phone the status bar plus
-    /// the navigation bar is taller than the home indicator, so `top` here is
-    /// normally below zero.
+    /// Read off `collection.safeAreaInsets` and not the view controller's: since
+    /// the header went in, the collection starts below it and UIKit therefore
+    /// contributes NOTHING at its top edge. Deriving the correction from the
+    /// number UIKit will actually add keeps this right whichever of the two is
+    /// true, rather than hard-coding today's answer.
+    ///
+    /// A negative `bottom` is fine and expected — that end is the top of the
+    /// screen, which the header already covers.
     private func applyInsets() {
-        let safe = view.safeAreaInsets
-        let wanted = UIEdgeInsets(top: safe.bottom + Self.padV - safe.top, left: 0,
-                                  bottom: safe.top + Self.padV - safe.bottom, right: 0)
+        // `own.top` is added at content-top (the bottom of the screen) and
+        // `own.bottom` at content-bottom (just under the header): the flip does
+        // not reach the safe area, which is why they have to be swapped here.
+        let own = collection.safeAreaInsets
+        let wanted = UIEdgeInsets(top: view.safeAreaInsets.bottom + Self.padV - own.top, left: 0,
+                                  bottom: Self.padV - own.bottom, right: 0)
         guard collection.contentInset != wanted else { return }
         collection.contentInset = wanted
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // `viewSafeAreaInsetsDidChange` fires on THIS view; the collection's own
+        // insets settle a layout pass later, and it is those the correction is
+        // computed from. Cheap — `applyInsets` returns without touching anything
+        // when the answer has not moved.
+        applyInsets()
+    }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        navigationController?.setNavigationBarHidden(false, animated: animated)
+        // Hidden, unlike the session list: this screen draws its own header, and
+        // showing UIKit's as well would put two titles on top of each other. The
+        // edge-swipe back still works — `SceneDelegate.gestureRecognizerShouldBegin`
+        // answers for a hidden bar, which is the whole reason it exists.
+        navigationController?.setNavigationBarHidden(true, animated: animated)
+        refreshHeader()
         start()
     }
 
@@ -390,6 +449,10 @@ final class ChatTimelineViewController: UIViewController {
         }
     }
 
+    private struct SessionInput: Encodable {
+        let sessionId: String
+    }
+
     private struct WindowInput: Encodable {
         let sessionId: String
         let limit: Int
@@ -418,6 +481,83 @@ final class ChatTimelineViewController: UIViewController {
         let base = KeyStore.base(for: entry)
         openStream(origin: base)
         loadWindow(origin: base)
+        loadMeta(origin: base)
+        startMetaPoll(origin: base)
+    }
+
+    // MARK: - The header's own query
+
+    /// What the header shows before `chat.getSession` has answered.
+    private var pendingHeaderModel: ChatHeaderModel {
+        ChatHeaderModel.pending(sessionId: sessionId, title: title_)
+    }
+
+    /// `chat.getSession`, which is where the meta line comes from.
+    ///
+    /// A different route from the list's `chat.listSessions`, and it has to be:
+    /// the list payload deliberately carries no `activity` blob (the server's own
+    /// rule — that query polls every 5s for every open page), so "Bash · 47s"
+    /// exists only here. Failure is silent: the header keeps whatever it had, or
+    /// the id, and the timeline below it is the thing that reports a broken
+    /// connection.
+    private func loadMeta(origin: URL) {
+        let api = HermitAPI(origin: origin, key: { KeyStore.active()?.key ?? "" })
+        let input = SessionInput(sessionId: sessionId)
+        metaTask?.cancel()
+        metaTask = Task { [weak self] in
+            // `getSession` answers `null` for a session this key cannot see, so
+            // the payload is optional and `try?` flattens the refusal into the
+            // same nothing. Two levels of optional, one meaning: no header data.
+            let got = try? await api.query("chat.getSession", input: input, as: SessionMeta?.self)
+            if Task.isCancelled { return }
+            await MainActor.run {
+                guard let self else { return }
+                self.metaTask = nil
+                guard let row = got ?? nil else { return }
+                self.meta = row
+                self.refreshHeader()
+            }
+        }
+    }
+
+    private func startMetaPoll(origin: URL) {
+        metaPoll?.invalidate()
+        // Same 5s the web's `getSession` query uses. `.common` so it keeps
+        // running while the timeline is being dragged — a header that freezes
+        // mid-scroll is the one moment a reader is most likely to look at it.
+        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self, self.metaTask == nil else { return }
+            self.loadMeta(origin: origin)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        metaPoll = timer
+    }
+
+    /// Rebuild the header from whatever is known right now.
+    ///
+    /// The pushed frame is folded in by `SessionStatus.merge`, which prefers the
+    /// polled row on a tie — the same rule the web's `statusRow` follows, and the
+    /// reason `event: status` is worth consuming at all: it moves the dot the
+    /// moment the gateway writes, instead of up to five seconds later.
+    @MainActor
+    private func refreshHeader() {
+        guard headerHost != nil else { return }
+        var model: ChatHeaderModel
+        if let meta {
+            model = ChatHeaderModel(meta: meta, sessionId: sessionId)
+            if let merged = SessionStatus.merge(meta.statusRow, pushedStatus) {
+                model.status = SessionStatus.view(merged, StatusOptions(unread: false))
+            }
+        } else {
+            model = pendingHeaderModel
+        }
+        // No back control when there is nothing to pop to. Today the timeline is
+        // always pushed, but it was the root for five rounds and may be again.
+        let canPop = (navigationController?.viewControllers.count ?? 0) > 1
+        headerHost.rootView = ChatHeaderView(
+            model: model,
+            onBack: canPop ? { [weak self] in self?.navigationController?.popViewController(animated: true) } : nil
+        )
     }
 
     private func teardown() {
@@ -432,6 +572,13 @@ final class ChatTimelineViewController: UIViewController {
         stream = nil
         pending = []
         windowLanded = false
+        metaTask?.cancel()
+        metaTask = nil
+        metaPoll?.invalidate()
+        metaPoll = nil
+        // `meta` and `pushedStatus` deliberately survive: coming back from the
+        // background re-queries, and blanking the header for that round trip
+        // would be a flicker with nothing behind it.
     }
 
     private func openStream(origin: URL) {
@@ -463,10 +610,17 @@ final class ChatTimelineViewController: UIViewController {
             }
             adopt(window: TimelineMerge.apply(window, frame.rows, gone: frame.gone))
             refold()
-        case .status, .connected, .frameDropped:
-            // Status drives the header (not built yet); a dropped frame is one
-            // unreadable payload on a connection that is still good, and the
-            // next frame carries the row again.
+        case .status(let frame):
+            // The fast half of the header's state. Kept as a frame rather than
+            // applied to `meta`, so `SessionStatus.merge` can go on deciding
+            // which of the two is later every time the header is rebuilt — a
+            // frame that lost to the poll once must not win after the next one.
+            pushedStatus = LiveStatusFrame(state: frame.state, alive: frame.alive,
+                                           activity: frame.activity, snapshotAt: frame.snapshotAt)
+            refreshHeader()
+        case .connected, .frameDropped:
+            // A dropped frame is one unreadable payload on a connection that is
+            // still good, and the next frame carries the row again.
             break
         case .disconnected:
             // Silent on purpose: the stream reconnects itself, and a banner that

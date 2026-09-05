@@ -52,6 +52,12 @@ IDENTITY = {"key-one": "m_one", "key-two": "m_two"}
 # ThreadingHTTPServer needs.
 SERVED = itertools.count(1)
 
+# The same trick for `chat.getSession`, which the chat header polls on its own
+# 5s timer. Stamped into the session TITLE, which is the string the header
+# leads with — so one screenshot says the header queried at all, that it sent
+# the right key, and (read twice) that its poll is running.
+META_SERVED = itertools.count(1)
+
 
 def ago(seconds):
     """superjson's `toISOString()`: UTC, always three decimals."""
@@ -319,6 +325,8 @@ class Handler(SimpleHTTPRequestHandler):
         route = self.path.split("?")[0]
         if route == "/api/trpc/chat.listSessions":
             return self.sessions()
+        if route == "/api/trpc/chat.getSession":
+            return self.get_session()
         if route == "/api/trpc/chat.listMessages":
             return self.list_messages()
         if route == "/api/trpc/chat.listMessagesBefore":
@@ -367,6 +375,49 @@ class Handler(SimpleHTTPRequestHandler):
         self.reply(code, payload)
 
     # ── the timeline ─────────────────────────────────────────────────────────
+
+    def get_session(self):
+        """The one row behind the chat header.
+
+        Chosen to make the header's arithmetic VISIBLE rather than plausible.
+        The backend is codex on a 258,400-token window, so 214,000 tokens is
+        82.8% and the bar draws amber; with the 1M default the same number is
+        21% and green, and nothing on screen would say which denominator was
+        used. `activity` is a tool call with an elapsed time, which is the half
+        of the state line that `chat.listSessions` deliberately never carries —
+        so "Bash · 47s" appearing at all is the proof this route was consulted
+        and not the list.
+        """
+        name = self.identity()
+        if not name:
+            return self.reply(401, unauth("chat.getSession"))
+        arg = self.trpc_input()
+        if arg.get("sessionId") != TIMELINE_SESSION:
+            return self.reply(200, trpc(None, {}))
+        row = {
+            "id": TIMELINE_SESSION,
+            "agentName": "asst",
+            "title": "getSession #%d · key %s" % (next(META_SERVED), name),
+            "preview": "should never be read — the title is not empty",
+            "origin": "web",
+            "startedAt": ago(7200), "lastMessageAt": ago(3), "lastReadAt": ago(3),
+            "closedAt": None, "hiddenAt": None, "hibernatedAt": None,
+            "restartRequestedAt": None,
+            "alive": True, "state": "working", "snapshotAt": ago(2),
+            "contextTokens": 214000,
+            # The RESOLVED backend, the way the server spreads `resolveRuntime`
+            # over its answer.
+            "runtime": "codex-exec", "runtimeProvider": None,
+            "runtimeModel": "gpt-5.6", "runtimeCredentialId": None,
+            "runtimeMode": None, "chatOnly": False,
+            "activity": {"kind": "tool", "label": "Bash", "elapsedSec": 47},
+            "livePreview": None, "rssMb": 512,
+            "takeoverBySessionId": None, "takeoverGoal": None, "takeoverTurns": None,
+            "takeoverStartedAt": None, "takeoverDraft": None, "takeoverBrainState": None,
+        }
+        # A single object, so the superjson `values` map is keyed by field name
+        # rather than by `<i>.<field>` the way a list of rows is.
+        self.reply(200, trpc(row, {f: ["Date"] for f in DATE_FIELDS if row.get(f)}))
 
     def list_messages(self):
         """The newest `limit` rows — the live window, and nothing else."""

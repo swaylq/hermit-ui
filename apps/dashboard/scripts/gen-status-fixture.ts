@@ -31,6 +31,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import {
   activityLabel,
+  mergeLiveStatus,
   backgroundSummary,
   backgroundTaskList,
   isRestingState,
@@ -145,7 +146,86 @@ export type Fixture = {
     tasks: ReturnType<typeof backgroundTaskList>;
   })[];
   statuses: (StatusCase & { expected: StatusView; resting: boolean; silenceMs: number | null })[];
+  merges: (MergeCase & {
+    merged: {
+      alive: boolean | null;
+      state: string | null;
+      snapshotAt: string | Date | null;
+      activity: unknown;
+      closedAt: string | Date | null;
+      restartRequestedAt: string | Date | null;
+    } | null;
+    view: StatusView;
+  })[];
 };
+
+// ---------------------------------------------------------------------------
+// mergeLiveStatus — the pushed frame against the polled row
+// ---------------------------------------------------------------------------
+
+type MergeCase = {
+  name: string;
+  why: string;
+  session: SessionRuntimeLike | null;
+  live: { state: string | null; alive: boolean; activity: unknown; snapshotAt: string | null } | null;
+};
+
+const MERGES: MergeCase[] = [
+  {
+    name: 'no-row',
+    why: 'Nothing to merge into. The frame is dropped, not promoted into a row.',
+    session: null,
+    live: { state: 'working', alive: true, activity: { kind: 'tool', label: 'Bash' }, snapshotAt: at(0) },
+  },
+  {
+    name: 'no-frame',
+    why: 'The ordinary case before the socket has said anything.',
+    session: { alive: true, state: 'idle', snapshotAt: at(1_000) },
+    live: null,
+  },
+  {
+    name: 'frame-newer',
+    why: 'The whole point: a push lands between two polls and the header moves.',
+    session: { alive: true, state: 'idle', snapshotAt: at(10_000) },
+    live: { state: 'working', alive: true, activity: { kind: 'tool', label: 'Bash', elapsedSec: 3 }, snapshotAt: at(1_000) },
+  },
+  {
+    name: 'frame-equal',
+    why: 'A tie goes to the ROW — the poll has caught up and carries every field.',
+    session: { alive: true, state: 'idle', snapshotAt: at(1_000), activity: { kind: 'tool', label: 'Read' } },
+    live: { state: 'working', alive: true, activity: null, snapshotAt: at(1_000) },
+  },
+  {
+    name: 'frame-older',
+    why: 'A frame that arrives after the poll it predates must not undo it.',
+    session: { alive: true, state: 'idle', snapshotAt: at(1_000) },
+    live: { state: 'working', alive: true, activity: null, snapshotAt: at(9_000) },
+  },
+  {
+    name: 'frame-no-snapshot',
+    why: 'A frame that cannot say when it was taken counts as zero and loses.',
+    session: { alive: true, state: 'idle', snapshotAt: at(5_000) },
+    live: { state: 'working', alive: true, activity: null, snapshotAt: null },
+  },
+  {
+    name: 'row-no-snapshot',
+    why: 'A row that never had one loses to any frame that does.',
+    session: { alive: false, state: 'idle', snapshotAt: null },
+    live: { state: 'working', alive: true, activity: null, snapshotAt: at(9_000) },
+  },
+  {
+    name: 'frame-does-not-clear-closed',
+    why: 'It replaces four fields. `closedAt` is not one of them.',
+    session: { alive: false, state: 'idle', snapshotAt: at(10_000), closedAt: at(60_000), restartRequestedAt: at(30_000) },
+    live: { state: 'working', alive: true, activity: null, snapshotAt: at(1_000) },
+  },
+  {
+    name: 'frame-clears-activity',
+    why: 'A null activity on a newer frame really does clear the row\'s.',
+    session: { alive: true, state: 'working', snapshotAt: at(10_000), activity: { kind: 'tool', label: 'Bash' } },
+    live: { state: 'idle', alive: true, activity: null, snapshotAt: at(1_000) },
+  },
+];
 
 export function buildFixture(): Fixture {
   return {
@@ -161,6 +241,25 @@ export function buildFixture(): Fixture {
       summary: backgroundSummary(a.activity),
       tasks: backgroundTaskList(a.activity),
     })),
+    merges: MERGES.map((c) => {
+      const merged = mergeLiveStatus(c.session, c.live);
+      return {
+        ...c,
+        merged: merged
+          ? {
+              alive: merged.alive ?? null,
+              state: merged.state ?? null,
+              snapshotAt: merged.snapshotAt ?? null,
+              activity: merged.activity ?? null,
+              closedAt: merged.closedAt ?? null,
+              restartRequestedAt: merged.restartRequestedAt ?? null,
+            }
+          : null,
+        // What the header would actually print out of it, which is the only
+        // reason the merge exists.
+        view: sessionStatusView(merged, { unread: false, now: NOW }),
+      };
+    }),
     statuses: STATUSES.map((s) => {
       const expected = sessionStatusView(s.session, s.opts);
       return {
@@ -191,6 +290,6 @@ if (invokedDirectly) {
   const f = buildFixture();
   writeFileSync(out, renderFixture());
   console.log(
-    `wrote      ${FIXTURE_JSON}  (${f.durations.length} durations, ${f.activities.length} activities, ${f.statuses.length} statuses)`,
+    `wrote      ${FIXTURE_JSON}  (${f.durations.length} durations, ${f.activities.length} activities, ${f.statuses.length} statuses, ${f.merges.length} merges)`,
   );
 }
