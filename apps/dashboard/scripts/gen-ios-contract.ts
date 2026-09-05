@@ -330,6 +330,8 @@ const camel = (v: string) => v.replace(/-([a-z])/g, (_, c: string) => c.toUpperC
 export const EXTRA_CLASSES: ReadonlyArray<{ cls: string; note: string }> = [
   { cls: 'rose-600', note: "the composer's Stop pill in the light scheme (components/chat/composer.tsx)" },
   { cls: 'emerald-600', note: "a finished attachment's dimensions under its chip (components/chat/composer.tsx)" },
+  { cls: 'neutral-800', note: 'the label on the lit send dome (components/chat/hold-to-talk.tsx)' },
+  { cls: 'neutral-900', note: 'the transcript in the hold bubble, and a lit arc label (components/chat/hold-to-talk.tsx)' },
 ] as const;
 
 const SHADE = (cls: string) => Number(cls.split('-')[1]);

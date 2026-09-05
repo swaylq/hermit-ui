@@ -1089,6 +1089,119 @@ final class SmokeTests: XCTestCase {
     /// today. Four queries rather than one because the picker is a remote view
     /// whose tree has changed shape across iOS versions, and a test that fails
     /// because Apple renamed a cell is a test that says nothing about this app.
+    /// The slot right of the box, and the press-and-hold behind it.
+    ///
+    /// ## What this can and cannot see, on THIS Mac
+    ///
+    /// The machine this suite runs on has no audio input device at all
+    /// (`system_profiler SPAudioDataType` lists an output and no input), so the
+    /// simulator has no microphone and a dictation run cannot get past
+    /// `AVAudioEngine`. Everything up to that point is real and is checked here:
+    /// which control is in the slot, the 260 ms that turns a press into a hold,
+    /// and the overlay it raises. The socket on the far side of the microphone
+    /// has its own harness that needs no microphone either —
+    /// `tools/asr-fixture.sh`, which drives `AsrSocket` against a real
+    /// WebSocket. What is covered NOWHERE is the audio path itself.
+    ///
+    /// The permission is granted from the shell (`simctl privacy grant`, in
+    /// bridge-fixture.sh) rather than by tapping an alert: an alert raised under
+    /// a held finger swallows the touch, which is the exact thing the
+    /// release-time ask exists to avoid, and a test that depended on it would be
+    /// testing the alert.
+    ///
+    /// The order matters. The press layer is over the field only while the box
+    /// is empty AND UNFOCUSED, so the hold comes BEFORE anything is typed:
+    /// SwiftUI does not resign a `TextField` because a finger landed elsewhere,
+    /// so once the caret is in the box there is no reliable way to get it out
+    /// again from a test — and the layer being gone at that point is the web's
+    /// behaviour too, not a limitation.
+    func testTheNativeComposerHoldsTheBoxToTalk() throws {
+        let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
+        guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
+
+        app.launchArguments = ["-hermitOrigin", fixture]
+        app.launch()
+        // The keyring first, and not as ceremony: with no active entry there is
+        // no key for `/api/asr`, `micSlot` is asked with `canDictate: false`, and
+        // the slot is correctly EMPTY — the first run of this test failed on the
+        // timeline never loading, one step before it would have failed on that.
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer")
+        app.webViews.buttons["keychain.set — two machines"].tap()
+        XCTAssertTrue(fixtureSays("keyring ok"), "the shell refused to store the keyring")
+        app.webViews.buttons["keychain.setActive — m_two"].tap()
+        XCTAssertTrue(fixtureSays("active m_two ok"), "the shell would not record which entry is active")
+        openTimeline()
+
+        // ── the slot ────────────────────────────────────────────────────────
+        // An empty box has the microphone and NOT the ✕. Before round 9 the slot
+        // was simply absent here, which is why the send circle sat one control
+        // further left than the web's.
+        let mic = app.buttons["composer.mic"]
+        let clear = app.buttons["composer.clear"]
+        XCTAssertTrue(mic.waitForExistence(timeout: 10), "an empty box has no microphone")
+        XCTAssertFalse(clear.exists, "an empty box should not offer to clear itself")
+        settle()
+        shoot("40-mic-on-an-empty-box")
+
+        // ── the hold ────────────────────────────────────────────────────────
+        // The overlay exists only WHILE the finger is down, and XCTest has no
+        // touch-down-and-stay-down primitive: `press(forDuration:)` blocks its
+        // caller for the whole gesture. It cannot be moved to another queue
+        // either — every XCUI call is main-thread only, which is what the first
+        // version of this test found out ("Must be called on the main thread").
+        //
+        // What DOES work: XCUI spins the main run loop while it synthesises
+        // events, so a timer scheduled before the press fires in the middle of
+        // it, on the main thread, and can ask the app what is on screen. If that
+        // ever stops being true this goes red on `the probe never ran` rather
+        // than quietly passing.
+        let box = composerField()
+        let centre = box.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        var probeRan = false
+        var sawDome = false
+        var sawCancel = false
+        var sawEdit = false
+        let probe = Timer(timeInterval: 1.5, repeats: false) { [self] _ in
+            probeRan = true
+            // 松开发送 is on the lit dome under the thumb; 取消 and 编辑 are the
+            // two arcs either side of it. All three come from `HoldCore`, and
+            // all three are held against the web's own strings by
+            // tools/hold-fixture.sh.
+            sawDome = app.staticTexts["松开发送"].exists
+            sawCancel = app.staticTexts["取消"].exists
+            sawEdit = app.staticTexts["编辑"].exists
+            shoot("41-hold-to-talk-overlay")
+        }
+        RunLoop.main.add(probe, forMode: .common)
+        centre.press(forDuration: 3)
+        probe.invalidate()
+
+        XCTAssertTrue(probeRan, "the probe never ran — XCUI no longer spins the run loop mid-press")
+        XCTAssertTrue(sawDome, "holding the box raised no overlay")
+        XCTAssertTrue(sawCancel, "the overlay has no 取消 arc")
+        XCTAssertTrue(sawEdit, "the overlay has no 编辑 arc")
+
+        // Letting go where you started is a send, and there is nothing to send —
+        // the microphone never opened. The overlay comes down either way.
+        XCTAssertTrue(screenStops("松开发送"), "the overlay stayed up after the finger left")
+        XCTAssertTrue(mic.waitForExistence(timeout: 5), "the microphone did not come back after the hold")
+
+        // ── and the swap ────────────────────────────────────────────────────
+        // One slot, never two, which is what keeps the send circle from moving.
+        composerField().tap()
+        composerField().typeText("hold test")
+        XCTAssertTrue(clear.waitForExistence(timeout: 5), "a draft did not bring the ✕ back")
+        XCTAssertFalse(mic.exists, "the microphone stayed while there was a draft")
+        settle()
+        shoot("42-clear-with-a-draft")
+
+        clear.tap()
+        XCTAssertTrue(mic.waitForExistence(timeout: 5), "clearing did not bring the microphone back")
+        XCTAssertFalse(clear.exists, "the ✕ stayed after the box was emptied")
+    }
+
     private func firstPickerPhoto(timeout: TimeInterval) -> XCUIElement? {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {

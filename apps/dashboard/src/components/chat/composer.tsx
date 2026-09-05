@@ -34,7 +34,11 @@ import { Collapse } from '@/components/chat/collapse';
 import { originalFor } from '@/lib/translate-outbound';
 import { canOpenMicSilently, refreshMicPermission, requestMicAccess } from '@/lib/voice-capture';
 import { nativeHaptic } from '@/lib/native-bridge';
-import { HoldToTalkOverlay, type HoldPhase, type HoldZone } from '@/components/chat/hold-to-talk';
+import { HoldToTalkOverlay } from '@/components/chat/hold-to-talk';
+import {
+  HOLD_MS, holdBailed, holdPressLayer, holdZoneAt, micSlot, micSlotLabel,
+  type HoldPhase, type HoldZone,
+} from '@/components/chat/hold-core';
 import type { DictationSource } from '@/components/chat/dictation-dock';
 
 // Lazy-load the zoomable image lightbox (its own ~20KB portal-overlay chunk) so
@@ -168,15 +172,11 @@ function StopPill({ onStop, stopping }: { onStop: () => void; stopping: boolean 
   );
 }
 
-// ── press-and-hold-to-talk thresholds ───────────────────────────────────────
-/** Hold the empty box this long and the press has become "talking". */
-const HOLD_MS = 260;
-/** Travel this far before that and it was a scroll passing through, not a hold. */
-const BAIL_PX = 10;
-/** Slide this far sideways, from where the finger went down, to pick 取消 / 编辑. */
-const SLIDE_PX = 64;
-/** Below this the finger hasn't gone anywhere, so the pill hit-test stays off. */
-const PILL_MIN_PX = 24;
+// The thresholds (HOLD_MS / BAIL_PX / SLIDE_PX / PILL_MIN_PX) and the three
+// decisions they feed — holdBailed, holdZoneAt, holdPressLayer — live in
+// hold-core.ts, along with the slot's own `micSlot`, because the iOS composer
+// has to reach the same answers and `apps/ios/tools/hold-fixture.sh` runs both
+// over one table.
 
 const draftKey = (sid: string) => `hermit:draft:${sid}`;
 function loadDraft(sid: string): string {
@@ -768,24 +768,21 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     if (!h.live) {
       // Still deciding. Any real travel means the finger was going somewhere
       // else — give the gesture back rather than starting to record.
-      if (Math.hypot(dx, dy) > BAIL_PX) { h.bailed = true; clearTimeout(h.timer); h.id = -1; }
+      if (holdBailed(dx, dy)) { h.bailed = true; clearTimeout(h.timer); h.id = -1; }
       return;
     }
     if (h.auth) return; // waiting to ask for permission — there are no zones yet
-    // Displacement decides, and landing ON a pill decides too, so a finger that
-    // aims at the target it can see is not second-guessed. The pill test is
-    // gated on having moved at all, or a press that started near a corner would
-    // read as "cancel" before the finger did anything.
-    const travelled = Math.hypot(dx, dy) > PILL_MIN_PX;
-    const onPill = (el: HTMLDivElement | null) => {
-      if (!travelled || !el) return false;
+    // Which exit the finger is over is hold-core's `holdZoneAt`; the only thing
+    // the DOM contributes is where the two hit boxes currently are.
+    const box = (el: HTMLDivElement | null) => {
+      if (!el) return null;
       const r = el.getBoundingClientRect();
-      return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
     };
-    const zone: HoldZone =
-      dx <= -SLIDE_PX || onPill(cancelPillRef.current) ? 'cancel'
-      : dx >= SLIDE_PX || onPill(editPillRef.current) ? 'edit'
-      : 'send';
+    const zone = holdZoneAt({
+      dx, dy, x: e.clientX, y: e.clientY,
+      cancel: box(cancelPillRef.current), edit: box(editPillRef.current),
+    });
     if (zone !== h.zone) {
       h.zone = zone;
       setHoldZone(zone);
@@ -903,15 +900,24 @@ export const ComposeBar = forwardRef<ComposerHandle, {
     return () => document.removeEventListener('visibilitychange', bail);
   }, [endHold, onDictateCancel]);
 
-  // When a press MAY start a run: an empty box nobody is typing in.
-  const holdIdle = touch && !!onDictate && !disabled && !awaitingInput && !dictating && draft.length === 0 && !focused;
-  // Once one HAS started, the layer must stay mounted no matter what those
-  // inputs do — and they all change immediately: the words land in the draft,
-  // `dictating` goes true. A layer that unmounts under a held finger never
-  // delivers its pointermove or its pointerup, so the zones would be dead and
-  // the run would never end. Same rule the old floating mic had, for the same
-  // reason. `holdZone` is non-null for exactly the life of the gesture.
-  const holdable = holdIdle || holdZone !== null;
+  // When the press layer is over the box: an empty box nobody is typing in —
+  // OR a gesture already in flight, which is why `gestureLive` is a parameter
+  // rather than an `||` here. Once a run HAS started every one of the other
+  // inputs changes immediately (the words land in the draft, `dictating` goes
+  // true), and a layer that unmounts under a held finger never delivers its
+  // pointermove or its pointerup: the zones would be dead and the run would
+  // never end. `holdZone` is non-null for exactly the life of the gesture.
+  const holdable = holdPressLayer({
+    touch, canDictate: !!onDictate, disabled, awaitingInput, dictating,
+    draftLength: draft.length, focused, gestureLive: holdZone !== null,
+  });
+
+  // What sits between the box and the send circle. One call, six inputs, three
+  // answers — and the reason the send circle is where the web puts it.
+  const slot = micSlot({
+    dictating, draftLength: draft.length, canDictate: !!onDictate,
+    disabled, awaitingInput, micArming,
+  });
 
   return (
     <form
@@ -1078,31 +1084,31 @@ export const ComposeBar = forwardRef<ComposerHandle, {
               changed is that it is on. That is also the whole status display
               for a hands-free run now; the words themselves are the rest of it.
               With text typed, the slot is the ✕ it always was. */}
-          {(dictating || draft.length === 0) && onDictate && !disabled && !awaitingInput ? (
+          {slot.slot === 'mic' ? (
             <button
               type="button"
-              onClick={dictating ? () => onDictateStop?.() : onMicTap}
-              disabled={micArming}
-              aria-label={dictating ? '结束听写' : '语音输入'}
-              title={dictating ? '正在听 · 点一下结束' : '语音输入 · 说的话直接写进输入框'}
+              onClick={slot.listening ? () => onDictateStop?.() : onMicTap}
+              disabled={slot.disabled}
+              aria-label={micSlotLabel(slot.listening)}
+              title={slot.listening ? '正在听 · 点一下结束' : '语音输入 · 说的话直接写进输入框'}
               className={cn(
                 'relative h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-full transition-colors cursor-pointer',
                 'disabled:cursor-wait disabled:opacity-60',
-                dictating
+                slot.listening
                   ? 'text-rose-500 dark:text-rose-400'
                   : 'text-muted-foreground hover:bg-accent hover:text-foreground',
               )}
             >
               {/* Breathing halo. Deliberately not animate-ping, which scales to
                   twice the button and would wash over the send circle beside it. */}
-              {dictating && (
+              {slot.listening && (
                 <span aria-hidden="true" className="absolute inset-0 animate-pulse rounded-full bg-rose-500/15 dark:bg-rose-400/20" />
               )}
-              {micArming
+              {slot.spinner
                 ? <Loader2 className="h-5 w-5 animate-spin" />
                 : <Mic className="relative h-5 w-5" />}
             </button>
-          ) : draft.length > 0 && !disabled ? (
+          ) : slot.slot === 'clear' ? (
             <button
               type="button"
               onClick={() => { setDraft(''); taRef.current?.focus({ preventScroll: true }); }}

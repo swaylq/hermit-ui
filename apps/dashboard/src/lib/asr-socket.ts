@@ -30,16 +30,11 @@
 
 import { getActiveKey } from '@/lib/keyring';
 import { wsUrl } from '@/lib/api-base';
-import { joinSegments } from '@/lib/dictation-text';
+import {
+  asrInitial, asrState, asrStep, type AsrModel, type DictationState,
+} from '@/lib/asr-reduce';
 
-export interface DictationState {
-  /** Unstable sentence-in-progress. Render dim, outside the textarea. */
-  partial: string;
-  /** Closed sentences, joined — this is what belongs in the draft. */
-  tail: string;
-  /** Sentences still being corrected (drives the "…" in the bar). */
-  pending: number;
-}
+export type { DictationState };
 
 export interface AsrSocketEvents {
   /** The ASR task is live; audio is being transcribed. */
@@ -63,8 +58,6 @@ export interface AsrSocket {
   close: () => void;
 }
 
-interface Seg { id: number; text: string; polishing: boolean }
-
 /** Audio held while the socket is still opening — ~4 s, well past a normal connect. */
 const PREOPEN_MAX_BYTES = 4 * 16_000 * 2;
 /** stop() waits this long for the tail + corrections before giving up on them. */
@@ -74,18 +67,19 @@ export function openAsrSocket(sessionId: string, events: AsrSocketEvents): AsrSo
   // Follows the active keyring entry's deployment; see lib/api-base.ts.
   const url = wsUrl(`/api/asr/${encodeURIComponent(sessionId)}`);
 
-  const segs: Seg[] = [];
-  let partial = '';
+  // Everything the frames say, and nothing about the socket — see
+  // `lib/asr-reduce.ts`, which iOS runs the same table over.
+  let model: AsrModel = asrInitial();
   let dead = false;
   let stopping = false;
   let doneTimer: ReturnType<typeof setTimeout> | null = null;
   let preopen: Int16Array[] = [];
   let preopenBytes = 0;
 
-  const tail = () => joinSegments(segs.map((s) => s.text));
+  const tail = () => asrState(model).tail;
   const emit = () => {
     if (dead) return;
-    events.onState({ partial, tail: tail(), pending: segs.filter((s) => s.polishing).length });
+    events.onState(asrState(model));
   };
 
   const sock = new WebSocket(url, [`hermit-key.${getActiveKey()}`]);
@@ -116,44 +110,18 @@ export function openAsrSocket(sessionId: string, events: AsrSocketEvents): AsrSo
   };
 
   sock.onmessage = (ev) => {
-    let msg: { type?: string; text?: string; segId?: number; message?: string; fatal?: boolean };
-    try { msg = JSON.parse(String(ev.data)); } catch { return; }
-    switch (msg.type) {
-      case 'ready':
-        events.onReady();
-        return;
-      case 'partial':
-        partial = msg.text ?? '';
-        emit();
-        return;
-      case 'final': {
-        if (typeof msg.segId !== 'number') return;
-        segs.push({ id: msg.segId, text: msg.text ?? '', polishing: true });
-        partial = '';
-        emit();
-        events.onSentence();
-        return;
-      }
-      case 'polished': {
-        const seg = segs.find((s) => s.id === msg.segId);
-        if (!seg) return;
-        seg.text = msg.text ?? seg.text;
-        seg.polishing = false;
-        emit();
-        return;
-      }
-      case 'done':
-        // Nothing is still being corrected by the time the server says done.
-        for (const s of segs) s.polishing = false;
-        partial = '';
-        emit();
-        settleDone();
-        return;
-      case 'error':
-        if (msg.fatal) fail(msg.message ?? 'ASR failed');
-        return;
-      default:
-        return;
+    const step = asrStep(model, String(ev.data));
+    // A frame the reducer ignored — unknown type, unparseable, a correction for
+    // a sentence that was never opened — hands the SAME object back, and
+    // redrawing on it would write the identical tail into the draft again.
+    const changed = step.model !== model;
+    model = step.model;
+    switch (step.effect.kind) {
+      case 'ready':    events.onReady(); return;
+      case 'sentence': emit(); events.onSentence(); return;
+      case 'done':     emit(); settleDone(); return;
+      case 'fail':     fail(step.effect.message); return;
+      default:         if (changed) emit(); return;
     }
   };
 

@@ -13,22 +13,8 @@ import SwiftUI
 /// compile this for the Mac and write the layout to a PNG in a couple of
 /// seconds — no simulator, no signing, no server — which is the only way this
 /// gets LOOKED at often enough to stay honest.
-/// "This is being drawn into a PNG, not onto a screen."
-///
-/// `accessibilityReduceMotion` is read-only in the environment, so the still-frame
-/// renderers cannot borrow it; this is the knob they set instead.
-/// `tools/render-list.swift` turns it on, and without it ImageRenderer catches the
-/// pulse animation at its dim end — every pulsing dot lands at half strength and
-/// `tools/pixel-compare.sh` reports four wrong dots when nothing is wrong. The web
-/// harness kills `animate-pulse` with a CSS rule for exactly the same reason.
-private struct StillFrameKey: EnvironmentKey { static let defaultValue = false }
-
-extension EnvironmentValues {
-    var hermitStillFrame: Bool {
-        get { self[StillFrameKey.self] }
-        set { self[StillFrameKey.self] = newValue }
-    }
-}
+// `hermitStillFrame` — the still-frame renderers' knob — moved to
+// WebLayout.swift in round 9, along with the `animate-pulse` it exists for.
 
 /// The web row's box, in CSS pixels, measured in Chrome off the component the
 /// dashboard ships rather than derived from SwiftUI's own line height.
@@ -163,7 +149,6 @@ struct SessionRowView: View {
 /// look unfamiliar, not invisible.
 struct StatusDot: View {
     let status: StatusView
-    @State private var dim = false
     /// Reduce Motion turns the pulse off and leaves the dot at full strength.
     /// The web has no equivalent — Tailwind's `animate-pulse` runs whatever
     /// `prefers-reduced-motion` says — so this is one of the few places the
@@ -173,6 +158,7 @@ struct StatusDot: View {
     @Environment(\.hermitStillFrame) private var stillFrame
 
     private var pulses: Bool { status.pulse && !reduceMotion && !stillFrame }
+
 
     var body: some View {
         let resolved = StatusPalette.dot(status.dot)
@@ -184,15 +170,10 @@ struct StatusDot: View {
             }
         }
         .frame(width: 6, height: 6)                     // h-1.5 w-1.5
-        // Tailwind's `animate-pulse`: opacity 1 → 0.5 → 1 over 2s, forever.
-        .opacity(pulses && dim ? 0.5 : 1)
-        .animation(
-            pulses
-                ? .easeInOut(duration: 1).repeatForever(autoreverses: true)
-                : .default,
-            value: dim
-        )
-        .onAppear { if pulses { dim = true } }
+        // Tailwind's `animate-pulse` — WebLayout.swift, which the lit microphone
+        // in the composer also uses. The Reduce Motion and still-frame gates that
+        // used to be spelled out here live in it.
+        .modifier(HermitPulse(active: pulses))
     }
 }
 

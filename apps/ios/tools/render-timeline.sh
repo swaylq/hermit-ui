@@ -23,7 +23,7 @@ OUT="${1:-shots}"
 mkdir -p "$OUT"
 BIN="$(mktemp -d)/render-timeline"
 swiftc -O -o "$BIN" \
-  Shared/WebContract.swift Shared/StatusPalette.swift \
+  Shared/WebContract.swift Hermit/WebLayout.swift Shared/StatusPalette.swift \
   Hermit/ContentBlock.swift Hermit/FoldRuns.swift \
   Hermit/SessionListItem.swift Hermit/SessionStatus.swift \
   Hermit/SessionMeta.swift Hermit/WebLabels.swift \

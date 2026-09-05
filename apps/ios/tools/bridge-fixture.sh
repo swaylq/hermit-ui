@@ -40,6 +40,7 @@ TESTS=("$@")
   testTheNativeComposerSendsAndHandsTheBubbleOver
   testTheNativeQueueStripShowsAndPullsBack
   testTheNativeComposerAttachesAPhoto
+  testTheNativeComposerHoldsTheBoxToTalk
 )
 
 command -v xcodegen >/dev/null || { echo "need xcodegen: brew install xcodegen" >&2; exit 1; }
@@ -120,6 +121,14 @@ open(sys.argv[1], 'wb').write(
     + chunk(b'IEND', b''))
 PYEOF
 xcrun simctl addmedia "$UDID" "$PHOTO" 2>/dev/null || echo "==> could not add a photo to the library (the attach test will skip)" >&2
+
+# The microphone, granted from here rather than by tapping the alert. The
+# press-and-hold asks for it on RELEASE precisely because an alert raised under a
+# held finger swallows the touch and the release never arrives — a test that
+# answered that alert would be testing the alert. Granted after the install, and
+# it survives the app being replaced.
+xcrun simctl privacy "$UDID" grant microphone ai.swaylab.hermit 2>/dev/null \
+  || echo "==> could not grant the microphone (the hold test will see the 授权 screen instead)" >&2
 
 common_args=(
   -project Hermit.xcodeproj

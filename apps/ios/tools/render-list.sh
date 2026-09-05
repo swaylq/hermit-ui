@@ -13,7 +13,7 @@ OUT="${1:-shots}"
 mkdir -p "$OUT"
 BIN="$(mktemp -d)/render-list"
 swiftc -O -o "$BIN" \
-  Shared/StatusPalette.swift Shared/WebContract.swift \
+  Shared/StatusPalette.swift Shared/WebContract.swift Hermit/WebLayout.swift \
   Hermit/SessionStatus.swift Hermit/SessionListItem.swift Hermit/SessionRowView.swift \
   Hermit/SessionListSkeleton.swift \
   tools/render-list.swift

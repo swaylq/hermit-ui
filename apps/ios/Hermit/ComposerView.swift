@@ -9,12 +9,12 @@ import SwiftUI
 /// since round 8 — the `+` that attaches an image or a file, with its chips
 /// above the box.
 ///
-/// The microphone and press-and-hold are still deliberately absent rather than
-/// drawn dead: each is its own line in `docs/ios-native-progress.md` (M5), and a
-/// control that promises an action it cannot perform is worse than a control
-/// that is not there yet. Which means the send circle still sits ONE SLOT
-/// further left than the web's on an empty box; the `+` closed the gap on the
-/// left, the mic will close the one on the right.
+/// Since round 9 the slot right of the box holds the microphone while the box is
+/// empty and the ✕ once it is not — the web's own rule, in `HoldCore.micSlot` —
+/// so the send circle finally sits where the web puts it in both states. The
+/// press-and-hold that goes with it is a transparent layer over the field, and
+/// the gesture it starts is decided by the HOST: the overlay it draws is
+/// full-screen, and this view is only as tall as the bottom of the screen.
 ///
 /// ## Pure SwiftUI, on purpose
 ///
@@ -118,6 +118,18 @@ struct ComposerModel: Equatable {
     /// timeline cannot draw one yet. The field exists so that when they land,
     /// the `+` is already wired to them.
     var awaitingInput: Bool = false
+    /// A dictation run is live: the mic is lit and the box is being written into
+    /// by something that is not the keyboard.
+    var dictating: Bool = false
+    /// The permission ask is in flight — the mic spins and refuses taps.
+    var micArming: Bool = false
+    /// Can this screen dictate at all? False with no machine key, which is the
+    /// web's `onDictate === undefined`, and the difference between an empty slot
+    /// and a mic that would only ever fail.
+    var canDictate: Bool = false
+    /// A press-and-hold is live right now. Keeps the press layer mounted even
+    /// though every other input says it should be gone — see `HoldCore.pressLayer`.
+    var holdLive: Bool = false
     /// The amber strip above the row — why the last send did not land, mostly.
     var notice: String?
     /// Extra room under the row: the home indicator's safe area while the
@@ -162,6 +174,14 @@ final class ComposerState: ObservableObject {
     /// reader: a message leaves the box and appears in the strip.
     @Published var attachments: [ComposerAttachment]
     @Published var queue: QueueBarModel
+    /// Bumped to put the caret in the box. A counter and not a `Bool` because the
+    /// request has to fire again after the field has been focused and blurred —
+    /// tapping an empty box twice is two requests, and a flag would only be one.
+    ///
+    /// The press layer needs this: it takes the touch that used to reach the
+    /// field, so it owes a tap back, and `@FocusState` is not something a view
+    /// controller can reach into.
+    @Published var focusRequest = 0
 
     init(draft: String = "", model: ComposerModel,
          attachments: [ComposerAttachment] = [],
@@ -189,6 +209,16 @@ struct ComposerView: View {
     /// (`useEffect(… , [sessionId, draft])`), because a draft that is only
     /// written on blur is a draft the app loses when iOS kills it.
     var onDraftChange: (String) -> Void
+    /// The mic button. One button, two meanings — start a hands-free run, or end
+    /// the one that is running — and the host decides which from `dictating`,
+    /// exactly as the web's `onClick` does.
+    var onMic: () -> Void = {}
+    /// The press layer, in WINDOW coordinates. Called on touch-down and on every
+    /// move; the host tells the two apart (it knows whether a gesture is live)
+    /// and owns every threshold. Both points come straight from the gesture, so
+    /// nothing here has to remember where the finger started.
+    var onHoldChanged: (CGPoint, CGPoint) -> Void = { _, _ in }
+    var onHoldEnded: (CGPoint, CGPoint) -> Void = { _, _ in }
 
     private var model: ComposerModel { state.model }
 
@@ -234,6 +264,7 @@ struct ComposerView: View {
         }
         .onAppear { if model.showStop { stopShownAt = Date() } }
         .onChange(of: state.draft) { _, value in onDraftChange(value) }
+        .onChange(of: state.focusRequest) { _, _ in focused = true }
     }
 
     // MARK: - The row
@@ -246,7 +277,7 @@ struct ComposerView: View {
         HStack(alignment: .bottom, spacing: ComposerMetrics.gap) {
             attachButton
             field
-            if !state.draft.isEmpty && !model.disabled { clearButton }
+            trailingSlot
             if model.showStop {
                 stopPill
                     .padding(.trailing, ComposerMetrics.pillMarginRight - ComposerMetrics.gap)
@@ -317,6 +348,44 @@ struct ComposerView: View {
         .padding(.vertical, ComposerMetrics.fieldPadV)
         .frame(minHeight: ComposerMetrics.fieldOneLine, alignment: .bottom)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay { if pressLayer { holdLayer } }
+    }
+
+    /// Is the press layer over the field right now? Every input but `focused`
+    /// comes from the host; that one is the one the host cannot see.
+    private var pressLayer: Bool {
+        HoldCore.pressLayer(touch: true,
+                            canDictate: model.canDictate,
+                            disabled: model.disabled,
+                            awaitingInput: model.awaitingInput,
+                            dictating: model.dictating,
+                            draftLength: state.draft.count,
+                            focused: focused,
+                            gestureLive: model.holdLive)
+    }
+
+    /// Press and hold to talk — WeChat's idiom, on the "Ask anything" box.
+    ///
+    /// A transparent layer over the field and NOT the field itself, for the same
+    /// reason the web uses a plain div rather than the textarea: a long press on
+    /// a real text field belongs to the platform. UIKit answers it with the
+    /// magnifier and an edit menu, and there is no reliable way to call that off
+    /// once it has started. A plain layer has no such behaviour, so it takes the
+    /// hold and hands a TAP straight back — which focuses the field, which is all
+    /// tapping an empty box ever did.
+    ///
+    /// `minimumDistance: 0` so the very first touch reports; everything the
+    /// gesture decides from — 260ms, 10 points of travel, 64 points of slide —
+    /// is `HoldCore`, in the host, where the hit boxes are.
+    private var holdLayer: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                    .onChanged { v in onHoldChanged(v.startLocation, v.location) }
+                    .onEnded { v in onHoldEnded(v.startLocation, v.location) }
+            )
+            .accessibilityIdentifier("composer.hold")
     }
 
     /// `placeholder:text-muted-foreground/70`.
@@ -353,12 +422,63 @@ struct ComposerView: View {
         .accessibilityIdentifier("composer.attach")
     }
 
-    /// The `✕` that empties the box. On the web this slot holds the microphone
-    /// while the box is empty and the ✕ once it is not; here there is no
-    /// microphone yet, so the slot is empty until you type. Which means the send
-    /// circle sits one slot further right than it should on a box with a draft,
-    /// and one further left on an empty one — visible, and it goes away with the
-    /// mic (M5).
+    /// One slot between the box and the send circle, and `HoldCore.micSlot`
+    /// decides what is in it: the microphone while the box is empty (or while a
+    /// run is live, however much has been dictated into it), the ✕ once there is
+    /// a draft, and nothing at all only when there is nothing to say.
+    @ViewBuilder private var trailingSlot: some View {
+        switch HoldCore.micSlot(dictating: model.dictating,
+                                draftLength: state.draft.count,
+                                canDictate: model.canDictate,
+                                disabled: model.disabled,
+                                awaitingInput: model.awaitingInput,
+                                micArming: model.micArming) {
+        case let .mic(listening, spinner, disabled):
+            micButton(listening: listening, spinner: spinner, disabled: disabled)
+        case .clear:
+            clearButton
+        case .none:
+            EmptyView()
+        }
+    }
+
+    /// The microphone. A TOGGLE — the same pixels start the run and end it — and
+    /// while it is listening it is LIT rather than swapped for some other glyph:
+    /// the button you pressed is the button you press again, and the only thing
+    /// that changed is that it is on. That is also the whole status display for a
+    /// hands-free run; the words themselves are the rest of it.
+    private func micButton(listening: Bool, spinner: Bool, disabled: Bool) -> some View {
+        let lit = scheme == .dark ? WebContract.rose400 : WebContract.rose500
+        return Button(action: onMic) {
+            ZStack {
+                // Breathing halo. Deliberately not a ping that scales to twice the
+                // button — that would wash over the send circle beside it.
+                if listening {
+                    Circle()
+                        .fill(lit.opacity(scheme == .dark ? 0.2 : 0.15))
+                        .modifier(HermitPulse())
+                }
+                if spinner {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(muted)
+                } else {
+                    Image(systemName: "mic")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(listening ? lit : muted)
+                }
+            }
+            .frame(width: ComposerMetrics.control, height: ComposerMetrics.control)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.6 : 1)
+        .accessibilityLabel(HoldCore.micSlotLabel(dictating: listening))
+        .accessibilityIdentifier("composer.mic")
+    }
+
+    /// The `✕` that empties the box.
     private var clearButton: some View {
         Button(action: onClear) {
             Image(systemName: "xmark")
@@ -369,6 +489,7 @@ struct ComposerView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("clear draft")
+        .accessibilityIdentifier("composer.clear")
     }
 
     /// `h-9 rounded-full border border-rose-500/40 px-2.5 text-xs font-medium

@@ -100,41 +100,16 @@ import { createPortal } from 'react-dom';
 import { Loader2, Mic } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { subscribeMicLevel } from '@/lib/mic-level';
+// The numbers and the words. Every one of them is also read by the iOS overlay,
+// which is why they are next door rather than here — see hold-core.ts.
+import {
+  BAND, CAP, DROP, ENTER_MS, HOLD_AUTH_HINT, HOLD_AUTH_LABEL, HOLD_CANCEL_LABEL,
+  HOLD_EDIT_LABEL, LABEL_D, LEAVE_MS, PILL_BOTTOM, PILL_GUTTER, PILL_HEIGHT,
+  R_DOME, R_OUT, ZONE_H, holdBlobMoving, holdCancelling, holdClock,
+  holdSurfaceLabel, midAt, type HoldPhase, type HoldZone,
+} from '@/components/chat/hold-core';
 
-/** Where the finger is, and therefore what lifting it will do. */
-export type HoldZone = 'send' | 'cancel' | 'edit';
-
-/**
- * 'auth' — the mic isn't authorized yet, so this press asks instead of recording
- * (the grant has to be requested from the RELEASE; see composer.tsx).
- * 'listening' — a run is live. 'finishing' — released to send, waiting for the
- * last words (and the whole-passage correction) to land before they go out.
- */
-export type HoldPhase = 'auth' | 'listening' | 'finishing';
-
-// The circle everything at the bottom is cut from. See the header.
-const DROP = 419;        // how far below the bottom edge its centre sits
-const R_DOME = 540;      // the filled disc — "lift here and it sends"
-const R_OUT = 620;       // outer edge of the 取消 / 编辑 band
-const BAND = 62;         // band thickness, so its inner edge is 558
-const CAP = 46.5;        // each arc's round end, either side of the midline
-const R_MID = R_OUT - BAND / 2;
-/** Height above the bottom edge of the band's centreline, `d` px off the midline. */
-const midAt = (d: number) => Math.sqrt(R_MID * R_MID - d * d) - DROP;
-/** Tall enough to contain the band's highest point (~201px). */
-const ZONE_H = 224;
-/** Where each label sits along its arc, measured from the midline. */
-const LABEL_D = 114;
-
-/**
- * Short on purpose. This arrives 260ms into a press that has not shown anything
- * yet (HOLD_MS in composer.tsx), so any transition here is delay stacked on top
- * of delay — and the longer it runs, the longer there is for a dropped frame to
- * be visible on it. Enter is a touch slower than leave so arriving still reads
- * as landing rather than snapping. Both must match the timeout that unmounts.
- */
-const ENTER_MS = 140;
-const LEAVE_MS = 120;
+export type { HoldPhase, HoldZone };
 
 /** The one accent this app already uses for "the mic is open". */
 const ROSE = '#fb7185';
@@ -214,7 +189,7 @@ export function HoldToTalkOverlay({
   // straight away, since the gate above would otherwise only bite on the next
   // audio block and 取消 has to still the blob on the frame you reach it.
   useEffect(() => {
-    movingRef.current = open && phase === 'listening' && zone !== 'cancel';
+    movingRef.current = holdBlobMoving(open, zone, phase);
     if (!movingRef.current) stageRef.current?.style.setProperty('--lv', '0');
   }, [open, zone, phase]);
 
@@ -225,10 +200,59 @@ export function HoldToTalkOverlay({
   if (!mounted || !view) return null;
 
   const { phase: vPhase, zone: vZone, text: vText } = view;
-  const cancelling = vZone === 'cancel' && vPhase === 'listening';
+  const cancelling = holdCancelling(vZone, vPhase);
   const ms = `${show ? ENTER_MS : LEAVE_MS}ms`;
 
   return createPortal(
+    <HoldToTalkFace
+      zone={vZone}
+      phase={vPhase}
+      text={vText}
+      show={show}
+      live={open}
+      stageRef={stageRef}
+      cancelRef={cancelRef}
+      editRef={editRef}
+    />,
+    document.body,
+  );
+}
+
+/**
+ * Everything the overlay DRAWS, with no portal, no mount gate and no timers —
+ * so it can be rendered to a string.
+ *
+ * Its own exported component for the same reason `AttachmentStrip` is one: the
+ * iOS shell draws its own version of this screen and `apps/ios/tools/hold-compare.sh`
+ * puts the two side by side, pixel for pixel. That comparison is only worth
+ * anything if the web half is THE component the dashboard ships, which it cannot
+ * be while the markup is trapped behind `createPortal` and a `useEffect` mount
+ * gate — `renderToStaticMarkup` produces nothing at all for either.
+ */
+export function HoldToTalkFace({
+  zone,
+  phase,
+  text,
+  show = true,
+  live = true,
+  stageRef,
+  cancelRef,
+  editRef,
+}: {
+  zone: HoldZone;
+  phase: HoldPhase;
+  text: string;
+  /** Has the enter transition run? False is the pre-enter / post-leave pose. */
+  show?: boolean;
+  /** Is the gesture still live? Only then are there hit boxes, or a running clock. */
+  live?: boolean;
+  stageRef?: React.RefObject<HTMLDivElement | null>;
+  cancelRef?: React.RefObject<HTMLDivElement | null>;
+  editRef?: React.RefObject<HTMLDivElement | null>;
+}) {
+  const cancelling = holdCancelling(zone, phase);
+  const ms = `${show ? ENTER_MS : LEAVE_MS}ms`;
+  return (
     // pointer-events-none throughout: the press layer over the textarea holds
     // the pointer capture for this whole gesture, and an overlay that swallowed
     // events would only be able to steal them from it.
@@ -248,16 +272,16 @@ export function HoldToTalkOverlay({
         } as React.CSSProperties}
         className="flex min-h-0 flex-1 flex-col items-center justify-end gap-3 px-6 pb-[20vh] transition-transform ease-out"
       >
-        {vPhase !== 'auth' && <Meter running={open && vPhase === 'listening'} dimmed={cancelling} />}
+        {phase !== 'auth' && <Meter running={live && phase === 'listening'} dimmed={cancelling} />}
 
-        {vPhase === 'auth' ? (
+        {phase === 'auth' ? (
           <Bubble tint="rgba(255,255,255,0.12)">
             <span className="flex items-center gap-2 text-white/70">
               <Mic className="h-4 w-4" />
-              需要麦克风权限才能说话
+              {HOLD_AUTH_LABEL}
             </span>
           </Bubble>
-        ) : vText ? (
+        ) : text ? (
           <Bubble tint={cancelling ? 'rgba(255,255,255,0.14)' : '#ffffff'}>
             {/* The tail is what just arrived, so the box shows its END. */}
             <span
@@ -267,35 +291,42 @@ export function HoldToTalkOverlay({
                 cancelling ? 'text-white/45 line-through decoration-white/35' : 'text-neutral-900',
               )}
             >
-              {vText}
+              {text}
             </span>
           </Bubble>
         ) : (
           <VoiceBlob dimmed={cancelling} />
         )}
 
-        {vPhase === 'auth' && (
-          <div className="text-[13px] font-medium text-white/75">松手 · 允许使用麦克风</div>
+        {phase === 'auth' && (
+          <div className="text-[13px] font-medium text-white/75">{HOLD_AUTH_HINT}</div>
         )}
       </div>
 
       {/* The three targets. During 授权 there is no choice to make — releasing
           anywhere opens the system alert — so drawing targets would be a lie. */}
-      {vPhase !== 'auth' && <Zones zone={vZone} phase={vPhase} show={show} ms={ms} />}
+      {phase !== 'auth' && <Zones zone={zone} phase={phase} show={show} ms={ms} />}
 
       {/* Hit boxes, invisible, and OUTSIDE the sliding container on purpose:
           the composer measures them mid-gesture, and a rect that is still
           drifting up would answer for where the arc is going to be rather than
           where it is. Only while the gesture is live — during the leave there
           is nothing left to aim at. */}
-      {open && vPhase !== 'auth' && (
+      {live && phase !== 'auth' && (
         <>
-          <div ref={cancelRef} className="absolute bottom-[100px] left-0 right-[calc(50%+15px)] h-[105px]" />
-          <div ref={editRef} className="absolute bottom-[100px] left-[calc(50%+15px)] right-0 h-[105px]" />
+          <div
+            ref={cancelRef}
+            style={{ bottom: PILL_BOTTOM, height: PILL_HEIGHT, right: `calc(50% + ${PILL_GUTTER}px)` }}
+            className="absolute left-0"
+          />
+          <div
+            ref={editRef}
+            style={{ bottom: PILL_BOTTOM, height: PILL_HEIGHT, left: `calc(50% + ${PILL_GUTTER}px)` }}
+            className="absolute right-0"
+          />
         </>
       )}
-    </div>,
-    document.body,
+    </div>
   );
 }
 
@@ -325,7 +356,7 @@ function Meter({ running, dimmed }: { running: boolean; dimmed: boolean }) {
         }}
         className="h-1.5 w-1.5 rounded-full transition-transform duration-100 ease-out"
       />
-      {`${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`}
+      {holdClock(secs)}
     </div>
   );
 }
@@ -387,12 +418,12 @@ const Zones = memo(function Zones({
         )}
       >
         {phase === 'finishing' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-        {phase === 'finishing' ? '正在发送' : '松开发送'}
+        {holdSurfaceLabel(phase)}
       </div>
 
       {/* ── the two arcs ─────────────────────────────────────────────────── */}
-      <Arc side="left" active={zone === 'cancel' && phase === 'listening'} label="取消" />
-      <Arc side="right" active={zone === 'edit' && phase === 'listening'} label="编辑" />
+      <Arc side="left" active={holdCancelling(zone, phase)} label={HOLD_CANCEL_LABEL} />
+      <Arc side="right" active={zone === 'edit' && phase === 'listening'} label={HOLD_EDIT_LABEL} />
     </div>
   );
 });

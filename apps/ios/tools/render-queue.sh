@@ -13,9 +13,9 @@ mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 BIN="$(mktemp -d)/render-queue"
 swiftc -O -o "$BIN" \
-  Shared/WebContract.swift \
+  Shared/WebContract.swift Hermit/WebLayout.swift \
   Hermit/ContentBlock.swift Hermit/ComposerCore.swift \
-  Hermit/QueueCore.swift Hermit/QueueBarView.swift Hermit/ComposerView.swift \
+  Hermit/QueueCore.swift Hermit/QueueBarView.swift Hermit/HoldCore.swift Hermit/AttachCore.swift Hermit/AttachmentChipView.swift Hermit/ComposerView.swift \
   Hermit/SessionRowView.swift Hermit/SessionListItem.swift Hermit/SessionStatus.swift \
   Hermit/WebLabels.swift Shared/StatusPalette.swift \
   tools/render-queue.swift

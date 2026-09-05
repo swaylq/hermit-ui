@@ -63,11 +63,17 @@ func model(disabled: Bool = false, working: Bool = false, queueFull: Bool = fals
            awaitingInput: Bool = false, uploading: Int = 0,
            draft: String = "", sending: Bool = false, stopping: Bool = false,
            notice: String? = nil, bottomInset: CGFloat = 0,
-           readyAttachments: Int = 0) -> ComposerModel {
+           readyAttachments: Int = 0,
+           // A machine key is present, so `micSlot` may put the microphone in
+           // the slot. Default true because that is the ordinary case on a
+           // signed-in phone, and because the state the picture is FOR — an
+           // empty box with the mic in it — is unreachable otherwise.
+           canDictate: Bool = true,
+           dictating: Bool = false) -> ComposerModel {
     ComposerModel(
         placeholder: ComposerCore.placeholder(ComposerCore.Face(
             disabled: disabled, awaitingInput: awaitingInput, queueFull: queueFull,
-            working: working, uploadingCount: uploading, dictating: false,
+            working: working, uploadingCount: uploading, dictating: dictating,
             touch: true, brainGhost: false
         )),
         canSend: ComposerCore.canSend(disabled: disabled, awaitingInput: awaitingInput,
@@ -77,6 +83,8 @@ func model(disabled: Bool = false, working: Bool = false, queueFull: Bool = fals
         showStop: ComposerCore.stopPill(inFlight: working, statusKey: "ready", closed: disabled).show,
         stopping: stopping,
         disabled: disabled,
+        dictating: dictating,
+        canDictate: canDictate,
         notice: notice,
         bottomInset: bottomInset
     )
@@ -137,9 +145,14 @@ let LONG_DRAFT = String(repeating: "\u{7ffb}\u{9875}\u{4e0d}\u{8df3}\u{4f4d} ", 
 }
 
 let CASES: [Case] = [
-    Case(why: "empty and at rest — the circle is dead", draft: "", model: model()),
-    Case(why: "typed: the circle lights and the ✕ appears", draft: "把这一屏也做成原生的",
-         model: model(draft: "把这一屏也做成原生的")),
+    Case(why: "empty and at rest — the mic is in the slot, the circle is dead",
+         draft: "", model: model()),
+    Case(why: "listening — the same button, lit, and the placeholder says so",
+         draft: "", model: model(dictating: true)),
+    Case(why: "no machine key: the slot is empty, and so is the gap it leaves",
+         draft: "", model: model(canDictate: false)),
+    Case(why: "typed: the circle lights and the ✕ takes the mic's slot",
+         draft: "把这一屏也做成原生的", model: model(draft: "把这一屏也做成原生的")),
     Case(why: "a turn is running: Stop sits BESIDE the circle, never in it",
          draft: "", model: model(working: true)),
     Case(why: "…and the circle still sends, so both can be live at once",

@@ -136,6 +136,43 @@ final class ChatTimelineViewController: UIViewController {
     /// stacked — the web's `pwa-pb-safe` does the same.
     private var composerBottomInset: CGFloat = 0
 
+    // MARK: Press and hold to talk
+    //
+    // `HoldCore` decides every threshold and which exit the finger is over;
+    // `HoldToTalkView` draws the screen; `DictationRun` owns the microphone and
+    // the socket. This controller is where they meet, and it is here rather than
+    // in `ComposerView` for one reason: the overlay is FULL SCREEN, and the
+    // composer's hosting controller is only as tall as the bottom of it.
+
+    /// The overlay, mounted for the life of a gesture. Nil the rest of the time —
+    /// unlike the web, which keeps it mounted always so it can animate OUT; here
+    /// the leave is a SwiftUI transition on the host's own root view, so there is
+    /// nothing to keep alive.
+    private var holdHost: UIHostingController<HoldToTalkView>?
+    private var hold = HoldToTalkModel()
+    /// Everything the gesture has to decide from, kept out of SwiftUI's state:
+    /// the moves arrive faster than a redraw and none of this is drawn.
+    private struct HoldGesture {
+        var live = false
+        /// The press became "talking" — 260 ms with the finger still on the box.
+        var armed = false
+        /// The finger travelled before that: it was a scroll passing through.
+        var bailed = false
+        /// This press is asking for the microphone instead of recording.
+        var asking = false
+        var zone: HoldZone = .send
+        var timer: Timer?
+    }
+    private var gesture = HoldGesture()
+    /// Released over 送: the run is closing and the words are still settling.
+    private var holdSending = false
+    private var dictation: DictationRun?
+    /// The claim this run holds on the draft — everything after `base` is the
+    /// run's to rewrite. `DictationText.foldTail` is what keeps a user who types
+    /// mid-run from having it overwritten.
+    private var dictClaim = DictationClaim.new()
+    private var micArming = false
+
     // MARK: Attachments
     //
     // `AttachCore` decides what may be attached and how many; `AttachPicker`
@@ -320,7 +357,10 @@ final class ChatTimelineViewController: UIViewController {
             onRemoveAttachment: { [weak self] id in self?.removeAttachment(id) },
             onDraftChange: { [weak self] value in self?.draftChanged(value) },
             onCancelQueued: { [weak self] id in self?.cancelQueued(id) },
-            onClearQueue: { [weak self] in self?.clearQueue() }
+            onClearQueue: { [weak self] in self?.clearQueue() },
+            onMic: { [weak self] in self?.micTapped() },
+            onHoldChanged: { [weak self] start, at in self?.holdChanged(start: start, at: at) },
+            onHoldEnded: { [weak self] start, at in self?.holdEnded(start: start, at: at) }
         ))
         composerHost.view.translatesAutoresizingMaskIntoConstraints = false
         composerHost.view.backgroundColor = .clear
@@ -958,6 +998,11 @@ final class ChatTimelineViewController: UIViewController {
         model.stopping = stopping
         model.sending = sending > 0
         model.bottomInset = composerBottomInset
+        // The web's `onDictate === undefined`: no machine key, no dictation, and
+        // therefore no microphone in the slot rather than one that would only
+        // ever fail. Also the only input `HoldCore.pressLayer` needs that this
+        // controller can see.
+        model.canDictate = KeyStore.active() != nil
         let queueFull = QueueCore.isFull(displayQueue.count)
         model.placeholder = ComposerCore.placeholder(ComposerCore.Face(
             disabled: closed,
@@ -972,7 +1017,9 @@ final class ChatTimelineViewController: UIViewController {
             // Real since round 8. `uploading N…` is a rung the web has always
             // had and the port could never reach.
             uploadingCount: uploadingCount,
-            dictating: false,
+            // Real since round 9: `听写中…` is the rung the web shows while a run
+            // is writing into the box.
+            dictating: composer.model.dictating,
             // A phone is always touch-primary, which is the branch the web takes
             // when `isTouchPrimary()` is true.
             touch: true,
@@ -1043,6 +1090,255 @@ final class ChatTimelineViewController: UIViewController {
     ///   3. show the bubble and empty the box, because a composer that waits for
     ///      a round trip reads as broken on a slow connection;
     ///   4. send, and on failure put the words back exactly as they were.
+
+    // MARK: - Press and hold to talk
+
+    /// The mic button beside the box. Hands-free: no hold, no zones, nothing to
+    /// aim at — it just starts adding words, and the same button ends the run.
+    /// The first press on an unauthorized mic spends itself on the permission
+    /// ask, exactly as the hold does.
+    private func micTapped() {
+        setNotice(nil)
+        if let run = dictation, run.active { run.stop(); return }
+        guard VoiceCapture.authorized else { authorizeMic(); return }
+        beginDictation(.tap)
+    }
+
+    /// Ask for the microphone.
+    ///
+    /// Fired from a TAP or from the RELEASE of a hold, never from under a held
+    /// finger: a system alert raised there swallows the touch, and the release
+    /// that would have ended the run never arrives. That is also the web's rule,
+    /// for the same reason and a different alert.
+    private func authorizeMic() {
+        guard !micArming else { return }
+        micArming = true
+        composer.model.micArming = true
+        setNotice("请允许使用麦克风")
+        Task { @MainActor in
+            let granted = await VoiceCapture.requestAccess()
+            micArming = false
+            composer.model.micArming = false
+            setNotice(granted ? "已授权 · 再按一下开始说话" : "麦克风被拒绝，去系统设置开启")
+        }
+    }
+
+    /// Open a run and point it at the draft.
+    private func beginDictation(_ source: DictationRun.Source) {
+        guard dictation?.active != true, let entry = KeyStore.active() else { return }
+        // A run's claim starts empty: the base is resolved LAZILY, at the moment
+        // the first sentence lands, so anything typed between pressing and
+        // speaking is still the user's. See `DictationText.foldTail`.
+        dictClaim = .new()
+
+        var callbacks = DictationRun.Callbacks()
+        callbacks.onActive = { [weak self] active, _ in
+            guard let self else { return }
+            self.composer.model.dictating = active
+            // The placeholder has a rung for this (`listening…`), and it is the
+            // only thing that says so on a hands-free run.
+            self.refreshComposer()
+            if active { self.hold.phase = .listening; self.pushHold() }
+        }
+        callbacks.onTail = { [weak self] tail in self?.dictated(tail) }
+        callbacks.onLevel = { [weak self] level in
+            guard let self, self.gesture.live else { return }
+            self.hold.level = level
+            self.pushHold()
+        }
+        callbacks.onNotice = { [weak self] text in self?.setNotice(text) }
+        callbacks.onFinished = { [weak self] in
+            guard let self else { return }
+            self.dictation = nil
+            // Released over 发送 and waiting for the last words: they have landed,
+            // so this is the moment to send them.
+            if self.holdSending { self.holdSendNow() }
+        }
+
+        let run = DictationRun(root: HermitAPI.rootOf(KeyStore.base(for: entry)),
+                               sessionId: sessionId,
+                               key: entry.key,
+                               callbacks: callbacks)
+        dictation = run
+        run.start(source)
+    }
+
+    /// A run rewrote its tail. Fold it into the draft the way the web does:
+    /// if the user typed under it, THEIR text wins and the tail grows after it.
+    private func dictated(_ tail: String) {
+        let folded = DictationText.foldTail(dictClaim, draft: composer.draft, tail: tail)
+        dictClaim = folded.claim
+        guard folded.draft != composer.draft else { return }
+        setDraft(folded.draft)
+        if gesture.live {
+            hold.text = folded.draft
+            pushHold()
+        }
+    }
+
+    // MARK: The gesture
+
+    /// Touch-down, and every move after it, in window coordinates.
+    ///
+    /// The first call of a press is the touch-down: `gesture.live` is what tells
+    /// them apart, and it is set here rather than by the composer so this
+    /// controller is the only thing that knows what a press is.
+    private func holdChanged(start: CGPoint, at: CGPoint) {
+        if !gesture.live {
+            gesture = HoldGesture(live: true)
+            composer.model.holdLive = true
+            // Warm the Taptic Engine now, not when the hold fires: it spins up on
+            // first use, and the buzz below is the only signal that recording
+            // started. A late one reads as a press that did not take.
+            Haptics.play("prepare")
+            gesture.timer = Timer.scheduledTimer(withTimeInterval: HoldMetrics.holdDelay,
+                                                 repeats: false) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.holdArmed() }
+            }
+            return
+        }
+
+        let dx = at.x - start.x
+        let dy = at.y - start.y
+        guard gesture.armed else {
+            // Still deciding. Any real travel means the finger was going
+            // somewhere else — give the gesture back rather than recording.
+            if HoldCore.bailed(dx: dx, dy: dy) {
+                gesture.bailed = true
+                gesture.timer?.invalidate()
+                gesture.timer = nil
+            }
+            return
+        }
+        guard !gesture.asking else { return }   // no zones during 授权
+
+        let boxes = HoldCore.hitBoxes(width: view.bounds.width, height: view.bounds.height)
+        let zone = HoldCore.zone(dx: dx, dy: dy, x: at.x, y: at.y,
+                                 cancel: boxes.cancel, edit: boxes.edit)
+        guard zone != gesture.zone else { return }
+        gesture.zone = zone
+        hold.zone = zone
+        pushHold()
+        // Crossing into another exit. `selection` is the click UIKit uses for a
+        // picker moving a notch, which is exactly what this is — and it is quiet
+        // enough to fire repeatedly while a finger wanders between the arcs.
+        Haptics.play("selection")
+    }
+
+    /// 260 ms with the finger still on the box: this press is talking.
+    private func holdArmed() {
+        guard gesture.live, !gesture.bailed else { return }
+        gesture.armed = true
+        // Before the branch below on purpose: the press registered either way,
+        // and on the unauthorized path this buzz is the only thing that says so
+        // before the permission alert appears.
+        Haptics.play("medium")
+        hold = HoldToTalkModel(zone: .send, phase: .listening, text: composer.draft)
+        // Not authorized yet? Show the ask instead of recording — opening the mic
+        // here would raise the alert under the finger. The release does it.
+        if !VoiceCapture.authorized {
+            gesture.asking = true
+            hold.phase = .auth
+        }
+        presentHold()
+        if !gesture.asking { beginDictation(.hold) }
+    }
+
+    private func holdEnded(start: CGPoint, at: CGPoint) {
+        guard gesture.live else { return }
+        let armed = gesture.armed, asking = gesture.asking, zone = gesture.zone, bailed = gesture.bailed
+        gesture.timer?.invalidate()
+        gesture = HoldGesture()
+        composer.model.holdLive = false
+
+        guard armed else {
+            dismissHold()
+            // A tap on an empty box is a tap on an empty box: focus it. Skipped
+            // when the finger travelled — that was a scroll passing through.
+            if !bailed { focusComposer() }
+            return
+        }
+        if asking { dismissHold(); authorizeMic(); return }
+
+        // Landing taps, one per outcome. Cancel and edit are both "put it down",
+        // so they get the light one; only a send earns the success pattern —
+        // the distinction a finger can feel without looking at the screen.
+        switch zone {
+        case .cancel:
+            Haptics.play("light")
+            dictation?.cancel()
+            dismissHold()
+        case .edit:
+            Haptics.play("light")
+            dictation?.stop()
+            dismissHold()
+            focusComposer()
+        case .send:
+            // Close the run and hold the overlay up on `finishing`: the last
+            // sentence is still landing, and sending the half of it that had
+            // arrived is not what was said.
+            Haptics.play("success")
+            holdSending = true
+            hold.phase = .finishing
+            hold.zone = .send
+            pushHold()
+            if let run = dictation, run.active {
+                run.stop()
+            } else {
+                holdSendNow()
+            }
+        }
+    }
+
+    /// The send itself, once the words have stopped moving. Re-reads the draft
+    /// rather than trusting what the overlay was showing at release: the last
+    /// sentence landed after it.
+    private func holdSendNow() {
+        guard holdSending else { return }
+        holdSending = false
+        dismissHold()
+        guard !composer.draft.isEmpty else { return }
+        sendDraft()
+    }
+
+    // MARK: The overlay
+
+    private func presentHold() {
+        guard holdHost == nil else { pushHold(); return }
+        let host = UIHostingController(rootView: HoldToTalkView(model: hold))
+        host.view.backgroundColor = .clear
+        // The finger is captured by the press layer over the composer for this
+        // whole gesture; a view that took touches could only steal them from it.
+        host.view.isUserInteractionEnabled = false
+        host.view.frame = view.bounds
+        host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addChild(host)
+        view.addSubview(host.view)
+        host.didMove(toParent: self)
+        holdHost = host
+    }
+
+    private func pushHold() {
+        guard let host = holdHost else { return }
+        hold.seconds = dictation.map { Date().timeIntervalSince($0.startedAt) } ?? 0
+        host.rootView = HoldToTalkView(model: hold)
+    }
+
+    private func dismissHold() {
+        guard let host = holdHost else { return }
+        holdHost = nil
+        host.willMove(toParent: nil)
+        host.view.removeFromSuperview()
+        host.removeFromParent()
+    }
+
+    /// Hand the tap back. The press layer swallowed the touch that used to focus
+    /// the field, so it owes one — and `@FocusState` lives inside SwiftUI, which
+    /// is why this goes through the state object rather than the responder chain.
+    private func focusComposer() {
+        composer.focusRequest += 1
+    }
+
     private func sendDraft() {
         let typed = composer.draft
         guard ComposerCore.canSend(disabled: composer.model.disabled, awaitingInput: false,

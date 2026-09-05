@@ -1,0 +1,15 @@
+{
+  "width": 393,
+  "height": 852,
+  "gap": 16,
+  "cases": [
+    { "why": "nothing said yet — the blob", "zone": "send", "phase": "listening", "text": "" },
+    { "why": "one sentence, over the lit dome", "zone": "send", "phase": "listening", "text": "把 zhinan-main 上的隧道重启一下。" },
+    { "why": "slid left: struck through, and the blob is still", "zone": "cancel", "phase": "listening", "text": "把 zhinan-main 上的隧道重启一下。" },
+    { "why": "slid right: 编辑 is lit, the words are not touched", "zone": "edit", "phase": "listening", "text": "把 zhinan-main 上的隧道重启一下。" },
+    { "why": "released over send — 正在发送", "zone": "send", "phase": "finishing", "text": "把 zhinan-main 上的隧道重启一下。" },
+    { "why": "the mic is not authorized: no targets, only the ask", "zone": "send", "phase": "auth", "text": "" },
+    { "why": "a passage long enough to clamp at eight lines", "zone": "send", "phase": "listening", "text": "把 zhinan-main 上的隧道重启一下，然后看一眼 pm2 的日志有没有报错。如果 web-detect 又 OOM 了就把它单独重启，别动 zcms-server。还有那个 ricoh 的定时任务，昨天半夜跑挂了一次，日志在 /var/log 下面，顺手看看是不是磁盘满了。最后把结果发我。" },
+    { "why": "slid left over a long passage", "zone": "cancel", "phase": "listening", "text": "把 zhinan-main 上的隧道重启一下，然后看一眼 pm2 的日志有没有报错。如果 web-detect 又 OOM 了就把它单独重启，别动 zcms-server。" }
+  ]
+}

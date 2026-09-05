@@ -312,84 +312,11 @@ struct AttachmentChipView: View {
     }
 }
 
-// MARK: - the web's line box
-
-/// Give a block of text the height CSS would give it: one `line` per line the
-/// text actually wrapped onto, with the text centred in that box the way a CSS
-/// line box centres its content (half-leading above, half below).
-///
-/// SwiftUI's `lineSpacing` sets the gap BETWEEN lines and nothing else, so a
-/// block of n lines comes out `n·natural + (n−1)·spacing` — short of `n·line` by
-/// one line's worth of leading, every time, no matter what the constant says.
-/// Padding it by a constant works only while the assumed natural height is
-/// right; this counts instead:
-///
-///     one  = the height at unlimited width        → one natural line
-///     all  = the height at the width it is getting → n·natural + (n−1)·spacing
-///     n    = (all − one) / (one + spacing) + 1
-///
-/// which is exact for any font metrics at all, and is why a wrong `natural`
-/// costs a point of pitch inside the block rather than a point of drift that
-/// accumulates down the screen. `TimelineMetrics` has the same open question
-/// (docs/ios-native-progress.md, M6's first blocker) and this is the answer to
-/// it — the timeline can adopt it whole.
-struct WebLineBox: Layout {
-    /// The web's line box: `font-size × line-height`.
-    var line: CGFloat
-    /// The `lineSpacing` the child already carries. Passed rather than applied
-    /// so the arithmetic can use it.
-    var spacing: CGFloat
-
-    private func measure(_ child: LayoutSubview, width: CGFloat) -> (lines: Int, height: CGFloat) {
-        let one = child.sizeThatFits(ProposedViewSize(width: .infinity, height: nil)).height
-        let all = child.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
-        let pitch = one + spacing
-        guard pitch > 0 else { return (1, line) }
-        let n = max(1, Int(((all - one) / pitch).rounded()) + 1)
-        return (n, CGFloat(n) * line)
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let child = subviews.first else { return .zero }
-        let width = proposal.width ?? child.sizeThatFits(.unspecified).width
-        return CGSize(width: width, height: measure(child, width: width).height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard let child = subviews.first else { return }
-        child.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center,
-                    proposal: ProposedViewSize(width: bounds.width, height: nil))
-    }
-}
-
-// MARK: - max-width
-
-/// CSS `max-width` for one child: it gets its own ideal width when that fits
-/// under the cap and exactly the cap when it does not — and is then asked how
-/// tall it is AT that width, which is what lets wrapped text grow the box.
-///
-/// SwiftUI has no modifier that does this. `.frame(maxWidth:)` is a FLEXIBLE
-/// frame: it takes everything on offer and only falls back to the ideal when the
-/// proposal is nil, and even then it sizes ITSELF without re-asking the child
-/// how tall it is at the clamped width. Both halves of that mattered here — see
-/// the note in the chip.
-struct MaxWidthBox: Layout {
-    var maxWidth: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let child = subviews.first else { return .zero }
-        let ideal = child.sizeThatFits(.unspecified)
-        let width = min(ideal.width, maxWidth)
-        let height = child.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
-        return CGSize(width: width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard let child = subviews.first else { return }
-        child.place(at: CGPoint(x: bounds.minX, y: bounds.minY), anchor: .topLeading,
-                    proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
-    }
-}
+// The two CSS primitives this file used to define — `WebLineBox` (a block of
+// text as tall as CSS would make it) and `MaxWidthBox` (a real `max-width`) —
+// now live in `WebLayout.swift`. They were never about chips: the hold-to-talk
+// bubble needs both, and a layout that answers a CSS question belongs beside the
+// question rather than inside the first view that happened to ask it.
 
 // MARK: - flex-wrap
 

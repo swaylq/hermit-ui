@@ -72,6 +72,13 @@ const HAND_CONVERTED: Record<string, [number, number, number]> = {
   'rose-400': [0.943, 0.4307, 0.5029],
   'rose-600': [0.8488, 0.102, 0.2693],
   'emerald-600': [0.2066, 0.5891, 0.414],
+  // The hold-to-talk overlay's two greys, converted through the same
+  // independent CSS Color 4 path — which reproduced every value above to within
+  // 0.0008 before these two were written down. Achromatic, so they are also the
+  // one pair whose answer can be checked by hand: 0.205³ through the sRGB
+  // transfer function is 0.0905, and a neutral is the same number in P3.
+  'neutral-800': [0.1494, 0.1494, 0.1494],
+  'neutral-900': [0.0905, 0.0905, 0.0905],
 };
 
 test('oklch → Display P3 lands where the hand conversion landed', () => {

@@ -14,7 +14,7 @@ mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 BIN="$(mktemp -d)/render-attach"
 swiftc -O -o "$BIN" \
-  Shared/WebContract.swift \
+  Shared/WebContract.swift Hermit/WebLayout.swift \
   Hermit/AttachCore.swift Hermit/AttachmentChipView.swift \
   tools/render-attach.swift
 "$BIN" "$OUT" "$PWD/tools/fixtures/attach-strip.json"

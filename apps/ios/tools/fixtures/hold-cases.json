@@ -1,0 +1,2932 @@
+{
+  "thresholds": {
+    "holdMs": 260,
+    "bailPx": 10,
+    "slidePx": 64,
+    "pillMinPx": 24
+  },
+  "geometry": {
+    "drop": 419,
+    "rDome": 540,
+    "rOut": 620,
+    "band": 62,
+    "cap": 46.5,
+    "rMid": 589,
+    "zoneH": 224,
+    "labelD": 114,
+    "domeApex": 121,
+    "pillBottom": 100,
+    "pillHeight": 105,
+    "pillGutter": 15,
+    "enterMs": 140,
+    "leaveMs": 120
+  },
+  "labels": {
+    "cancel": "取消",
+    "edit": "编辑",
+    "auth": "需要麦克风权限才能说话",
+    "authHint": "松手 · 允许使用麦克风"
+  },
+  "newClaim": {
+    "base": null,
+    "rendered": ""
+  },
+  "bail": [
+    {
+      "why": "dead still",
+      "dx": 0,
+      "dy": 0,
+      "expected": false
+    },
+    {
+      "why": "a fingertip of tremor",
+      "dx": 3,
+      "dy": 4,
+      "expected": false
+    },
+    {
+      "why": "exactly BAIL_PX away — still a press",
+      "dx": 10,
+      "dy": 0,
+      "expected": false
+    },
+    {
+      "why": "exactly BAIL_PX away, diagonally",
+      "dx": 6,
+      "dy": 8,
+      "expected": false
+    },
+    {
+      "why": "one pixel past it",
+      "dx": 10.01,
+      "dy": 0,
+      "expected": true
+    },
+    {
+      "why": "a scroll passing through",
+      "dx": 0,
+      "dy": -40,
+      "expected": true
+    },
+    {
+      "why": "a scroll the other way",
+      "dx": 0,
+      "dy": 40,
+      "expected": true
+    },
+    {
+      "why": "backwards counts the same",
+      "dx": -11,
+      "dy": 0,
+      "expected": true
+    }
+  ],
+  "zones": [
+    {
+      "why": "has not moved",
+      "dx": 0,
+      "dy": 0,
+      "x": 196.5,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "send"
+    },
+    {
+      "why": "drifted a little left, nowhere near SLIDE_PX",
+      "dx": -20,
+      "dy": 0,
+      "x": 176,
+      "y": 500,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "send"
+    },
+    {
+      "why": "exactly SLIDE_PX left — cancel",
+      "dx": -64,
+      "dy": 0,
+      "x": 132,
+      "y": 500,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "cancel"
+    },
+    {
+      "why": "one short of SLIDE_PX left, and not over a box",
+      "dx": -63.9,
+      "dy": 0,
+      "x": 132,
+      "y": 500,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "send"
+    },
+    {
+      "why": "exactly SLIDE_PX right — edit",
+      "dx": 64,
+      "dy": 0,
+      "x": 260,
+      "y": 500,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "edit"
+    },
+    {
+      "why": "one short of SLIDE_PX right",
+      "dx": 63.9,
+      "dy": 0,
+      "x": 260,
+      "y": 500,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "send"
+    },
+    {
+      "why": "way left",
+      "dx": -200,
+      "dy": 30,
+      "x": 20,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "cancel"
+    },
+    {
+      "why": "way right",
+      "dx": 200,
+      "dy": 30,
+      "x": 380,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "edit"
+    },
+    {
+      "why": "inside the cancel box, travelled past PILL_MIN_PX but under SLIDE_PX",
+      "dx": -30,
+      "dy": 20,
+      "x": 100,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "cancel"
+    },
+    {
+      "why": "inside the cancel box but has barely moved — the box stays off",
+      "dx": -10,
+      "dy": 10,
+      "x": 100,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "send"
+    },
+    {
+      "why": "exactly PILL_MIN_PX of travel is NOT travelled",
+      "dx": -24,
+      "dy": 0,
+      "x": 100,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "send"
+    },
+    {
+      "why": "a hair past PILL_MIN_PX, over the cancel box",
+      "dx": -24.1,
+      "dy": 0,
+      "x": 100,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "cancel"
+    },
+    {
+      "why": "inside the edit box, small displacement",
+      "dx": 30,
+      "dy": 20,
+      "x": 300,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "edit"
+    },
+    {
+      "why": "in the gutter between the boxes — neither",
+      "dx": 30,
+      "dy": 20,
+      "x": 196.5,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "send"
+    },
+    {
+      "why": "on the cancel box right edge (inclusive)",
+      "dx": -30,
+      "dy": 0,
+      "x": 181.5,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "cancel"
+    },
+    {
+      "why": "a pixel past the cancel box right edge",
+      "dx": -30,
+      "dy": 0,
+      "x": 182.5,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "send"
+    },
+    {
+      "why": "on the boxes top edge (inclusive)",
+      "dx": -30,
+      "dy": 0,
+      "x": 100,
+      "y": 647,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "cancel"
+    },
+    {
+      "why": "a pixel above the boxes",
+      "dx": -30,
+      "dy": 0,
+      "x": 100,
+      "y": 646,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "send"
+    },
+    {
+      "why": "below the boxes, in the corner under cancel",
+      "dx": -30,
+      "dy": 60,
+      "x": 40,
+      "y": 842,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "send"
+    },
+    {
+      "why": "slid far left AND standing on the edit box — left is tested first",
+      "dx": -80,
+      "dy": 0,
+      "x": 300,
+      "y": 700,
+      "cancel": {
+        "left": 0,
+        "top": 647,
+        "right": 181.5,
+        "bottom": 752
+      },
+      "edit": {
+        "left": 211.5,
+        "top": 647,
+        "right": 393,
+        "bottom": 752
+      },
+      "expected": "cancel"
+    },
+    {
+      "why": "no boxes yet, displacement still decides",
+      "dx": -80,
+      "dy": 0,
+      "x": 40,
+      "y": 700,
+      "cancel": null,
+      "edit": null,
+      "expected": "cancel"
+    },
+    {
+      "why": "no boxes, inside where cancel would be",
+      "dx": -30,
+      "dy": 0,
+      "x": 100,
+      "y": 700,
+      "cancel": null,
+      "edit": null,
+      "expected": "send"
+    }
+  ],
+  "midAt": [
+    {
+      "d": 0,
+      "expected": 170
+    },
+    {
+      "d": 46.5,
+      "expected": 168.16160467115014
+    },
+    {
+      "d": 60,
+      "expected": 166.93600333142183
+    },
+    {
+      "d": 114,
+      "expected": 158.86244037833092
+    },
+    {
+      "d": 150,
+      "expected": 150.57966958099905
+    },
+    {
+      "d": 200,
+      "expected": 135.00451261700027
+    },
+    {
+      "d": 589,
+      "expected": -419
+    }
+  ],
+  "hitBoxes": [
+    {
+      "w": 393,
+      "h": 852,
+      "expected": {
+        "cancel": {
+          "left": 0,
+          "top": 647,
+          "right": 181.5,
+          "bottom": 752
+        },
+        "edit": {
+          "left": 211.5,
+          "top": 647,
+          "right": 393,
+          "bottom": 752
+        }
+      }
+    },
+    {
+      "w": 320,
+      "h": 568,
+      "expected": {
+        "cancel": {
+          "left": 0,
+          "top": 363,
+          "right": 145,
+          "bottom": 468
+        },
+        "edit": {
+          "left": 175,
+          "top": 363,
+          "right": 320,
+          "bottom": 468
+        }
+      }
+    },
+    {
+      "w": 430,
+      "h": 932,
+      "expected": {
+        "cancel": {
+          "left": 0,
+          "top": 727,
+          "right": 200,
+          "bottom": 832
+        },
+        "edit": {
+          "left": 230,
+          "top": 727,
+          "right": 430,
+          "bottom": 832
+        }
+      }
+    },
+    {
+      "w": 834,
+      "h": 1194,
+      "expected": {
+        "cancel": {
+          "left": 0,
+          "top": 989,
+          "right": 402,
+          "bottom": 1094
+        },
+        "edit": {
+          "left": 432,
+          "top": 989,
+          "right": 834,
+          "bottom": 1094
+        }
+      }
+    }
+  ],
+  "surface": [
+    {
+      "phase": "auth",
+      "expected": "松开发送"
+    },
+    {
+      "phase": "listening",
+      "expected": "松开发送"
+    },
+    {
+      "phase": "finishing",
+      "expected": "正在发送"
+    }
+  ],
+  "cancelling": [
+    {
+      "zone": "send",
+      "phase": "auth",
+      "expected": false
+    },
+    {
+      "zone": "send",
+      "phase": "listening",
+      "expected": false
+    },
+    {
+      "zone": "send",
+      "phase": "finishing",
+      "expected": false
+    },
+    {
+      "zone": "cancel",
+      "phase": "auth",
+      "expected": false
+    },
+    {
+      "zone": "cancel",
+      "phase": "listening",
+      "expected": true
+    },
+    {
+      "zone": "cancel",
+      "phase": "finishing",
+      "expected": false
+    },
+    {
+      "zone": "edit",
+      "phase": "auth",
+      "expected": false
+    },
+    {
+      "zone": "edit",
+      "phase": "listening",
+      "expected": false
+    },
+    {
+      "zone": "edit",
+      "phase": "finishing",
+      "expected": false
+    }
+  ],
+  "blob": [
+    {
+      "open": true,
+      "zone": "send",
+      "phase": "auth",
+      "expected": false
+    },
+    {
+      "open": true,
+      "zone": "send",
+      "phase": "listening",
+      "expected": true
+    },
+    {
+      "open": true,
+      "zone": "send",
+      "phase": "finishing",
+      "expected": false
+    },
+    {
+      "open": true,
+      "zone": "cancel",
+      "phase": "auth",
+      "expected": false
+    },
+    {
+      "open": true,
+      "zone": "cancel",
+      "phase": "listening",
+      "expected": false
+    },
+    {
+      "open": true,
+      "zone": "cancel",
+      "phase": "finishing",
+      "expected": false
+    },
+    {
+      "open": true,
+      "zone": "edit",
+      "phase": "auth",
+      "expected": false
+    },
+    {
+      "open": true,
+      "zone": "edit",
+      "phase": "listening",
+      "expected": true
+    },
+    {
+      "open": true,
+      "zone": "edit",
+      "phase": "finishing",
+      "expected": false
+    },
+    {
+      "open": false,
+      "zone": "send",
+      "phase": "auth",
+      "expected": false
+    },
+    {
+      "open": false,
+      "zone": "send",
+      "phase": "listening",
+      "expected": false
+    },
+    {
+      "open": false,
+      "zone": "send",
+      "phase": "finishing",
+      "expected": false
+    },
+    {
+      "open": false,
+      "zone": "cancel",
+      "phase": "auth",
+      "expected": false
+    },
+    {
+      "open": false,
+      "zone": "cancel",
+      "phase": "listening",
+      "expected": false
+    },
+    {
+      "open": false,
+      "zone": "cancel",
+      "phase": "finishing",
+      "expected": false
+    },
+    {
+      "open": false,
+      "zone": "edit",
+      "phase": "auth",
+      "expected": false
+    },
+    {
+      "open": false,
+      "zone": "edit",
+      "phase": "listening",
+      "expected": false
+    },
+    {
+      "open": false,
+      "zone": "edit",
+      "phase": "finishing",
+      "expected": false
+    }
+  ],
+  "clock": [
+    {
+      "s": 0,
+      "expected": "0:00"
+    },
+    {
+      "s": 1,
+      "expected": "0:01"
+    },
+    {
+      "s": 9,
+      "expected": "0:09"
+    },
+    {
+      "s": 59,
+      "expected": "0:59"
+    },
+    {
+      "s": 60,
+      "expected": "1:00"
+    },
+    {
+      "s": 61,
+      "expected": "1:01"
+    },
+    {
+      "s": 599,
+      "expected": "9:59"
+    },
+    {
+      "s": 600,
+      "expected": "10:00"
+    },
+    {
+      "s": 3599,
+      "expected": "59:59"
+    },
+    {
+      "s": 3600,
+      "expected": "60:00"
+    },
+    {
+      "s": 3661,
+      "expected": "61:01"
+    }
+  ],
+  "slots": [
+    {
+      "why": "dictating=false draft=0 canDictate=true disabled=false awaiting=false arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "mic",
+        "listening": false,
+        "spinner": false,
+        "disabled": false
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=true disabled=false awaiting=false arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "mic",
+        "listening": false,
+        "spinner": true,
+        "disabled": true
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=true disabled=false awaiting=true arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=true disabled=false awaiting=true arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=true disabled=true awaiting=false arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=true disabled=true awaiting=false arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=true disabled=true awaiting=true arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=true disabled=true awaiting=true arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=false disabled=false awaiting=false arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=false disabled=false awaiting=false arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=false disabled=false awaiting=true arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=false disabled=false awaiting=true arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=false disabled=true awaiting=false arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=false disabled=true awaiting=false arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=false disabled=true awaiting=true arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=0 canDictate=false disabled=true awaiting=true arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=true disabled=false awaiting=false arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=true disabled=false awaiting=false arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=true disabled=false awaiting=true arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=true disabled=false awaiting=true arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=true disabled=true awaiting=false arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=true disabled=true awaiting=false arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=true disabled=true awaiting=true arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=true disabled=true awaiting=true arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=false disabled=false awaiting=false arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=false disabled=false awaiting=false arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=false disabled=false awaiting=true arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=false disabled=false awaiting=true arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=false disabled=true awaiting=false arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=false disabled=true awaiting=false arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=false disabled=true awaiting=true arming=false",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=false draft=7 canDictate=false disabled=true awaiting=true arming=true",
+      "input": {
+        "dictating": false,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=true disabled=false awaiting=false arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "mic",
+        "listening": true,
+        "spinner": false,
+        "disabled": false
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=true disabled=false awaiting=false arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "mic",
+        "listening": true,
+        "spinner": true,
+        "disabled": true
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=true disabled=false awaiting=true arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=true disabled=false awaiting=true arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=true disabled=true awaiting=false arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=true disabled=true awaiting=false arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=true disabled=true awaiting=true arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=true disabled=true awaiting=true arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=false disabled=false awaiting=false arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=false disabled=false awaiting=false arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=false disabled=false awaiting=true arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=false disabled=false awaiting=true arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=false disabled=true awaiting=false arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=false disabled=true awaiting=false arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=false disabled=true awaiting=true arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=0 canDictate=false disabled=true awaiting=true arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 0,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=true disabled=false awaiting=false arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "mic",
+        "listening": true,
+        "spinner": false,
+        "disabled": false
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=true disabled=false awaiting=false arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "mic",
+        "listening": true,
+        "spinner": true,
+        "disabled": true
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=true disabled=false awaiting=true arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=true disabled=false awaiting=true arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=true disabled=true awaiting=false arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=true disabled=true awaiting=false arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=true disabled=true awaiting=true arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=true disabled=true awaiting=true arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=false disabled=false awaiting=false arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=false disabled=false awaiting=false arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=false disabled=false awaiting=true arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=false disabled=false awaiting=true arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "clear"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=false disabled=true awaiting=false arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=false disabled=true awaiting=false arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": false,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=false disabled=true awaiting=true arming=false",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": false
+      },
+      "expected": {
+        "slot": "none"
+      }
+    },
+    {
+      "why": "dictating=true draft=7 canDictate=false disabled=true awaiting=true arming=true",
+      "input": {
+        "dictating": true,
+        "draftLength": 7,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": true,
+        "micArming": true
+      },
+      "expected": {
+        "slot": "none"
+      }
+    }
+  ],
+  "slotLabels": [
+    {
+      "dictating": false,
+      "expected": "语音输入"
+    },
+    {
+      "dictating": true,
+      "expected": "结束听写"
+    }
+  ],
+  "layers": [
+    {
+      "why": "the resting state on a phone: empty, unfocused, idle — the layer is on",
+      "input": {
+        "touch": true,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "dictating": false,
+        "draftLength": 0,
+        "focused": false,
+        "gestureLive": false
+      },
+      "expected": true
+    },
+    {
+      "why": "a desktop never holds the box",
+      "input": {
+        "touch": false,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "dictating": false,
+        "draftLength": 0,
+        "focused": false,
+        "gestureLive": false
+      },
+      "expected": false
+    },
+    {
+      "why": "the caret is in the box — it is an ordinary textarea again",
+      "input": {
+        "touch": true,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "dictating": false,
+        "draftLength": 0,
+        "focused": true,
+        "gestureLive": false
+      },
+      "expected": false
+    },
+    {
+      "why": "there is a draft",
+      "input": {
+        "touch": true,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "dictating": false,
+        "draftLength": 3,
+        "focused": false,
+        "gestureLive": false
+      },
+      "expected": false
+    },
+    {
+      "why": "no dictation handler at all",
+      "input": {
+        "touch": true,
+        "canDictate": false,
+        "disabled": false,
+        "awaitingInput": false,
+        "dictating": false,
+        "draftLength": 0,
+        "focused": false,
+        "gestureLive": false
+      },
+      "expected": false
+    },
+    {
+      "why": "session closed",
+      "input": {
+        "touch": true,
+        "canDictate": true,
+        "disabled": true,
+        "awaitingInput": false,
+        "dictating": false,
+        "draftLength": 0,
+        "focused": false,
+        "gestureLive": false
+      },
+      "expected": false
+    },
+    {
+      "why": "a card upstream is waiting on a tap",
+      "input": {
+        "touch": true,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": true,
+        "dictating": false,
+        "draftLength": 0,
+        "focused": false,
+        "gestureLive": false
+      },
+      "expected": false
+    },
+    {
+      "why": "a hands-free run is live — no hold layer over a box being written into",
+      "input": {
+        "touch": true,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "dictating": true,
+        "draftLength": 0,
+        "focused": false,
+        "gestureLive": false
+      },
+      "expected": false
+    },
+    {
+      "why": "MID-GESTURE: every idle input has gone false and the layer must stay",
+      "input": {
+        "touch": true,
+        "canDictate": true,
+        "disabled": false,
+        "awaitingInput": false,
+        "dictating": true,
+        "draftLength": 12,
+        "focused": false,
+        "gestureLive": true
+      },
+      "expected": true
+    },
+    {
+      "why": "mid-gesture on a desktop is impossible, but the flag still wins",
+      "input": {
+        "touch": false,
+        "canDictate": false,
+        "disabled": true,
+        "awaitingInput": true,
+        "dictating": true,
+        "draftLength": 12,
+        "focused": true,
+        "gestureLive": true
+      },
+      "expected": true
+    }
+  ],
+  "joins": [
+    {
+      "why": "nothing",
+      "texts": [],
+      "expected": ""
+    },
+    {
+      "why": "one sentence",
+      "texts": [
+        "把隧道重启一下。"
+      ],
+      "expected": "把隧道重启一下。"
+    },
+    {
+      "why": "Chinese sentences abut — no space",
+      "texts": [
+        "把隧道重启一下。",
+        "然后看看日志。"
+      ],
+      "expected": "把隧道重启一下。然后看看日志。"
+    },
+    {
+      "why": "empty segments are skipped, not joined around",
+      "texts": [
+        "第一句。",
+        "",
+        "第三句。"
+      ],
+      "expected": "第一句。第三句。"
+    },
+    {
+      "why": "the Latin seam gets a space",
+      "texts": [
+        "restart",
+        "then check"
+      ],
+      "expected": "restart then check"
+    },
+    {
+      "why": "digits count as word characters on both sides",
+      "texts": [
+        "port 8080",
+        "3 times"
+      ],
+      "expected": "port 8080 3 times"
+    },
+    {
+      "why": "a seam that is punctuation on the left needs no space",
+      "texts": [
+        "restart.",
+        "then check"
+      ],
+      "expected": "restart.then check"
+    },
+    {
+      "why": "a seam that is punctuation on the right needs no space",
+      "texts": [
+        "restart",
+        ". then"
+      ],
+      "expected": "restart. then"
+    },
+    {
+      "why": "Chinese then Latin",
+      "texts": [
+        "重启",
+        "nginx"
+      ],
+      "expected": "重启nginx"
+    },
+    {
+      "why": "Latin then Chinese",
+      "texts": [
+        "nginx",
+        "重启"
+      ],
+      "expected": "nginx重启"
+    },
+    {
+      "why": "a leading empty segment does not earn a space",
+      "texts": [
+        "",
+        "restart"
+      ],
+      "expected": "restart"
+    },
+    {
+      "why": "trailing empty",
+      "texts": [
+        "restart",
+        ""
+      ],
+      "expected": "restart"
+    }
+  ],
+  "folds": [
+    {
+      "why": "first words into an empty box",
+      "claim": {
+        "base": null,
+        "rendered": ""
+      },
+      "draft": "",
+      "tail": "你好",
+      "expected": {
+        "draft": "你好",
+        "claim": {
+          "base": "",
+          "rendered": "你好"
+        }
+      }
+    },
+    {
+      "why": "first words into a box that already had typing — a space is inserted",
+      "claim": {
+        "base": null,
+        "rendered": ""
+      },
+      "draft": "备注",
+      "tail": "你好",
+      "expected": {
+        "draft": "备注 你好",
+        "claim": {
+          "base": "备注 ",
+          "rendered": "备注 你好"
+        }
+      }
+    },
+    {
+      "why": "nothing dictated and nothing to dictate — the draft is left alone",
+      "claim": {
+        "base": null,
+        "rendered": ""
+      },
+      "draft": "手打的",
+      "tail": "",
+      "expected": {
+        "draft": "手打的",
+        "claim": {
+          "base": null,
+          "rendered": ""
+        }
+      }
+    },
+    {
+      "why": "the tail grows, claim intact",
+      "claim": {
+        "base": "",
+        "rendered": "你好"
+      },
+      "draft": "你好",
+      "tail": "你好世界",
+      "expected": {
+        "draft": "你好世界",
+        "claim": {
+          "base": "",
+          "rendered": "你好世界"
+        }
+      }
+    },
+    {
+      "why": "the tail shrinks to nothing — the base comes back, trimmed",
+      "claim": {
+        "base": "备注 ",
+        "rendered": "备注 你好"
+      },
+      "draft": "备注 你好",
+      "tail": "",
+      "expected": {
+        "draft": "备注",
+        "claim": {
+          "base": "备注 ",
+          "rendered": "备注"
+        }
+      }
+    },
+    {
+      "why": "the user typed under the run: THEIR text becomes the new base",
+      "claim": {
+        "base": "",
+        "rendered": "你好"
+      },
+      "draft": "你好 手打",
+      "tail": "你好世界",
+      "expected": {
+        "draft": "你好 手打 你好世界",
+        "claim": {
+          "base": "你好 手打 ",
+          "rendered": "你好 手打 你好世界"
+        }
+      }
+    },
+    {
+      "why": "the user emptied the box mid-run",
+      "claim": {
+        "base": "",
+        "rendered": "你好"
+      },
+      "draft": "",
+      "tail": "你好世界",
+      "expected": {
+        "draft": "你好世界",
+        "claim": {
+          "base": "",
+          "rendered": "你好世界"
+        }
+      }
+    },
+    {
+      "why": "trailing whitespace in the interfered draft is folded into the separator",
+      "claim": {
+        "base": "",
+        "rendered": "你好"
+      },
+      "draft": "手打的   ",
+      "tail": "继续",
+      "expected": {
+        "draft": "手打的 继续",
+        "claim": {
+          "base": "手打的 ",
+          "rendered": "手打的 继续"
+        }
+      }
+    },
+    {
+      "why": "base with no trailing space stays exactly as stored",
+      "claim": {
+        "base": "前言",
+        "rendered": "前言你好"
+      },
+      "draft": "前言你好",
+      "tail": "你好吗",
+      "expected": {
+        "draft": "前言你好吗",
+        "claim": {
+          "base": "前言",
+          "rendered": "前言你好吗"
+        }
+      }
+    }
+  ],
+  "replaces": [
+    {
+      "why": "the whole-passage correction lands",
+      "claim": {
+        "base": "",
+        "rendered": "你好世界"
+      },
+      "draft": "你好世界",
+      "tail": "你好，世界。",
+      "expected": {
+        "draft": "你好，世界。",
+        "claim": {
+          "base": "",
+          "rendered": "你好，世界。"
+        },
+        "applied": true
+      }
+    },
+    {
+      "why": "with a base in front of it",
+      "claim": {
+        "base": "备注 ",
+        "rendered": "备注 你好世界"
+      },
+      "draft": "备注 你好世界",
+      "tail": "你好，世界。",
+      "expected": {
+        "draft": "备注 你好，世界。",
+        "claim": {
+          "base": "备注 ",
+          "rendered": "备注 你好，世界。"
+        },
+        "applied": true
+      }
+    },
+    {
+      "why": "an empty correction gives the base back, trimmed",
+      "claim": {
+        "base": "备注 ",
+        "rendered": "备注 你好"
+      },
+      "draft": "备注 你好",
+      "tail": "",
+      "expected": {
+        "draft": "备注",
+        "claim": {
+          "base": "备注 ",
+          "rendered": "备注"
+        },
+        "applied": true
+      }
+    },
+    {
+      "why": "the run never wrote anything — nothing to replace",
+      "claim": {
+        "base": null,
+        "rendered": ""
+      },
+      "draft": "手打的",
+      "tail": "你好，世界。",
+      "expected": {
+        "draft": "手打的",
+        "claim": {
+          "base": null,
+          "rendered": ""
+        },
+        "applied": false
+      }
+    },
+    {
+      "why": "the draft moved under it: STALE, and dropped (this is where foldTail would append)",
+      "claim": {
+        "base": "",
+        "rendered": "你好世界"
+      },
+      "draft": "你好世界 手打",
+      "tail": "你好，世界。",
+      "expected": {
+        "draft": "你好世界 手打",
+        "claim": {
+          "base": "",
+          "rendered": "你好世界"
+        },
+        "applied": false
+      }
+    }
+  ],
+  "refine": [
+    {
+      "passage": "",
+      "expected": false
+    },
+    {
+      "passage": "继续",
+      "expected": false
+    },
+    {
+      "passage": "把隧道重启一下",
+      "expected": false
+    },
+    {
+      "passage": "把隧道重启一下。",
+      "expected": false
+    },
+    {
+      "passage": "把隧道重启一下。然后看看日志。",
+      "expected": false
+    },
+    {
+      "passage": "短。短。",
+      "expected": false
+    },
+    {
+      "passage": "a. b. c",
+      "expected": false
+    },
+    {
+      "passage": "把 zhinan-main 上的隧道重启一下，然后看一眼 pm2 的日志有没有报错",
+      "expected": true
+    },
+    {
+      "passage": "   把隧道重启一下。然后看看日志。   ",
+      "expected": false
+    },
+    {
+      "passage": "一二三四五六七八九十一二三四五",
+      "expected": false
+    },
+    {
+      "passage": "一二三四五六七八九十一二三四五六",
+      "expected": false
+    },
+    {
+      "passage": "🙂🙂🙂🙂🙂🙂🙂🙂。。",
+      "expected": true
+    },
+    {
+      "passage": "🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂",
+      "expected": true
+    }
+  ],
+  "asr": [
+    {
+      "why": "nothing yet",
+      "steps": []
+    },
+    {
+      "why": "the ordinary run: ready, a partial that rewrites itself, a final, its polish, done",
+      "steps": [
+        {
+          "raw": "{\"type\":\"ready\"}",
+          "changed": false,
+          "effect": {
+            "kind": "ready"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "{\"type\":\"partial\",\"text\":\"把\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "把",
+            "tail": "",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "{\"type\":\"partial\",\"text\":\"把隧道重\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "把隧道重",
+            "tail": "",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "{\"type\":\"final\",\"segId\":0,\"text\":\"把隧道重启一下\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "把隧道重启一下",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"polished\",\"segId\":0,\"text\":\"把隧道重启一下。\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "把隧道重启一下。",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "{\"type\":\"done\"}",
+          "changed": false,
+          "effect": {
+            "kind": "done"
+          },
+          "state": {
+            "partial": "",
+            "tail": "把隧道重启一下。",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "corrections come back OUT OF ORDER — segment 1 before segment 0",
+      "steps": [
+        {
+          "raw": "{\"type\":\"final\",\"segId\":0,\"text\":\"第一句\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "第一句",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"final\",\"segId\":1,\"text\":\"第二句\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "第一句第二句",
+            "pending": 2
+          }
+        },
+        {
+          "raw": "{\"type\":\"polished\",\"segId\":1,\"text\":\"第二句。\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "第一句第二句。",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"polished\",\"segId\":0,\"text\":\"第一句。\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "第一句。第二句。",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "a correction for a sentence that was never opened is ignored",
+      "steps": [
+        {
+          "raw": "{\"type\":\"final\",\"segId\":0,\"text\":\"第一句\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "第一句",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"polished\",\"segId\":9,\"text\":\"凭空\"}",
+          "changed": false,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "第一句",
+            "pending": 1
+          }
+        }
+      ]
+    },
+    {
+      "why": "ids need not start at 0 or be contiguous",
+      "steps": [
+        {
+          "raw": "{\"type\":\"final\",\"segId\":7,\"text\":\"seven\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "seven",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"final\",\"segId\":11,\"text\":\"eleven\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "seven eleven",
+            "pending": 2
+          }
+        },
+        {
+          "raw": "{\"type\":\"polished\",\"segId\":7,\"text\":\"Seven.\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "Seven.eleven",
+            "pending": 1
+          }
+        }
+      ]
+    },
+    {
+      "why": "a final with no segId is dropped — nothing could ever correct it",
+      "steps": [
+        {
+          "raw": "{\"type\":\"final\",\"text\":\"无主的一句\"}",
+          "changed": false,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "{\"type\":\"partial\",\"text\":\"下一句\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "下一句",
+            "tail": "",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "a polish that came back empty keeps the sentence it was correcting",
+      "steps": [
+        {
+          "raw": "{\"type\":\"final\",\"segId\":0,\"text\":\"原句\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "原句",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"polished\",\"segId\":0}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "原句",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "a final with no text opens an empty sentence, and it still holds its slot",
+      "steps": [
+        {
+          "raw": "{\"type\":\"final\",\"segId\":0}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"final\",\"segId\":1,\"text\":\"第二句\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "第二句",
+            "pending": 2
+          }
+        }
+      ]
+    },
+    {
+      "why": "done clears every outstanding correction and the partial",
+      "steps": [
+        {
+          "raw": "{\"type\":\"final\",\"segId\":0,\"text\":\"第一句\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "第一句",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"partial\",\"text\":\"没说完的\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "没说完的",
+            "tail": "第一句",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"done\"}",
+          "changed": true,
+          "effect": {
+            "kind": "done"
+          },
+          "state": {
+            "partial": "",
+            "tail": "第一句",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "a fatal error, and its message",
+      "steps": [
+        {
+          "raw": "{\"type\":\"error\",\"fatal\":true,\"message\":\"Too many requests\"}",
+          "changed": false,
+          "effect": {
+            "kind": "fail",
+            "message": "Too many requests"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "a fatal error with no message has a default",
+      "steps": [
+        {
+          "raw": "{\"type\":\"error\",\"fatal\":true}",
+          "changed": false,
+          "effect": {
+            "kind": "fail",
+            "message": "ASR failed"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "a non-fatal error is not a failure",
+      "steps": [
+        {
+          "raw": "{\"type\":\"error\",\"message\":\"hiccup\"}",
+          "changed": false,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "garbage on the wire changes nothing",
+      "steps": [
+        {
+          "raw": "not json at all",
+          "changed": false,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "{\"type\":\"partial\",\"text\":\"ok\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "ok",
+            "tail": "",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "a frame type this client has never heard of",
+      "steps": [
+        {
+          "raw": "{\"type\":\"vibes\",\"text\":\"?\"}",
+          "changed": false,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "valid JSON that is not an object",
+      "steps": [
+        {
+          "raw": "42",
+          "changed": false,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "\"hello\"",
+          "changed": false,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "null",
+          "changed": false,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "the same partial twice says nothing new — the second frame changes nothing",
+      "steps": [
+        {
+          "raw": "{\"type\":\"partial\",\"text\":\"把隧道\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "把隧道",
+            "tail": "",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "{\"type\":\"partial\",\"text\":\"把隧道\"}",
+          "changed": false,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "把隧道",
+            "tail": "",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "a correction repeated says nothing new either",
+      "steps": [
+        {
+          "raw": "{\"type\":\"final\",\"segId\":0,\"text\":\"原句\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "原句",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"polished\",\"segId\":0,\"text\":\"原句。\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "原句。",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "{\"type\":\"polished\",\"segId\":0,\"text\":\"原句。\"}",
+          "changed": false,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "原句。",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "done on a run that already settled: the effect fires, the model does not move",
+      "steps": [
+        {
+          "raw": "{\"type\":\"final\",\"segId\":0,\"text\":\"一句\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "一句",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"done\"}",
+          "changed": true,
+          "effect": {
+            "kind": "done"
+          },
+          "state": {
+            "partial": "",
+            "tail": "一句",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "{\"type\":\"done\"}",
+          "changed": false,
+          "effect": {
+            "kind": "done"
+          },
+          "state": {
+            "partial": "",
+            "tail": "一句",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "a partial that empties itself IS news",
+      "steps": [
+        {
+          "raw": "{\"type\":\"partial\",\"text\":\"半句\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "半句",
+            "tail": "",
+            "pending": 0
+          }
+        },
+        {
+          "raw": "{\"type\":\"partial\",\"text\":\"\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "",
+            "tail": "",
+            "pending": 0
+          }
+        }
+      ]
+    },
+    {
+      "why": "a partial after a final, then another final: the Latin seam gets its space",
+      "steps": [
+        {
+          "raw": "{\"type\":\"final\",\"segId\":0,\"text\":\"restart\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "restart",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"partial\",\"text\":\"then\"}",
+          "changed": true,
+          "effect": {
+            "kind": "none"
+          },
+          "state": {
+            "partial": "then",
+            "tail": "restart",
+            "pending": 1
+          }
+        },
+        {
+          "raw": "{\"type\":\"final\",\"segId\":1,\"text\":\"then check\"}",
+          "changed": true,
+          "effect": {
+            "kind": "sentence"
+          },
+          "state": {
+            "partial": "",
+            "tail": "restart then check",
+            "pending": 2
+          }
+        }
+      ]
+    }
+  ]
+}

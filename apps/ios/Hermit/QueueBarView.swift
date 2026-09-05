@@ -240,6 +240,9 @@ struct ComposerStack: View {
     var onDraftChange: (String) -> Void
     var onCancelQueued: (String) -> Void
     var onClearQueue: () -> Void
+    var onMic: () -> Void = {}
+    var onHoldChanged: (CGPoint, CGPoint) -> Void = { _, _ in }
+    var onHoldEnded: (CGPoint, CGPoint) -> Void = { _, _ in }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -252,7 +255,9 @@ struct ComposerStack: View {
                 onSend: onSend, onStop: onStop, onClear: onClear,
                 onDismissNotice: onDismissNotice,
                 onAttach: onAttach, onRemoveAttachment: onRemoveAttachment,
-                onDraftChange: onDraftChange
+                onDraftChange: onDraftChange,
+                onMic: onMic,
+                onHoldChanged: onHoldChanged, onHoldEnded: onHoldEnded
             )
         }
         .frame(maxWidth: .infinity)

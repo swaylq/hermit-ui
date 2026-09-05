@@ -14,8 +14,8 @@ OUT="${1:-shots}"
 mkdir -p "$OUT"
 BIN="$(mktemp -d)/render-composer"
 swiftc -O -o "$BIN" \
-  Shared/WebContract.swift \
-  Hermit/ContentBlock.swift Hermit/ComposerCore.swift Hermit/ComposerView.swift \
+  Shared/WebContract.swift Hermit/WebLayout.swift \
+  Hermit/ContentBlock.swift Hermit/ComposerCore.swift Hermit/HoldCore.swift Hermit/ComposerView.swift \
   Hermit/AttachCore.swift Hermit/AttachmentChipView.swift \
   Hermit/QueueCore.swift Hermit/QueueBarView.swift \
   Hermit/SessionRowView.swift Hermit/SessionListItem.swift Hermit/SessionStatus.swift \
