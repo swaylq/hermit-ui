@@ -4,10 +4,9 @@
 // bubble (previously a plain `<a target="_blank">` that yanked you to a new
 // tab). Interactions:
 //   · wheel / pinch          → zoom around the pointer (or pinch midpoint)
-//   · tap / click the image  → toggle fit ⇄ 2.5×, zooming toward the tap
 //   · drag                   → pan (only meaningful once zoomed in)
 //   · −/＋/percentage buttons → zoom out / in / reset (thumb-reachable on phones)
-//   · click the backdrop     → close · Escape → close
+//   · tap / click anywhere   → close, picture or backdrop · Escape → close
 //
 // Motion (open · close · ← / →) lives in globals.css as .lb-root / .lb-stage /
 // .lb-slide — see the block there for why each animated property gets its own
@@ -460,30 +459,38 @@ export function ImageLightbox({
       clearLongPress();
       if (longPressed.current) { longPressed.current = false; return; } // the press that opened the menu
       if (menu) { setMenu(null); return; }                              // any later tap dismisses the menu
+      const dx = start ? e.clientX - start.x : 0;
+      const dy = start ? e.clientY - start.y : 0;
       // Swipe to navigate — only when not zoomed (a zoomed drag pans instead).
-      if (wasMoved && view.current.scale <= 1.01 && start) {
-        const dx = e.clientX - start.x;
-        const dy = e.clientY - start.y;
+      if (view.current.scale <= 1.01 && start) {
         if (Math.abs(dx) > SWIPE_MIN && Math.abs(dx) > Math.abs(dy) * 1.4) {
           navigate(dx < 0 ? 1 : -1); // swipe left → next, right → previous
           return;
         }
+        // Anything shorter than a swipe did nothing at fit scale — the clamp
+        // pins tx/ty to 0 while the picture is smaller than the container, so
+        // there was no pan to preserve. Treat it as a tap however far the
+        // pointer rolled: a thumb on glass drifts several px every time, and
+        // the 4px `moved` cutoff was turning those into silent no-ops.
+        if (Math.hypot(dx, dy) > SWIPE_MIN) return;
+      } else if (wasMoved) {
+        return; // a pan or a pinch while zoomed in — not a tap
       }
-      if (wasMoved) return; // a pan / pinch, not a tap — don't toggle or close
-      const onImage = imgRef.current?.contains(e.target as Node);
-      if (!onImage) {
-        onOpenChange(false); // tapped the backdrop area
-      } else if (e.pointerType === 'touch') {
-        // On touch, a single tap closes the viewer (not zoom-toggle) — zooming
-        // on phones is pinch or the −/＋ buttons. Desktop keeps click-to-zoom.
-        onOpenChange(false);
-      } else if (view.current.scale > 1.01) {
-        reset(); // already zoomed → back to fit
-      } else {
-        zoomAround(2.5, e.clientX, e.clientY); // fit → zoom toward the tap
-      }
+      // A tap closes the viewer wherever it lands, picture or backdrop — what
+      // sway asked for on 2026-09-05 ("click it again and it should go away").
+      //
+      // It used to close only under a finger and toggle fit ⇄ 2.5× under a
+      // mouse, and the test deciding which — `imgRef.contains(e.target)` — was
+      // not answering the question it looked like it was answering.
+      // onPointerDown captures the pointer on the container, and a captured
+      // pointer retargets every later event to the capture element, so by the
+      // time we read it here `e.target` is the container in Chromium and the
+      // <img> in WebKit-under-touch (both measured). One line, a different
+      // branch per engine. Zoom now lives only where it is unambiguous: the
+      // wheel, a pinch, and the −/＋/% buttons.
+      onOpenChange(false);
     },
-    [onOpenChange, reset, zoomAround, navigate, menu, clearLongPress],
+    [onOpenChange, navigate, menu, clearLongPress],
   );
 
   if (!mounted || typeof document === 'undefined') return null;
@@ -509,22 +516,27 @@ export function ImageLightbox({
       // — full focus on the image — and paints at full strength reliably.
       style={{ backgroundColor: 'rgb(9,9,11)' }}
       data-state={phase}
-      // On the way out the viewer is still painted but must stop being a target.
-      // `inert` is the one that actually finishes the job: pointer-events-none
-      // alone is opt-out-able, and every control below re-enables itself with
-      // pointer-events-auto, so the arrows would still take taps mid-fade. The
-      // class stays as the fallback for browsers without inert.
-      inert={phase === 'leaving'}
+      // The backdrop KEEPS taking pointer events while it fades out. Making it
+      // click-through here (it used to carry `inert` + pointer-events-none for
+      // the whole `leaving` phase) is what produced the reopen sway reported on
+      // 2026-09-05: the compatibility `click` a touchscreen fires after a tap is
+      // hit-tested when it is dispatched, not when the finger landed. React
+      // flushes the closing pointerup synchronously, so by then this element was
+      // out of the hit test and the click sailed through to the chat thumbnail
+      // underneath — which is exactly where the tap was, since that thumbnail is
+      // what opened the viewer. `setOpen(true)` fired again mid-fade and the
+      // picture dipped to scale(.92) and sprang back: the "wobble".
+      // Blocking the controls mid-fade is what `inert` was actually for, so it
+      // now sits on the control layer alone (see below).
       className={cn(
         'lb-root fixed inset-0 z-[100] flex touch-none select-none items-center justify-center overflow-hidden',
         zoomed ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in',
-        phase === 'leaving' && 'pointer-events-none',
       )}
     >
       {/* Two wrappers, one animated property each (see globals.css): .lb-stage
           pops on open/close, .lb-slide carries the ← / → travel. Both shrink-wrap
-          the image, so the "did the tap land on the image?" hit tests below —
-          which ask imgRef, not these — keep working unchanged. */}
+          the image, so the long-press test below — which asks imgRef, not these
+          — keeps working unchanged. */}
       <div className="lb-stage flex items-center justify-center">
         <div ref={slideRef} className="lb-slide flex items-center justify-center">
           {/* THE HALF-PAINTED PICTURE. A non-interlaced PNG paints top-down as
@@ -565,8 +577,15 @@ export function ImageLightbox({
       </div>
 
       {/* Controls float above the image; the layer is click-through
-          (pointer-events-none) so taps between buttons still close. */}
-      <div className="pointer-events-none absolute inset-0">
+          (pointer-events-none) so taps between buttons still close.
+
+          `inert` on the way out, and it is the one that finishes the job:
+          pointer-events-none is opt-out-able and every button below re-enables
+          itself with pointer-events-auto, so the arrows would still take taps
+          mid-fade. It stays scoped to this layer — putting it on the backdrop
+          took the backdrop out of the hit test too, and the click that closed
+          the viewer then reached the page underneath. */}
+      <div inert={phase === 'leaving'} className="pointer-events-none absolute inset-0">
         {/* pwa-sheet-safe-top: the portal sits outside the pwa-safe-* app shell, so
             in an installed PWA `top-3` puts this button under the iOS status bar —
             where the system eats the tap and the ✕ reads as broken. Pushed below
