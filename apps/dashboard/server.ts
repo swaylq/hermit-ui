@@ -50,6 +50,7 @@ import { createAsrWsServer } from './src/server/asr-ws';
 import { loadContext } from './src/server/transcribe-context';
 import { tmuxPaneName } from './src/lib/pane-name';
 import { gatewayUpgradeKey } from './src/server/gateway-ws-auth';
+import { SwrCache } from './src/server/swr-cache';
 
 const port = parseInt(process.env.PORT || '4101', 10);
 const dev = process.env.NODE_ENV !== 'production';
@@ -63,27 +64,27 @@ const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
 });
 
-// Cache resolved keys for 5 min — mirrors apps/dashboard/src/server/trpc.ts.
-// bcrypt.compare costs 50–200ms each, so without this every browser WS
-// connect would spend a quarter-second on auth.
-interface AuthHit { machineId: string; cachedAt: number }
-const authCache = new Map<string, AuthHit>();
+// Cache resolved keys — mirrors apps/dashboard/src/server/auth.ts and shares its
+// discipline (src/server/swr-cache.ts): one bcrypt per key at a time, and an
+// entry past AUTH_TTL_MS is refreshed behind the caller, never dropped in front
+// of it. bcrypt.compare is ~320ms of blocked event loop on the VPS (cost 12), so
+// a miss that every concurrent caller paid for stalled the whole dashboard.
 const AUTH_TTL_MS = 5 * 60_000;
 const LAST_SEEN_BUMP_MS = 30_000;
+const authCache = new SwrCache<string>({
+  freshMs: AUTH_TTL_MS,
+  resolve: async (key) => {
+    const candidates = await prisma.machine.findMany({ where: { keyPrefix: key.slice(0, 8) } });
+    for (const m of candidates) {
+      if (await bcrypt.compare(key, m.keyHash)) return m.id;
+    }
+    return null;
+  },
+});
 
 async function resolveMachineByKey(key: string): Promise<string | null> {
   if (!key) return null;
-  const hit = authCache.get(key);
-  if (hit && Date.now() - hit.cachedAt < AUTH_TTL_MS) return hit.machineId;
-  const prefix = key.slice(0, 8);
-  const candidates = await prisma.machine.findMany({ where: { keyPrefix: prefix } });
-  for (const m of candidates) {
-    if (await bcrypt.compare(key, m.keyHash)) {
-      authCache.set(key, { machineId: m.id, cachedAt: Date.now() });
-      return m.id;
-    }
-  }
-  return null;
+  return authCache.get(key);
 }
 
 // ── Per-machine gateway control connections ─────────────────────────────────

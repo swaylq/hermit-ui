@@ -11,20 +11,12 @@
 
 import bcrypt from 'bcryptjs';
 import { prisma } from './db';
+import { SwrCache } from './swr-cache';
 
 export type MachineRow = Awaited<ReturnType<typeof prisma.machine.findMany>>[number];
 
-interface AuthCacheEntry {
-  machine: MachineRow;
-  cachedAt: number;
-  lastSeenBumpedAt: number;
-}
-
 const AUTH_TTL_MS = 5 * 60_000;
 const LASTSEEN_DEBOUNCE_MS = 30_000;
-
-// Process-local. pm2 cluster workers warm independently (fine — each is small).
-const authCache = new Map<string, AuthCacheEntry>();
 
 async function resolveUncached(keyPlain: string): Promise<MachineRow | null> {
   // keyPrefix is indexed, so this returns ~1 candidate — one bcrypt, not N.
@@ -36,46 +28,50 @@ async function resolveUncached(keyPlain: string): Promise<MachineRow | null> {
   return null;
 }
 
+// Process-local. pm2 cluster workers warm independently (fine — each is small).
+//
+// Not a plain TTL map (swr-cache.ts says what that cost): a key past AUTH_TTL_MS
+// is still answered from its entry while one refresh runs behind it, and
+// concurrent misses share a single bcrypt. Every gateway's key was cached in the
+// same second after each deploy, so they all expired together, and the twenty
+// pollers that arrived next each ran their own 320ms compare — a 5–9s stall of
+// the whole dashboard every five minutes, for days (2026-09-05).
+const machineCache = new SwrCache<MachineRow>({ freshMs: AUTH_TTL_MS, resolve: resolveUncached });
+
+// Machine id → when lastSeen was last bumped. Beside the cache rather than in
+// it, so a background refresh does not reset the debounce.
+const lastSeenBumpedAt = new Map<string, number>();
+
 /**
- * Resolve a Machine from its plaintext X-Asst-Key. Cached for AUTH_TTL_MS; the
- * `lastSeen` bump is debounced + fire-and-forget so a tight poll/sync loop never
- * slams UPDATE or blocks the response. Returns null on missing/invalid key.
+ * Resolve a Machine from its plaintext X-Asst-Key. Cached (fresh for AUTH_TTL_MS,
+ * then refreshed behind the caller); the `lastSeen` bump is debounced +
+ * fire-and-forget so a tight poll/sync loop never slams UPDATE or blocks the
+ * response. Returns null on missing/invalid key.
  */
 export async function resolveMachineByKey(keyPlain: string): Promise<MachineRow | null> {
   if (!keyPlain) return null;
-
-  let hit = authCache.get(keyPlain);
-  if (hit && Date.now() - hit.cachedAt > AUTH_TTL_MS) {
-    authCache.delete(keyPlain);
-    hit = undefined;
-  }
-  if (!hit) {
-    const machine = await resolveUncached(keyPlain);
-    if (!machine) return null;
-    hit = { machine, cachedAt: Date.now(), lastSeenBumpedAt: 0 };
-    authCache.set(keyPlain, hit);
-  }
+  const machine = await machineCache.get(keyPlain);
+  if (!machine) return null;
 
   // Debounced, fire-and-forget lastSeen bump (the share-link lastUsedAt bump below
   // mirrors this). Best-effort telemetry — a failed write just means the next
   // request re-bumps, so the error is intentionally dropped.
-  if (Date.now() - hit.lastSeenBumpedAt > LASTSEEN_DEBOUNCE_MS) {
-    hit.lastSeenBumpedAt = Date.now();
+  const now = Date.now();
+  if (now - (lastSeenBumpedAt.get(machine.id) ?? 0) > LASTSEEN_DEBOUNCE_MS) {
+    lastSeenBumpedAt.set(machine.id, now);
     void prisma.machine
-      .update({ where: { id: hit.machine.id }, data: { lastSeen: new Date() } })
+      .update({ where: { id: machine.id }, data: { lastSeen: new Date() } })
       .catch(() => {});
   }
 
-  return hit.machine;
+  return machine;
 }
 
 // Drop cached auth entries for a machine so the next request re-resolves fresh.
 // Call after mutating cached machine fields (e.g. alias) — otherwise reads like
 // machines.me serve a stale snapshot for up to AUTH_TTL_MS.
 export function invalidateMachineCache(machineId: string): void {
-  for (const [k, v] of authCache) {
-    if (v.machine.id === machineId) authCache.delete(k);
-  }
+  machineCache.deleteWhere((m) => m.id === machineId);
 }
 
 // ─── Agent share links: a scoped credential for ONE agent ────────────────────
@@ -90,22 +86,19 @@ export type ResolvedScope =
   | { scope: 'machine'; machine: MachineRow; scopedAgent: null }
   | { scope: 'agent'; machine: MachineRow; scopedAgent: string };
 
-interface ShareCacheEntry {
+interface ShareEntry {
   machine: MachineRow;
   agentName: string;
   keyPrefix: string;
-  cachedAt: number;
-  lastUsedBumpedAt: number;
 }
 
 const SHARE_TTL_MS = 30_000;
-const shareCache = new Map<string, ShareCacheEntry>();
 
 export function shareKeyPrefix(token: string): string {
   return token.slice(0, SHARE_PREFIX_LEN);
 }
 
-async function resolveShareUncached(keyPlain: string): Promise<ShareCacheEntry | null> {
+async function resolveShareUncached(keyPlain: string): Promise<ShareEntry | null> {
   // keyPrefix is indexed → ~1 candidate, one bcrypt, like resolveUncached.
   const candidates = await prisma.agentShareLink.findMany({
     where: { keyPrefix: shareKeyPrefix(keyPlain) },
@@ -113,32 +106,26 @@ async function resolveShareUncached(keyPlain: string): Promise<ShareCacheEntry |
   });
   for (const link of candidates) {
     if (await bcrypt.compare(keyPlain, link.keyHash)) {
-      return {
-        machine: link.machine,
-        agentName: link.agentName,
-        keyPrefix: link.keyPrefix,
-        cachedAt: Date.now(),
-        lastUsedBumpedAt: 0,
-      };
+      return { machine: link.machine, agentName: link.agentName, keyPrefix: link.keyPrefix };
     }
   }
   return null;
 }
 
-async function resolveShareCached(keyPlain: string): Promise<ShareCacheEntry | null> {
-  let hit = shareCache.get(keyPlain);
-  if (hit && Date.now() - hit.cachedAt > SHARE_TTL_MS) {
-    shareCache.delete(keyPlain);
-    hit = undefined;
-  }
-  if (!hit) {
-    hit = (await resolveShareUncached(keyPlain)) ?? undefined;
-    if (!hit) return null;
-    shareCache.set(keyPlain, hit);
-  }
+// Same discipline as machineCache. A revoked link is refused by the refresh that
+// the first request after SHARE_TTL_MS starts — one request later than a plain
+// expiry — and at once on this worker through invalidateShareCache.
+const shareCache = new SwrCache<ShareEntry>({ freshMs: SHARE_TTL_MS, resolve: resolveShareUncached });
+const lastUsedBumpedAt = new Map<string, number>(); // `${machineId}/${agentName}` → ms
+
+async function resolveShareCached(keyPlain: string): Promise<ShareEntry | null> {
+  const hit = await shareCache.get(keyPlain);
+  if (!hit) return null;
   // Debounced, fire-and-forget lastUsedAt bump (mirrors the machine lastSeen bump).
-  if (Date.now() - hit.lastUsedBumpedAt > LASTSEEN_DEBOUNCE_MS) {
-    hit.lastUsedBumpedAt = Date.now();
+  const k = `${hit.machine.id}/${hit.agentName}`;
+  const now = Date.now();
+  if (now - (lastUsedBumpedAt.get(k) ?? 0) > LASTSEEN_DEBOUNCE_MS) {
+    lastUsedBumpedAt.set(k, now);
     void prisma.agentShareLink
       .updateMany({ where: { machineId: hit.machine.id, agentName: hit.agentName }, data: { lastUsedAt: new Date() } })
       .catch(() => {});
@@ -163,7 +150,5 @@ export async function resolveKey(keyPlain: string): Promise<ResolvedScope | null
 // Drop cached share resolutions for a key prefix so a revoked / regenerated link
 // stops authenticating immediately on this worker (≤30s elsewhere via TTL).
 export function invalidateShareCache(keyPrefix: string): void {
-  for (const [k, v] of shareCache) {
-    if (v.keyPrefix === keyPrefix) shareCache.delete(k);
-  }
+  shareCache.deleteWhere((v) => v.keyPrefix === keyPrefix);
 }
