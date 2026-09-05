@@ -14,6 +14,7 @@ import { QUEUE_LIMIT, USER_QUEUE_FILTER } from '../../lib/chat-queue';
 import { sessionRecencyMs } from '../../lib/session-recency';
 import { backgroundOutstanding, backgroundSummary } from '../../lib/session-status';
 import { stripNulDeep } from '../sanitize';
+import type { WireContentBlock } from '../../lib/chat-blocks';
 import { capMessageContent } from '../message-cap';
 import { messageProjection } from '../message-digest';
 import { extractSearchText, extractInteractionBlocks } from '../chat-text';
@@ -38,23 +39,15 @@ import {
 } from '../session-cleanup';
 import { deleteSessionUploads, sessionUploadBytesMany } from '../session-uploads';
 
-const ContentBlock = z.union([
-  z.object({ type: z.literal('text'), text: z.string() }),
-  z.object({
-    type: z.literal('tool_use'),
-    id: z.string(),
-    name: z.string(),
-    input: z.any(),
-  }),
-  z.object({
-    type: z.literal('tool_result'),
-    tool_use_id: z.string(),
-    content: z.any(),
-    is_error: z.boolean().optional(),
-  }),
-  z.object({ type: z.literal('thinking'), thinking: z.string().optional() }),
-  z.object({ type: z.string(), [Symbol.for('passthrough')]: z.any() }).passthrough(),
-]);
+// What a content block is now lives in ONE file, `lib/chat-blocks.ts`, next to
+// the reader that turns it into something renderable and next to the generator
+// that hands the same definition to `apps/ios/Shared/ContentBlock.swift`.
+//
+// The union that used to be spelled out here was dead — declared, never
+// referenced by a single procedure, so nothing on any write path was checked
+// against it. `chat.send` below now builds its blocks AS `WireContentBlock`,
+// which is the one write path in this file that composes blocks itself, and gets
+// the check at compile time instead.
 
 // USER_QUEUE_FILTER moved to lib/chat-queue.ts — the Live Activity needs the
 // same object and must not import a router to get it. Four call sites below.
@@ -1230,7 +1223,7 @@ export const chatRouter = router({
       // Anthropic-style content blocks: text first (matches user's mental
       // model of "I typed, then attached"), then each image as a source.url
       // block. Gateway picks these up via pollPending and feeds claude.
-      const content: Array<Record<string, unknown>> = [];
+      const content: WireContentBlock[] = [];
       if (text) content.push({ type: 'text', text });
       for (const img of images) {
         content.push({

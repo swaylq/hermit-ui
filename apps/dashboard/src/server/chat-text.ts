@@ -12,20 +12,20 @@
 // Blocks are joined with a newline, NOT concatenated (the way components/chat/
 // lib.ts:msgText does for display). A query must not match across a block
 // boundary and invent a hit that exists in no single block.
+//
+// What counts as a `text` block is `lib/chat-blocks.ts`'s call, not this
+// file's: it is the same question the iOS cache asks (`ContentBlock.text`),
+// and the two answers have to be one answer or a phone's local search finds
+// rows the browser's does not.
+
+import { blockText, parseBlocks } from '../lib/chat-blocks';
 
 export function extractSearchText(content: unknown): string {
-  if (typeof content === 'string') return content.trim();
-  if (!Array.isArray(content)) return '';
-  const parts: string[] = [];
-  for (const b of content) {
-    if (b && typeof b === 'object') {
-      const block = b as { type?: unknown; text?: unknown };
-      if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
-        parts.push(block.text);
-      }
-    }
-  }
-  return parts.join('\n').trim();
+  return parseBlocks(content)
+    .map(blockText)
+    .filter((t) => t.trim())
+    .join('\n')
+    .trim();
 }
 
 // The renderable blocks a summary reader would see that are NOT prose.

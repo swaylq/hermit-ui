@@ -2,12 +2,12 @@
 // Extracted from chat/page.tsx (P2-3) so the split-out components can share them
 // with the SessionPane core that stays behind.
 
+import { blockText, parseBlocks } from '@/lib/chat-blocks';
+
 // Flatten a message's content blocks to plain text — used to match an optimistic
 // outbound row against its real counterpart once that lands in the query cache.
 export function msgText(content: unknown): string {
-  if (typeof content === 'string') return content.trim();
-  if (!Array.isArray(content)) return '';
-  return content.map((b: any) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('').trim();
+  return parseBlocks(content).map(blockText).join('').trim();
 }
 
 // Local-timezone date helpers for the message-timeline day dividers. Shared by
@@ -22,9 +22,16 @@ export function isSameDay(a: Date | string, b: Date | string): boolean {
   return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
 }
 
-// A single content block in an assistant/user message (text / tool_use /
-// tool_result / image / thinking). Shared by page.tsx and the message-render
-// components split out of it.
+// A single content block in an assistant/user message, as the timeline's own
+// components still read it: raw, off the wire, every field optional.
+//
+// The DEFINITION of a block is `lib/chat-blocks.ts` — a `ContentBlock` there is
+// a tagged union with the unknown case made explicit, which is what the iOS
+// timeline decodes into and what a renderer can switch over exhaustively. This
+// type is what the existing renderer was written against and stays until
+// `message-timeline.tsx` / `fold-runs.ts` are moved over to that union, which is
+// its own change: they reach into these fields in about forty places and half of
+// those reads are `b?.field` on a value that may not be an object at all.
 export type Block = { type: string; text?: string; name?: string; input?: any; tool_use_id?: string; content?: any; source?: any; width?: number; height?: number };
 
 // Claude Code's harness writes "No response requested." as the visible-text
