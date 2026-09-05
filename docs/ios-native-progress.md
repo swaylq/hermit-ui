@@ -45,7 +45,8 @@
    **只想驱动原生网络层或数据层**（不要模拟器、不要 key、不要网络）：tRPC 那半用
    `tools/api-fixture.sh`（8 秒），SSE 那半用 `tools/stream-fixture.sh`（15 秒），
    本地库和搜索用 `tools/cache-fixture.sh`（4 秒），
-   状态判定（`sessionStatusView` 的移植）用 `tools/status-fixture.sh`（2 秒）。
+   状态判定（`sessionStatusView` 的移植）用 `tools/status-fixture.sh`（2 秒），
+   消息块的解码用 `tools/blocks-fixture.sh`（4 秒，第 18 轮加的）。
    两个都是假 dashboard + 一个 `swiftc` 直接编出来的驱动程序，会把「Swift 解出了什么」
    和「服务器真收到的请求行」两边都打出来。**它们不在任何 target 里，
    `swiftc -typecheck Hermit/*.swift` 看不见 `tools/`** —— 编不过只有跑一次才知道。
@@ -341,10 +342,23 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
 
 ## M4 — 时间线（最贵的一块）
 
-- [ ] **消息块的真 schema**（先于一切渲染）。今天没有：服务端 zod 是带 `.passthrough()`
-      的宽松联合（`routers/chat.ts:41-57`），`image`/`file`/`interaction` 直接放行；
-      客户端 `components/chat/lib.ts:28` 的 `Block` 是全可选 + `any` 的袋子。
-      做成 zod 判别联合 + Swift `enum ContentBlock: Decodable`，**网页端也要改用它**
+- [x] **消息块的真 schema**（先于一切渲染）—— 第 18 轮。`apps/dashboard/src/lib/chat-blocks.ts`
+      是唯一那份定义，**故意分成两半**：`WireContentBlock` 只校验、原样交还写进去的对象
+      （写入口要的就是这个：生产者发来一个比本次部署新的块类型，也得能连键带值存下来），
+      `parseBlocks()` 是读的那一面 —— 一个渲染器能 switch 的判别联合，unknown 那支是显式的。
+      **联合是「不可能失败」的**：那一列里已经躺着四个生产者一年里写进去的 54 万行，
+      能拒掉其中一行的 schema 就是让历史画不出来 —— 所以匹配不上任何已知变体的块变成
+      `unknown` 并带着生产者自己那个 type 字符串，既不报错也不丢块。这正好是 M4 最后一条
+      「不认识的块画成写着类型名的灰卡片」要的东西。
+      Swift 那半是 `apps/ios/Hermit/ContentBlock.swift`（**只依赖 Foundation**，
+      时间线可以建在它上面而不把视图层拖进每一次解码）。
+      两边吃同一份 `tools/fixtures/block-cases.json`，见 `tools/blocks-fixture.sh`。
+      **顺带发现：`routers/chat.ts:41` 那个「宽松联合」是死代码** —— 声明了，
+      没有任何一个 procedure 引用过它，也就是说今天任何写入路径上都没有块级校验
+      （真正的入口 `/api/sync/chat-message` 校验到 `string | unknown[]` 为止，那是刻意的）。
+      网页端改用它的地方挑了不花代价的三处：`chat.send` 现在**以 `WireContentBlock` 的身份**
+      拼块（编译期就管住），`extractSearchText` 和 `msgText` 换成共用的那个读法。
+      时间线自己的组件仍留着宽松的 `Block`，理由写在 `components/chat/lib.ts` 的注释里
 - [ ] `foldRuns`（`components/chat/fold-runs.ts` 323 行纯函数）移植成 Swift；
       把 TS 那 398 行测试的输入输出导成共享 JSON 夹具，两边跑同一份
 - [ ] markdown 渲染：GFM 表格、围栏代码、14 种语言高亮（bash css diff go javascript
@@ -398,31 +412,29 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**第 17 轮把 M3 留下的对齐问题做完了**：10.10%/10.03% → **4.33%/4.29%**，而且误差不再
-逐行累积（热力图上十一行的点和文字全部各就各位）。剩下的 4.3% 逐项量过，**没有一条还是
-布局问题**，所以下一轮不要再在这块行上磨，去开 M4。
+**第 18 轮开了 M4：消息块现在有一份定义了**，两边共用，53 个块 + 9 个整列的夹具全过
+（`tools/blocks-fixture.sh`，4 秒，反证做过：往 Swift 里塞三处偏差，正好红在对应的三个用例上）。
+顺带在模拟器上补掉了第 17 轮欠的那次确认，见下面第 2 条。
 
-剩下的 4.3% 是什么，量出来的：
+**下一轮做 M4 第二条：`foldRuns` 移植成 Swift。** 现在是做它最好的时机 ——
+`fold-runs.ts` 那 323 行读的全是块的字段，而这些字段刚刚被定死；它已有的 398 行 TS 测试
+可以照 `gen-blocks-fixture.ts` 的样子导成共享夹具（那个生成器就是照 `gen-status-fixture.ts`
+抄的，第三次用同一个套路了，模板很稳）。注意 `fold-runs.ts` 今天吃的是宽松的 `Block`，
+移植时两边都应该改吃 `parseBlocks()` 的结果，否则 Swift 那边等于对着另一份输入跑。
 
-1. **字形本身**（大头）。两个光栅化器画同一个字，边缘就是不一样，中文尤其明显 ——
-   最差的几条 16px 带全部落在标题的中文上。这一项不会归零，也不该追。
-2. **等宽字体宽 3%**（副标题那行差 4.3pt，逐字累积）。原因见「踩过的坑」，
-   要 sway 决定打不打包一份字体。
-3. **`/50` 和 `/30` 两个半透明点各差一个通道 9–12/255**。
-   `bg-amber-400/50` 网页是 `(139,104,12)`、原生 `(139,104,0)`；`bg-emerald-500/30`
-   是 `(18,53,41)` 对 `(9,53,41)`。原因是 Tailwind v4 的 `/50` 走
-   `color-mix(in oklab, …, transparent)`，而 Swift 这边是 `.opacity(0.5)` 直接混。
-   **这条是真该修的**，而且修的地方明确：让 `gen-ios-contract.ts` 直接生成混好的颜色，
-   别让 Swift 侧再乘一次透明度 —— WebContract 存在的理由就是不让颜色在两边各算一遍。
-   一次生成器改动，不到半小时，下一轮可以顺手带上。
-4. **图钉/眼睛/月亮三个 12pt 标记**：网页是 lucide 的描边，原生是 SF Symbols 的实心，
-   粗细和轮廓都对不上；而且网页的 `self-center` 是在行盒里居中，原生这三个还挂在基线上，
-   差 1.4pt。面积极小，先记着。
+**这一轮量出来、要接着处理的两件**：
 
-**所以下一轮开 M4 的第一条：消息块的真 schema。** 它是时间线一切渲染的前提，而且和这一轮
-的教训是同一条 —— 先把两边吃的东西定死，再谈画得像不像。服务端今天是带 `.passthrough()`
-的宽松联合（`routers/chat.ts:41-57`），客户端 `components/chat/lib.ts:28` 的 `Block`
-是全可选 + `any`；做成 zod 判别联合 + Swift `enum ContentBlock: Decodable`，网页端也换过去。
+1. **真列表的行距是 52.33pt，像素比对画的那张是 49.5pt** —— 差 2.83pt，
+   **11 行完全均匀、不累积**（从 `shots/16-session-list.png` 的状态点逐点量的）。
+   所以第 17 轮的行高改动在真机上没有变形，这条确认到此为止；但
+   **`tools/pixel-compare.sh` 结构上看不见这 2.83pt**：它画的是孤立的一行，
+   而真列表是 `UIHostingConfiguration` 里的一个 cell。`.margins(.all, 0)` 已经设了，
+   所以多出来的高度另有出处（cell 的最小高度？SwiftUI 内容的理想高度超过了 48.5？没查）。
+   M6 每一屏都要过一次比对，这个盲区在那之前值得花十分钟定位。
+2. 第 17 轮列在这里的三条「剩下的 4.3%」原样有效，其中**只有 `/50` `/30` 两个半透明点
+   那条是真该修的**：让 `gen-ios-contract.ts` 直接生成混好的颜色（Tailwind v4 的 `/50` 走
+   `color-mix(in oklab, …, transparent)`，Swift 这边是 `.opacity(0.5)` 直接混，差 9–12/255）。
+   一次生成器改动。另外两条（字形本身、等宽字体宽 3%）不该追，后者要 sway 拍板。
 
 **仍然欠着的（顺序不变，都不大）**：
 
@@ -436,10 +448,8 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
    会一直停着）；浅色模式下骨架屏几乎看不见，见「踩过的坑」。
 5. `chat.send` 的幂等键现在**可以真的驱动了**（本机有 Postgres 了）：起一个本机 dashboard、
    拿同一个 `clientId` 发两次，确认第二次拿回第一次那一行、且没有副作用。
-6. **M7 那条「装到模拟器上从头到尾走一遍」还一次都没做过。** 第 15 轮之后 App 的根换了，
-   这一轮又动了每一行的高度 —— 上一次在模拟器上看这个列表是第 15 轮的 `shots/20`、`21`。
-   行高改动只在 Mac 上的 ImageRenderer 里验证过，`UIHostingConfiguration` 里的
-   自适应高度是另一条代码路径，M4 开工前值得花一次 `bridge-fixture.sh` 确认它没变形。
+6. **M7 那条「装到模拟器上从头到尾走一遍」仍然没做过**（第 18 轮只跑了列表那一屏，
+   `shots/16`、`17`、`18` 是这一轮新截的）。等 M4 有东西可看再走，一次走完比分三次走划算。
 
 **部署纪律不变**：`20260905090000_chatmessage_client_id` 那个提交和
 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线，先上代码后跑迁移会让部署上的
@@ -457,6 +467,35 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 而这条路径只在这台 Mac 的 libsqlite3 上跑过）。`HermitStream` 的前后台切换同理。
 
 ## 踩过的坑
+
+### 「服务端已经有 schema」写在文件里，但没有任何人引用它（第 18 轮）
+
+`routers/chat.ts:41` 那个 `const ContentBlock = z.union([...])` 是**死代码** ——
+声明了，整个仓库零引用，所以今天**任何写入路径上都没有块级校验**。
+这份进展文件自己（M4 第一条的原文）也把它当成「宽松但存在的校验」写了进来，
+一路传了十七轮没人验证。真正的入口是 `/api/sync/chat-message`，它校验到
+`string | unknown[]` 为止，而且注释写明了那是刻意的（块的形状是 SDK 的，会变）。
+**教训**：写「今天的实现是 X」之前 grep 一次谁在用 X。一个 `const` 的存在只证明有人写过它。
+
+### 一个不可能失败的解码器，绿灯本身不说明任何事（第 18 轮）
+
+`ContentBlock.parse` 的设计就是「什么都能解出来」—— 于是 53 个用例第一次跑就 73/73 全绿，
+这个结果和「Swift 那边其实全部返回 `.unknown`」长得一模一样。所以反证不是可选的：
+往 Swift 里塞了三处偏差（interaction 缺 `kind` 时默认 permission、`is_error` 按存在与否判、
+`text` 字段缺失时归 unknown），跑出来正好红在对应的三个用例上，第四条红的是同一处偏差
+波及的另一个用例。**判据要落在字段上，不能只落在标签上**：驱动程序比的是整块重新编码成
+网页那份 JSON 之后的结果，因为这两个实现有一半的分歧就在「哪个字段是 null、哪个字段不存在」。
+
+### 像素比对画的是孤立的一行，看不见真列表的 cell 高度（第 18 轮）
+
+`tools/pixel-compare.sh` 里原生那半是 `render-list.swift` 用 ImageRenderer 画的行视图，
+量出来是 `RowMetrics.pitch` = 49.5pt；而模拟器上真列表的行距是 **52.33pt**
+（`shots/16-session-list.png`，11 行逐点量，完全均匀不累积）。差的 2.83pt 出在
+`UIHostingConfiguration` 那一层 —— `.margins(.all, 0)` 已经设过了，所以是别的东西，还没查。
+**这是比对流程的结构性盲区，不是这次的 bug**：M6 那 13 屏每一屏都要过一次比对，
+在那之前得知道它量不到什么。顺带：这次也是第 17 轮行高改动第一次在真机代码路径上被看过，
+结论是没变形。
+
 
 - **FTS5 的 `trigram` 分词器对不到三个字符的查询是静默返回 0 行**，不报错、不警告。
   中文查询两个字是常态（「义脑」就是），所以这不是边角是主路。判据必须写在调用方
@@ -940,6 +979,7 @@ Oklab→线性 sRGB 那一步会塌成三个通道都等于 L³，Display P3 和
 
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
+| 18 | 2026-09-05 | **开 M4：消息块有定义了。** 新增 `apps/dashboard/src/lib/chat-blocks.ts`（`WireContentBlock` 只校验、原样交还，给写入口；`parseBlocks()` 是读的那一面，判别联合，unknown 一支显式）、`apps/ios/Hermit/ContentBlock.swift`（只依赖 Foundation，含一个 `JSONValue` 给 `input`/`content`/`payload` 这三个谁都不约束的字段）、生成器 `scripts/gen-blocks-fixture.ts` → `tools/fixtures/block-cases.json`（53 块 + 9 个整列）、驱动 `tools/blocks-fixture.sh`。联合**不可能失败**：匹配不上就是 `unknown` 并带着生产者自己那个 type 字符串，这正是 M4 最后一条的灰卡片要的。网页端接了三处：`chat.send` 以 `WireContentBlock` 拼块、`extractSearchText` 和 `msgText` 换成共用读法；时间线组件仍留宽松 `Block`，理由写在注释里。**发现 `routers/chat.ts:41` 的块级联合是死代码**（零引用） | `tools/blocks-fixture.sh` **73/73 过**，反证做过（塞三处偏差 → 正好红在对应用例上，恢复后全绿）；`xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0 无输出**（先 `prisma generate`）；改到的两个纯函数各自驱动过 —— `chat-text.test.ts` **8/8 过**，`msgText` 与被它替换掉的那份实现在 20 种真实形状上**逐条相同**。另跑了一次模拟器补第 17 轮欠的确认：`testTheNativeListDrawsTheActiveMachinesSessions` 过，`shots/16`、`17`、`18` **亲眼看过**，真列表行距 **52.33pt 完全均匀**（比对那张是 49.5，差 2.83 写进「踩过的坑」）。收工 `simctl list devices booted` 为空 |
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |
 | 17 | 2026-09-05 | **把第 16 轮量出来的行错位修掉：10.10%/10.03% → 4.33%/4.29%，误差不再逐行累积。** 根因是网页的行高压根不在这一行的 class 里（Tailwind preflight 的 `line-height: 1.5`），所以 `SessionRowView` 新增 `RowMetrics`（`titleLine` 19.5 / `metaLine` 15 / `lineGap` 2 / `padV` 6 / `box` 48.5 / `pitch` 49.5），两行各自 `.frame(height:)` 到网页的行盒；补上 `space-y-px` 的 1pt（做成行自己的下外边距，所以列表和 `render-list.sh` 共用一份）；选中行圆角 `.continuous` → `.circular`。`StatusDot` 认 Reduce Motion，另加一个 `\.hermitStillFrame` 环境值给静帧渲染器（`accessibilityReduceMotion` 只读，设不了）。`render-list.swift` 的画布改成按行距算的整数高度，`render-session-rows.tsx` 把 body 也刷成 `--sidebar`，两张图因此同尺寸。新增 `HERMIT_MEASURE=1 tools/render-web-list.sh`：打印 Chrome 自己量的每个元素盒子 | `xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0 无输出**（先 `prisma generate`）；`tools/pixel-compare.sh` 跑了四遍，**10.10%/10.03% → 4.33%/4.29%**，热力图**亲眼看过**：十一行的点和文字全部各就各位，不再逐行错开，浅色那张原生渲染也逐行看过。四个满色的状态点改完**逐字节相同**（`(255,185,0)`/`(0,188,255)`/`(255,32,86)`/`(0,188,125)`，改之前脉动的三个只有 50% 强度）。剩下的 4.3% 逐项量过并写进「下一项」：字形本身、等宽字体宽 3%（`.AppleSystemUIFontMonospaced` 步进 6.1816 对浏览器的 6.0，**`.tracking(0)` 试过，一个像素都没变**）、`/50` `/30` 两个点各差一个通道。**没起过模拟器**，收工 `simctl list devices booted` 为空、无残留 Chrome |
 | 16 | 2026-09-05 | **M3 收官：像素比对流程。** `tools/pixel-compare.sh` 一条命令 33 秒：`render-list.sh` 画原生、新增的 `render-web-list.sh` 画网页、新增的 `tools/png-diff.swift` 逐像素比，热力图落 `shots/`。网页那半是新增的 `apps/dashboard/scripts/render-session-rows.tsx`：`react-dom/server` 渲染**真的那个行组件**＋`@tailwindcss/postcss` 编出的 CSS 内联，再用 `/Applications` 的 Chrome `--headless=new` 截图；为此把 `SessionRow` 从 `recent-lists.tsx` 抬进 `components/sidebar/session-row.tsx`（原文件 import 时就要 trpc 客户端和 Next 路由 hook）。两边吃同一份新增的 `tools/fixtures/session-rows.json`（11 行，时间写成「多少秒之前」），共享一个 `HERMIT_FIXTURE_NOW`；`render-list.swift` 的 SAMPLES 因此从写死改成读这份夹具 | `xcodegen` + `swiftc -typecheck` **exit 0**；dashboard `tsc --noEmit` **0 错**；`tools/pixel-compare.sh` **真跑通了两遍**，明暗各 960x1455、**10.10% / 10.03% 像素不一致**，热力图**亲眼看过**：第一行几乎重合、之后每行错开约 4pt 一路累积，到第八行整整错开一行 —— 结论是原生行比网页行矮，已写进「下一项」。过程中比对**自己先抓到一个夹具 bug**（网页那半从没联系过 dashboard，`dashboardReach()` 回 0＝「没有依据」，于是不判 stale，而 Swift 默认联系正常）：补上一小时正常联系记录后 11 行状态逐行一致，已逐条核对（working/background/unread/ready/starting/restarting/stale/asleep/closed/ready/ready）。`png-diff` 第一版写出的是一整张白图，改成直写字节后重跑才看见上面那些结论。**没起过模拟器**，收工 `simctl list devices booted` 为空、无残留 Chrome |
