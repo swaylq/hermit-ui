@@ -281,8 +281,8 @@ test('a session that pins no model runs the fleet default', () => {
   const prev = process.env.HERMIT_CODEX_MODEL;
   delete process.env.HERMIT_CODEX_MODEL;
   try {
-    assert.equal(resolveCodexModel(sessionFor(null)), 'gpt-5.6-sol');
-    assert.equal(resolveCodexModel(sessionFor('   ')), 'gpt-5.6-sol');
+    assert.equal(resolveCodexModel(sessionFor(null)), 'gpt-6-astra');
+    assert.equal(resolveCodexModel(sessionFor('   ')), 'gpt-6-astra');
   } finally {
     if (prev === undefined) delete process.env.HERMIT_CODEX_MODEL;
     else process.env.HERMIT_CODEX_MODEL = prev;
@@ -314,6 +314,7 @@ test('the machine env sits between the session and the fleet default', () => {
 // dashboard, so the fleet default has to bend to it.
 
 test('the default model takes the top of the ladder unchanged', () => {
+  assert.equal(clampEffort('ultra', 'gpt-6-astra'), 'ultra');
   assert.equal(clampEffort('ultra', 'gpt-5.6-sol'), 'ultra');
   assert.equal(clampEffort('ultra', 'gpt-5.6-terra'), 'ultra');
 });

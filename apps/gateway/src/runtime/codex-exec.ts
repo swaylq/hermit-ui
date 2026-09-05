@@ -115,10 +115,22 @@ function codexHome(): string {
  * not a fleet decision, and a machine with a stale ~/.codex/config.toml would
  * quietly run an older model than the one this was tuned for.
  *
- * gpt-5.6-sol is codex's own priority-1 entry, described in its model catalog
- * as "Latest frontier agentic coding model."
+ * gpt-6-astra is codex's own priority-1 entry, described in its model catalog
+ * as "Our most capable model for complex, demanding work." sway chose it for
+ * the whole fleet on 2026-09-05; it replaced gpt-5.6-sol, which had held the
+ * same priority-1 slot since 2026-09-01.
+ *
+ * This constant and the `@openai/codex-sdk` version in package.json have to
+ * move together. The catalog entry carries `minimal_client_version: 0.153.0`,
+ * and an older CLI asking for this model is refused by the SERVER, not by
+ * codex: `400 The 'gpt-6-astra' model requires a newer version of Codex`. That
+ * is a dead turn, not a downgrade to something that works — measured against
+ * the 0.152.0 binary on 2026-09-05. The SDK is what pins the binary that gets
+ * spawned (see `client()` below), and 0.153.4 is the first release shipping one
+ * new enough. Lowering that dependency without also lowering this model kills
+ * every codex session on the box.
  */
-const DEFAULT_MODEL = 'gpt-5.6-sol';
+const DEFAULT_MODEL = 'gpt-6-astra';
 
 /** codex's reasoning ladder, weakest first. */
 const EFFORT_LADDER = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
@@ -160,6 +172,12 @@ const DEFAULT_EFFORT: Effort = 'max';
 const TOP_EFFORT: ReadonlyArray<{ prefix: string; top: Effort }> = [
   // Longest first: 'gpt-5.6-luna' must be found before the 'gpt-5.6' family
   // entry, or the one 5.6 model without ultra would be handed it.
+  //
+  // gpt-6-astra clamps nothing — 'ultra' is the top of the ladder, so this row
+  // behaves exactly as its absence would. It is here because it is the fleet
+  // default, and a reader should be able to see that its ceiling was actually
+  // read off the catalog rather than assumed by the unknown-model fallback.
+  { prefix: 'gpt-6-astra', top: 'ultra' },
   { prefix: 'gpt-5.3-codex-spark', top: 'xhigh' },
   { prefix: 'gpt-5.6-luna', top: 'max' },
   { prefix: 'gpt-5.6', top: 'ultra' },
@@ -349,10 +367,15 @@ function codexSdkVersion(): string | null {
 /**
  * The queue codex's requests join.
  *
- * codex's own catalog prices the `priority` tier as "1.5x speed, increased
- * usage" — the same model and the same answer, served ahead of the ordinary
- * queue and charged harder against the ChatGPT plan's limits. sway chose it for
- * the whole fleet on 2026-09-01, alongside gpt-5.6-sol at `max`.
+ * codex's own catalog prices the `priority` tier as speed bought with quota —
+ * the same model and the same answer, served ahead of the ordinary queue and
+ * charged harder against the ChatGPT plan's limits. The price is per-model:
+ * "1.5x speed, increased usage" on the gpt-5.6 family, "2x speed, increased
+ * usage" on gpt-6-astra. sway chose this tier for the whole fleet on
+ * 2026-09-01 alongside gpt-5.6-sol at `max`, and kept it on 2026-09-05 when
+ * the default model became gpt-6-astra — so the fleet now sits on the more
+ * expensive multiplier. Worth remembering when the weekly allowance looks high:
+ * it is one ChatGPT account's budget, shared by every machine.
  *
  * `fast` is the spelling codex's own `/fast` command writes into config.toml;
  * codex resolves it to the tier id `priority` when it builds the request.
@@ -382,8 +405,8 @@ export function serviceTierConfig(): NonNullable<CodexOptions['config']> {
  * Force the Responses API onto HTTPS/SSE instead of codex's preferred
  * WebSockets transport.
  *
- * The gpt-5.6 model presets ship `prefer_websockets: true` baked into the
- * binary, and upstream offers no plain off switch: the `responses_websockets`
+ * The gpt-5.6 and gpt-6 model presets both ship `prefer_websockets: true`
+ * baked into the binary, and upstream offers no plain off switch: the `responses_websockets`
  * feature flag is removed, and overriding the built-in `openai` provider is
  * rejected outright ("Built-in providers cannot be overridden"). On a network
  * where a long-lived wss to chatgpt.com dies mid-turn — macmini003 and
