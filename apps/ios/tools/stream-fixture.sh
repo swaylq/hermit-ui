@@ -23,7 +23,13 @@ BUILD="$(mktemp -d)"
 # successful run reports failure.
 trap 'kill "${SRV:-}" 2>/dev/null || true; wait "${SRV:-}" 2>/dev/null || true; rm -rf "$BUILD"' EXIT
 
-swiftc -o "$BUILD/drive" Hermit/HermitAPI.swift Hermit/HermitStream.swift tools/stream-fixture/main.swift
+# SessionStatus.swift is here for `SessionActivity` alone: `LiveStatusFrame`
+# decodes one out of every `event: status` frame. It arrived with the chat
+# header in round 5 and this build list was not updated, so this script has
+# not compiled since — silently, because nothing else runs it.
+swiftc -o "$BUILD/drive" Hermit/HermitAPI.swift Hermit/HermitStream.swift \
+  Hermit/SessionStatus.swift Hermit/ContentBlock.swift Shared/WebContract.swift \
+  tools/stream-fixture/main.swift
 
 python3 tools/stream-fixture/server.py "$PORT" "$BUILD/requests.jsonl" &
 SRV=$!

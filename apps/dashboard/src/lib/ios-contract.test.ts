@@ -51,11 +51,17 @@ test('the checked-in WebContract.swift is what this app renders today', () => {
   );
 });
 
-// The seven values the palette carried while it was still hand-written, from
-// whatever tool converted them originally. Pinning the conversion against an
-// independent one is the only way to know a refactor of the matrices below
-// still lands on the colour Safari draws — the generated file would otherwise
-// be self-consistent and wrong.
+// Reference values from a SECOND conversion of the same oklch declarations.
+// Pinning the generator against an independent one is the only way to know a
+// refactor of the matrices below still lands on the colour Safari draws — the
+// generated file would otherwise be self-consistent and wrong.
+//
+// The first seven are what the palette carried while it was still hand-written,
+// from whatever tool converted them originally. `rose-600` (the composer's Stop
+// pill) was added later and converted through the CSS Color 4 spec's own
+// OKLab→LMS→XYZ→P3 matrices, which is a different code path from the one in
+// gen-ios-contract — the same script reproduced all seven above it to within
+// this tolerance before its answer for rose-600 was written down here.
 const HAND_CONVERTED: Record<string, [number, number, number]> = {
   'amber-400': [0.9593, 0.7385, 0.1175],
   'rose-500': [0.9219, 0.2406, 0.3555],
@@ -64,6 +70,7 @@ const HAND_CONVERTED: Record<string, [number, number, number]> = {
   'emerald-500': [0.2673, 0.7268, 0.5082],
   'emerald-400': [0.3349, 0.8196, 0.5913],
   'rose-400': [0.943, 0.4307, 0.5029],
+  'rose-600': [0.8488, 0.102, 0.2693],
 };
 
 test('oklch → Display P3 lands where the hand conversion landed', () => {

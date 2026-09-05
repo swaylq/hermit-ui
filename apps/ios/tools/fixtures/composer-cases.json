@@ -1,0 +1,1282 @@
+{
+  "queueLimit": 5,
+  "deliveryGraceMs": 4000,
+  "clientIdPattern": "^[A-Za-z0-9._:-]{1,128}$",
+  "landed": [
+    {
+      "why": "nothing optimistic, nothing to do",
+      "optimistic": [],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hi"
+            }
+          ]
+        }
+      ],
+      "kept": []
+    },
+    {
+      "why": "a realId that has landed retires its bubble",
+      "optimistic": [
+        {
+          "id": "p1",
+          "realId": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "kept": []
+    },
+    {
+      "why": "a realId that has NOT landed stays, even when the text matches something else",
+      "optimistic": [
+        {
+          "id": "p1",
+          "realId": "r9",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "kept": [
+        "p1"
+      ]
+    },
+    {
+      "why": "no realId yet: the text is the fallback, and it matches",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "kept": []
+    },
+    {
+      "why": "the translate case — real row English, bubble Chinese, no realId: it stays",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": "你好"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ],
+      "kept": [
+        "p1"
+      ]
+    },
+    {
+      "why": "each real row claims at most ONE bubble: two identical sends, one row landed",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        },
+        {
+          "id": "p2",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ],
+      "kept": [
+        "p2"
+      ]
+    },
+    {
+      "why": "…and two rows landed retires both",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        },
+        {
+          "id": "p2",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        },
+        {
+          "id": "r2",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ],
+      "kept": []
+    },
+    {
+      "why": "a realId bubble does not eat the text budget the other one needs",
+      "optimistic": [
+        {
+          "id": "p1",
+          "realId": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        },
+        {
+          "id": "p2",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ],
+      "kept": []
+    },
+    {
+      "why": "msgText trims, so trailing whitespace on either side still matches",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": "  spaced  "
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "spaced"
+            }
+          ]
+        }
+      ],
+      "kept": []
+    },
+    {
+      "why": "msgText joins EVERY text block and only text blocks",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": "look at this"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "look at "
+            },
+            {
+              "type": "image",
+              "source": {
+                "type": "url",
+                "url": "u"
+              }
+            },
+            {
+              "type": "text",
+              "text": "this"
+            }
+          ]
+        }
+      ],
+      "kept": []
+    },
+    {
+      "why": "a tool_result row is text-empty, so an EMPTY bubble matches it — the web does this too",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": ""
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "x",
+              "content": "output"
+            }
+          ]
+        }
+      ],
+      "kept": []
+    },
+    {
+      "why": "content that is not an array at all is text-empty",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": ""
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": null
+        }
+      ],
+      "kept": []
+    },
+    {
+      "why": "a bare string content IS its text (parseBlocks says so)",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": "plain"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": "plain"
+        }
+      ],
+      "kept": []
+    },
+    {
+      "why": "U+FEFF is whitespace to JS trim and not to CharacterSet.whitespacesAndNewlines",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": "﻿bom﻿"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "bom"
+            }
+          ]
+        }
+      ],
+      "kept": []
+    },
+    {
+      "why": "U+200B is NOT whitespace to either — this pair must NOT match",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": "​zwsp"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "zwsp"
+            }
+          ]
+        }
+      ],
+      "kept": [
+        "p1"
+      ]
+    },
+    {
+      "why": "the ideographic space U+3000 is trimmed",
+      "optimistic": [
+        {
+          "id": "p1",
+          "content": [
+            {
+              "type": "text",
+              "text": "　ideo　"
+            }
+          ]
+        }
+      ],
+      "real": [
+        {
+          "id": "r1",
+          "content": [
+            {
+              "type": "text",
+              "text": "ideo"
+            }
+          ]
+        }
+      ],
+      "kept": []
+    }
+  ],
+  "placeholders": [
+    {
+      "why": "resting, desktop",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": false,
+        "uploadingCount": 0,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "Ask anything"
+    },
+    {
+      "why": "resting, touch — the hold gesture only exists there",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": false,
+        "uploadingCount": 0,
+        "dictating": false,
+        "touch": true,
+        "brainGhost": false
+      },
+      "expected": "Ask anything · hold to talk"
+    },
+    {
+      "why": "closed",
+      "face": {
+        "disabled": true,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": false,
+        "uploadingCount": 0,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "session is closed"
+    },
+    {
+      "why": "closed outranks everything below it",
+      "face": {
+        "disabled": true,
+        "awaitingInput": true,
+        "queueFull": true,
+        "working": true,
+        "uploadingCount": 3,
+        "dictating": true,
+        "touch": true,
+        "brainGhost": false
+      },
+      "expected": "session is closed"
+    },
+    {
+      "why": "the brain ghost outranks even closed — it owns the pixels",
+      "face": {
+        "disabled": true,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": false,
+        "uploadingCount": 0,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": true
+      },
+      "expected": ""
+    },
+    {
+      "why": "awaiting an interaction card",
+      "face": {
+        "disabled": false,
+        "awaitingInput": true,
+        "queueFull": false,
+        "working": false,
+        "uploadingCount": 0,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "↑ respond above to continue"
+    },
+    {
+      "why": "awaiting outranks a full queue",
+      "face": {
+        "disabled": false,
+        "awaitingInput": true,
+        "queueFull": true,
+        "working": true,
+        "uploadingCount": 0,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "↑ respond above to continue"
+    },
+    {
+      "why": "queue full",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": true,
+        "working": false,
+        "uploadingCount": 0,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "queue full (5) · waiting for current turn"
+    },
+    {
+      "why": "queue full outranks working — queueing is what would fail",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": true,
+        "working": true,
+        "uploadingCount": 0,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "queue full (5) · waiting for current turn"
+    },
+    {
+      "why": "working",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": true,
+        "uploadingCount": 0,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "working… ↵ to queue next"
+    },
+    {
+      "why": "working outranks an upload in flight",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": true,
+        "uploadingCount": 2,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "working… ↵ to queue next"
+    },
+    {
+      "why": "uploading, one",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": false,
+        "uploadingCount": 1,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "uploading 1…"
+    },
+    {
+      "why": "uploading, several",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": false,
+        "uploadingCount": 7,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "uploading 7…"
+    },
+    {
+      "why": "uploading outranks dictating",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": false,
+        "uploadingCount": 1,
+        "dictating": true,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "uploading 1…"
+    },
+    {
+      "why": "dictating",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": false,
+        "uploadingCount": 0,
+        "dictating": true,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "listening…"
+    },
+    {
+      "why": "dictating outranks the touch hint",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": false,
+        "uploadingCount": 0,
+        "dictating": true,
+        "touch": true,
+        "brainGhost": false
+      },
+      "expected": "listening…"
+    },
+    {
+      "why": "a negative upload count is not \"uploading\" — the guard is > 0",
+      "face": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "working": false,
+        "uploadingCount": -1,
+        "dictating": false,
+        "touch": false,
+        "brainGhost": false
+      },
+      "expected": "Ask anything"
+    }
+  ],
+  "canSend": [
+    {
+      "why": "an empty box sends nothing",
+      "input": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "uploadingCount": 0,
+        "draft": "",
+        "readyAttachments": 0
+      },
+      "expected": false
+    },
+    {
+      "why": "text",
+      "input": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "uploadingCount": 0,
+        "draft": "hi",
+        "readyAttachments": 0
+      },
+      "expected": true
+    },
+    {
+      "why": "whitespace only is not text",
+      "input": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "uploadingCount": 0,
+        "draft": "   \n\t ",
+        "readyAttachments": 0
+      },
+      "expected": false
+    },
+    {
+      "why": "U+FEFF only is not text to JS trim",
+      "input": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "uploadingCount": 0,
+        "draft": "﻿",
+        "readyAttachments": 0
+      },
+      "expected": false
+    },
+    {
+      "why": "U+00A0 only is not text",
+      "input": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "uploadingCount": 0,
+        "draft": " ",
+        "readyAttachments": 0
+      },
+      "expected": false
+    },
+    {
+      "why": "U+200B only IS text — not whitespace anywhere",
+      "input": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "uploadingCount": 0,
+        "draft": "​",
+        "readyAttachments": 0
+      },
+      "expected": true
+    },
+    {
+      "why": "U+2028 (line separator) only is not text",
+      "input": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "uploadingCount": 0,
+        "draft": " ",
+        "readyAttachments": 0
+      },
+      "expected": false
+    },
+    {
+      "why": "an attachment alone is enough",
+      "input": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "uploadingCount": 0,
+        "draft": "",
+        "readyAttachments": 1
+      },
+      "expected": true
+    },
+    {
+      "why": "an attachment still uploading is not",
+      "input": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "uploadingCount": 1,
+        "draft": "",
+        "readyAttachments": 1
+      },
+      "expected": false
+    },
+    {
+      "why": "working is NOT in here: a send during a turn is a queue item",
+      "input": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": false,
+        "uploadingCount": 0,
+        "draft": "hi",
+        "readyAttachments": 0
+      },
+      "expected": true
+    },
+    {
+      "why": "closed",
+      "input": {
+        "disabled": true,
+        "awaitingInput": false,
+        "queueFull": false,
+        "uploadingCount": 0,
+        "draft": "hi",
+        "readyAttachments": 0
+      },
+      "expected": false
+    },
+    {
+      "why": "awaiting an interaction card",
+      "input": {
+        "disabled": false,
+        "awaitingInput": true,
+        "queueFull": false,
+        "uploadingCount": 0,
+        "draft": "hi",
+        "readyAttachments": 0
+      },
+      "expected": false
+    },
+    {
+      "why": "queue full",
+      "input": {
+        "disabled": false,
+        "awaitingInput": false,
+        "queueFull": true,
+        "uploadingCount": 0,
+        "draft": "hi",
+        "readyAttachments": 0
+      },
+      "expected": false
+    }
+  ],
+  "flight": [
+    {
+      "why": "an empty session is not in flight",
+      "input": {
+        "statusState": null,
+        "snapshotAt": null,
+        "lastRole": null,
+        "lastAt": null,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": false,
+        "inFlight": false
+      }
+    },
+    {
+      "why": "the newest row is the assistant, nothing streaming",
+      "input": {
+        "statusState": "idle",
+        "snapshotAt": 1757000000000,
+        "lastRole": "assistant",
+        "lastAt": 1756999999000,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": false,
+        "inFlight": false
+      }
+    },
+    {
+      "why": "…and the same row still growing IS in flight, though not waiting",
+      "input": {
+        "statusState": "idle",
+        "snapshotAt": 1757000000000,
+        "lastRole": "assistant",
+        "lastAt": 1756999999000,
+        "optimisticAt": null,
+        "streamingTail": true,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": false,
+        "inFlight": true
+      }
+    },
+    {
+      "why": "the newest row is the user and the pane is working",
+      "input": {
+        "statusState": "working",
+        "snapshotAt": 1757000000000,
+        "lastRole": "user",
+        "lastAt": 1756999999000,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": true,
+        "inFlight": true
+      }
+    },
+    {
+      "why": "the newest row is the user and there is no status row at all",
+      "input": {
+        "statusState": null,
+        "snapshotAt": null,
+        "lastRole": "user",
+        "lastAt": 1756999999000,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": true,
+        "inFlight": true
+      }
+    },
+    {
+      "why": "idle, snapshot exactly at lastMsg + grace — NOT settled, the test is strict",
+      "input": {
+        "statusState": "idle",
+        "snapshotAt": 1756999994000,
+        "lastRole": "user",
+        "lastAt": 1756999990000,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": true,
+        "inFlight": true
+      }
+    },
+    {
+      "why": "idle, snapshot one ms past that — settled",
+      "input": {
+        "statusState": "idle",
+        "snapshotAt": 1756999994001,
+        "lastRole": "user",
+        "lastAt": 1756999990000,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": false,
+        "inFlight": false
+      }
+    },
+    {
+      "why": "idle, snapshot older than the message — the gateway has not seen it",
+      "input": {
+        "statusState": "idle",
+        "snapshotAt": 1756999940000,
+        "lastRole": "user",
+        "lastAt": 1756999999000,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": true,
+        "inFlight": true
+      }
+    },
+    {
+      "why": "idle, no snapshot, message exactly 90s old — NOT settled, strict again",
+      "input": {
+        "statusState": "idle",
+        "snapshotAt": null,
+        "lastRole": "user",
+        "lastAt": 1756999910000,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": true,
+        "inFlight": true
+      }
+    },
+    {
+      "why": "idle, no snapshot, message 90s + 1ms old — settled",
+      "input": {
+        "statusState": "idle",
+        "snapshotAt": null,
+        "lastRole": "user",
+        "lastAt": 1756999909999,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": false,
+        "inFlight": false
+      }
+    },
+    {
+      "why": "working, message ancient — the 90s hatch is idle-only",
+      "input": {
+        "statusState": "working",
+        "snapshotAt": null,
+        "lastRole": "user",
+        "lastAt": 1756999100000,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": true,
+        "inFlight": true
+      }
+    },
+    {
+      "why": "an optimistic row makes the newest message the user’s, whatever the server says",
+      "input": {
+        "statusState": "idle",
+        "snapshotAt": 1757000000000,
+        "lastRole": "assistant",
+        "lastAt": 1756999999000,
+        "optimisticAt": 1757000000000,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": true,
+        "inFlight": true
+      }
+    },
+    {
+      "why": "and the optimistic row’s clock is the one that counts, even when the server row is NEWER",
+      "input": {
+        "statusState": "idle",
+        "snapshotAt": 1756999900000,
+        "lastRole": "assistant",
+        "lastAt": 1757000000000,
+        "optimisticAt": 1756999800000,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": false,
+        "inFlight": false
+      }
+    },
+    {
+      "why": "a session with no messages but an idle status is settled",
+      "input": {
+        "statusState": "idle",
+        "snapshotAt": 1757000000000,
+        "lastRole": null,
+        "lastAt": null,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": false,
+        "inFlight": false
+      }
+    },
+    {
+      "why": "blocked is not idle, but the newest row is the assistant",
+      "input": {
+        "statusState": "blocked",
+        "snapshotAt": null,
+        "lastRole": "assistant",
+        "lastAt": 1756999999000,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": false,
+        "inFlight": false
+      }
+    },
+    {
+      "why": "blocked with an unanswered user row on top: waiting",
+      "input": {
+        "statusState": "blocked",
+        "snapshotAt": 1757000000000,
+        "lastRole": "user",
+        "lastAt": 1756999999000,
+        "optimisticAt": null,
+        "streamingTail": false,
+        "now": 1757000000000
+      },
+      "expected": {
+        "waitingAssistant": true,
+        "inFlight": true
+      }
+    }
+  ],
+  "stop": [
+    {
+      "why": "resting",
+      "inFlight": false,
+      "statusKey": "ready",
+      "closed": false,
+      "expected": {
+        "turnRunning": false,
+        "show": false
+      }
+    },
+    {
+      "why": "the local signal alone is enough",
+      "inFlight": true,
+      "statusKey": "ready",
+      "closed": false,
+      "expected": {
+        "turnRunning": true,
+        "show": true
+      }
+    },
+    {
+      "why": "the gateway’s working alone is enough — this is the long-tool-call case",
+      "inFlight": false,
+      "statusKey": "working",
+      "closed": false,
+      "expected": {
+        "turnRunning": true,
+        "show": true
+      }
+    },
+    {
+      "why": "both",
+      "inFlight": true,
+      "statusKey": "working",
+      "closed": false,
+      "expected": {
+        "turnRunning": true,
+        "show": true
+      }
+    },
+    {
+      "why": "closed hides the pill but the turn is still “running” for Escape",
+      "inFlight": true,
+      "statusKey": "working",
+      "closed": true,
+      "expected": {
+        "turnRunning": true,
+        "show": false
+      }
+    },
+    {
+      "why": "closed and resting",
+      "inFlight": false,
+      "statusKey": "ready",
+      "closed": true,
+      "expected": {
+        "turnRunning": false,
+        "show": false
+      }
+    },
+    {
+      "why": "starting is not working",
+      "inFlight": false,
+      "statusKey": "starting",
+      "closed": false,
+      "expected": {
+        "turnRunning": false,
+        "show": false
+      }
+    },
+    {
+      "why": "blocked is not working",
+      "inFlight": false,
+      "statusKey": "blocked",
+      "closed": false,
+      "expected": {
+        "turnRunning": false,
+        "show": false
+      }
+    }
+  ],
+  "clientIds": [
+    {
+      "why": "a UUID",
+      "id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+      "ok": true
+    },
+    {
+      "why": "a cuid",
+      "id": "clg2h7x9k0000qw3f8v2n1r5p",
+      "ok": true
+    },
+    {
+      "why": "the <install>:<seq> shape the iOS outbox will use",
+      "id": "A1B2C3D4-E5F6:00000042",
+      "ok": true
+    },
+    {
+      "why": "a dot and an underscore are both in",
+      "id": "ios.outbox_7",
+      "ok": true
+    },
+    {
+      "why": "exactly 128 characters",
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ok": true
+    },
+    {
+      "why": "129 is one too many",
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ok": false
+    },
+    {
+      "why": "empty is refused — the length floor is 1",
+      "id": "",
+      "ok": false
+    },
+    {
+      "why": "a slash is not in the charset",
+      "id": "ios/7",
+      "ok": false
+    },
+    {
+      "why": "a space is not",
+      "id": "ios 7",
+      "ok": false
+    },
+    {
+      "why": "a NUL is not — that is the byte Postgres refuses",
+      "id": "ios\u00007",
+      "ok": false
+    },
+    {
+      "why": "a Chinese character is not",
+      "id": "会话1",
+      "ok": false
+    },
+    {
+      "why": "an emoji is not",
+      "id": "ios😀",
+      "ok": false
+    },
+    {
+      "why": "a newline is not — and the anchors must be ^$ and not \\A\\z",
+      "id": "ios\n7",
+      "ok": false
+    },
+    {
+      "why": "a leading newline, same reason",
+      "id": "\nios",
+      "ok": false
+    },
+    {
+      "why": "a TRAILING newline is refused: JS $ is end-of-input, ICU $ is not",
+      "id": "ios7\n",
+      "ok": false
+    },
+    {
+      "why": "trailing CRLF, same trap",
+      "id": "ios7\r\n",
+      "ok": false
+    }
+  ]
+}

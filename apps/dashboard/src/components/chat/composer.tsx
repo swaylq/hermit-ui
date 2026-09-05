@@ -11,11 +11,11 @@ import { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImper
 import { cn } from '@/lib/utils';
 import { authedFetch } from '@/lib/asst-fetch';
 import { isTouchPrimary } from '@/lib/save-file';
-import { QUEUE_LIMIT } from '@/lib/chat-queue';
 import { foldTail, newClaim, replaceTail, type DictationClaim } from '@/lib/dictation-text';
 import dynamic from 'next/dynamic';
 import { Plus, ArrowUp, FileText, Loader2, Mic, X } from 'lucide-react';
 import { msgText, type Attachment } from '@/components/chat/lib';
+import { composerCanSend, composerPlaceholder } from '@/components/chat/composer-core';
 import { Collapse } from '@/components/chat/collapse';
 import { originalFor } from '@/lib/translate-outbound';
 import { canOpenMicSilently, refreshMicPermission, requestMicAccess } from '@/lib/voice-capture';
@@ -625,7 +625,10 @@ export const ComposeBar = forwardRef<ComposerHandle, {
   // The Brain's in-progress sentence shows only while the box is otherwise empty —
   // the moment you start typing, the composer is yours and the ghost gets out.
   const showBrainGhost = !!brainDraft && draft.length === 0 && !disabled;
-  const canSend = !disabled && !awaitingInput && !queueFull && uploadingCount === 0 && (draft.trim().length > 0 || readyAttachments.length > 0);
+  const canSend = composerCanSend({
+    disabled, awaitingInput, queueFull, uploadingCount,
+    draft, readyAttachments: readyAttachments.length,
+  });
 
   // ── press and hold to talk ────────────────────────────────────────────────
   // WeChat's idiom, on the "Ask anything" box: hold it, talk, and where the
@@ -1062,31 +1065,13 @@ export const ComposeBar = forwardRef<ComposerHandle, {
               e.preventDefault();
               submit();
             }}
-            placeholder={
-              showBrainGhost
-                ? ''
-                : disabled
-                ? 'session is closed'
-                : awaitingInput
-                ? '↑ respond above to continue'
-                : queueFull
-                ? `queue full (${QUEUE_LIMIT}) · waiting for current turn`
-                : working
-                ? 'working… ↵ to queue next'
-                : uploadingCount > 0
-                ? `uploading ${uploadingCount}…`
-                : dictating
-                // The box is the only place a hands-free run reports from now,
-                // and it says this for the second or two before the first words
-                // land on top of it.
-                ? 'listening…'
-                : touch
-                // Only where the gesture exists. On a desktop the box is held
-                // by nobody and ⌥ is the way in, so promising a hold would be
-                // an instruction that does nothing.
-                ? 'Ask anything · hold to talk'
-                : 'Ask anything'
-            }
+            // The ladder — and the order, which is the whole content of it —
+            // lives in composer-core, so the iOS composer can be held against
+            // this exact function rather than against a reading of the JSX.
+            placeholder={composerPlaceholder({
+              disabled, awaitingInput, queueFull, working, uploadingCount,
+              dictating, touch, brainGhost: showBrainGhost,
+            })}
             disabled={disabled || awaitingInput}
             rows={1}
             className="no-scrollbar block w-full bg-transparent text-base sm:text-[15px] resize-none outline-none leading-relaxed min-h-[28px] max-h-[360px] overflow-auto py-1.5 text-foreground placeholder:text-muted-foreground/70 disabled:cursor-not-allowed"

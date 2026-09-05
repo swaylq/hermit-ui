@@ -317,6 +317,20 @@ export const THEME_VARS: ReadonlyArray<{ cssVar: string; note: string }> = [
 /** `muted-foreground` → `mutedForeground` */
 const camel = (v: string) => v.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 
+/**
+ * Palette classes a native screen draws that `readColorClasses` cannot see.
+ *
+ * That scanner only matches a class ALONE inside quotes, which is how
+ * `session-status.ts` and `ctx-bar.tsx` write theirs. The composer writes its
+ * Stop pill's colours mid-string inside a `cn(...)` call, so they are named
+ * here instead — with the file that draws them, so this stays a record of what
+ * is on screen rather than a dumping ground. Same rule as THEME_VARS: one entry
+ * at a time, when a screen actually uses it.
+ */
+export const EXTRA_CLASSES: ReadonlyArray<{ cls: string; note: string }> = [
+  { cls: 'rose-600', note: "the composer's Stop pill in the light scheme (components/chat/composer.tsx)" },
+] as const;
+
 const SHADE = (cls: string) => Number(cls.split('-')[1]);
 const FAMILY = (cls: string) => cls.split('-')[0];
 
@@ -324,6 +338,7 @@ export function readContract(): Contract {
   const classes = [
     ...readColorClasses(SOURCES.statusDots, ['bg']),
     ...readColorClasses(SOURCES.ctxBar, ['bg', 'text']),
+    ...EXTRA_CLASSES.map((e) => e.cls),
   ];
   const uniq = [...new Set(classes)].sort(
     (x, y) => FAMILY(x).localeCompare(FAMILY(y)) || SHADE(x) - SHADE(y),

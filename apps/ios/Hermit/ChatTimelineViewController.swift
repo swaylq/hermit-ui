@@ -8,9 +8,14 @@ import SwiftUI
 /// Reached only through `hermit://timeline/<session id>`, exactly the way the
 /// native session list was introduced: a new screen goes up on a URL first, so
 /// it can be walked through and screenshotted without becoming the thing every
-/// tap lands on. Tapping a row in the list still opens the web chat page, and
-/// will until this screen has the composer (M5) — a timeline you cannot reply
-/// in is not a replacement for one you can.
+/// tap lands on. Tapping a row in the list still opens the web chat page.
+///
+/// The composer is here as of round 6, so this screen can now hold a
+/// conversation — but only the typed half of one. Attachments, press-to-talk and
+/// dictation are still the web's alone, and the day a list row lands HERE is the
+/// day those stop existing on a phone. So the front door does not move until M5
+/// is finished; the switch is one line in `SessionListViewController` and it is
+/// written down as its own checklist item rather than taken early.
 ///
 /// ## Upside down
 ///
@@ -106,6 +111,31 @@ final class ChatTimelineViewController: UIViewController {
     /// `chat.getSession` on the web's own `refetchInterval`.
     private var metaPoll: Timer?
 
+    // MARK: The composer
+    //
+    // `ComposerCore` decides everything it says and does; this controller only
+    // supplies the facts and performs the two mutations. See ComposerView for
+    // what is deliberately not drawn yet.
+
+    private var composerHost: UIHostingController<ComposerView>!
+    private let composer = ComposerState(draft: "", model: ComposerModel(
+        placeholder: "", canSend: false, sending: false,
+        showStop: false, stopping: false, disabled: false, notice: nil, bottomInset: 0
+    ))
+    /// Sends in the air. A count and not a flag: the web serialises sends but
+    /// does not block on them, so two can be outstanding at once.
+    private var sending = 0
+    /// `cancelTurn` is in the air.
+    private var stopping = false
+    /// Sends run in the order they were pressed. The web chains them on one
+    /// promise for the same reason: two messages typed a second apart must reach
+    /// the gateway in that order, and `Task` gives no such guarantee on its own.
+    private var sendChain: Task<Void, Never>?
+    /// The bottom padding the composer adds under its row: the home indicator's
+    /// safe area while the keyboard is down, nothing while it is up. `max()`, not
+    /// stacked — the web's `pwa-pb-safe` does the same.
+    private var composerBottomInset: CGFloat = 0
+
     /// The LIVE window, oldest-first — the newest `WebContract.timelineLimit`
     /// rows, and the only rows the stream carries. Kept apart from the fold's
     /// output so a push re-folds from the same rows the server sent rather than
@@ -115,8 +145,23 @@ final class ChatTimelineViewController: UIViewController {
     /// `chat.listMessagesBefore` page at a time, and absorbs whatever the window
     /// sheds while it is on screen.
     private var older: [FoldInput] = []
-    /// Window + history, which is the conversation the fold is run over.
-    private var allInputs: [FoldInput] { older + window }
+    /// Messages this screen has SENT and not yet seen come back.
+    ///
+    /// Drawn at the bottom of the conversation the instant the send button is
+    /// pressed, and retired by `ComposerCore.dropLanded` once the real row lands
+    /// — by the id `chat.send` answered with, or by text in the second before it
+    /// answers. The web calls these `pending`; the name here is `outgoing`
+    /// because `pending` is already taken on this class, by the stream frames
+    /// held while the window query is in the air.
+    private var outgoing: [ComposerCore.Optimistic] = []
+
+    /// Window + history + what we have just said, which is the conversation the
+    /// fold is run over.
+    ///
+    /// The optimistic rows go LAST because they are the newest by construction:
+    /// the fold reads the list oldest-first, and a bubble that jumped above the
+    /// reply it is waiting for would be a worse lie than a slow one.
+    private var allInputs: [FoldInput] { older + window + outgoing.map(Self.foldInput) }
     private var stream: HermitStream<WireMessage>?
     private var streamTask: Task<Void, Never>?
     /// Frames that arrived before `chat.listMessages` answered. See
@@ -220,6 +265,25 @@ final class ChatTimelineViewController: UIViewController {
         collection.delegate = self
         view.addSubview(collection)
 
+        composer.draft = ComposerDraft.load(sessionId)
+        composerHost = UIHostingController(rootView: ComposerView(
+            state: composer,
+            onSend: { [weak self] in self?.sendDraft() },
+            onStop: { [weak self] in self?.stopTurn() },
+            onClear: { [weak self] in self?.setDraft("") },
+            onDismissNotice: { [weak self] in self?.setNotice(nil) },
+            onDraftChange: { [weak self] value in self?.draftChanged(value) }
+        ))
+        composerHost.view.translatesAutoresizingMaskIntoConstraints = false
+        composerHost.view.backgroundColor = .clear
+        addChild(composerHost)
+        view.addSubview(composerHost.view)
+        composerHost.didMove(toParent: self)
+        // The composer owns the bottom safe area itself (see `bottomInset`), so
+        // the guide has to stop reserving it — otherwise the home indicator is
+        // paid for twice and the box floats on an empty band.
+        view.keyboardLayoutGuide.usesBottomSafeArea = false
+
         headerHost = UIHostingController(rootView: ChatHeaderView(model: pendingHeaderModel, onBack: nil))
         headerHost.view.translatesAutoresizingMaskIntoConstraints = false
         headerHost.view.backgroundColor = .clear
@@ -255,14 +319,22 @@ final class ChatTimelineViewController: UIViewController {
             // an opaque bar still moves the scroll indicator and the rubber-band
             // through it.
             collection.topAnchor.constraint(equalTo: headerHost.view.bottomAnchor),
-            collection.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            collection.bottomAnchor.constraint(equalTo: composerHost.view.topAnchor),
             collection.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collection.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            // Pinned to the keyboard, not to the safe area: `keyboardLayoutGuide`
+            // collapses to the bottom of the view when there is no keyboard, so
+            // one constraint covers both states and animates between them on
+            // UIKit's own curve — which is the point, since the web's box is
+            // carried by the browser's visual viewport and moves on the same one.
+            composerHost.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
+            composerHost.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            composerHost.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             message.topAnchor.constraint(equalTo: headerHost.view.bottomAnchor, constant: 16),
             message.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Self.padH),
             message.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Self.padH),
             spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            spinner.centerYAnchor.constraint(equalTo: collection.centerYAnchor),
         ])
 
         let cell = UICollectionView.CellRegistration<FlippedListCell, String> {
@@ -348,8 +420,16 @@ final class ChatTimelineViewController: UIViewController {
         // `own.top` is added at content-top (the bottom of the screen) and
         // `own.bottom` at content-bottom (just under the header): the flip does
         // not reach the safe area, which is why they have to be swapped here.
+        //
+        // Since the composer went in, the list is bounded by two opaque bars and
+        // reaches neither end of the screen, so `own` is zero on both edges and
+        // the home indicator is the composer's to clear. The correction is still
+        // computed from `own` rather than assumed zero: whichever of the two is
+        // true, `adjustedContentInset = safeAreaInsets + contentInset` holds, and
+        // arithmetic that stays right through a layout change is worth one
+        // subtraction.
         let own = collection.safeAreaInsets
-        let wanted = UIEdgeInsets(top: view.safeAreaInsets.bottom + Self.padV - own.top, left: 0,
+        let wanted = UIEdgeInsets(top: Self.padV - own.top, left: 0,
                                   bottom: Self.padV - own.bottom, right: 0)
         guard collection.contentInset != wanted else { return }
         collection.contentInset = wanted
@@ -362,6 +442,19 @@ final class ChatTimelineViewController: UIViewController {
         // computed from. Cheap — `applyInsets` returns without touching anything
         // when the answer has not moved.
         applyInsets()
+        // Whether the keyboard is up, read off the guide rather than off a pair
+        // of notifications: the guide is already the thing the composer is
+        // pinned to, so this cannot disagree with where the box actually is —
+        // and it stays right during the animation, which two notifications
+        // bracketing it do not.
+        let keyboard = max(0, view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY)
+        let wanted = keyboard > 0 ? 0 : view.safeAreaInsets.bottom
+        // Guarded: assigning it would publish, and publishing inside a layout
+        // pass that has not finished is how a SwiftUI host ends up laying out
+        // twice per frame.
+        guard wanted != composerBottomInset else { return }
+        composerBottomInset = wanted
+        refreshComposer()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -372,6 +465,7 @@ final class ChatTimelineViewController: UIViewController {
         // answers for a hidden bar, which is the whole reason it exists.
         navigationController?.setNavigationBarHidden(true, animated: animated)
         refreshHeader()
+        refreshComposer()
         start()
     }
 
@@ -516,6 +610,7 @@ final class ChatTimelineViewController: UIViewController {
                 guard let row = got ?? nil else { return }
                 self.meta = row
                 self.refreshHeader()
+                self.refreshComposer()
             }
         }
     }
@@ -546,7 +641,13 @@ final class ChatTimelineViewController: UIViewController {
         if let meta {
             model = ChatHeaderModel(meta: meta, sessionId: sessionId)
             if let merged = SessionStatus.merge(meta.statusRow, pushedStatus) {
-                model.status = SessionStatus.view(merged, StatusOptions(unread: false))
+                // `liveWorking` is this screen's own read of the conversation,
+                // and it is why the dot turns the instant you press send instead
+                // of when the gateway's next snapshot lands. The web passes the
+                // same flag (`liveWorking: isInFlight`); until round 6 this
+                // header did not, so its dot was up to five seconds late on
+                // exactly the message the reader was watching for.
+                model.status = SessionStatus.view(merged, StatusOptions(liveWorking: liveWorking, unread: false))
             }
         } else {
             model = pendingHeaderModel
@@ -559,6 +660,269 @@ final class ChatTimelineViewController: UIViewController {
             onBack: canPop ? { [weak self] in self?.navigationController?.popViewController(animated: true) } : nil
         )
     }
+
+    // MARK: - The composer
+
+    /// One outgoing message, as a row the fold can draw.
+    ///
+    /// `role: "user"` and a text block, which is exactly what `chat.send` will
+    /// write — so the optimistic bubble and the real row fold into the same
+    /// shape and the swap between them is invisible.
+    private static func foldInput(_ o: ComposerCore.Optimistic) -> FoldInput {
+        FoldInput(id: o.id, role: "user", content: o.content,
+                  createdAt: isoNow.string(from: Date()), authoredBy: nil)
+    }
+
+    /// Timestamps for optimistic rows, in the format the server sends —
+    /// `HermitAPI.isoDate` reads it back, and the fold's day dividers order by it.
+    private static let isoNow: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        return f
+    }()
+
+    /// The clock the composer's own state is judged against. One property so a
+    /// test can move it; nothing else in this class needs it.
+    private var nowMs: Double { Date().timeIntervalSince1970 * 1000 }
+
+    /// What `turnInFlight` sees right now.
+    ///
+    /// `streamingTail` is `false` and that is a KNOWN gap, not an oversight: the
+    /// web watches the tail assistant row's JSON grow between polls and holds
+    /// "in flight" for 1.8s after each growth. Nothing here tracks that yet, so
+    /// the fast local signal covers only "I just sent and nobody has answered".
+    /// The rest arrives through `statusKey == "working"`, which is the gateway's
+    /// own view and is at most one 5s poll behind — late, not wrong. Its own
+    /// checklist line.
+    private var turnSignals: ComposerCore.TurnSignals {
+        let status = SessionStatus.merge(meta?.statusRow, pushedStatus)
+        let last = window.last ?? older.last
+        return ComposerCore.TurnSignals(
+            statusState: status?.state,
+            snapshotAt: status?.snapshotAt.map { $0.timeIntervalSince1970 * 1000 },
+            lastRole: last?.role,
+            lastAt: last.flatMap { HermitAPI.isoDate($0.createdAt)?.timeIntervalSince1970 }.map { $0 * 1000 },
+            // Only the NEWEST optimistic row matters, and only its clock —
+            // exactly what `pending[pending.length - 1]` is on the web.
+            optimisticAt: outgoing.isEmpty ? nil : nowMs,
+            streamingTail: false,
+            now: nowMs
+        )
+    }
+
+    /// Rebuild the composer's model from whatever is known right now.
+    ///
+    /// Cheap and idempotent, so every path that changes anything it reads simply
+    /// calls it — the same discipline `refreshHeader` follows.
+    @MainActor
+    private func refreshComposer() {
+        guard composerHost != nil else { return }
+        let closed = meta?.closedAt != nil
+        let flight = ComposerCore.turnInFlight(turnSignals)
+        let stop = ComposerCore.stopPill(inFlight: flight.inFlight,
+                                         statusKey: headerStatusKey,
+                                         closed: closed)
+        var model = composer.model
+        model.disabled = closed
+        model.showStop = stop.show
+        model.stopping = stopping
+        model.sending = sending > 0
+        model.bottomInset = composerBottomInset
+        model.placeholder = ComposerCore.placeholder(ComposerCore.Face(
+            disabled: closed,
+            // Neither of these can be true yet: the timeline cannot see an
+            // interaction card (M4) and it has no queue readout (M5), so the two
+            // rungs they own are unreachable rather than wrong. Both are their
+            // own checklist lines; passing `false` here is what makes the ladder
+            // itself already correct when they land.
+            awaitingInput: false,
+            queueFull: false,
+            working: stop.turnRunning,
+            uploadingCount: 0,
+            dictating: false,
+            // A phone is always touch-primary, which is the branch the web takes
+            // when `isTouchPrimary()` is true.
+            touch: true,
+            brainGhost: false
+        ))
+        model.canSend = ComposerCore.canSend(
+            disabled: closed, awaitingInput: false, queueFull: false,
+            uploadingCount: 0, draft: composer.draft, readyAttachments: 0
+        )
+        guard model != composer.model else { return }
+        composer.model = model
+    }
+
+    /// The status key the header is showing. Read from the same merge the header
+    /// runs so the pill and the dot can never disagree — the web's Stop reads
+    /// `status.key` for exactly that reason.
+    private var headerStatusKey: String {
+        guard let meta, let merged = SessionStatus.merge(meta.statusRow, pushedStatus) else { return "" }
+        return SessionStatus.view(merged, StatusOptions(liveWorking: liveWorking, unread: false)).key.rawValue
+    }
+
+    /// Working as THIS screen sees it, handed to `sessionStatusView` the way the
+    /// web hands it `isInFlight`. Without it the dot waits for the gateway's
+    /// snapshot — up to five seconds after you press send.
+    private var liveWorking: Bool {
+        ComposerCore.turnInFlight(turnSignals).inFlight
+    }
+
+    /// Typing. The value is already in `composer.draft` — the field wrote it —
+    /// so this only persists it and re-decides whether the circle is live.
+    private func draftChanged(_ value: String) {
+        ComposerDraft.save(sessionId, value)
+        refreshComposer()
+    }
+
+    /// Write the box from OUTSIDE it: the clear button, and putting the words
+    /// back after a failed send.
+    private func setDraft(_ value: String) {
+        composer.draft = value
+        ComposerDraft.save(sessionId, value)
+        refreshComposer()
+    }
+
+    private func setNotice(_ text: String?) {
+        guard composer.model.notice != text else { return }
+        composer.model.notice = text
+    }
+
+    /// Send what is in the box.
+    ///
+    /// The order is the web's, and each step is load-bearing:
+    ///   1. re-pin to the newest row, so the reply scrolls into view even if the
+    ///      reader had wandered up the history;
+    ///   2. mint the idempotency key BEFORE anything can fail, so a retry of
+    ///      this exact message can never become a second message;
+    ///   3. show the bubble and empty the box, because a composer that waits for
+    ///      a round trip reads as broken on a slow connection;
+    ///   4. send, and on failure put the words back exactly as they were.
+    private func sendDraft() {
+        let typed = composer.draft
+        guard ComposerCore.canSend(disabled: composer.model.disabled, awaitingInput: false,
+                                   queueFull: false, uploadingCount: 0,
+                                   draft: typed, readyAttachments: 0) else { return }
+        guard let entry = KeyStore.active() else {
+            setNotice("No machine key on this device yet.")
+            return
+        }
+        // The server trims too, and an untrimmed bubble would not match the row
+        // that comes back — `dropLanded`'s text fallback compares trimmed text.
+        let text = ComposerCore.jsTrim(typed)
+        let clientId = ComposerCore.newClientId()
+
+        scrollToTail()
+        setNotice(nil)
+        outgoing.append(ComposerCore.Optimistic(
+            id: clientId, realId: nil,
+            content: .array([.object(["type": .string("text"), "text": .string(text)])])
+        ))
+        setDraft("")
+        sending += 1
+        refold()
+        refreshComposer()
+        refreshHeader()
+
+        let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+        let input = SendInput(sessionId: sessionId, clientId: clientId, text: text)
+        let previous = sendChain
+        sendChain = Task { [weak self] in
+            // Serial: the gateway delivers in insert order, so two messages
+            // typed a second apart must not race into the wrong one.
+            _ = await previous?.result
+            do {
+                let sent = try await api.mutate("chat.send", input: input, as: SentMessage.self)
+                await MainActor.run { self?.sendLanded(clientId: clientId, realId: sent.id) }
+            } catch {
+                await MainActor.run { self?.sendFailed(clientId: clientId, typed: typed, error: error) }
+            }
+        }
+    }
+
+    @MainActor
+    private func sendLanded(clientId: String, realId: String) {
+        sending = max(0, sending - 1)
+        // Hand the bubble over to its real counterpart BY ID. It stays on screen
+        // until that exact row arrives (see `ComposerCore.dropLanded`), which is
+        // what keeps a send whose text the server rewrote from flickering.
+        if let i = outgoing.firstIndex(where: { $0.id == clientId }) {
+            outgoing[i].realId = realId
+        }
+        dropLandedOutgoing()
+        refold()
+        refreshComposer()
+    }
+
+    @MainActor
+    private func sendFailed(clientId: String, typed: String, error: Error) {
+        sending = max(0, sending - 1)
+        outgoing.removeAll { $0.id == clientId }
+        // Put back what was typed, untrimmed, exactly as it was — including a
+        // trailing newline someone was in the middle of writing after.
+        if composer.draft.isEmpty { setDraft(typed) }
+        // Say WHY. Silently restoring the draft is what once read as "send is
+        // dead"; the server's own sentence ("queue_full", "session is closed")
+        // is the useful half.
+        setNotice(error.localizedDescription)
+        refold()
+        refreshComposer()
+    }
+
+    /// Kill the running turn.
+    ///
+    /// The 400ms arm delay lives in `ComposerView` where the button is, because
+    /// what it guards against is a finger already travelling toward that corner.
+    private func stopTurn() {
+        guard !stopping, let entry = KeyStore.active() else { return }
+        stopping = true
+        refreshComposer()
+        let api = HermitAPI(origin: KeyStore.base(for: entry), key: { KeyStore.active()?.key ?? "" })
+        let input = SessionInput(sessionId: sessionId)
+        Task { [weak self] in
+            _ = try? await api.mutate("chat.cancelTurn", input: input, as: CancelResult.self)
+            await MainActor.run {
+                guard let self else { return }
+                self.stopping = false
+                self.refreshComposer()
+                // The gateway writes `cancelRequestedAt` and the pane state
+                // follows a beat later; re-asking is what turns the dot round
+                // without waiting out the poll.
+                if let e = KeyStore.active() { self.loadMeta(origin: KeyStore.base(for: e)) }
+            }
+        }
+    }
+
+    /// Retire every optimistic bubble whose real row is now on screen.
+    @MainActor
+    private func dropLandedOutgoing() {
+        guard !outgoing.isEmpty else { return }
+        let real = (older + window).map { (id: $0.id, content: $0.content) }
+        outgoing = ComposerCore.dropLanded(outgoing, landed: real)
+    }
+
+    /// Back to the newest row. The list is upside down, so that is content
+    /// offset zero — less whatever inset the collection adds at rest.
+    private func scrollToTail() {
+        collection.setContentOffset(CGPoint(x: 0, y: -collection.adjustedContentInset.top),
+                                    animated: false)
+    }
+
+    private struct SendInput: Encodable {
+        let sessionId: String
+        /// The idempotency key. Optional on the wire — the browser composer sends
+        /// without one — but never omitted here: a phone is the client that
+        /// actually loses its connection mid-send.
+        let clientId: String
+        let text: String
+    }
+
+    /// `chat.send` answers with the whole row it wrote. Only the id is read: it
+    /// is what the optimistic bubble is handed over to.
+    private struct SentMessage: Decodable { let id: String }
+
+    private struct CancelResult: Decodable { let ok: Bool }
 
     private func teardown() {
         inFlight?.cancel()
@@ -618,6 +982,7 @@ final class ChatTimelineViewController: UIViewController {
             pushedStatus = LiveStatusFrame(state: frame.state, alive: frame.alive,
                                            activity: frame.activity, snapshotAt: frame.snapshotAt)
             refreshHeader()
+            refreshComposer()
         case .connected, .frameDropped:
             // A dropped frame is one unreadable payload on a connection that is
             // still good, and the next frame carries the row again.
@@ -771,10 +1136,18 @@ final class ChatTimelineViewController: UIViewController {
     /// exactly where a seam would land. Sixty rows of pure-function work per
     /// push is not the cost worth being clever about.
     private func refold() {
+        // Retiring landed bubbles happens HERE rather than at each of the four
+        // call sites: every path that can bring a real row in ends up in this
+        // method, and a bubble left standing over its own row is the one bug
+        // this whole mechanism exists to prevent.
+        dropLandedOutgoing()
         let all = allInputs
         show(rows: FoldRuns.fold(all))
         message.isHidden = !all.isEmpty
         if all.isEmpty { message.text = "Nothing in this conversation yet." }
+        // The newest row just moved, which is half of what decides whether a
+        // turn is running.
+        refreshComposer()
     }
 
     /// `rows` arrives oldest-first, the way the fold produces it and the way the

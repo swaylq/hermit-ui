@@ -24,3 +24,19 @@ export const QUEUE_LIMIT = 5;
  * importing the whole tRPC graph.
  */
 export const USER_QUEUE_FILTER = { role: 'user', deliveredAt: null, externalId: null } as const;
+
+/**
+ * The charset a `chat.send` idempotency key may use, and the router's own zod
+ * check (`send`'s `clientId`). Deliberately narrow rather than a bare string: it
+ * covers every id a client would actually generate (UUID, cuid, ULID,
+ * `<install>:<seq>`) while making a NUL byte — which Postgres refuses to store
+ * in a text column — a zod error at the edge instead of a failed INSERT halfway
+ * through the mutation.
+ *
+ * Here rather than inline in the router because a client outside this codebase
+ * has to satisfy it: the iOS composer mints these, and
+ * `apps/ios/tools/composer-fixture.sh` holds its port against this exact
+ * pattern. A regex the only consumer can read is a regex the other consumer
+ * guesses at.
+ */
+export const CLIENT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;

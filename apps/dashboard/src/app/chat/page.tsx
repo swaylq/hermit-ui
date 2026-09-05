@@ -18,7 +18,7 @@ import { CtxBar } from '@/components/ctx-bar';
 import { contextWindowFor } from '@/lib/context-window';
 import { chatHeaderTitle } from '@/lib/chat-header';
 import {
-  sessionStatusView, mergeLiveStatus, workingUnconfirmed, isRestingState, DELIVERY_GRACE_MS,
+  sessionStatusView, mergeLiveStatus, workingUnconfirmed, isRestingState,
   type LiveStatusFrame,
 } from '@/lib/session-status';
 import { dashboardReach } from '@/lib/dashboard-reach';
@@ -48,6 +48,7 @@ import { useOlderPages, shedRows, shouldKeepShed, type TimelineRow } from '@/com
 import { usePrependAnchor } from '@/components/chat/use-prepend-anchor';
 import { useScrollStability } from '@/components/chat/use-scroll-stability';
 import { isVerticalWheelInput, readerMovedUp } from '@/components/chat/scroll-stability-core';
+import { dropLanded, stopPill, turnInFlight } from '@/components/chat/composer-core';
 import { useCachedTimeline, useTimelineWriteThrough } from '@/lib/chat-cache/use-chat-cache';
 import { applyMessagePush, foldPushes, type PushFrame } from '@/lib/chat-cache/merge-messages';
 import { ConfirmIconButton } from '@/components/chat/confirm-icon-button';
@@ -94,35 +95,6 @@ const SETTLE_CHASE_FRAMES = 24;
 // scroll position synchronously after a history prepend so there's no visible
 // lurch), plain useEffect on the server to dodge React's SSR warning.
 const useIsoLayoutEffect = typeof document !== 'undefined' ? useLayoutEffect : useEffect;
-
-// Optimistic-row handoff. An optimistic row (a `pending` bubble or an
-// `optimisticQueue` stub) comes off screen once its REAL row lands in server
-// data. Match by the id chat.send returned (`realId`): text matching breaks
-// under outgoing auto-translate, where the optimistic row holds the typed
-// Chinese and the real row is English, so the two never met and the stub
-// lingered / double-counted. Text survives only as a fallback for the window
-// before the send responds, and each real row claims at most ONE optimistic
-// row — two identical texts sent back to back must not dedupe each other.
-function dropLanded<T extends { id: string; realId?: string; content: { type: 'text'; text: string }[] }>(
-  optimistic: T[],
-  real: ReadonlyArray<{ id: string; content: unknown }>,
-): T[] {
-  if (optimistic.length === 0) return optimistic;
-  const ids = new Set(real.map((m) => m.id));
-  const texts = new Map<string, number>();
-  for (const m of real) {
-    const t = msgText(m.content);
-    texts.set(t, (texts.get(t) ?? 0) + 1);
-  }
-  return optimistic.filter((p) => {
-    if (p.realId) return !ids.has(p.realId);
-    const t = msgText(p.content);
-    const left = texts.get(t) ?? 0;
-    if (left === 0) return true;
-    texts.set(t, left - 1);
-    return false;
-  });
-}
 
 // ── SSE message-list merge ──────────────────────────────────────────────────
 // The stream pushes the entire newest-N window every ~250ms. Writing it into
@@ -1447,17 +1419,6 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
   const optimisticUser = pending.length ? pending[pending.length - 1] : null;
   const lastMsg = messages.data?.[messages.data.length - 1];
-  const lastMsgIsUser = optimisticUser ? true : lastMsg?.role === 'user';
-  const lastMsgTime = optimisticUser
-    ? new Date(optimisticUser.createdAt).getTime()
-    : lastMsg
-    ? new Date(lastMsg.createdAt).getTime()
-    : 0;
-  const snapTime = statusRow?.snapshotAt ? new Date(statusRow.snapshotAt).getTime() : 0;
-  const turnSettled =
-    statusRow?.state === 'idle'
-    && (snapTime > lastMsgTime + DELIVERY_GRACE_MS || Date.now() - lastMsgTime > 90_000);
-  const isWaitingAssistant = lastMsgIsUser && !turnSettled;
 
   // Any unresolved interaction (permission / question) in the loaded window?
   // While one is pending the agent's turn is BLOCKED on the user's click — gate
@@ -1526,7 +1487,22 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
 
   // ESC while a turn is in flight = click Stop. Lives at the document level
   // since the textarea is disabled during streaming and can't receive keys.
-  const isInFlight = isWaitingAssistant || !!streamingTailId;
+  //
+  // `turnInFlight` is the pure half — see components/chat/composer-core, which
+  // is also what the iOS timeline runs. Everything it reads is passed in,
+  // including the clock: an optimistic row we just wrote counts as the newest
+  // user message, and `turnSettled` needs the gateway to have snapshotted after
+  // it (plus DELIVERY_GRACE_MS) before the screen stops looking busy.
+  const snapTime = statusRow?.snapshotAt ? new Date(statusRow.snapshotAt).getTime() : 0;
+  const { waitingAssistant: isWaitingAssistant, inFlight: isInFlight } = turnInFlight({
+    statusState: statusRow?.state ?? null,
+    snapshotAt: snapTime,
+    lastRole: lastMsg?.role ?? null,
+    lastAt: lastMsg ? new Date(lastMsg.createdAt).getTime() : null,
+    optimisticAt: optimisticUser ? new Date(optimisticUser.createdAt).getTime() : null,
+    streamingTail: !!streamingTailId,
+    now: Date.now(),
+  });
   // The waiting dispatch queue (undelivered user rows). Refetch only while it
   // matters: the gateway drains as turns end (so poll while in-flight) and the
   // user can cancel (so poll while non-empty); idle + empty → off. Mutations
@@ -1771,35 +1747,16 @@ export function SessionPane({ sessionId, anchorMessageId = null }: { sessionId: 
     status.key === 'working' || status.key === 'starting' || status.key === 'restarting';
 
   // "A turn is running" — for everything that ACTS on that fact: Stop, Escape,
-  // and what the composer says about itself.
-  //
-  // NOT isInFlight alone. That is a local SSE heuristic (the tail row grew within
-  // ~1.8s, or the newest message is an unanswered user row), and it goes false
-  // whenever the agent is busy WITHOUT emitting — which is precisely a long tool
-  // call. Reported: a session sitting in a multi-minute Bash showed "working" in
-  // the header and thinking dots in the timeline, while the composer said "Ask
-  // anything" and offered no way to stop it. The Stop button disappeared exactly
-  // when it was most needed.
-  //
-  // The thinking dots already had this fixed (see showThinkingDots above, and its
-  // note about the >1.8s gap); Stop and Escape were left behind on the old
-  // signal. `status.key === 'working'` is the union — sessionStatusView ORs our
-  // fast local signal with the gateway's pane-derived state — so this is a strict
-  // superset of the old condition and cannot hide Stop anywhere it used to show.
-  //
-  // The cost of the union is a stale snapshot leaving Stop up for a few seconds
-  // after a turn ends. Pressing it then sends Escape to an idle pane, which does
-  // nothing. A Stop that lingers is a far smaller problem than one that vanishes.
-  const turnRunning = isInFlight || status.key === 'working';
-
-  // Whether the composer shows its Stop pill. It sits at the right of the input
-  // row, where the thumb already is — but BESIDE the send circle, never in it.
-  // It once lived in the send button's own slot, styled identically, so while a
-  // turn ran the most-tapped pixels in the app quietly changed meaning from
-  // "send" to "kill the turn"; the gateway logs are full of turns killed
-  // mid-stream and followed by a short 「继续」. What makes the current placement
+  // and what the composer says about itself — and whether the composer shows its
+  // Stop pill. Both decided by `stopPill` in components/chat/composer-core, which
+  // carries the reasoning (why the union with status.key, and what it costs) and
+  // is the version the iOS timeline runs too. What makes the pill's PLACEMENT
   // safe is in ComposeBar's StopPill. See docs/composer-stop-misfire.md.
-  const showStopPill = turnRunning && !session?.closedAt;
+  const { turnRunning, show: showStopPill } = stopPill({
+    inFlight: isInFlight,
+    statusKey: status.key,
+    closed: !!session?.closedAt,
+  });
 
   // Viewing a session = reading it. Stamp it read on open and on every new
   // message that lands while open, so it never shows the red "unread" dot to the

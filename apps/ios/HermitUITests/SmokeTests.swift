@@ -720,6 +720,129 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer at the end")
     }
 
+    /// The composer: a draft that survives being killed, a send that shows its
+    /// bubble before the server answers, the handover to the real row, and Stop.
+    ///
+    /// Everything here needs a phone. The draft lives in `UserDefaults` and only
+    /// a real launch can lose it; the bubble handover is a race between a
+    /// mutation and an SSE frame; and the Stop pill's whole design is about
+    /// which pixels a thumb lands on. `tools/composer-fixture.sh` holds the
+    /// DECISIONS against the web — this holds the wiring.
+    func testTheNativeComposerSendsAndHandsTheBubbleOver() throws {
+        let fixture = ProcessInfo.processInfo.environment["HERMIT_BRIDGE_ORIGIN"] ?? ""
+        guard !fixture.isEmpty else { throw XCTSkip("no HERMIT_BRIDGE_ORIGIN — see tools/bridge-fixture.sh") }
+
+        app.launchArguments = ["-hermitOrigin", fixture]
+        app.launch()
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer")
+        app.webViews.buttons["keychain.set — two machines"].tap()
+        XCTAssertTrue(fixtureSays("keyring ok"), "the shell refused to store the keyring")
+        app.webViews.buttons["keychain.setActive — m_two"].tap()
+        XCTAssertTrue(fixtureSays("active m_two ok"), "the shell would not record which entry is active")
+
+        XCUIDevice.shared.system.open(URL(string: "hermit://timeline/s_timeline")!)
+        XCTAssertTrue(screenSays("window · key m_two · limit 60 · digest 1", timeout: 40),
+                      "the native timeline never drew its window")
+
+        let box = composerField()
+        XCTAssertTrue(box.waitForExistence(timeout: 10), "the timeline has no composer")
+
+        // ── the draft outlives the process ───────────────────────────────────
+        //
+        // Typed, NOT sent, then the app is killed the way iOS kills it. A draft
+        // held only in a view's state is gone by the next line and every other
+        // assertion in this test still passes.
+        box.tap()
+        box.typeText("draft that has to survive")
+        XCTAssertTrue(boxSays("draft that has to survive"),
+                      "what was typed never reached the box")
+        app.terminate()
+        app.launch()
+        XCUIDevice.shared.system.open(URL(string: "hermit://timeline/s_timeline")!)
+        XCTAssertTrue(screenSays("window · key m_two", timeout: 40),
+                      "the timeline did not come back after the relaunch")
+        XCTAssertTrue(boxSays("draft that has to survive", timeout: 15),
+                      "the draft did not survive a relaunch — hermit:draft:<sid> was never written, or never read")
+        settle(); shoot("27-composer-draft-restored")
+
+        // Clear it from the ✕ rather than by selecting and deleting: that button
+        // is the only way to empty the box on a phone, and it is one of the two
+        // controls the slot beside the field holds.
+        app.buttons["clear draft"].tap()
+        XCTAssertFalse(boxSays("draft that has to survive", timeout: 3),
+                       "the ✕ did not empty the box")
+
+        // ── send ─────────────────────────────────────────────────────────────
+        // ASCII on purpose. `typeText` drives the simulator's keyboard, and a CJK
+        // string through it depends on the host's hardware keyboard being
+        // connected — a flake with nothing to do with what is under test. What
+        // the box does with 中文 is checked where it can be checked without a
+        // keyboard: `tools/render-composer.sh` draws it, and
+        // `tools/composer-fixture.sh` runs the trimming over it.
+        let typed = "first native send"
+        let box2 = composerField()
+        box2.tap()
+        box2.typeText(typed)
+        let send = app.buttons["composer.send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "the composer has no send button")
+        XCTAssertTrue(send.isEnabled, "the send button is dead with a draft in the box")
+        settle(); shoot("28-composer-typed")
+        send.tap()
+
+        // The bubble is on screen BEFORE the server has said anything, and the
+        // box is empty. Both halves matter: a composer that waits for a round
+        // trip reads as broken, and one that clears late sends twice.
+        XCTAssertTrue(screenSays(typed, timeout: 10),
+                      "the optimistic bubble never appeared — the send is waiting on the network")
+        settle(); shoot("29-composer-optimistic")
+
+        // The real row lands a beat later, and it says something DIFFERENT from
+        // what was typed — which is the case a text match cannot survive (the
+        // dashboard's outgoing auto-translate rewrites a message exactly this
+        // way). The bubble has to be handed over by the id `chat.send` answered
+        // with. If it were matched by text, both rows would be on screen now.
+        XCTAssertTrue(screenSays("server #1 · " + typed, timeout: 25),
+                      "the row chat.send wrote never arrived on the stream")
+        XCTAssertFalse(screenStillHas(typed, excluding: "server #"),
+                       "the optimistic bubble is still there beside its real row — dropLanded matched on text, not on the id")
+        settle(); shoot("30-composer-handed-over")
+
+        // A second send, so the two idempotency keys have to differ: the fixture
+        // mints `server #N` once per NEW clientId and replays the stored row for
+        // a repeat, so a shell that reused one key would draw `server #1` twice.
+        let box3 = composerField()
+        box3.tap()
+        box3.typeText("second")
+        app.buttons["composer.send"].tap()
+        XCTAssertTrue(screenSays("server #2 · second", timeout: 25),
+                      "the second send reused the first send's clientId — the server replayed row #1")
+
+        // ── Stop ─────────────────────────────────────────────────────────────
+        //
+        // The fixture's session is `working`, so the pill is up. It is a
+        // LABELLED pill and not a second circle, which is why this asks for it
+        // by name.
+        let stop = app.buttons["stop this turn"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 10),
+                      "no Stop pill on a working session")
+        // The 400ms arm delay: a tap that arrives before the pill has been on
+        // screen long enough to have been aimed at is swallowed. It has been up
+        // since the window landed, so this one is not.
+        stop.tap()
+        // The header carries the fixture's cancel count and re-polls every five
+        // seconds, so this is the mutation actually reaching the server rather
+        // than a button that looked pressed.
+        XCTAssertTrue(screenSays("cancels 1", timeout: 25),
+                      "tapping Stop never reached chat.cancelTurn")
+        settle(); shoot("31-composer-stopped")
+
+        openPage()
+        app.webViews.buttons["keychain.clear"].tap()
+        XCTAssertTrue(fixtureSays("keychain.clear ok"), "keychain.clear did not answer at the end")
+    }
+
     // MARK: - helpers
     /// Let the list stop moving before a screenshot.
     ///
@@ -730,6 +853,33 @@ final class SmokeTests: XCTestCase {
     /// shows holes that are not in the finished layout. These images are the
     /// evidence a reviewer looks at, so they are taken of a settled screen.
     private func settle() { Thread.sleep(forTimeInterval: 3) }
+
+    /// The composer's text box.
+    ///
+    /// Asked for as a text VIEW first and a text FIELD second: SwiftUI's
+    /// `TextField(axis: .vertical)` is a multi-line control and surfaces as
+    /// either depending on the OS build, and hard-coding one of them is a test
+    /// that starts failing on an iOS update for no reason anybody can see.
+    private func composerField() -> XCUIElement {
+        let asView = app.textViews["composer.field"]
+        return asView.exists ? asView : app.textFields["composer.field"]
+    }
+
+    /// What the composer's box currently holds.
+    ///
+    /// A text control's contents are its `value`, not its `label` — `screenSays`
+    /// scans labels and cannot see a draft at all, which is exactly how the
+    /// first run of this test failed. An EMPTY box's value is its placeholder,
+    /// UIKit's own convention, so this is only ever asked about text that was
+    /// typed.
+    private func boxSays(_ needle: String, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let v = composerField().value as? String, v.contains(needle) { return true }
+            Thread.sleep(forTimeInterval: 0.25)
+        } while Date() < deadline
+        return false
+    }
 
     /// Swipe until something shows up, or give up and say so.
     ///
@@ -834,6 +984,19 @@ final class SmokeTests: XCTestCase {
     /// Wait for the fixture's result line to mention something. Substring rather
     /// than equality: the line carries the method and the shell's own sentence,
     /// and the assertion is about the sentence.
+    /// Is anything on screen carrying `needle` that is NOT the real row?
+    ///
+    /// Equality against the whole label would be the obvious check and it is the
+    /// wrong one: a `UIHostingConfiguration` row can come back as one merged
+    /// element carrying the message AND its clock, so `label == typed` would be
+    /// false whether the bubble is there or not — an assertion that passes for
+    /// the wrong reason. Excluding the real row's marker asks the question that
+    /// is actually being asked.
+    private func screenStillHas(_ needle: String, excluding marker: String) -> Bool {
+        let p = NSPredicate(format: "label CONTAINS %@ AND NOT (label CONTAINS %@)", needle, marker)
+        return app.descendants(matching: .any).matching(p).firstMatch.waitForExistence(timeout: 3)
+    }
+
     private func fixtureSays(_ needle: String, timeout: TimeInterval = 8) -> Bool {
         let match = app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", needle))
         return match.firstMatch.waitForExistence(timeout: timeout)

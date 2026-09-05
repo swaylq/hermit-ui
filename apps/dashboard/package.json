@@ -18,6 +18,7 @@
     "gen:fold-fixture": "TZ=UTC tsx scripts/gen-fold-fixture.ts",
     "gen:merge-fixture": "tsx scripts/gen-merge-fixture.ts",
     "gen:header-fixture": "tsx scripts/gen-header-fixture.ts",
+    "gen:composer-fixture": "tsx scripts/gen-composer-fixture.ts",
     "render:session-rows": "tsx scripts/render-session-rows.tsx",
     "seed": "tsx scripts/seed-machine.ts",
     "migrate": "prisma migrate deploy",

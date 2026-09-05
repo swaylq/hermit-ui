@@ -35,6 +35,7 @@ import itertools
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -311,6 +312,50 @@ def emit(sid, frame, after=0.0):
         go()
 
 
+# ── what the composer writes (M5) ────────────────────────────────────────────
+#
+# `chat.send` keyed by the caller's `clientId`, which is the whole point of the
+# route: a client that retries a send it never saw the answer to passes the same
+# key and must get the FIRST call's row back rather than post a second message.
+# The dashboard's own router does this against a unique index; here a dict is
+# enough to prove the client sends the key and reuses it.
+#
+# The row that comes back deliberately does NOT say what was typed. `chat.send`
+# on the real server writes the text it was given, but the dashboard also has an
+# outgoing auto-translate that rewrites it, so the optimistic bubble and its real
+# row genuinely differ — and matching them by TEXT is the bug `dropLanded` exists
+# to avoid. Echoing something else here is what makes a by-id handoff provable:
+# if the shell matched on text, the screen would end up holding both rows.
+SENT = {}            # clientId -> the row we answered with
+SENT_ORDER = []      # clientIds, in the order they arrived
+CANCELS = []         # every chat.cancelTurn we were asked for
+SEND_LOCK = threading.Lock()
+
+
+def sent_row(client_id, text):
+    """The row `chat.send` answers with, minted once per clientId."""
+    with SEND_LOCK:
+        prior = SENT.get(client_id)
+        if prior:
+            return prior, True
+        n = len(SENT_ORDER) + 1
+        row = {
+            "id": "sent%03d" % n,
+            "role": "user",
+            "content": [{"type": "text", "text": "server #%d · %s" % (n, text)}],
+            "createdAt": stamp(time.time()),
+            "authoredBy": None,
+        }
+        SENT[client_id] = row
+        SENT_ORDER.append(client_id)
+        return row, False
+
+
+def sent_frame(row):
+    """The `event: messages` delta that lands the row the composer just sent."""
+    return 'event: messages\ndata: {"rows":[%s],"gone":[]}\n\n' % json.dumps(row, ensure_ascii=False)
+
+
 class Handler(SimpleHTTPRequestHandler):
     # HTTP/1.1, so `/api/chat/stream` can answer with a chunked body that is
     # written to over minutes. Every other response here sends a content-length
@@ -333,7 +378,20 @@ class Handler(SimpleHTTPRequestHandler):
             return self.list_before()
         if route == "/api/chat/stream":
             return self.stream()
+        if route == "/__fixture/sent":
+            # What the composer actually posted, for the test to read back. Not a
+            # dashboard route — the two leading underscores are there so nobody
+            # mistakes it for one.
+            return self.reply(200, {"clientIds": SENT_ORDER, "cancels": CANCELS})
         super().do_GET()
+
+    def do_POST(self):
+        route = self.path.split("?")[0]
+        if route == "/api/trpc/chat.send":
+            return self.send_message()
+        if route == "/api/trpc/chat.cancelTurn":
+            return self.cancel_turn()
+        self.plain(404, "no POST route " + route)
 
     # ── replies ──────────────────────────────────────────────────────────────
 
@@ -367,6 +425,58 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError, AttributeError):
             return {}
 
+    def trpc_body(self):
+        """The `{"0":{"json":…}}` envelope tRPC puts in a mutation's BODY."""
+        try:
+            n = int(self.headers.get("content-length") or 0)
+            raw = self.rfile.read(n) if n else b""
+            return (json.loads(raw).get("0") or {}).get("json") or {}
+        except (ValueError, AttributeError, TypeError):
+            return {}
+
+    # ── the composer ─────────────────────────────────────────────────────────
+
+    def send_message(self):
+        """`chat.send`, keyed by the client's idempotency key.
+
+        The key is REQUIRED here, which the real router does not do (the browser
+        composer sends without one). A native client that dropped it would still
+        work against the dashboard and lose its only protection against a retried
+        send becoming two messages, so this fixture refuses — that is the whole
+        thing this route is here to check.
+        """
+        name = self.identity()
+        if not name:
+            return self.reply(401, unauth("chat.send"))
+        arg = self.trpc_body()
+        cid = arg.get("clientId") or ""
+        if not re.match(r"^[A-Za-z0-9._:-]{1,128}$", cid):
+            return self.reply(200, [{"error": {"json": {
+                "message": "clientId missing or outside the charset: %r" % cid,
+                "code": -32600,
+                "data": {"code": "BAD_REQUEST", "httpStatus": 400, "path": "chat.send"}}}}])
+        text = (arg.get("text") or "").strip()
+        if not text:
+            return self.reply(200, [{"error": {"json": {
+                "message": "empty message", "code": -32600,
+                "data": {"code": "BAD_REQUEST", "httpStatus": 400, "path": "chat.send"}}}}])
+        row, replayed = sent_row(cid, text)
+        # The stream carries the row a beat later, exactly as the gateway's does:
+        # the mutation answers first, and the delta is what retires the bubble.
+        # Not on a replay — the frame for that row has already been sent, and a
+        # second one would be a change the client cannot distinguish from a real
+        # edit.
+        if not replayed:
+            emit(TIMELINE_SESSION, sent_frame(row), after=1.0)
+        self.reply(200, trpc(row, {"createdAt": ["Date"]}))
+
+    def cancel_turn(self):
+        name = self.identity()
+        if not name:
+            return self.reply(401, unauth("chat.cancelTurn"))
+        CANCELS.append(self.trpc_body().get("sessionId") or "")
+        self.reply(200, trpc({"ok": True}, {}))
+
     # ── the session list ─────────────────────────────────────────────────────
 
     def sessions(self):
@@ -397,7 +507,11 @@ class Handler(SimpleHTTPRequestHandler):
         row = {
             "id": TIMELINE_SESSION,
             "agentName": "asst",
-            "title": "getSession #%d · key %s" % (next(META_SERVED), name),
+            # The cancel count rides on the title so a `chat.cancelTurn` is
+            # visible ON SCREEN one poll later. The alternative was an HTTP call
+            # out of the test process to read the fixture's own state, which is a
+            # second way for the test to be wrong.
+            "title": "getSession #%d · key %s · cancels %d" % (next(META_SERVED), name, len(CANCELS)),
             "preview": "should never be read — the title is not empty",
             "origin": "web",
             "startedAt": ago(7200), "lastMessageAt": ago(3), "lastReadAt": ago(3),

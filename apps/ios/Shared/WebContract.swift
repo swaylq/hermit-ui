@@ -104,6 +104,8 @@ enum WebContract {
     static let rose400 = Color(.displayP3, red: 0.9429, green: 0.4308, blue: 0.5031)
     /// `rose-500` — oklch(64.5% 0.246 16.439)
     static let rose500 = Color(.displayP3, red: 0.9218, green: 0.2407, blue: 0.3557)
+    /// `rose-600` — oklch(58.6% 0.253 17.585)
+    static let rose600 = Color(.displayP3, red: 0.8488, green: 0.1020, blue: 0.2693)
     /// `sky-400` — oklch(74.6% 0.16 232.661)
     static let sky400 = Color(.displayP3, red: 0.3060, green: 0.7250, blue: 0.9802)
     /// `zinc-400` — oklch(70.5% 0.015 286.067)

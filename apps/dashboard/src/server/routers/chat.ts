@@ -10,7 +10,7 @@ import { prisma } from '../db';
 // "ready" for up to POLL_MS after you pressed send: the SSE stream only
 // noticed the row on its 2 s safety-net poll. Every write here signals.
 import { fire as fireChat } from '../chat-bus';
-import { QUEUE_LIMIT, USER_QUEUE_FILTER } from '../../lib/chat-queue';
+import { CLIENT_ID_RE, QUEUE_LIMIT, USER_QUEUE_FILTER } from '../../lib/chat-queue';
 import { sessionRecencyMs } from '../../lib/session-recency';
 import { backgroundOutstanding, backgroundSummary } from '../../lib/session-status';
 import { stripNulDeep } from '../sanitize';
@@ -1122,12 +1122,10 @@ export const chatRouter = router({
         // Optional: the browser composer sends without one and keeps today's
         // behaviour exactly.
         //
-        // The charset is deliberately narrow rather than a bare string: it covers
-        // every id a client would actually generate (UUID, cuid, ULID,
-        // `<install>:<seq>`) while making a NUL byte — which Postgres refuses to
-        // store in a text column — a zod error at the edge instead of a failed
-        // INSERT halfway through the mutation.
-        clientId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional(),
+        // The charset lives in lib/chat-queue as CLIENT_ID_RE, beside QUEUE_LIMIT
+        // and for the same reason: a second client has to satisfy it, and the
+        // iOS composer's port is held against that exact pattern.
+        clientId: z.string().regex(CLIENT_ID_RE).optional(),
         // Text is optional when at least one image is attached. We still
         // require AT LEAST ONE of text/images so we never insert empty rows.
         text: z.string().max(64_000).default(''),

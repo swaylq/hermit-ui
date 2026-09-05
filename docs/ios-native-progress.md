@@ -78,6 +78,7 @@
    本地库和搜索用 `tools/cache-fixture.sh`（4 秒），
    状态判定（`sessionStatusView` 的移植）用 `tools/status-fixture.sh`（2 秒），
    消息块的解码用 `tools/blocks-fixture.sh`（4 秒，第 18 轮加的），
+   输入框那五个判断用 `tools/composer-fixture.sh`（3 秒，第 6 轮加的），
    聊天头部那七个纯函数用 `tools/header-fixture.sh`（3 秒，第 5 轮加的）。
    两个都是假 dashboard + 一个 `swiftc` 直接编出来的驱动程序，会把「Swift 解出了什么」
    和「服务器真收到的请求行」两边都打出来。**它们不在任何 target 里，
@@ -507,10 +508,27 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
 
 ## M5 — 输入框
 
-- [ ] 附件（`/api/upload` multipart，20 图 / 10 文件上限，用返回的 **safe** url）、
-      草稿（`hermit:draft:<sid>`，每次按键都写）、队列条（`QUEUE_LIMIT=5`）、
-      停止胶囊（独立的一颗，**不要和发送做在同一块像素上**）、↑↓ 走历史、
-      Enter 发送 / Shift+Enter 换行、输入法组字期间不发送
+- [x] **输入框的骨架**：一个会长的框（`rounded-[26px]`、`text-base`/26px 行盒、
+      一行到十三行）、草稿（`hermit:draft:<sid>` → `UserDefaults`，每次按键都写，
+      杀掉进程也还在）、`chat.send` **带幂等键**、乐观气泡（`ComposerCore.dropLanded`
+      **按 `chat.send` 返回的 id 交接**，文字只是应答回来之前那一秒的兜底）、
+      **停止胶囊**（独立一颗、有标签、`ARM_MS=400`，`chat.cancelTurn`）、
+      失败把原文一字不差放回去 + 琥珀条说明原因。第 6 轮，
+      `Hermit/Composer{Core,View}.swift`，五个纯函数配 `tools/composer-fixture.sh`
+- [ ] **输入框左边那颗 `+`（附件）**：`/api/upload` multipart，20 图 / 10 文件上限，
+      用返回的 **safe** url。**今天那一格是空的** —— 画一颗点不动的 `+` 比不画更坏，
+      但空着就意味着输入框比网页少一格、发送圈往左挪了 36pt，这是看得见的差
+- [ ] **队列条**（`QUEUE_LIMIT=5`）+ `chat.queue` / `dequeue` / `clearQueue`。
+      没有它，`composerPlaceholder` 的 `queue full` 那一级和 `canSend` 的 `queueFull`
+      在原生这边永远是 false —— 梯子本身已经是对的，缺的是喂给它的那个数
+- [ ] **`streamingTailId`**：网页盯着尾部 assistant 行的 JSON 在两次轮询之间长没长，
+      长了就把「在跑」再撑 1.8 秒，并且把这个信号喂进 `sessionStatusView(liveWorking:)`。
+      原生这边 `turnInFlight(streamingTail:)` 今天恒为 false，靠网关的 `working`
+      兜底（最多晚一次 5 秒轮询）—— **是晚，不是错**，但不是「完全一致」
+- [ ] ↑↓ 走历史、Enter 发送 / Shift+Enter 换行 —— **都是桌面键盘的行为**，
+      网页在触屏上自己就 `return`（`isTouchPrimary()`）。装了硬件键盘的 iPad 才用得上
+- [ ] **把会话列表那一行点进原生时间线**（今天还是进网页 chat 页）。
+      一行代码，但要等 M5 做完：今天点进来会丢掉附件、按住说话、听写
 - [ ] 按住说话：`HOLD_MS=260`、`BAIL_PX=10`、`SLIDE_PX=64`，三个区是
       发送 / 左划取消 / 右划落回输入框（**没有「转文字」这个区**）
 - [ ] 听写：`/api/asr/<sid>` WebSocket，鉴权走 `Sec-WebSocket-Protocol: hermit-key.<token>`
@@ -550,23 +568,26 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 > 2026-09-05 16:35 起，这个清单由 `perfect-goal` 的轮次驱动，轮次日志在
 > `~/agents/asst/projects/ios-native/goal/ROUNDS.md`，目标与验收标准在同目录的 `GOAL.md`。
-> 目标未变：把这个清单清空。**清单 33/56** —— 分母涨了 5：第 5 轮做完时间线的头
-> （勾掉一条），并把这个头**还欠着的四件**（右侧动作簇 / 模型胶囊 / 点标题改名 /
-> 两个胶囊开详情面板）写成明写的清单项。都是「全部复刻网页」躲不掉的，
-> 留在散文里只会让清单先清空、活后干完。
+> 目标未变：把这个清单清空。**清单 34/61** —— 分母涨了 5：第 6 轮做完输入框最小的
+> 那一半（勾掉一条），并把这一条里**没做的部分拆成五条明写的**（`+` 附件 / 队列条 /
+> `streamingTailId` / 桌面键盘的两条快捷键 / 把列表点进原生时间线）。都是
+> 「全部复刻网页」躲不掉的，留在散文里只会让清单先清空、活后干完。
 
-**第 1 条：M5 输入框。** `GOAL.md` 验收标准 2 里只剩这一块没做：
-读得到、会自己长、翻得动、头也有了，发不出去。做完了列表点一行才该换成进原生时间线。
-先做最小的那一半（草稿、`chat.send` + 幂等键、乐观气泡、发送中的停止胶囊），
-附件 / 按住说话 / 听写各自是独立的清单项，别一轮全吃。
+**第 1 条：队列条 + `chat.queue`。** 输入框的梯子里 `queue full` 那一级今天喂不到数，
+`dequeue` / `clearQueue` 也还没接。做完它，`composerPlaceholder` 和 `composerCanSend`
+两个已经移植好的纯函数才第一次拿到全部四个输入。
 
-**第 2 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
+**第 2 条：`+` 附件。** 输入框左边那一格今天是空的 —— 网页那颗 `+` 在，原生不在，
+整排控件因此比网页少一格。`/api/upload` multipart，20 图 / 10 文件，用返回的 **safe** url。
+做完这两条，「把会话列表那一行点进原生时间线」才能开。
+
+**第 3 条：本地行存储 + `pageBefore`。** `ChatCache` 今天只有 prose 一层，
 所以翻页每一页都问服务端，而网页读过一遍的历史是零网络的。加 `full` / `digest` 两个行存储
 （带 `nextId`），`pageBefore` 才有调用方，`ChatCache` 欠的「两级保真」也一起解掉。
 
-**第 3 条：头部右侧的动作簇。** 现在右边是空的。做它等于把 `chat.createSession` /
-`deleteSession` / `reopenSession` 这几条 mutation 一次性接进原生，
-所以它也是 M5 之外第一条真正会**写**服务端的活。
+**第 4 条：头部右侧的动作簇。** 现在右边是空的。做它等于把 `chat.createSession` /
+`deleteSession` / `reopenSession` 这几条 mutation 一次性接进原生。
+（`chat.send` / `cancelTurn` 第 6 轮已经接了，所以它不再是「第一条会写服务端的活」。）
 
 **抽屉原生化是 M3 末尾三条明写的清单项**，比上面几条都大，排在它们后面：
 时间线是 `GOAL.md` 验收标准 2 点名的那一屏。
@@ -615,6 +636,54 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 16:5x 那句「全部复刻网页，做完再评审，反复改到完美」把范围定死成全量，见 `GOAL.md`。
 
 ## 踩过的坑
+
+### CSS 的 border 撑高盒子，SwiftUI 的 `.strokeBorder` 不撑（第 6 轮）
+
+输入框那个 `rounded-[26px] border px-2 py-2` 的盒子，第一版量出来是 **54pt，网页是 56px**。
+两件事各差一点，加起来正好两点：
+
+1. **一行的高度**。CSS 的 `leading-relaxed` 给 16px 字一个 **26px 的行盒**，加上 `py-1.5`
+   就是 38px，比 36pt 的按钮高，所以整排的高度由它说了算。SwiftUI 用系统字体自己的行高
+   （16pt 约 19.1pt），38 就变成了 31，整排改由按钮的 36pt 决定。
+   **行盒必须写成一个数**（`ComposerMetrics.fieldOneLine`），不能留给字体 ——
+   和 `TimelineMetrics` 早就记下的那条是同一件事。
+2. **边框**。Tailwind 的 preflight 是 `box-sizing: border-box`，`border` 那 1px
+   **算进元素高度**；`.overlay(RoundedRectangle().strokeBorder())` 画在 bounds 里面，
+   **一点都不撑**。padding 要写成 `boxPadV + hairline`。
+
+两点，在整屏最大的那个控件上，**断言全过、肉眼也看不出来**，只有 `tools/pixel-probe.sh`
+说得出来。修完再量：上边框 24.0–25.0、下边框 78.7–79.7，外高 55.7 ≈ 56。
+
+### `ImageRenderer` 画不了 `TextField`（第 6 轮）
+
+`tools/render-composer.sh` 第一次跑出来：框、胶囊、圆圈全对，
+**输入框本体是一块黄色的「不可用」牌子**。`ImageRenderer` 渲染不了 UIKit/AppKit 支撑的控件。
+解法是复用 `SessionRowView` 早就有的 `hermitStillFrame` 环境值：静帧里换成同字号同内边距的
+`Text`。图不再能证明真控件自己的排版，但**能证明它周围的一切**，而空牌子什么都证明不了。
+
+### `CharacterSet.whitespacesAndNewlines` 不是 JS 的 `trim()`（第 6 轮）
+
+两个方向都错：**U+FEFF** 在 Unicode 里是 `Cf`，不在那个集合里，而 JS 的 `trim` 去掉它；
+**U+200B** 反过来 —— Foundation 认它是空白，JS 不认（它早就从 `Zs` 改成 `Cf` 了）。
+`msgText` 是 `trim` 过的、乐观气泡和真行就是靠它比对，所以这两个字符各自能让一条消息
+永远配不上自己的行、或者配上别人的。`ComposerCore.jsWhitespace` 把 ECMA-262 的
+`WhiteSpace` + `LineTerminator` 逐个列出来；夹具里两个字符各一条用例，
+反证时正好红这四条（两个方向各两条）。
+
+### JS 的 `$` 是「输入的末尾」，ICU 的 `$` 不是（第 6 轮）
+
+`chat.send` 的 `clientId` 是 `/^[A-Za-z0-9._:-]{1,128}$/`。用 `NSRegularExpression`
+照抄这个 pattern，`"abc\n"` 会**通过** —— ICU 的 `$` 也匹配最后一个换行符之前的位置，
+JS（不带 `/m`）只匹配输入末尾。服务端会拒，客户端以为自己合法。
+所以 `isValidClientId` 直接查字符集 + 数 UTF-16 长度，不走正则；
+夹具里 `ios7\n` 和 `ios7\r\n` 两条就是钉这个的，反证时只红它们两条。
+
+### 文本控件的内容是 `value`，不是 `label`（第 6 轮，UI 测试）
+
+`screenSays` 扫的是 `label`，一个 `TextField` 的 `label` 是它的无障碍名，
+**打进去的字在 `value` 里**。所以「输入框里有没有这几个字」这个问题，用 `screenSays`
+问永远是「没有」—— 新测试第一次跑就死在这。另外空框的 `value` 是 placeholder（UIKit 的惯例），
+所以只能拿它问打进去过的字。
 
 ### worktree 里跑 `tsc` 之前一定要先 `prisma generate`（第 5 轮，第三次）
 

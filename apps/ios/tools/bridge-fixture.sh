@@ -37,6 +37,7 @@ TESTS=("$@")
   testTheWebAppIsTheFrontDoorAndTheListIsBehindIt
   testThePageCanProposeAnotherServer
   testTheNativeTimelineStreamsAndPagesBack
+  testTheNativeComposerSendsAndHandsTheBubbleOver
 )
 
 command -v xcodegen >/dev/null || { echo "need xcodegen: brew install xcodegen" >&2; exit 1; }
