@@ -177,6 +177,21 @@ export interface Oklch {
   h: number;
 }
 
+/**
+ * `oklch(1 0 0 / 10%)` → `{ css: 'oklch(1 0 0)', alpha: 0.1 }`.
+ *
+ * Kept OUT of `parseOklch` on purpose: that function's three numbers go into
+ * the colour-space conversion, and alpha goes nowhere near it — it is carried
+ * to the Swift initialiser untouched. Splitting first also means every existing
+ * caller and its assertions see the same shape they always did.
+ */
+export function splitAlpha(css: string): { css: string; alpha: number } {
+  const m = /^(oklch\([^/)]*)\/\s*([\d.]+)(%?)\s*\)$/.exec(css.trim());
+  if (!m) return { css: css.trim(), alpha: 1 };
+  const raw = Number(m[2]);
+  return { css: `${m[1].trimEnd()})`, alpha: m[3] === '%' ? raw / 100 : raw };
+}
+
 /** `oklch(82.8% 0.189 84.429)` → its three numbers, L in 0…1. */
 export function parseOklch(css: string): Oklch {
   const m = /^oklch\(\s*([\d.]+)(%?)\s+([\d.]+)\s+([\d.]+)\s*\)$/.exec(css.trim());
@@ -230,13 +245,32 @@ export interface PaletteEntry {
   p3: [number, number, number];
 }
 
+/**
+ * One scheme's value of a theme variable.
+ *
+ * `oklch` is the declaration with any alpha stripped off, so anything reading
+ * it back gets a colour it can parse; the alpha rides alongside as a number.
+ * Only `--border` is translucent today (`oklch(1 0 0 / 10%)` in `.dark`), and
+ * it is translucent for a reason a screenshot shows: a solid hairline at that
+ * lightness reads as a rule across the dark timeline.
+ */
+export interface ThemeSide {
+  /** `oklch(1 0 0)` — the declaration, alpha removed. */
+  oklch: string;
+  /** `oklch(1 0 0 / 10%)` — the declaration as globals.css writes it. */
+  declared: string;
+  p3: [number, number, number];
+  /** 0…1. Exactly 1 for an opaque declaration. */
+  alpha: number;
+}
+
 export interface ThemeEntry {
   /** `muted-foreground` — the CSS custom property, without the dashes. */
   cssVar: string;
   /** `mutedForeground` */
   swiftName: string;
-  light: { oklch: string; p3: [number, number, number] };
-  dark: { oklch: string; p3: [number, number, number] };
+  light: ThemeSide;
+  dark: ThemeSide;
   /** What the row that reads it uses it for. */
   note: string;
 }
@@ -272,6 +306,10 @@ export const THEME_VARS: ReadonlyArray<{ cssVar: string; note: string }> = [
   { cssVar: 'sidebar-foreground', note: 'a session row\'s title' },
   { cssVar: 'sidebar-accent', note: 'the row you are looking at' },
   { cssVar: 'muted-foreground', note: 'the agent name, the time, the status word' },
+  { cssVar: 'background', note: 'the page behind the timeline, and a user bubble\'s text' },
+  { cssVar: 'foreground', note: 'body text, and the user bubble it is knocked out of' },
+  { cssVar: 'muted', note: 'the fill behind a system row and an unknown block' },
+  { cssVar: 'border', note: 'a run capsule\'s hairline' },
 ] as const;
 
 /** `muted-foreground` → `mutedForeground` */
@@ -302,7 +340,10 @@ export function readContract(): Contract {
 
   const themeColors: ThemeEntry[] = THEME_VARS.map(({ cssVar, note }) => {
     const raw = readThemeVar(SOURCES.theme, cssVar);
-    const conv = (css: string) => ({ oklch: css, p3: oklchToDisplayP3(parseOklch(css)) });
+    const conv = (css: string): ThemeSide => {
+      const { css: bare, alpha } = splitAlpha(css);
+      return { oklch: bare, declared: css.trim(), p3: oklchToDisplayP3(parseOklch(bare)), alpha };
+    };
     return { cssVar, swiftName: camel(cssVar), light: conv(raw.light), dark: conv(raw.dark), note };
   });
 
@@ -345,6 +386,11 @@ export function readContract(): Contract {
  *  a fractional one still renders correctly as a Double literal. */
 const sec = (n: number) => String(n);
 const chan = (n: number) => n.toFixed(4);
+
+/** One `Color(.displayP3, …)` literal, with `opacity:` only when it is not 1. */
+const swiftColor = (s: ThemeSide) =>
+  `Color(.displayP3, red: ${chan(s.p3[0])}, green: ${chan(s.p3[1])}, blue: ${chan(s.p3[2])}` +
+  (s.alpha === 1 ? ')' : `, opacity: ${chan(s.alpha)})`);
 
 export function renderWebContractSwift(c: Contract): string {
   const L: string[] = [];
@@ -449,17 +495,17 @@ export function renderWebContractSwift(c: Contract): string {
   L.push('    // twice in that file, under `:root` and under `.dark`, and the browser');
   L.push('    // picks by the scheme in force. So both values come across and the view');
   L.push('    // picks the same way — see `ThemeColor.resolve`.');
+  L.push('    //');
+  L.push('    // A declaration with an alpha (`--border` in `.dark`) keeps it: the');
+  L.push('    // browser composites that hairline against whatever is behind it, and a');
+  L.push('    // flattened one would be wrong on every background but the page\'s own.');
   L.push('');
   for (const t of c.theme) {
     L.push(`    /// \`--${t.cssVar}\` — ${t.note}.`);
-    L.push(`    /// light ${t.light.oklch} · dark ${t.dark.oklch}`);
+    L.push(`    /// light ${t.light.declared} · dark ${t.dark.declared}`);
     L.push(`    static let ${t.swiftName} = ThemeColor(`);
-    L.push(
-      `        light: Color(.displayP3, red: ${chan(t.light.p3[0])}, green: ${chan(t.light.p3[1])}, blue: ${chan(t.light.p3[2])}),`,
-    );
-    L.push(
-      `        dark: Color(.displayP3, red: ${chan(t.dark.p3[0])}, green: ${chan(t.dark.p3[1])}, blue: ${chan(t.dark.p3[2])})`,
-    );
+    L.push(`        light: ${swiftColor(t.light)},`);
+    L.push(`        dark: ${swiftColor(t.dark)}`);
     L.push('    )');
   }
   L.push('}');

@@ -372,13 +372,26 @@ true，不会退回弹框。麦克风是这个 App 最初唯一的存在理由�
       json markdown plaintext python rust sql typescript xml yaml）。
       **没有数学公式、没有 mermaid** —— 这是省下来的范围。
       注意这一步会终结「零第三方依赖」
-- [ ] 倒置 `UICollectionView` 的时间线（每个 cell 也翻转），把「向上插入历史」变成
-      「向下追加」；分页 + `nextId` 空洞证明（`lib/chat-cache/types.ts:47-68`）
+- [x] **倒置 `UICollectionView` 的时间线骨架**（每个 cell 也翻转）—— 第 20 轮。
+      `apps/ios/Hermit/TimelineRowView.swift`（纯 SwiftUI，画一个 `FoldedRow`）+
+      `apps/ios/Hermit/ChatTimelineViewController.swift`（`collection.transform` 竖向翻转、
+      每个 cell 翻回来、diffable 按 `FoldedRow.key` 索引、`chat.listMessages` 取
+      `WebContract.timelineLimit`/`timelineDigest` 那一个窗口）。翻转买到的两件事写在类注释里：
+      「贴着最新一条」就是 contentOffset 0，而**加载更早的历史变成了 append** ——
+      网页为「在顶部插入而不跳动」花掉的是 `use-prepend-anchor.ts` 整整 514 行。
+      **还挂在 URL 上、不是前门**：`hermit://timeline/<id>`，和当初引入原生列表同一个做法；
+      列表里点一行仍然进网页 chat 页，要等 M5 有输入框才该换
+- [ ] 分页 + `nextId` 空洞证明（`lib/chat-cache/types.ts:47-68`）—— 骨架只取最新那一窗，
+      没有「更早」这条路
 - [ ] 两级保真：digest / full，展开胶囊时 `chat.getMessages` 取真实体
 - [ ] 交互卡片：`kind: permission | question`，`status`、`decision`、`answeredBy`
 - [ ] 图片 / 文件块 + lightbox（`QLPreviewController`）
-- [ ] **不认识的块类型画成写着类型名的灰卡片**，不能画成空白 ——
-      沿用 `SessionCard.swift:33-45` 那条既有纪律
+- [x] **不认识的块类型画成写着类型名的灰卡片**，不能画成空白 —— 第 20 轮，
+      `TimelineRowView.BlockView` 的 `.unknown` 分支，卡片上印的就是生产者自己那个 type
+      字符串（截图里那张写着 `sink_deliverable`）。`type` 是空串的（那个块根本不是对象）
+      印 `unrecognised block`，不留一个没标签的框。同一条纪律往外铺了一层：
+      这个 switch 的**每一支都画点什么** —— tool_result、interaction、image、file
+      现在都是带标签的占位卡或者一行 chip，等各自那条清单来换掉
 
 ## M5 — 输入框
 
@@ -419,47 +432,63 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 
 ## 下一项（下一轮从这里开始）
 
-**第 19 轮做完 M4 第二条：`foldRuns` 有 Swift 版了**（`Hermit/FoldRuns.swift`，
-`tools/fold-fixture.sh` 97/97，五次反证各红在该红的地方）。M4 前两条现在是一对：
-`ContentBlock` 说一条消息由什么组成，`FoldRuns` 说这些块排成哪几行。清单 28/45。
+**第 20 轮做完时间线骨架，M4 的第四条前半和最后一条都勾掉了。清单 30/46。**
+`TimelineRowView.swift`（纯 SwiftUI，一个 `FoldedRow` 进、一行像素出）+
+`ChatTimelineViewController.swift`（倒置 collection view）+ `tools/render-timeline.sh`
+（几秒，不用模拟器）。**三个纯函数（`SessionStatus`、`ContentBlock`、`FoldRuns`）
+到这一轮才第一次有调用方**，也是第一次有东西可以看：`shots/timeline-dark.png` /
+`timeline-light.png` 亲眼看过，用户气泡、运行胶囊（`▸ Read · Bash · Edit  1 error 3 步 · 1m`）、
+思考胶囊、Brain 虚线框、系统药丸、ask 卡、图片/文件 chip、`sink_deliverable` 灰卡片、
+「turn ended without a reply」十一种行都画对了。
 
-**下一轮建议做「时间线的骨架」，也就是 M4 第四条的前半，而不是照清单顺序去做 markdown。**
-理由是这三样纯函数（`SessionStatus`、`ContentBlock`、`FoldRuns`）到今天**一个调用方都没有**，
-而它们的正确性已经被夹具管住了；再往上堆第四个纯函数，风险不会下降，能看的东西还是零。
-骨架的范围只要：一个倒置的 `UICollectionView`（cell 也翻转）+ `FoldRuns.fold` 出来的行 +
-纯文本气泡 + 折叠胶囊只画摘要（名字、次数、错误数、思考字数）+ 不认识的块画成写着类型名的
-灰卡片（M4 最后一条顺带就做完了）。**markdown 先不碰**：那一步要引第一个第三方依赖，
-是个该由 sway 点头的决定，不该夹在别的活里顺手做掉；骨架也不挡它，气泡里换渲染器就行。
-做完骨架，M6 那套像素比对第一次能对着时间线跑，下面第 1 条的盲区也才有真页面可量。
+**下一轮建议做两件小的，都在骨架上，不要开新面**：
+
+1. **接上 `HermitStream`，让这一屏会自己动。** 现在是 `viewWillAppear` 拉一次就不管了 ——
+   一条正在写的回复不会长，胶囊不会转。`HermitStream` 已经存在并且验过（第 8 轮），
+   缺的只是「一帧到了怎么并进 `[FoldedRow]`」：按 id 覆盖 `FoldInput` 再整段重折是最笨也最对的，
+   因为 `safeSplitIndex` 保证了接缝处分段折 == 整体折，先这么做，慢了再说。
+2. **把「更早」那条路补上**（M4 第四条剩下的半条）：`chat.listMessagesBefore` +
+   `nextId` 空洞证明。倒置之后这是 append，代价比网页那边小一个数量级，值得趁着还记得就做。
+
+**做完这两条，时间线才值得考虑接成前门**；在那之前 `hermit://timeline/<id>` 是唯一入口，
+列表点一行还是进网页。**接前门这件事要等 M5 有输入框** —— 一个回不了话的时间线不是替代品。
+
+**骨架自己欠的三件（都写在代码注释里，不急）**：
+
+1. **胶囊点不开。** `▸` 画着，但没有展开态，也就没有 `chat.getMessages` 那条取全量的路
+   （M4 第五条）。这不挡任何事，展开态是往 `RunCapsuleView` 底下加一段。
+2. **图片/文件是一行 chip，不是 `file-preview.tsx`。** 只保证「说出它是什么」，
+   真的缩略图和 lightbox 是 M4 第七条。
+3. **行距用的是 `.lineSpacing`，不是真的 CSS 行盒。** `TimelineMetrics` 记着网页每一档的
+   `line-height`（`text-sm` 是 20 不是 21 —— Tailwind v4 给它配了 `calc(1.25/0.875)`，
+   不是 preflight 那个 1.5），但 SwiftUI 只能调行间距、调不了首行的行盒高度。
+   第 17 轮在会话行上踩过一模一样的坑，那次是靠 `.frame(height:)` 逐行钉死的。
+   **M6 给这一屏跑第一次像素比对之前，得先决定这里用哪种做法** —— 会话行是一行文字所以钉得住，
+   一段可换行的正文钉不住。
 
 **接着处理的两件（第 18 轮量出来的，原样有效）**：
 
-1. **真列表的行距是 52.33pt，像素比对画的那张是 49.5pt** —— 差 2.83pt，
-   **11 行完全均匀、不累积**（从 `shots/16-session-list.png` 的状态点逐点量的）。
-   所以第 17 轮的行高改动在真机上没有变形，这条确认到此为止；但
-   **`tools/pixel-compare.sh` 结构上看不见这 2.83pt**：它画的是孤立的一行，
-   而真列表是 `UIHostingConfiguration` 里的一个 cell。`.margins(.all, 0)` 已经设了，
-   所以多出来的高度另有出处（cell 的最小高度？SwiftUI 内容的理想高度超过了 48.5？没查）。
-   M6 每一屏都要过一次比对，这个盲区在那之前值得花十分钟定位。
-2. 第 17 轮列在这里的三条「剩下的 4.3%」原样有效，其中**只有 `/50` `/30` 两个半透明点
-   那条是真该修的**：让 `gen-ios-contract.ts` 直接生成混好的颜色（Tailwind v4 的 `/50` 走
+1. **真列表的行距是 52.33pt，像素比对画的那张是 49.5pt** —— 差 2.83pt，11 行完全均匀不累积。
+   `tools/pixel-compare.sh` 结构上看不见这一段（它画孤立的一行，真列表是
+   `UIHostingConfiguration` 里的一个 cell）。**新屏也吃这个亏**：`render-timeline.sh` 画的
+   同样是脱离 cell 的一列。M6 开工前值得花十分钟定位。
+2. `gen-ios-contract.ts` 直接生成混好的半透明色（Tailwind v4 的 `/50` 走
    `color-mix(in oklab, …, transparent)`，Swift 这边是 `.opacity(0.5)` 直接混，差 9–12/255）。
-   一次生成器改动。另外两条（字形本身、等宽字体宽 3%）不该追，后者要 sway 拍板。
+   一次生成器改动。**这一轮顺手给生成器加了 alpha 支持**（`--border` 在 `.dark` 里是
+   `oklch(1 0 0 / 10%)`），那条路已经通了，剩下的是把 `color-mix` 也算进去。
 
 **仍然欠着的（顺序不变，都不大）**：
 
 1. **通知点击那条路没有被真的走过。** `AppDelegate` 收到 APNs 的 `path` 交给
-   `AppShell.openPath`，比以前多了「把网页带到前面」这一步，而模拟器没有 APNs、UI 用例也没覆盖。
-   `hermit://session/<id>` 走同一个 `openPath`，`XCUIDevice.shared.system.open` 开一次就能覆盖大半。
-2. **地址填错、但设备上还留着 keyring 时，前门是一张加载失败的列表。** 以前直接看到离线屏和
-   它的 "Change server"，现在要点右上角的 ＋ 才找得到。够用但不好发现，失败文案里也许该带一句。
-3. **`hermit://sessions` 的语义变了**：现在是 `popToRootViewController` 而不是 push 一个新屏。
-4. 相对时间不会自己走（只有服务端字段变了的行才 `reconfigureItems`，静止的会话上「3m ago」
-   会一直停着）；浅色模式下骨架屏几乎看不见，见「踩过的坑」。
-5. `chat.send` 的幂等键现在**可以真的驱动了**（本机有 Postgres 了）：起一个本机 dashboard、
-   拿同一个 `clientId` 发两次，确认第二次拿回第一次那一行、且没有副作用。
-6. **M7 那条「装到模拟器上从头到尾走一遍」仍然没做过**（第 18 轮只跑了列表那一屏，
-   `shots/16`、`17`、`18` 是这一轮新截的）。等 M4 有东西可看再走，一次走完比分三次走划算。
+   `AppShell.openPath`，而模拟器没有 APNs、UI 用例也没覆盖。
+   `XCUIDevice.shared.system.open` 开一次 `hermit://session/<id>` 就能覆盖大半 ——
+   **现在多了一个同样没走过的 `hermit://timeline/<id>`，两个一起验最省事**。
+2. **地址填错、但设备上还留着 keyring 时，前门是一张加载失败的列表。** 够用但不好发现。
+3. **`hermit://sessions` 的语义变了**：现在是 `popToRootViewController`。
+4. 相对时间不会自己走（列表和时间线都是）；浅色模式下骨架屏几乎看不见，见「踩过的坑」。
+5. `chat.send` 的幂等键现在可以真的驱动了（本机有 Postgres 了）。
+6. **M7 那条「装到模拟器上从头到尾走一遍」仍然没做过。** 现在有第二屏可看了，
+   等第 21 轮把流接上再走，一次走完列表 + 时间线两屏。
 
 **部署纪律不变**：`20260905090000_chatmessage_client_id` 那个提交和
 `pnpm --filter @hermit-ui/dashboard migrate` 必须一起上线，先上代码后跑迁移会让部署上的
@@ -467,16 +496,59 @@ brain 6 个，逐个原生化，每个都过一次像素比对。建议顺序（
 连接串 `postgresql://znmacserver001@localhost:5432/hermit_dev`，**worktree 里没有 `.env`**，
 独立检出里跑 Prisma 要显式带上它。
 
-**要 sway 拍板的四件（都不急，不挡下一轮）**：**M4 的 markdown 那一步要引第一个第三方依赖**（GFM 表格 + 围栏代码 + 14 种语言高亮，自己写不现实），这会终结「零第三方依赖」这条一直守着的性质，值得他先点头；左边缘归壳还是归网页侧栏（第 15 轮按
-「同一个意图，原生的赢」处理了，开关是 `lib/native-bridge.ts` 的 `setNativeEdgeSwipe`）；
-`/chat/terminal` 是不是就保持网页（M6 最后一条）；以及要不要为那 3% 的等宽字体宽度往包里
-塞一份字体（第 17 轮量出来的，见「踩过的坑」）。
+**要 sway 拍板的四件（都不急，不挡下一轮）**：**M4 的 markdown 那一步要引第一个第三方依赖**
+（GFM 表格 + 围栏代码 + 14 种语言高亮，自己写不现实），这会终结「零第三方依赖」这条一直守着的
+性质，值得他先点头 —— **骨架已经把位置留好了，换掉 `ProseText` 里那一个 `Text` 就行**；
+左边缘归壳还是归网页侧栏（第 15 轮按「同一个意图，原生的赢」处理了，开关是
+`lib/native-bridge.ts` 的 `setNativeEdgeSwipe`）；`/chat/terminal` 是不是就保持网页
+（M6 最后一条）；以及要不要为那 3% 的等宽字体宽度往包里塞一份字体。
 
 `ChatCache` 欠的两件仍然要等 M4 有调用方：`full`/`digest` 两层，以及真机上的 FTS5
-（`ChatCache.open` 建表时就 `CREATE VIRTUAL TABLE`，旧系统缺 FTS5 会在**开库**时炸，
-而这条路径只在这台 Mac 的 libsqlite3 上跑过）。`HermitStream` 的前后台切换同理。
+（`ChatCache.open` 建表时就 `CREATE VIRTUAL TABLE`，旧系统缺 FTS5 会在**开库**时炸）。
+`HermitStream` 的前后台切换同理 —— 上面第 1 条会同时解掉它。
 
 ## 踩过的坑
+
+### SwiftUI 说不出「最多占父容器的 85%」，宽度只能从外面喂进去（第 20 轮）
+
+气泡的 `max-w-[85%]` 是**列宽的一个比例**，而 SwiftUI 的 `.frame(maxWidth:)` 只吃绝对点数。
+三条路都不通：`containerRelativeFrame` 把宽度**钉死**成那个值（短消息会拉成满行），
+`GeometryReader` 不按内容算自己的高度（自适应高度的 cell 正好只要这一件事），
+`.frame(maxWidth: .infinity)` 就是满行。所以 `TimelineRowView` 多一个 `width` 参数，
+collection view 用 `bounds.width - 两侧 margin` 算给它，渲染工具用画布宽算给它。
+**代价是转屏要重配一次 cell** —— 不然整段会话留在竖屏宽度上，`viewWillTransition` 里
+`reconfigureItems(全部)`。
+
+### JS 的 `toFixed(1)` 和 C 的 `%.1f` 在正好一半的地方朝相反方向进位（第 20 轮）
+
+`fmtChars(1250)` 网页是 `1.3k`：ECMAScript 的 `toFixed` 规定「两个候选一样近就取大的」。
+Swift 的 `String(format: "%.1f")` 是 C 的 printf，用的是**向偶数进位**，会给 `1.2k`。
+一个思考块 1250 字符不是罕见数字，而两张截图并排看谁也发现不了差 0.1k。
+写法：`(Double(n) / 100).rounded(.toNearestOrAwayFromZero)` 再自己拆整数和十分位。
+**验的办法比写的办法重要**：把 `run-capsule.tsx` 里那三个函数
+`sed` 出来去掉类型标注丢给 node（`sed -E 's/: (number|string|string\[\])//g'`，
+它们不依赖任何 import），Swift 那边由 `tools/render-timeline.sh` 打同一张表，`diff` 两边。
+30 个输入全对上才敢用 —— 这已经是「移植纯函数先跑一遍」这条第四次救场。
+
+### 发送侧的气泡，只有时钟那一行是右对齐的（第 20 轮，截图抓到的）
+
+`justify-end` 在**外层**：它把气泡推到右边。气泡内部是个普通块级容器，
+里面的 Brain 标签、段落、文件 chip **一律从左边开始**，只有底下那行时间戳自己带
+`justify-end`。我第一版把整个 `VStack` 设成 `alignment: .trailing`，
+结果 BRAIN 标签和 `build.txt` 贴在气泡右边 —— 编译过、类型对、逻辑上也「说得通」，
+**只有画出来才看得见**。`tools/render-timeline.sh` 从写完到发现这个问题隔了不到两分钟。
+
+### 生成器的 oklch 正则解不了带 alpha 的声明，而 `--border` 正好带（第 20 轮）
+
+`globals.css` 里 `.dark` 的 `--border: oklch(1 0 0 / 10%)`。`gen-ios-contract.ts` 的
+`parseOklch` 是 `^oklch\(\s*L\s+C\s+H\s*\)$`，直接抛 `not an oklch() colour`。
+**不要把 alpha 塞进 `parseOklch` 的返回值** —— 它的三个数是要进色彩空间换算的，alpha 不进；
+而且 `ios-contract.test.ts` 里有一条 `assert.deepEqual(parseOklch(…), {l, c, h})`，
+多一个字段就红。做法是先 `splitAlpha()` 切开，`ThemeSide` 带着 `alpha` 和 `declared`
+（原样的声明串，只为了让生成文件的注释仍然写着 `/ 10%`），渲染时 alpha 不是 1 才补
+`opacity:`。**半透明是要保留的，不能压平**：浏览器把那条发丝线合成在它背后的东西上，
+压平之后除了页面自己那个底色，在别的背景上都是错的。
+
 
 ### 用 `parseBlocks()` 的结果去折叠，会让同一段会话两边折得不一样（第 19 轮）
 
@@ -1021,6 +1093,7 @@ Oklab→线性 sRGB 那一步会塌成三个通道都等于 L³，Display P3 和
 
 | 轮 | 时间 | 做了什么 | 构建 |
 |---|---|---|---|
+| 20 | 2026-09-05 | **M4 时间线骨架：这三个纯函数第一次有调用方，也第一次有东西可看。** 新增 `apps/ios/Hermit/TimelineRowView.swift`（纯 SwiftUI，一个 `FoldedRow` 进；气泡 / 运行胶囊 / 思考胶囊 / 系统药丸 / Brain 虚线框 / ask 卡 / 图片文件 chip / **不认识的块画成写着 type 的灰卡片** / turn-ended 标记）、`apps/ios/Hermit/ChatTimelineViewController.swift`（collection view 竖向翻转、cell 翻回来、diffable 按 `FoldedRow.key`、`chat.listMessages` 取 `WebContract` 那个窗口）、`tools/render-timeline.sh` + `tools/fixtures/timeline-cases.json`（几秒出图，不用模拟器）。`SceneDelegate` 加 `hermit://timeline/<id>`，**没动前门**。生成器 `gen-ios-contract.ts` 加了四个主题色（`background`/`foreground`/`muted`/`border`）和 alpha 支持 —— `--border` 在 `.dark` 里是 `oklch(1 0 0 / 10%)`，老正则解不了 | `xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0**；`src/lib/ios-contract.test.ts` 单独跑 **11/11 过**（含新加的半透明主题色）。三个胶囊标签函数和网页那三个**逐输入对过 30 个，全等** —— 其中 `1250` 一例本来会差（`1.3k` vs `1.2k`，见「踩过的坑」）。**画出来看过两张**：`shots/timeline-dark.png` / `timeline-light.png`，十一种行都对，并且当场看出「发送侧气泡整块右对齐」是错的、改掉了。**没起过模拟器** |
 | 19 | 2026-09-05 | **M4 第二条：`foldRuns` 移植成 Swift。** 新增 `apps/ios/Hermit/FoldRuns.swift`（只依赖 Foundation，500 行，含 `isMachineryBlock`/`stepFor`/`closesRunUnconditionally`/`safeSplitIndex`/`summarizeRun`/`isHarnessTerminator` 和「运行块按下面那行取名」的第二遍）、生成器 `scripts/gen-fold-fixture.ts` → `tools/fixtures/fold-cases.json`、驱动 `tools/fold-fixture.sh`。**明确不按上一轮的打算做**：折叠的依据是原始块而不是 `parseBlocks()` 的结果，否则没有 `id` 的 `tool_use` 在手机上可见、在网页上被折走（写进「踩过的坑」）；`FoldedMessage` 因此同时带 `rawBlocks` 和 `blocks`。JS 的三处强制转换（`String(x)`、`??`、`is_error`/`__d` 的真值判断）照抄而不是「顺手改好」。**顺带修掉第 18 轮就上线的一个真 bug**：`ContentBlock.swift` 的 `chars` 用 `body.count` 数字素，网页数的是 UTF-16 码元 | `tools/fold-fixture.sh` **97/97 过**，**反证做过五次**（去掉 ask 豁免 → 只红 3 条 `isMachineryBlock[ask/*]` + `ask-stays-visible` + `digestInvariance`；运行块改按上面那行取名 → 红 20 条折叠；`chars` 改数字素 → 只红 `coercions`；`is_error` 改成只认字面 `true` → 只红 `coercions`；关掉跨天断开 → 只红 `run-never-spans-a-date-divider` 和 `unparseable-timestamp-closes-the-run`），逐个恢复后全绿。夹具里两条性质**真的验过**：11 个接缝逐个分两半折 == 整体折；摘要后的内容折出的折叠态与网页用完整内容折出的逐字段相同。块夹具加了 `好👍` / `é` 两例后 `tools/blocks-fixture.sh` 先红后绿（**73/73 → 75/75**）。`xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0 无输出**（先补 `src/generated/prisma` 软链，见「踩过的坑」）。无界面改动，未截图；**没起过模拟器** |
 | 18 | 2026-09-05 | **开 M4：消息块有定义了。** 新增 `apps/dashboard/src/lib/chat-blocks.ts`（`WireContentBlock` 只校验、原样交还，给写入口；`parseBlocks()` 是读的那一面，判别联合，unknown 一支显式）、`apps/ios/Hermit/ContentBlock.swift`（只依赖 Foundation，含一个 `JSONValue` 给 `input`/`content`/`payload` 这三个谁都不约束的字段）、生成器 `scripts/gen-blocks-fixture.ts` → `tools/fixtures/block-cases.json`（53 块 + 9 个整列）、驱动 `tools/blocks-fixture.sh`。联合**不可能失败**：匹配不上就是 `unknown` 并带着生产者自己那个 type 字符串，这正是 M4 最后一条的灰卡片要的。网页端接了三处：`chat.send` 以 `WireContentBlock` 拼块、`extractSearchText` 和 `msgText` 换成共用读法；时间线组件仍留宽松 `Block`，理由写在注释里。**发现 `routers/chat.ts:41` 的块级联合是死代码**（零引用） | `tools/blocks-fixture.sh` **73/73 过**，反证做过（塞三处偏差 → 正好红在对应用例上，恢复后全绿）；`xcodegen` + `swiftc -typecheck` **exit 0 无输出**；dashboard `tsc --noEmit` **exit 0 无输出**（先 `prisma generate`）；改到的两个纯函数各自驱动过 —— `chat-text.test.ts` **8/8 过**，`msgText` 与被它替换掉的那份实现在 20 种真实形状上**逐条相同**。另跑了一次模拟器补第 17 轮欠的确认：`testTheNativeListDrawsTheActiveMachinesSessions` 过，`shots/16`、`17`、`18` **亲眼看过**，真列表行距 **52.33pt 完全均匀**（比对那张是 49.5，差 2.83 写进「踩过的坑」）。收工 `simctl list devices booted` 为空 |
 | 0 | 2026-09-04 | 建这个文件，拆出 M0–M7 的清单 | 未改代码 |

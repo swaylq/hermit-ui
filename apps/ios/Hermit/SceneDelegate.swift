@@ -114,6 +114,22 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         nav?.popToRootViewController(animated: animated)
     }
 
+    /// Push the native timeline for one session.
+    ///
+    /// A fresh instance every time, unlike `web`: it holds a window of decoded
+    /// messages and nothing that is expensive to rebuild or painful to lose —
+    /// no live connection, no scroll position anybody has grown attached to.
+    /// Keeping one around per session is a cache with no eviction policy.
+    private func presentTimeline(sessionId: String, animated: Bool) {
+        guard let nav else { return }
+        // Not on top of another timeline: opening two sessions in a row should
+        // read as switching, not as a stack to back out of one screen at a time.
+        if nav.topViewController is ChatTimelineViewController {
+            nav.popViewController(animated: false)
+        }
+        nav.pushViewController(ChatTimelineViewController(sessionId: sessionId), animated: animated)
+    }
+
     /// The `hermit://` URLs this app answers to.
     ///
     /// `hermit://session/<id>` is built by the Live Activity and routed through
@@ -130,6 +146,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// `hermit://sessions` shows the list. It used to push it in front of the
     /// page; now that the list is the root it pops back to it, which is the same
     /// sentence — "show me the sessions" — and the reason the URL stays.
+    ///
+    /// `hermit://timeline/<id>` opens the NATIVE timeline for that session.
+    /// Nothing in the product produces this URL: it is how the screen gets
+    /// walked through and screenshotted while it is still a skeleton, the same
+    /// way the session list was introduced before it became the root. A tapped
+    /// row still goes to the web page — see `ChatTimelineViewController`.
     private func open(_ url: URL) {
         guard url.scheme == "hermit" else { return }
         switch url.host {
@@ -147,6 +169,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             presentWeb(animated: false).presentOriginEditor()
         case "sessions":
             presentList(animated: true)
+        case "timeline":
+            let id = url.lastPathComponent
+            guard !id.isEmpty, id != "timeline" else { return }
+            presentTimeline(sessionId: id, animated: true)
         default:
             return
         }

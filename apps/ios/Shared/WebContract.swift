@@ -107,6 +107,10 @@ enum WebContract {
     // twice in that file, under `:root` and under `.dark`, and the browser
     // picks by the scheme in force. So both values come across and the view
     // picks the same way — see `ThemeColor.resolve`.
+    //
+    // A declaration with an alpha (`--border` in `.dark`) keeps it: the
+    // browser composites that hairline against whatever is behind it, and a
+    // flattened one would be wrong on every background but the page's own.
 
     /// `--sidebar` — the session list's own background.
     /// light oklch(0.985 0 0) · dark oklch(0.205 0 0)
@@ -131,6 +135,30 @@ enum WebContract {
     static let mutedForeground = ThemeColor(
         light: Color(.displayP3, red: 0.4515, green: 0.4515, blue: 0.4515),
         dark: Color(.displayP3, red: 0.6302, green: 0.6302, blue: 0.6302)
+    )
+    /// `--background` — the page behind the timeline, and a user bubble's text.
+    /// light oklch(1 0 0) · dark oklch(0.145 0 0)
+    static let background = ThemeColor(
+        light: Color(.displayP3, red: 1.0000, green: 1.0000, blue: 1.0000),
+        dark: Color(.displayP3, red: 0.0394, green: 0.0394, blue: 0.0394)
+    )
+    /// `--foreground` — body text, and the user bubble it is knocked out of.
+    /// light oklch(0.145 0 0) · dark oklch(0.985 0 0)
+    static let foreground = ThemeColor(
+        light: Color(.displayP3, red: 0.0394, green: 0.0394, blue: 0.0394),
+        dark: Color(.displayP3, red: 0.9803, green: 0.9803, blue: 0.9803)
+    )
+    /// `--muted` — the fill behind a system row and an unknown block.
+    /// light oklch(0.97 0 0) · dark oklch(0.269 0 0)
+    static let muted = ThemeColor(
+        light: Color(.displayP3, red: 0.9606, green: 0.9606, blue: 0.9606),
+        dark: Color(.displayP3, red: 0.1494, green: 0.1494, blue: 0.1494)
+    )
+    /// `--border` — a run capsule's hairline.
+    /// light oklch(0.922 0 0) · dark oklch(1 0 0 / 10%)
+    static let border = ThemeColor(
+        light: Color(.displayP3, red: 0.8982, green: 0.8982, blue: 0.8982),
+        dark: Color(.displayP3, red: 1.0000, green: 1.0000, blue: 1.0000, opacity: 0.1000)
     )
 }
 

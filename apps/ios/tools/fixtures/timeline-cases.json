@@ -1,0 +1,93 @@
+{
+  "_comment": [
+    "One short conversation, chosen so every row shape the timeline skeleton can",
+    "draw appears exactly once: a human bubble, an assistant reply, a run capsule",
+    "with an error in it, a thinking-only run, a Brain turn, a system notice, an",
+    "ask card, an image and a file, a block type this build has never heard of,",
+    "and the marker for a turn that ended without a reply.",
+    "",
+    "These are RAW messages — the same shape chat.listMessages returns — so they",
+    "go through FoldRuns.fold on the way to the screen rather than posing the",
+    "rows by hand. What is being looked at is what the fold decided.",
+    "",
+    "Every instant is SECONDS BEFORE now, never a timestamp: a fixture with dates",
+    "baked in silently becomes a different conversation every day."
+  ],
+  "messages": [
+    {
+      "id": "m1", "role": "user", "createdAtAgo": 3600,
+      "content": [{ "type": "text", "text": "帮我看一下 iOS 那边的时间线还差什么，顺便把构建跑一遍。" }]
+    },
+    {
+      "id": "m2", "role": "assistant", "createdAtAgo": 3596,
+      "content": [
+        { "type": "thinking", "thinking": "The user wants a survey plus a build. Read the progress file first.", "chars": 1240 },
+        { "type": "tool_use", "id": "t1", "name": "Read", "input": { "file_path": "docs/ios-native-progress.md" } }
+      ]
+    },
+    {
+      "id": "m3", "role": "user", "createdAtAgo": 3590,
+      "content": [{ "type": "tool_result", "tool_use_id": "t1", "content": "…1043 lines…" }]
+    },
+    {
+      "id": "m4", "role": "assistant", "createdAtAgo": 3588,
+      "content": [{ "type": "tool_use", "id": "t2", "name": "Bash", "input": { "command": "swiftc -typecheck Hermit/*.swift" } }]
+    },
+    {
+      "id": "m5", "role": "user", "createdAtAgo": 3540,
+      "content": [{ "type": "tool_result", "tool_use_id": "t2", "content": "error: cannot find 'TimelineMetrics' in scope", "is_error": true }]
+    },
+    {
+      "id": "m6", "role": "assistant", "createdAtAgo": 3538,
+      "content": [{ "type": "tool_use", "id": "t3", "name": "Edit", "input": { "file_path": "Hermit/TimelineRowView.swift" } }]
+    },
+    {
+      "id": "m7", "role": "user", "createdAtAgo": 3536,
+      "content": [{ "type": "tool_result", "tool_use_id": "t3", "content": "ok" }]
+    },
+    {
+      "id": "m8", "role": "assistant", "createdAtAgo": 3535,
+      "content": [{ "type": "text", "text": "构建过了。时间线现在能画四种行：气泡、运行胶囊、思考胶囊，还有认不出来的块。" }]
+    },
+    {
+      "id": "m9", "role": "system", "createdAtAgo": 3000,
+      "content": [{ "type": "text", "text": "[session restarted]" }]
+    },
+    {
+      "id": "m10", "role": "user", "authoredBy": "brain", "createdAtAgo": 2400,
+      "content": [{ "type": "text", "text": "别忘了收尾要写回进展文件。" }]
+    },
+    {
+      "id": "m11", "role": "assistant", "createdAtAgo": 2390,
+      "content": [
+        { "type": "thinking", "thinking": "Nothing to run here, just answer.", "chars": 320 },
+        { "type": "text", "text": "记着呢。" }
+      ]
+    },
+    {
+      "id": "m12", "role": "assistant", "createdAtAgo": 1800,
+      "content": [
+        { "type": "tool_use", "id": "t4", "name": "mcp__hermit__ask", "input": { "question": "要不要现在就把时间线接成前门？" } }
+      ]
+    },
+    {
+      "id": "m13", "role": "user", "createdAtAgo": 1200,
+      "content": [
+        { "type": "text", "text": "先看看截图。" },
+        { "type": "image", "source": { "type": "url", "url": "https://example.invalid/shots/timeline.png" }, "width": 320, "height": 640 },
+        { "type": "file", "source": { "type": "url", "url": "https://example.invalid/logs/build.txt" }, "name": "build.txt" }
+      ]
+    },
+    {
+      "id": "m14", "role": "assistant", "createdAtAgo": 900,
+      "content": [
+        { "type": "text", "text": "这一段带了个我不认识的块，看它画成什么样：" },
+        { "type": "sink_deliverable", "path": "apps/ios/shots/timeline-dark.png" }
+      ]
+    },
+    {
+      "id": "m15", "role": "assistant", "createdAtAgo": 300,
+      "content": [{ "type": "text", "text": "No response requested." }]
+    }
+  ]
+}
