@@ -45,9 +45,14 @@ interface NativeApi {
   onRequest(id: string, method: string, params: Record<string, unknown>): void;
 }
 
+/** What the installed shell can answer. See `shellCaps`. */
+export type ShellCaps = { req?: boolean; keychain?: boolean };
+
 declare global {
   interface Window {
     __hermitNative?: NativeApi;
+    /** Set by the shell's document-start script (WebViewController.swift). */
+    __hermitShell?: { build?: string; caps?: ShellCaps };
     webkit?: { messageHandlers?: Record<string, { postMessage(msg: unknown): void }> };
   }
 }
@@ -55,6 +60,19 @@ declare global {
 /** True when running inside the native shell rather than a browser / PWA. */
 export function isNativeShell(): boolean {
   return typeof window !== 'undefined' && !!window.webkit?.messageHandlers?.hermit;
+}
+
+/**
+ * What the installed shell says it can do, announced by its document-start
+ * script (WebViewController.swift, `shellMarkerScript`).
+ *
+ * The page and the app ship separately, so the page must never wait on an
+ * answer from a shell built before the question existed. Empty in a browser,
+ * and in a shell older than the announcement — those took every message and
+ * answered none, which is exactly the case a caller has to know about.
+ */
+export function shellCaps(): ShellCaps {
+  return (typeof window !== 'undefined' && window.__hermitShell?.caps) || {};
 }
 
 // Last status the shell reported, plus whoever is watching. Module-level so the
@@ -307,10 +325,11 @@ function replyError(method: string, payload: unknown): Error {
 /**
  * Ask the shell something, and wait for its answer.
  *
- * Rejects rather than hangs in all four ways this can go wrong: outside the
- * shell, when the shell has never heard of the method, when the shell answers
- * with a failure, and after five seconds of silence. Callers need a web-side
- * fallback for the first of those regardless — this same code runs in a browser.
+ * Rejects rather than hangs in all five ways this can go wrong: outside the
+ * shell, in a shell built before it could answer anything (see `shellCaps`),
+ * when the shell has never heard of the method, when the shell answers with a
+ * failure, and after five seconds of silence. Callers need a web-side fallback
+ * for the first of those regardless — this same code runs in a browser.
  */
 export function nativeRequest<T = unknown>(
   method: string,
@@ -319,6 +338,15 @@ export function nativeRequest<T = unknown>(
   return new Promise<T>((resolve, reject) => {
     if (!isNativeShell()) {
       reject(new Error('not running in the native shell'));
+      return;
+    }
+    // A shell that predates the question channel takes the message and says
+    // nothing back, so this promise would sit on the five-second timer. On the
+    // boot path that was a blank screen per document — TestFlight builds 1–6
+    // against the web layer deployed 2026-09-05, 5.5s measured. Refuse at once;
+    // every caller carries the browser fallback anyway.
+    if (!shellCaps().req) {
+      reject(new Error(`the installed shell cannot answer ${method}`));
       return;
     }
     // Unique within this document, which is all it needs to be: the shell drops

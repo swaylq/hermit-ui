@@ -143,8 +143,16 @@ final class WebViewController: UIViewController {
     /// thing CSS can key off, and it has to be set at document start or the first
     /// frame paints without it. (`<html suppressHydrationWarning>` in layout.tsx
     /// means React will not fight over the attribute.)
+    ///
+    /// The same script announces what this build can answer (`__hermitShell.caps`).
+    /// The page and the app ship separately, so the page must never wait on a
+    /// reply from a shell built before the question existed: builds 1–6 answered
+    /// nothing, and the page sat on its five-second timeout per document.
+    private static let shellBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+
     private static let shellMarkerScript = WKUserScript(
         source: """
+        window.__hermitShell = { build: "\(shellBuild)", caps: { req: true, keychain: true } };
         (function () {
           var mark = function () {
             if (document.documentElement) {

@@ -123,8 +123,10 @@ function pushActiveToShell(id: string) {
  * Move the keyring into the device Keychain, once, before the app reads it.
  *
  * A no-op everywhere except the iOS shell — in a browser, and in any shell too
- * old to know the method, `nativeRequest` rejects and the keyring stays exactly
- * where it was. Awaited by the auth gate, which renders nothing until it returns.
+ * old to answer, `nativeRequest` rejects at once and the keyring stays exactly
+ * where it was. Awaited by the auth gate, which renders nothing until it returns
+ * — which is why "at once" matters: a rejection that waited on the five-second
+ * timeout was a blank screen per document on every phone with an older shell.
  *
  * The migration order is write → read back → only then drop the localStorage
  * copy. Clearing first, or clearing on the strength of a write that merely didn't
